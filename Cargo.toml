@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/goose-acp-client"]
+members = ["crates/goose-acp-client", "crates/mock-goose-server"]
 
 [package]
 name = "goose-mobile"

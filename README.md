@@ -127,6 +127,27 @@ Bundle identifiers and Android signing are configured in [`Dioxus.toml`](Dioxus.
 └── Dioxus.toml              # bundle config (identifiers, Android SDK levels)
 ```
 
+## Testing without an AI provider
+
+The workspace ships a protocol-faithful mock of `goose serve`
+([`crates/mock-goose-server`](crates/mock-goose-server)): same auth surface
+(401 / 406 probe), scripted turns with thinking, streamed markdown, a tool
+call with a real permission round-trip, cancellation, and history replay.
+Use it to exercise every app feature with no server or API key:
+
+```bash
+cargo run -p mock-goose-server            # listens on http://127.0.0.1:3285
+# in the app: URL http://127.0.0.1:3285, secret "mock-secret", working dir /home/demo
+```
+
+Prompt keywords: `slow` streams long enough to try the Stop button; `notool`
+skips the tool call. There is also a CLI protocol smoke test that works
+against the mock or a real server:
+
+```bash
+cargo run -p goose-acp-client --example smoke -- http://127.0.0.1:3285 mock-secret --prompt
+```
+
 ## Development notes
 
 - `cargo test -p goose-acp-client` runs protocol unit tests (wire-shape fidelity against goose 1.47 frames).

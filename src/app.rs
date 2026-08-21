@@ -3,7 +3,9 @@ use dioxus::prelude::*;
 use crate::state::{use_app_ctx_provider, Screen};
 use crate::views;
 
-const MAIN_CSS: Asset = asset!("/assets/main.css");
+// Embedded at compile time so styling works identically under `cargo run`,
+// `dx serve`, and mobile bundles.
+const MAIN_CSS: &str = include_str!("../assets/main.css");
 
 #[component]
 pub fn App() -> Element {
@@ -20,7 +22,7 @@ pub fn App() -> Element {
     let permission_open = !ctx.permission.read().is_empty();
 
     rsx! {
-        document::Link { rel: "stylesheet", href: MAIN_CSS }
+        document::Style { {MAIN_CSS} }
         document::Meta {
             name: "viewport",
             content: "width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover",
