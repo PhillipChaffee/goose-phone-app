@@ -1,8 +1,16 @@
 //! App-wide state: connection lifecycle, the event pump that folds ACP
 //! session updates into the chat transcript, and persisted settings.
+//!
+//! Every task that must outlive the screen that started it (the event pump,
+//! reconnects, RPC calls that navigate, toast timers) is spawned with
+//! `spawn_forever` onto the root scope — a plain `spawn` belongs to the
+//! current component and is cancelled when that screen unmounts.
 
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use goose_acp_client::{
     AcpClient, AcpEvent, ConnectConfig, MessageChunk, PermissionRequest, SessionInfo,
@@ -87,7 +95,12 @@ pub struct AppCtx {
     pub sessions_cursor: Signal<Option<String>>,
     pub sessions_loading: Signal<bool>,
     pub chat: Signal<ChatState>,
-    pub permission: Signal<Option<PermissionRequest>>,
+    /// Sessions with a turn currently in flight (client-side view).
+    pub running_sessions: Signal<HashSet<String>>,
+    /// FIFO of unanswered `session/request_permission` requests. Every entry
+    /// MUST eventually be answered (or the transport dropped) — the agent's
+    /// turn blocks on it.
+    pub permission: Signal<Vec<PermissionRequest>>,
     pub usage: Signal<Option<Usage>>,
     pub toast: Signal<Option<String>>,
 }
@@ -105,7 +118,8 @@ pub fn use_app_ctx_provider() -> AppCtx {
         sessions_cursor: use_signal(|| None),
         sessions_loading: use_signal(|| false),
         chat: use_signal(ChatState::default),
-        permission: use_signal(|| None),
+        running_sessions: use_signal(HashSet::new),
+        permission: use_signal(Vec::new),
         usage: use_signal(|| None),
         toast: use_signal(|| None),
     };
@@ -117,14 +131,16 @@ pub fn use_app_ctx() -> AppCtx {
     use_context()
 }
 
+static TOAST_SEQ: AtomicU64 = AtomicU64::new(0);
+
 pub fn show_toast(ctx: &AppCtx, message: impl Into<String>) {
     let mut toast = ctx.toast;
-    let message = message.into();
-    toast.set(Some(message.clone()));
-    spawn(async move {
+    let id = TOAST_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    toast.set(Some(message.into()));
+    spawn_forever(async move {
         tokio::time::sleep(Duration::from_secs(4)).await;
-        // Only clear if nothing newer replaced it.
-        if toast.peek().as_deref() == Some(message.as_str()) {
+        // Only clear if no newer toast was shown since.
+        if TOAST_SEQ.load(Ordering::Relaxed) == id {
             toast.set(None);
         }
     });
@@ -170,7 +186,7 @@ pub async fn establish(ctx: AppCtx) -> bool {
                 format!("{} {}", info.agent_name, info.agent_version)
             };
             conn.set(ConnState::Connected { agent });
-            spawn(pump(ctx, events));
+            spawn_forever(pump(ctx, events));
             true
         }
         Err(e) => {
@@ -195,6 +211,7 @@ async fn pump(ctx: AppCtx, mut events: mpsc::Receiver<AcpEvent>) {
     let mut usage = ctx.usage;
     let mut conn = ctx.conn;
     let mut client_slot = ctx.client;
+    let mut running_sessions = ctx.running_sessions;
 
     while let Some(event) = events.recv().await {
         match event {
@@ -215,25 +232,23 @@ async fn pump(ctx: AppCtx, mut events: mpsc::Receiver<AcpEvent>) {
                 }
             }
             AcpEvent::Permission(request) => {
-                permission.set(Some(request));
+                // Queue, never replace: every request must be answered or the
+                // agent's turn hangs.
+                permission.write().push(request);
             }
             AcpEvent::RequestCancelled { request_id } => {
-                let matches_open = permission
-                    .peek()
-                    .as_ref()
-                    .map(|p| p.request_id == request_id)
-                    .unwrap_or(false);
-                if matches_open {
-                    permission.set(None);
-                }
+                permission.write().retain(|p| p.request_id != request_id);
             }
             AcpEvent::Disconnected { reason } => {
                 client_slot.set(None);
                 chat.write().running = false;
-                permission.set(None);
-                if ctx.want_connected.peek().clone() {
+                running_sessions.write().clear();
+                // Transport is gone; the server resolves its own pending
+                // permission requests via the transport-error path.
+                permission.write().clear();
+                if *ctx.want_connected.peek() {
                     conn.set(ConnState::Failed(format!("Connection lost: {reason}")));
-                    spawn(reconnect_loop(ctx));
+                    spawn_forever(reconnect_loop(ctx));
                 } else {
                     conn.set(ConnState::Disconnected);
                 }
@@ -243,10 +258,15 @@ async fn pump(ctx: AppCtx, mut events: mpsc::Receiver<AcpEvent>) {
     }
 }
 
+/// Retry until connected or the user disconnects: quick ramp, then a steady
+/// 30-second cadence (covers long VPN outages and phone sleep — suspended
+/// timers resume on wake).
 async fn reconnect_loop(ctx: AppCtx) {
-    for delay in [2u64, 4, 8, 15] {
+    let mut ramp = [2u64, 4, 8, 15].into_iter();
+    loop {
+        let delay = ramp.next().unwrap_or(30);
         tokio::time::sleep(Duration::from_secs(delay)).await;
-        if !ctx.want_connected.peek().clone() {
+        if !*ctx.want_connected.peek() {
             return;
         }
         if ctx.conn.peek().is_connected() {
@@ -443,20 +463,26 @@ pub fn open_session(ctx: AppCtx, info: SessionInfo) {
     let mut chat = ctx.chat;
     let mut usage = ctx.usage;
     let cwd = info.cwd.clone().unwrap_or_else(|| "/".to_string());
+    let running = ctx.running_sessions.peek().contains(&info.session_id);
 
     chat.set(ChatState {
         session_id: Some(info.session_id.clone()),
         cwd: cwd.clone(),
         title: info.display_title(),
         items: Vec::new(),
-        running: false,
+        running,
         loading: true,
     });
     usage.set(None);
     screen.set(Screen::Chat);
 
-    spawn(async move {
+    spawn_forever(async move {
         let Some(client) = ctx.client.peek().clone() else {
+            let mut chat = ctx.chat;
+            if chat.peek().session_id.as_deref() == Some(info.session_id.as_str()) {
+                chat.write().loading = false;
+            }
+            show_toast(&ctx, "Not connected — reconnect in Settings");
             return;
         };
         let result = client.session_load(&info.session_id, &cwd).await;
@@ -480,8 +506,9 @@ pub fn new_session(ctx: AppCtx) {
         );
         return;
     }
-    spawn(async move {
+    spawn_forever(async move {
         let Some(client) = ctx.client.peek().clone() else {
+            show_toast(&ctx, "Not connected — reconnect in Settings");
             return;
         };
         match client.session_new(&working_dir).await {
@@ -505,27 +532,38 @@ pub fn new_session(ctx: AppCtx) {
     });
 }
 
-/// Send the user's message and run the agent turn.
-pub fn send_prompt(ctx: AppCtx, text: String) {
+/// Send the user's message and run the agent turn. Returns false (leaving the
+/// caller's draft untouched) if the message could not be submitted.
+pub fn send_prompt(ctx: AppCtx, text: String) -> bool {
     let mut chat = ctx.chat;
     let Some(session_id) = chat.peek().session_id.clone() else {
-        return;
+        return false;
     };
     let Some(client) = ctx.client.peek().clone() else {
-        show_toast(&ctx, "Not connected");
-        return;
+        show_toast(&ctx, "Not connected — reconnect in Settings");
+        return false;
     };
     {
         let mut c = chat.write();
         c.items.push(ChatItem::User { text: text.clone() });
         c.running = true;
     }
-    spawn(async move {
+    let mut running_sessions = ctx.running_sessions;
+    running_sessions.write().insert(session_id.clone());
+
+    spawn_forever(async move {
         let result = client.prompt(&session_id, &text).await;
+
+        let mut running_sessions = ctx.running_sessions;
+        running_sessions.write().remove(&session_id);
         let mut chat = ctx.chat;
         if chat.peek().session_id.as_deref() == Some(session_id.as_str()) {
             chat.write().running = false;
         }
+        // The turn is over; answer any permission prompt it left behind
+        // (covers error paths where the run dies with a request outstanding).
+        answer_pending_permissions(&ctx, &client, &session_id);
+
         match result {
             Ok(stop) => match stop.as_str() {
                 "end_turn" | "cancelled" => {}
@@ -536,6 +574,44 @@ pub fn send_prompt(ctx: AppCtx, text: String) {
             Err(e) => show_toast(&ctx, format!("Prompt failed: {e}")),
         }
     });
+    true
+}
+
+/// Stop the current chat's running turn. Any open permission prompt for the
+/// session is answered "cancelled" FIRST (the frames travel in order, so the
+/// parked run unparks and then observes the cancel), matching goose Desktop.
+pub fn stop_turn(ctx: AppCtx) {
+    let Some(session_id) = ctx.chat.peek().session_id.clone() else {
+        return;
+    };
+    let Some(client) = ctx.client.peek().clone() else {
+        return;
+    };
+    answer_pending_permissions(&ctx, &client, &session_id);
+    client.cancel(&session_id);
+}
+
+/// Respond "cancelled" to every queued permission request for `session_id`
+/// and drop them from the queue.
+fn answer_pending_permissions(ctx: &AppCtx, client: &AcpClient, session_id: &str) {
+    let mut permission = ctx.permission;
+    permission.write().retain(|req| {
+        if req.session_id == session_id {
+            client.respond_permission(req.request_id.clone(), None);
+            false
+        } else {
+            true
+        }
+    });
+}
+
+/// Answer the front-of-queue permission request and remove it.
+pub fn answer_permission(ctx: AppCtx, request_id: Value, option_id: Option<String>) {
+    if let Some(client) = ctx.client.peek().clone() {
+        client.respond_permission(request_id.clone(), option_id);
+    }
+    let mut permission = ctx.permission;
+    permission.write().retain(|req| req.request_id != request_id);
 }
 
 /// Human-friendly `updatedAt` (RFC3339 → "YYYY-MM-DD HH:MM").

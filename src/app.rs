@@ -17,7 +17,7 @@ pub fn App() -> Element {
     };
 
     let toast = (ctx.toast)();
-    let permission_open = ctx.permission.read().is_some();
+    let permission_open = !ctx.permission.read().is_empty();
 
     rsx! {
         document::Link { rel: "stylesheet", href: MAIN_CSS }

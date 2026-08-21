@@ -1,3 +1,4 @@
+use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use goose_acp_client::{probe, ProbeOutcome};
 
@@ -34,7 +35,9 @@ pub fn SettingsView() -> Element {
 
     let on_connect = move |_| {
         save();
-        spawn(async move {
+        // Root-scope task: it navigates away from this screen and must
+        // survive the unmount.
+        spawn_forever(async move {
             if establish(ctx).await {
                 let mut screen = ctx.screen;
                 screen.set(Screen::Sessions);
@@ -46,7 +49,7 @@ pub fn SettingsView() -> Element {
     let on_test = move |_| {
         save();
         let s = ctx.settings.peek().clone();
-        spawn(async move {
+        spawn_forever(async move {
             let mut testing = testing;
             testing.set(true);
             let pinned = goose_acp_client::parse_fingerprint(&s.fingerprint)

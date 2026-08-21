@@ -55,8 +55,13 @@ pub async fn probe(base_url: &str, secret: &str, pinned: bool) -> ProbeOutcome {
     }
     match req.send().await {
         Ok(resp) => match resp.status().as_u16() {
+            // 406 is the documented auth-success signal: a plain GET /acp
+            // only reaches content negotiation after the secret is accepted.
+            406 => ProbeOutcome::Ok,
             401 | 403 => ProbeOutcome::AuthFailed,
-            _ => ProbeOutcome::Ok,
+            status => ProbeOutcome::Unreachable(format!(
+                "GET /acp returned HTTP {status}, expected 406 — is this a goose server?"
+            )),
         },
         Err(e) => ProbeOutcome::Unreachable(e.to_string()),
     }

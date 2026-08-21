@@ -1,6 +1,6 @@
 # Goose Mobile
 
-A mobile client for [goose](https://github.com/block/goose) — Block's open-source AI agent — written entirely in **Rust** with [Dioxus](https://dioxuslabs.com). One codebase builds for **iOS**, **Android**, and desktop, and connects to a remote goose server running on your own machine or cloud box, reached privately over **Tailscale**.
+A mobile client for [goose](https://github.com/aaif-goose/goose) — the open-source AI agent from the Agentic AI Foundation (originally created by Block) — written entirely in **Rust** with [Dioxus](https://dioxuslabs.com). One codebase builds for **iOS**, **Android**, and desktop, and connects to a remote goose server running on your own machine or cloud box, reached privately over **Tailscale**.
 
 ```
 ┌─────────────┐     Tailscale (WireGuard)      ┌──────────────────────┐
@@ -18,7 +18,7 @@ Modern goose (≥ 1.42) exposes a single API: the [Agent Client Protocol](https:
 - streamed `session/update` notifications render live assistant text, thinking, and tool calls
 - `session/request_permission` requests from the agent pop a native approval sheet (allow once / always / reject)
 - `session/cancel` stops a running turn; token usage is shown from goose's usage notifications
-- disconnects (phone sleeping, network blips) auto-reconnect with backoff and replay the open session's history
+- disconnects (phone sleeping, network blips) auto-reconnect — quick backoff ramp, then a steady 30 s retry until the server is back — and the open session's history is replayed
 
 The protocol layer lives in [`crates/goose-acp-client`](crates/goose-acp-client) — a UI-independent tokio + tungstenite + rustls library you can reuse in other Rust clients.
 
@@ -28,7 +28,7 @@ On the machine that will run goose (any always-on Linux/macOS box):
 
 ```bash
 # Install goose and configure your AI provider once
-curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash
+curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | bash
 goose configure
 
 # Run the server (default port 3284). The secret key is the app's password.
@@ -38,7 +38,7 @@ GOOSE_SERVER__SECRET_KEY='pick-a-long-random-secret' \
 
 Verify it locally: `curl http://127.0.0.1:3284/status` → `ok`.
 
-goose's own guide for this setup: [Remote goose server](https://github.com/block/goose/blob/main/documentation/docs/guides/remote-goose-server.md).
+goose's own guide for this setup: [Remote goose server](https://github.com/aaif-goose/goose/blob/main/documentation/docs/guides/remote-goose-server.md).
 
 ## 2. Tailscale setup (recommended path)
 

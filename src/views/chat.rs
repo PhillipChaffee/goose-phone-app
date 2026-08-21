@@ -1,8 +1,9 @@
+use dioxus::dioxus_core::spawn_forever;
 use dioxus::document;
 use dioxus::prelude::*;
 
 use crate::markdown;
-use crate::state::{send_prompt, use_app_ctx, ChatItem, Screen};
+use crate::state::{answer_permission, send_prompt, stop_turn, use_app_ctx, ChatItem, Screen};
 
 #[component]
 pub fn ChatView() -> Element {
@@ -11,20 +12,10 @@ pub fn ChatView() -> Element {
     let usage = (ctx.usage)();
     let mut draft = use_signal(String::new);
 
-    // Keep the transcript pinned to the bottom as content streams in.
-    let item_count = chat.items.len();
-    let last_len = chat
-        .items
-        .last()
-        .map(|item| match item {
-            ChatItem::User { text } => text.len(),
-            ChatItem::Assistant { text, .. } => text.len(),
-            ChatItem::Thought { text, .. } => text.len(),
-            ChatItem::Tool { output, .. } => output.len(),
-        })
-        .unwrap_or(0);
+    // Keep the transcript pinned to the bottom as content streams in. The
+    // chat signal is read INSIDE the effect so it re-runs on every change.
     use_effect(move || {
-        let _ = (item_count, last_len);
+        let _ = ctx.chat.read().items.len();
         document::eval(
             "requestAnimationFrame(() => { \
                const el = document.getElementById('chat-scroll'); \
@@ -41,8 +32,11 @@ pub fn ChatView() -> Element {
         if text.is_empty() {
             return;
         }
-        draft.set(String::new());
-        send_prompt(ctx, text);
+        // Only clear the draft once the message was actually accepted, so a
+        // failed send (e.g. disconnected) doesn't eat the typed text.
+        if send_prompt(ctx, text) {
+            draft.set(String::new());
+        }
     };
 
     rsx! {
@@ -52,7 +46,7 @@ pub fn ChatView() -> Element {
                 onclick: move |_| {
                     let mut screen = ctx.screen;
                     screen.set(Screen::Sessions);
-                    spawn(async move { crate::state::refresh_sessions(ctx, false).await });
+                    spawn_forever(async move { crate::state::refresh_sessions(ctx, false).await });
                 },
                 "‹"
             }
@@ -97,14 +91,7 @@ pub fn ChatView() -> Element {
             if running {
                 button {
                     class: "btn danger",
-                    onclick: move |_| {
-                        if let (Some(client), Some(session_id)) = (
-                            ctx.client.peek().clone(),
-                            ctx.chat.peek().session_id.clone(),
-                        ) {
-                            client.cancel(&session_id);
-                        }
-                    },
+                    onclick: move |_| stop_turn(ctx),
                     "Stop"
                 }
             } else {
@@ -192,11 +179,13 @@ fn format_tokens(n: u64) -> String {
     }
 }
 
-/// Modal shown while the agent waits for a tool permission decision.
+/// Modal shown while the agent waits for a tool permission decision. Renders
+/// the FRONT of the permission queue; answering reveals the next request.
 #[component]
 pub fn PermissionModal() -> Element {
     let ctx = use_app_ctx();
-    let Some(request) = (ctx.permission)() else {
+    let queue = (ctx.permission)();
+    let Some(request) = queue.first().cloned() else {
         return rsx! {};
     };
 
@@ -213,10 +202,28 @@ pub fn PermissionModal() -> Element {
         .map(|v| serde_json::to_string_pretty(v).unwrap_or_default())
         .unwrap_or_default();
 
+    // Show which session is asking when it isn't the one on screen.
+    let current = ctx.chat.read().session_id.clone();
+    let session_label = if current.as_deref() != Some(request.session_id.as_str()) {
+        let sessions = ctx.sessions.read();
+        let name = sessions
+            .iter()
+            .find(|s| s.session_id == request.session_id)
+            .map(|s| s.display_title())
+            .unwrap_or_else(|| request.session_id.clone());
+        Some(format!("Session: {name}"))
+    } else {
+        None
+    };
+    let pending_more = queue.len().saturating_sub(1);
+
     rsx! {
         div { class: "modal-backdrop",
             div { class: "modal",
                 h2 { "Permission request" }
+                if let Some(label) = session_label {
+                    p { class: "modal-session", "{label}" }
+                }
                 p { class: "modal-tool", "{title}" }
                 if !input.is_empty() {
                     details { class: "tool-output",
@@ -237,19 +244,19 @@ pub fn PermissionModal() -> Element {
                                 let request_id = request.request_id.clone();
                                 let option_id = option.option_id.clone();
                                 move |_| {
-                                    if let Some(client) = ctx.client.peek().clone() {
-                                        client.respond_permission(
-                                            request_id.clone(),
-                                            Some(option_id.clone()),
-                                        );
-                                    }
-                                    let mut permission = ctx.permission;
-                                    permission.set(None);
+                                    answer_permission(
+                                        ctx,
+                                        request_id.clone(),
+                                        Some(option_id.clone()),
+                                    );
                                 }
                             },
                             {permission_label(option.name.as_deref(), &option.option_id)}
                         }
                     }
+                }
+                if pending_more > 0 {
+                    p { class: "modal-pending", "+{pending_more} more waiting" }
                 }
             }
         }

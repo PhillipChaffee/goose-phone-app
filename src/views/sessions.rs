@@ -1,3 +1,4 @@
+use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 
 use crate::state::{
@@ -37,7 +38,7 @@ pub fn SessionsView() -> Element {
                     class: "btn secondary",
                     disabled: loading,
                     onclick: move |_| {
-                        spawn(async move { refresh_sessions(ctx, false).await });
+                        spawn_forever(async move { refresh_sessions(ctx, false).await });
                     },
                     if loading { "…" } else { "↻" }
                 }
@@ -82,7 +83,7 @@ pub fn SessionsView() -> Element {
                                         move |_| {
                                             let session_id = session_id.clone();
                                             confirm_delete.set(None);
-                                            spawn(async move {
+                                            spawn_forever(async move {
                                                 let Some(client) = ctx.client.peek().clone() else { return };
                                                 match client.session_delete(&session_id).await {
                                                     Ok(()) => {
@@ -122,7 +123,7 @@ pub fn SessionsView() -> Element {
                         class: "btn secondary grow",
                         disabled: loading,
                         onclick: move |_| {
-                            spawn(async move { refresh_sessions(ctx, true).await });
+                            spawn_forever(async move { refresh_sessions(ctx, true).await });
                         },
                         "Load more"
                     }
