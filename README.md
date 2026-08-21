@@ -90,13 +90,18 @@ dx doctor                                        # verifies platform toolchains
 dx serve
 ```
 
+> **Putting it on a real iPhone?** [`docs/iphone-setup.md`](docs/iphone-setup.md)
+> is a verified end-to-end walkthrough (signing, Developer Mode, Tailscale on
+> the phone, and the failure modes), for the case where goose already runs on a
+> tailnet-connected server.
+
 ### iOS (requires a Mac with Xcode)
 
 ```bash
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim
 open -a Simulator && dx serve --ios          # simulator
 dx serve --ios --device                      # physical device (needs a provisioning profile)
-dx bundle --ios                              # release .ipa
+dx bundle --ios --release --codesign        # release .ipa (must be signed)
 ```
 
 ### Android (requires Android Studio + NDK)
@@ -153,7 +158,8 @@ cargo run -p goose-acp-client --example smoke -- http://127.0.0.1:3285 mock-secr
 - `cargo test -p goose-acp-client` runs protocol unit tests (wire-shape fidelity against goose 1.47 frames).
 - The client advertises no `fs`/`terminal` capabilities, so the agent always uses its own server-side tools — the phone only ever approves or rejects them.
 - Settings persist in the app-private data directory (`dioxus-sdk-storage`); the secret never leaves the device except as the `X-Secret-Key` header to your server.
-- The WebSocket sends a ping every 30 s to keep NAT/VPN paths alive; `session/prompt` deliberately has no timeout (agent turns can run for minutes).
+- The WebSocket sends a ping every 30 s and treats two unanswered pings as a dead connection — a phone that changes networks (or a NAT/VPN gateway that drops an idle mapping) otherwise leaves a half-open socket that looks connected. `session/prompt` deliberately has no timeout (agent turns can run for minutes).
+- `./scripts/check-server.sh` verifies a goose server is in the shape the app needs and prints the values to enter in Settings.
 - Session history replays through the same streaming path as live updates (`session/load`), so one rendering pipeline covers both.
 
 ## Security

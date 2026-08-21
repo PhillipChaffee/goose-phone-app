@@ -360,6 +360,14 @@ async fn actor(
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     keepalive.reset(); // don't ping immediately
 
+    // Pings we have sent with nothing heard back since. A phone that moves
+    // between networks — or a NAT/VPN gateway that drops an idle mapping —
+    // leaves a half-open socket: sends still "succeed" into a dead
+    // connection. Any inbound frame proves liveness; silence across two
+    // ping intervals means the connection is gone.
+    const MAX_MISSED_PONGS: u32 = 2;
+    let mut unanswered_pings: u32 = 0;
+
     let mut reason = "connection closed".to_string();
 
     loop {
@@ -415,6 +423,9 @@ async fn actor(
                 }
             }
             msg = stream.next() => {
+                // Anything received — data, pong, even a ping — proves the
+                // peer is still there.
+                unanswered_pings = 0;
                 match msg {
                     None => break,
                     Some(Err(e)) => {
@@ -448,10 +459,15 @@ async fn actor(
                 }
             }
             _ = keepalive.tick() => {
+                if unanswered_pings >= MAX_MISSED_PONGS {
+                    reason = "server stopped responding (no pong)".to_string();
+                    break;
+                }
                 if sink.send(Message::Ping(Vec::new().into())).await.is_err() {
                     reason = "keepalive failed".to_string();
                     break;
                 }
+                unanswered_pings += 1;
             }
         }
     }

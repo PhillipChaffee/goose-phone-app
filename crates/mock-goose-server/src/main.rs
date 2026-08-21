@@ -205,6 +205,11 @@ async fn handle_conn(mut socket: TcpStream, state: Shared, secret: String) -> io
 type Ws = tokio_tungstenite::WebSocketStream<Prefixed>;
 
 async fn serve_ws(ws: Ws, state: Shared) {
+    // MOCK_SILENT=1 simulates a half-open connection: the socket stays open
+    // but the peer stops reading and answering (so tungstenite never
+    // auto-pongs). Used to verify the client's ping-timeout detection.
+    let silent_after = std::env::var("MOCK_SILENT").ok().is_some_and(|v| v == "1");
+
     let (mut sink, mut stream) = ws.split();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Message>();
 
@@ -273,6 +278,15 @@ async fn serve_ws(ws: Ws, state: Shared) {
                     }
                 };
                 let _ = out_tx.send(Message::Text(frame.to_string().into()));
+
+                if silent_after && m == "initialize" {
+                    // Answer the handshake, then go dead while holding the
+                    // socket open: stop polling the stream so no pongs are
+                    // ever sent. A correct client notices via ping timeout.
+                    eprintln!("MOCK_SILENT: going silent after initialize");
+                    tokio::time::sleep(Duration::from_secs(600)).await;
+                    return;
+                }
             }
             _ => {}
         }

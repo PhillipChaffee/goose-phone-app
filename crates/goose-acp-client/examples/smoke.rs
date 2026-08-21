@@ -1,14 +1,42 @@
 //! Protocol smoke test against a running server:
 //!   cargo run -p goose-acp-client --example smoke -- http://127.0.0.1:3284 SECRET [--prompt]
+//!
+//! `--watch` instead connects and idles, reporting how long until the
+//! connection is declared dead — used to verify ping-timeout detection
+//! against a server that stops responding (see MOCK_SILENT in
+//! mock-goose-server).
+
+use std::time::Instant;
 
 use goose_acp_client::{probe, AcpClient, AcpEvent, ConnectConfig, SessionUpdate};
 
 #[tokio::main]
 async fn main() {
     let mut args = std::env::args().skip(1);
-    let base_url = args.next().expect("usage: smoke <base_url> <secret> [--prompt]");
+    let base_url = args
+        .next()
+        .expect("usage: smoke <base_url> <secret> [--prompt|--watch]");
     let secret = args.next().unwrap_or_default();
-    let run_prompt = args.next().as_deref() == Some("--prompt");
+    let mode = args.next();
+    let run_prompt = mode.as_deref() == Some("--prompt");
+
+    if mode.as_deref() == Some("--watch") {
+        let cfg = ConnectConfig { base_url, secret, fingerprint: None };
+        let started = Instant::now();
+        let (_client, mut events, info) = AcpClient::connect(&cfg).await.expect("connect");
+        println!("connected to {} — idling", info.agent_name);
+        while let Some(event) = events.recv().await {
+            if let AcpEvent::Disconnected { reason } = event {
+                println!(
+                    "disconnected after {:.0}s: {reason}",
+                    started.elapsed().as_secs_f64()
+                );
+                return;
+            }
+        }
+        println!("event stream ended without a Disconnected event");
+        return;
+    }
 
     println!("probe: {:?}", probe(&base_url, &secret, false).await);
 
