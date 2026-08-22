@@ -370,15 +370,23 @@ fn push_chunk(chat: &mut Signal<ChatState>, chunk: MessageChunk, kind: ChunkKind
 
     // Append to the trailing bubble when it belongs to the same message.
     match (&kind, c.items.last_mut()) {
-        (ChunkKind::Assistant, Some(ChatItem::Assistant { message_id: last_id, text: last }))
-            if *last_id == message_id || message_id.is_none() =>
-        {
+        (
+            ChunkKind::Assistant,
+            Some(ChatItem::Assistant {
+                message_id: last_id,
+                text: last,
+            }),
+        ) if *last_id == message_id || message_id.is_none() => {
             last.push_str(&text);
             return;
         }
-        (ChunkKind::Thought, Some(ChatItem::Thought { message_id: last_id, text: last }))
-            if *last_id == message_id || message_id.is_none() =>
-        {
+        (
+            ChunkKind::Thought,
+            Some(ChatItem::Thought {
+                message_id: last_id,
+                text: last,
+            }),
+        ) if *last_id == message_id || message_id.is_none() => {
             last.push_str(&text);
             return;
         }
@@ -398,7 +406,13 @@ fn push_chunk(chat: &mut Signal<ChatState>, chunk: MessageChunk, kind: ChunkKind
 
 fn apply_tool_update(chat: &mut Signal<ChatState>, update: ToolCallUpdate) {
     let mut c = chat.write();
-    let Some(ChatItem::Tool { title, kind, status, output, .. }) = c
+    let Some(ChatItem::Tool {
+        title,
+        kind,
+        status,
+        output,
+        ..
+    }) = c
         .items
         .iter_mut()
         .rev()
@@ -611,7 +625,9 @@ pub fn answer_permission(ctx: AppCtx, request_id: Value, option_id: Option<Strin
         client.respond_permission(request_id.clone(), option_id);
     }
     let mut permission = ctx.permission;
-    permission.write().retain(|req| req.request_id != request_id);
+    permission
+        .write()
+        .retain(|req| req.request_id != request_id);
 }
 
 /// Human-friendly `updatedAt` (RFC3339 → "YYYY-MM-DD HH:MM").

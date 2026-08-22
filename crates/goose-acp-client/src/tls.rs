@@ -32,8 +32,7 @@ pub fn parse_fingerprint(input: &str) -> Result<Option<[u8; 32]>, String> {
     }
     let mut out = [0u8; 32];
     for (i, byte) in out.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&cleaned[i * 2..i * 2 + 2], 16)
-            .map_err(|e| e.to_string())?;
+        *byte = u8::from_str_radix(&cleaned[i * 2..i * 2 + 2], 16).map_err(|e| e.to_string())?;
     }
     Ok(Some(out))
 }

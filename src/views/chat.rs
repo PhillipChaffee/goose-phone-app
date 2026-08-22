@@ -133,7 +133,13 @@ fn render_item(index: usize, item: &ChatItem) -> Element {
                 }
             }
         }
-        ChatItem::Tool { title, kind, status, output, .. } => {
+        ChatItem::Tool {
+            title,
+            kind,
+            status,
+            output,
+            ..
+        } => {
             let icon = tool_icon(kind);
             let has_output = !output.is_empty();
             rsx! {

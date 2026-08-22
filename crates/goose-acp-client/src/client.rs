@@ -113,7 +113,7 @@ enum Cmd {
 }
 
 /// Cloneable handle to a live ACP connection.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AcpClient {
     tx: mpsc::UnboundedSender<Cmd>,
 }
@@ -493,7 +493,9 @@ async fn handle_incoming<S>(
         // Response to one of our requests.
         (None, Some(id)) => {
             let Some(id) = id.as_u64() else { return };
-            let Some(reply) = pending.remove(&id) else { return };
+            let Some(reply) = pending.remove(&id) else {
+                return;
+            };
             let result = if let Some(error) = value.get("error") {
                 Err(AcpError::Rpc {
                     code: error.get("code").and_then(Value::as_i64).unwrap_or(-32603),

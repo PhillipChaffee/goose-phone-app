@@ -4,9 +4,8 @@
 use pulldown_cmark::{html, Event, Options, Parser, Tag, TagEnd};
 
 pub fn to_html(markdown: &str) -> String {
-    let options = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS;
+    let options =
+        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     // Images become plain text so the WebView never fetches remote content
     // (which would go through ATS/cleartext policies and leak the tailnet's
     // existence to arbitrary hosts the agent mentions).

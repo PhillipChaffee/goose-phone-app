@@ -21,7 +21,11 @@ async fn main() {
     let run_prompt = mode.as_deref() == Some("--prompt");
 
     if mode.as_deref() == Some("--watch") {
-        let cfg = ConnectConfig { base_url, secret, fingerprint: None };
+        let cfg = ConnectConfig {
+            base_url,
+            secret,
+            fingerprint: None,
+        };
         let started = Instant::now();
         let (_client, mut events, info) = AcpClient::connect(&cfg).await.expect("connect");
         println!("connected to {} — idling", info.agent_name);
@@ -40,7 +44,11 @@ async fn main() {
 
     println!("probe: {:?}", probe(&base_url, &secret, false).await);
 
-    let cfg = ConnectConfig { base_url, secret, fingerprint: None };
+    let cfg = ConnectConfig {
+        base_url,
+        secret,
+        fingerprint: None,
+    };
     let (client, mut events, info) = AcpClient::connect(&cfg).await.expect("connect");
     println!("connected: {} {}", info.agent_name, info.agent_version);
 
@@ -100,9 +108,7 @@ async fn main() {
 
         let prompt_client = client.clone();
         let prompt_task =
-            tokio::spawn(
-                async move { prompt_client.prompt(&sid, "smoke test: run a tool").await },
-            );
+            tokio::spawn(async move { prompt_client.prompt(&sid, "smoke test: run a tool").await });
 
         if let Ok(Some(p)) = pump.await {
             client.respond_permission(p.request_id, Some("allow_once".into()));

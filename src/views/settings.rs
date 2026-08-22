@@ -60,7 +60,9 @@ pub fn SettingsView() -> Element {
             testing.set(false);
             match outcome {
                 ProbeOutcome::Ok => show_toast(&ctx, "Server reachable, secret accepted ✓"),
-                ProbeOutcome::AuthFailed => show_toast(&ctx, "Server reachable, but the secret key was rejected"),
+                ProbeOutcome::AuthFailed => {
+                    show_toast(&ctx, "Server reachable, but the secret key was rejected")
+                }
                 ProbeOutcome::Unreachable(e) => show_toast(&ctx, format!("Unreachable: {e}")),
             }
         });

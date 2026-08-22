@@ -67,7 +67,11 @@ impl ContentBlock {
     }
 
     pub fn text(text: impl Into<String>) -> Self {
-        ContentBlock::Text { text: text.into(), annotations: None, meta: None }
+        ContentBlock::Text {
+            text: text.into(),
+            annotations: None,
+            meta: None,
+        }
     }
 }
 
@@ -313,7 +317,10 @@ pub struct InitializeInfo {
 #[derive(Debug)]
 pub enum AcpEvent {
     /// `session/update` notification.
-    Update { session_id: String, update: SessionUpdate },
+    Update {
+        session_id: String,
+        update: SessionUpdate,
+    },
     /// `_goose/unstable/session/update` notification (token usage, status
     /// messages). Payload is the raw `update` object tagged by `sessionUpdate`.
     GooseUpdate { session_id: String, update: Value },
@@ -430,6 +437,9 @@ mod tests {
         assert_eq!(info.session_id, "20260821_1");
         assert_eq!(info.display_title(), "Fix the build");
         assert_eq!(info.message_count(), Some(12));
-        assert_eq!(info.last_message_snippet().as_deref(), Some("Done — the build is green."));
+        assert_eq!(
+            info.last_message_snippet().as_deref(),
+            Some("Done — the build is green.")
+        );
     }
 }

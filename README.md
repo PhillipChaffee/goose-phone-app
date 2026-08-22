@@ -1,177 +1,195 @@
 # Goose Mobile
 
-A mobile client for [goose](https://github.com/aaif-goose/goose) — the open-source AI agent from the Agentic AI Foundation (originally created by Block) — written entirely in **Rust** with [Dioxus](https://dioxuslabs.com). One codebase builds for **iOS**, **Android**, and desktop, and connects to a remote goose server running on your own machine or cloud box, reached privately over **Tailscale**.
+[![CI](https://github.com/PhillipChaffee/goose-phone-app/actions/workflows/ci.yml/badge.svg)](https://github.com/PhillipChaffee/goose-phone-app/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/PhillipChaffee/goose-phone-app/branch/main/graph/badge.svg)](https://codecov.io/gh/PhillipChaffee/goose-phone-app)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-```
-┌─────────────┐     Tailscale (WireGuard)      ┌──────────────────────┐
-│  Phone       │  wss://goose-box.tailnet…/acp │  Cloud / home server │
-│  Goose Mobile│ ─────────────────────────────▶│  goose serve (ACP)   │
-│  + Tailscale │      JSON-RPC over WebSocket  │  + tailscaled        │
-└─────────────┘                                └──────────────────────┘
-```
+**Talk to your own [goose](https://github.com/aaif-goose/goose) AI agent from your phone.**
+
+Goose Mobile is a native client for a goose agent running on your own machine — a
+home server, a cloud VPS, your desktop. It reaches that server privately over
+[Tailscale](https://tailscale.com), so nothing is exposed to the public internet.
+Written entirely in Rust with [Dioxus](https://dioxuslabs.com), one codebase builds
+for **iOS**, **Android**, and desktop.
+
+<p align="center">
+  <img src="docs/images/chat.png" alt="Streaming chat with tool output" width="32%">
+  <img src="docs/images/permission.png" alt="Tool permission prompt" width="32%">
+  <img src="docs/images/sessions.png" alt="Session list" width="32%">
+</p>
+
+## Features
+
+- **Full agent chat** — streamed responses rendered as markdown (code blocks, tables, lists), with the agent's reasoning in collapsible sections.
+- **Tool visibility and control** — every tool call appears as a card with live status and output, and the agent's permission requests become an approval sheet: allow once, always allow, or reject.
+- **Sessions** — browse, resume, and delete your server-side sessions; history replays through the same rendering path as live output, so a resumed chat looks identical.
+- **Built for a phone on a flaky network** — Stop cancels a running turn, dropped connections reconnect automatically and replay history, and half-open sockets (the classic "connected but nothing happens" after switching networks) are detected and recovered.
+- **Private by default** — reaches your server over your tailnet, authenticated with a shared secret, with optional certificate pinning.
 
 ## How it works
 
-Modern goose (≥ 1.42) exposes a single API: the [Agent Client Protocol](https://agentclientprotocol.com) (JSON-RPC 2.0) served by `goose serve` at `/acp`. This app speaks it over a WebSocket — the same transport the official goose Desktop app uses:
+```
+┌──────────────┐    Tailscale (WireGuard)      ┌──────────────────────┐
+│  Your phone  │  wss://goose-box.tailnet…/acp │  Your server         │
+│ Goose Mobile │ ─────────────────────────────▶│  goose serve (ACP)   │
+│  + Tailscale │   JSON-RPC over WebSocket     │  + tailscaled        │
+└──────────────┘                               └──────────────────────┘
+```
 
-- `initialize` → `session/new` / `session/load` / `session/list` → `session/prompt`
-- streamed `session/update` notifications render live assistant text, thinking, and tool calls
-- `session/request_permission` requests from the agent pop a native approval sheet (allow once / always / reject)
-- `session/cancel` stops a running turn; token usage is shown from goose's usage notifications
-- disconnects (phone sleeping, network blips) auto-reconnect — quick backoff ramp, then a steady 30 s retry until the server is back — and the open session's history is replayed
+goose (≥ 1.42) exposes one API: the [Agent Client Protocol](https://agentclientprotocol.com)
+— JSON-RPC 2.0 served by `goose serve` at `/acp`. This app speaks it over a
+WebSocket, the same transport the official goose Desktop app uses.
 
-The protocol layer lives in [`crates/goose-acp-client`](crates/goose-acp-client) — a UI-independent tokio + tungstenite + rustls library you can reuse in other Rust clients.
+The protocol layer lives in [`crates/goose-acp-client`](crates/goose-acp-client): a
+UI-independent tokio + tungstenite + rustls library you can reuse in any Rust client.
 
-## 1. Server setup
+## Requirements
 
-On the machine that will run goose (any always-on Linux/macOS box):
+- A machine to run goose on (any always-on Linux or macOS box) with an AI provider configured
+- [Tailscale](https://tailscale.com) on that machine and on your phone — the free tier is plenty
+- To build for iOS: a Mac with Xcode. For Android: Android Studio with the NDK
+
+## Quick start
+
+### 1. Run goose as a server
 
 ```bash
 # Install goose and configure your AI provider once
 curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | bash
 goose configure
 
-# Run the server (default port 3284). The secret key is the app's password.
+# Start the server. The secret key is the app's password.
 GOOSE_SERVER__SECRET_KEY='pick-a-long-random-secret' \
   goose serve --platform desktop --enable-scheduler --host 127.0.0.1 --port 3284
 ```
 
-Verify it locally: `curl http://127.0.0.1:3284/status` → `ok`.
+### 2. Put it on your tailnet
 
-goose's own guide for this setup: [Remote goose server](https://github.com/aaif-goose/goose/blob/main/documentation/docs/guides/remote-goose-server.md).
-
-## 2. Tailscale setup (recommended path)
-
-1. Install [Tailscale](https://tailscale.com) on the server (`tailscaled` + `tailscale up`) and sign in to your tailnet.
-2. In the [admin console → DNS](https://login.tailscale.com/admin/dns): enable **MagicDNS** and **HTTPS Certificates**.
-3. Front goose with tailnet-only HTTPS (a real Let's Encrypt certificate, no self-signed anything):
-
-   ```bash
-   sudo tailscale serve --bg 3284
-   ```
-
-   Your server is now `https://<machine-name>.<tailnet-name>.ts.net` — reachable **only** from your tailnet, with goose still bound to localhost.
-4. On your phone, install the Tailscale app (App Store / Play Store), sign in to the same tailnet, and toggle the VPN on.
-
-In Goose Mobile's settings, enter:
-
-- **Server URL**: `https://<machine-name>.<tailnet-name>.ts.net`
-- **Secret key**: the `GOOSE_SERVER__SECRET_KEY` value
-- **Working directory**: an absolute path on the server where new sessions start, e.g. `/home/you/projects`
-
-Tap **Test connection**, then **Save & Connect**.
-
-### Alternative: goose's own TLS (self-signed + pinning)
-
-If you'd rather not use `tailscale serve`, run goose with TLS directly:
+With Tailscale running on that machine, and **MagicDNS** + **HTTPS Certificates**
+enabled in the [admin console](https://login.tailscale.com/admin/dns):
 
 ```bash
-GOOSE_SERVER__SECRET_KEY='…' goose serve --host 0.0.0.0 --port 3284 --tls
+sudo tailscale serve --bg 3284
 ```
 
-goose prints `GOOSED_CERT_FINGERPRINT=AA:BB:…` at startup. Use `https://<tailnet-ip-or-name>:3284` as the server URL and paste that fingerprint into the app's **TLS certificate fingerprint** field — the app pins that exact certificate (same scheme as goose Desktop).
+Your server is now at `https://<machine>.<tailnet>.ts.net` with a real certificate,
+reachable only from your tailnet, with goose still bound to localhost.
 
-### Alternative: plain HTTP over the tailnet
-
-`http://<machine-name>.<tailnet-name>.ts.net:3284` (with `--host 0.0.0.0`, no `--tls`) also works — Tailscale already encrypts the path end-to-end, and the app's networking is pure Rust, so iOS ATS / Android cleartext policies don't intercept it. Keep the secret key set either way; the tailnet ACL plus the secret are your two layers of defense.
-
-## 3. Building the app
-
-Install the Dioxus CLI once:
+Verify everything is in the shape the app needs:
 
 ```bash
-curl -sSL https://dioxus.dev/install.sh | bash   # or: cargo install dioxus-cli
-dx doctor                                        # verifies platform toolchains
+./scripts/check-server.sh
 ```
 
-### Desktop (development)
+It checks the goose process and version, the secret, what address it listens on,
+`tailscale serve`, and the HTTP signals that matter — then prints the exact values
+to enter in the app.
+
+### 3. Build and install
 
 ```bash
-dx serve
+curl -sSL https://dioxus.dev/install.sh | bash   # the dx CLI
+dx serve --desktop                               # try it on your computer first
 ```
 
-> **Putting it on a real iPhone?** [`docs/iphone-setup.md`](docs/iphone-setup.md)
-> is a verified end-to-end walkthrough (signing, Developer Mode, Tailscale on
-> the phone, and the failure modes), for the case where goose already runs on a
-> tailnet-connected server.
-
-### iOS (requires a Mac with Xcode)
+**iOS** — see [`docs/iphone-setup.md`](docs/iphone-setup.md) for the full walkthrough
+(signing is the fiddly part):
 
 ```bash
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim
-open -a Simulator && dx serve --ios          # simulator
-dx serve --ios --device                      # physical device (needs a provisioning profile)
-dx bundle --ios --release --codesign        # release .ipa (must be signed)
+dx serve --ios              # simulator
+dx serve --ios --device     # your iPhone
+dx bundle --ios --release --codesign
 ```
 
-### Android (requires Android Studio + NDK)
+**Android**:
 
 ```bash
 rustup target add aarch64-linux-android armv7-linux-androideabi \
                   i686-linux-android x86_64-linux-android
-# In Android Studio's SDK Manager install: SDK, command-line tools, NDK (side by side), CMake.
-# Export JAVA_HOME / ANDROID_HOME / NDK_HOME per the Dioxus mobile guide.
-dx serve --android                           # emulator
-dx serve --android --device                  # physical device via adb
-dx bundle --android                          # release .aab (use --package-types apk for an APK)
+dx serve --android          # emulator
+dx serve --android --device # your phone
+dx bundle --android         # .aab (--package-types apk for an APK)
 ```
 
-Bundle identifiers and Android signing are configured in [`Dioxus.toml`](Dioxus.toml). See the [Dioxus mobile guide](https://dioxuslabs.com/learn/0.7/guides/platforms/mobile) for toolchain details.
+### 4. Connect
 
-## Project layout
+Install Tailscale on your phone, sign in to the same tailnet, turn it on. Then in
+the app's settings:
 
-```
-├── src/                     # Dioxus app (UI, state, event pump)
-│   ├── main.rs              #   entry point
-│   ├── app.rs               #   root component + screen switching
-│   ├── state.rs             #   settings, connection lifecycle, chat transcript fold
-│   ├── markdown.rs          #   sanitized markdown → HTML for chat bubbles
-│   └── views/               #   Settings / Sessions / Chat screens + permission modal
-├── assets/main.css          # mobile-first dark theme
-├── crates/goose-acp-client/ # reusable ACP protocol library (tokio + tungstenite + rustls)
-└── Dioxus.toml              # bundle config (identifiers, Android SDK levels)
-```
+| Field | Value |
+| --- | --- |
+| **Server URL** | `https://<machine>.<tailnet>.ts.net` |
+| **Secret key** | your `GOOSE_SERVER__SECRET_KEY` |
+| **Working directory** | an absolute path on the server, e.g. `/home/you/projects` |
+| **TLS fingerprint** | leave empty unless you use `goose serve --tls` (see below) |
 
-## Testing without an AI provider
+Tap **Test connection**, then **Save & Connect**.
 
-The workspace ships a protocol-faithful mock of `goose serve`
-([`crates/mock-goose-server`](crates/mock-goose-server)): same auth surface
-(401 / 406 probe), scripted turns with thinking, streamed markdown, a tool
-call with a real permission round-trip, cancellation, and history replay.
-Use it to exercise every app feature with no server or API key:
+<p align="center">
+  <img src="docs/images/settings.png" alt="Settings screen" width="45%">
+</p>
+
+## Connection options
+
+| Setup | Server URL | Notes |
+| --- | --- | --- |
+| `tailscale serve` (recommended) | `https://<machine>.<tailnet>.ts.net` | Real Let's Encrypt certificate, goose stays on localhost |
+| goose's own TLS | `https://<host>:3284` | Run `goose serve --tls`; paste the `GOOSED_CERT_FINGERPRINT` it prints into the fingerprint field to pin the self-signed certificate |
+| Plain HTTP over the tailnet | `http://<host>:3284` | Works — Tailscale already encrypts the path, and the app's networking is pure Rust so iOS ATS doesn't block it |
+
+## Try it without a server
+
+The workspace ships a protocol-faithful mock of `goose serve`, so you can exercise
+every feature with no server and no API key:
 
 ```bash
-cargo run -p mock-goose-server            # listens on http://127.0.0.1:3285
-# in the app: URL http://127.0.0.1:3285, secret "mock-secret", working dir /home/demo
+cargo run -p mock-goose-server     # http://127.0.0.1:3285, secret "mock-secret"
 ```
 
-Prompt keywords: `slow` streams long enough to try the Stop button; `notool`
-skips the tool call. There is also a CLI protocol smoke test that works
-against the mock or a real server:
+Point the app at it with working directory `/home/demo`. Prompt keywords: `slow`
+streams long enough to try the Stop button, `notool` skips the tool call.
+
+## Development
 
 ```bash
-cargo run -p goose-acp-client --example smoke -- http://127.0.0.1:3285 mock-secret --prompt
+cargo check --workspace          # must be warning-free
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace           # unit + integration tests
+cargo llvm-cov -p goose-acp-client --summary-only   # coverage
+dx serve --desktop               # run the app
 ```
 
-## Development notes
+```
+├── src/                     # Dioxus app
+│   ├── state.rs             #   connection lifecycle, chat transcript folding
+│   └── views/               #   Settings / Sessions / Chat + permission modal
+├── crates/goose-acp-client/ # ACP protocol library (reusable, UI-independent)
+├── crates/mock-goose-server/# fake goose server for testing
+├── scripts/check-server.sh  # verify a server is app-ready
+└── docs/iphone-setup.md     # iPhone deployment walkthrough
+```
 
-- `cargo test -p goose-acp-client` runs protocol unit tests (wire-shape fidelity against goose 1.47 frames).
-- The client advertises no `fs`/`terminal` capabilities, so the agent always uses its own server-side tools — the phone only ever approves or rejects them.
-- Settings persist in the app-private data directory (`dioxus-sdk-storage`); the secret never leaves the device except as the `X-Secret-Key` header to your server.
-- The WebSocket sends a ping every 30 s and treats two unanswered pings as a dead connection — a phone that changes networks (or a NAT/VPN gateway that drops an idle mapping) otherwise leaves a half-open socket that looks connected. `session/prompt` deliberately has no timeout (agent turns can run for minutes).
-- `./scripts/check-server.sh` verifies a goose server is in the shape the app needs and prints the values to enter in Settings.
-- Session history replays through the same streaming path as live updates (`session/load`), so one rendering pipeline covers both.
+The coverage badge measures `goose-acp-client` — the UI-independent half of the
+workspace, where the protocol and connection logic live.
 
 ## Security
 
-- Prefer the `tailscale serve` setup: tailnet-only exposure, real certificates, goose bound to loopback.
-- Use a long random `GOOSE_SERVER__SECRET_KEY`; the app sends it only to the configured server.
-- Restrict which tailnet devices may reach the goose port with [Tailscale ACLs](https://tailscale.com/kb/1018/acls).
-- Tool permission prompts are your last line of defense — leave goose in approval mode for remote use.
+- Prefer `tailscale serve`: tailnet-only exposure, real certificates, goose bound to loopback.
+- Use a long random `GOOSE_SERVER__SECRET_KEY`. The app sends it only to the server you configure, and stores it in the app-private data directory.
+- Restrict which devices can reach the goose port with [Tailscale ACLs](https://tailscale.com/kb/1018/acls). Note that `tailscale serve` means peers connect on port **443**, not 3284.
+- Tool permission prompts are your last line of defense — leave goose in an approval mode for remote use.
 
-## Roadmap ideas
+## Status
 
-- Embedded Tailscale (`libtailscale`) for one-tap onboarding without the separate VPN app
-- Image attachments (the protocol layer already models `ContentBlock::Image`)
-- Mid-turn steering via `_goose/unstable/session/steer`
-- Session rename/archive, recipes, and model switching from the phone
+Working and tested against a real `goose serve`, plus a full UI pass against the
+mock. Not yet exercised: a production tailnet round-trip from a physical device.
+Expect rough edges on first device install — [`docs/iphone-setup.md`](docs/iphone-setup.md)
+covers the known ones.
+
+Ideas for next: image attachments, mid-turn steering, session rename/archive,
+model switching from the phone, and embedded Tailscale for one-tap onboarding.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

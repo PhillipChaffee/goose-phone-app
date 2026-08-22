@@ -133,7 +133,9 @@ async fn main() {
     println!("mock goose serve listening on http://127.0.0.1:{port} (secret: {secret})");
 
     loop {
-        let Ok((socket, _)) = listener.accept().await else { continue };
+        let Ok((socket, _)) = listener.accept().await else {
+            continue;
+        };
         let state = state.clone();
         let secret = secret.clone();
         tokio::spawn(async move {
@@ -194,7 +196,11 @@ async fn handle_conn(mut socket: TcpStream, state: Shared, secret: String) -> io
         return Ok(());
     }
 
-    let stream = Prefixed { prefix: head, pos: 0, inner: socket };
+    let stream = Prefixed {
+        prefix: head,
+        pos: 0,
+        inner: socket,
+    };
     let ws = tokio_tungstenite::accept_async(stream)
         .await
         .map_err(|e| io::Error::other(e.to_string()))?;
@@ -236,9 +242,14 @@ async fn serve_ws(ws: Ws, state: Shared) {
             Message::Close(_) => break,
             _ => continue,
         };
-        let Ok(frame) = serde_json::from_str::<Value>(text.as_str()) else { continue };
+        let Ok(frame) = serde_json::from_str::<Value>(text.as_str()) else {
+            continue;
+        };
 
-        let method = frame.get("method").and_then(Value::as_str).map(str::to_string);
+        let method = frame
+            .get("method")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         let id = frame.get("id").cloned();
         let params = frame.get("params").cloned().unwrap_or(Value::Null);
 
@@ -251,7 +262,10 @@ async fn serve_ws(ws: Ws, state: Shared) {
                 }
             }
             (Some("session/cancel"), None) => {
-                let sid = params.get("sessionId").and_then(Value::as_str).unwrap_or("");
+                let sid = params
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 if let Some(notify) = cancels.lock().unwrap().get(sid) {
                     notify.notify_waiters();
                 }
@@ -261,7 +275,11 @@ async fn serve_ws(ws: Ws, state: Shared) {
                 let state = state.clone();
                 let pending = pending.clone();
                 let cancel = Arc::new(Notify::new());
-                let sid = params.get("sessionId").and_then(Value::as_str).unwrap_or("").to_string();
+                let sid = params
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
                 cancels.lock().unwrap().insert(sid.clone(), cancel.clone());
                 let cancels = cancels.clone();
                 tokio::spawn(async move {
@@ -300,7 +318,11 @@ fn notify(out: &mpsc::UnboundedSender<Message>, method: &str, params: Value) {
 }
 
 fn session_update(out: &mpsc::UnboundedSender<Message>, sid: &str, update: &Value) {
-    notify(out, "session/update", json!({"sessionId": sid, "update": update}));
+    notify(
+        out,
+        "session/update",
+        json!({"sessionId": sid, "update": update}),
+    );
 }
 
 fn handle_request(
@@ -321,7 +343,10 @@ fn handle_request(
             "authMethods": []
         })),
         "session/new" => {
-            let cwd = params.get("cwd").and_then(Value::as_str).unwrap_or_default();
+            let cwd = params
+                .get("cwd")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             if !cwd.starts_with('/') {
                 return Err((-32602, format!("cwd must be an absolute path, got `{cwd}`")));
             }
@@ -331,12 +356,18 @@ fn handle_request(
             let sid = format!("20260821_{n}");
             s.sessions.insert(
                 sid.clone(),
-                SessionData { cwd: cwd.to_string(), ..Default::default() },
+                SessionData {
+                    cwd: cwd.to_string(),
+                    ..Default::default()
+                },
             );
             Ok(json!({"sessionId": sid, "modes": null, "configOptions": []}))
         }
         "session/load" => {
-            let sid = params.get("sessionId").and_then(Value::as_str).unwrap_or("");
+            let sid = params
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let data = state.lock().unwrap().sessions.get(sid).cloned();
             match data {
                 Some(data) => {
@@ -378,7 +409,10 @@ fn handle_request(
             Ok(json!({"sessions": list, "nextCursor": null}))
         }
         "session/delete" => {
-            let sid = params.get("sessionId").and_then(Value::as_str).unwrap_or("");
+            let sid = params
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             state.lock().unwrap().sessions.remove(sid);
             Ok(json!({}))
         }
@@ -432,7 +466,16 @@ async fn run_turn(
                 _ = cancel.notified() => { cancelled = true; }
             }
             if cancelled {
-                finish(&out, &state, &sid, request_id, record, "cancelled", user_text).await;
+                finish(
+                    &out,
+                    &state,
+                    &sid,
+                    request_id,
+                    record,
+                    "cancelled",
+                    user_text,
+                )
+                .await;
                 return;
             }
         };
@@ -471,19 +514,16 @@ async fn run_turn(
 
         let (tx, rx) = oneshot::channel();
         let req_id = format!("srv-{}", SERVER_REQ_ID.fetch_add(1, Ordering::Relaxed));
-        pending
-            .lock()
-            .unwrap()
-            .insert(format!("\"{req_id}\""), tx);
+        pending.lock().unwrap().insert(format!("\"{req_id}\""), tx);
         let frame = json!({"jsonrpc":"2.0","id":req_id,"method":"session/request_permission","params":{
-            "sessionId": sid,
-            "toolCall": {"toolCallId":"tc_1","title":"shell: uname -a","kind":"execute","rawInput":{"command":"uname -a"}},
-            "options": [
-                {"optionId":"allow_always","name":"allow_always","kind":"allow_always"},
-                {"optionId":"allow_once","name":"allow_once","kind":"allow_once"},
-                {"optionId":"reject_once","name":"reject_once","kind":"reject_once"},
-                {"optionId":"reject_always","name":"reject_always","kind":"reject_always"}
-            ]}});
+        "sessionId": sid,
+        "toolCall": {"toolCallId":"tc_1","title":"shell: uname -a","kind":"execute","rawInput":{"command":"uname -a"}},
+        "options": [
+            {"optionId":"allow_always","name":"allow_always","kind":"allow_always"},
+            {"optionId":"allow_once","name":"allow_once","kind":"allow_once"},
+            {"optionId":"reject_once","name":"reject_once","kind":"reject_once"},
+            {"optionId":"reject_always","name":"reject_always","kind":"reject_always"}
+        ]}});
         let _ = out.send(Message::Text(frame.to_string().into()));
 
         let outcome = tokio::select! {
@@ -493,11 +533,17 @@ async fn run_turn(
                 return;
             }
         };
-        let allowed = outcome.pointer("/outcome/optionId").and_then(Value::as_str)
-            .map(|o| o.starts_with("allow")).unwrap_or(false);
+        let allowed = outcome
+            .pointer("/outcome/optionId")
+            .and_then(Value::as_str)
+            .map(|o| o.starts_with("allow"))
+            .unwrap_or(false);
 
         if allowed {
-            emit(json!({"sessionUpdate":"tool_call_update","toolCallId":"tc_1","status":"in_progress"}), &mut record);
+            emit(
+                json!({"sessionUpdate":"tool_call_update","toolCallId":"tc_1","status":"in_progress"}),
+                &mut record,
+            );
             step!();
             emit(
                 json!({"sessionUpdate":"tool_call_update","toolCallId":"tc_1","status":"completed",
@@ -515,7 +561,9 @@ async fn run_turn(
 
     // Assistant message stream (markdown showcase).
     let chunks: Vec<String> = if slow {
-        (1..=40).map(|i| format!("chunk {i} of a very long streaming answer… ")).collect()
+        (1..=40)
+            .map(|i| format!("chunk {i} of a very long streaming answer… "))
+            .collect()
     } else {
         vec![
             "Here's what I found:\n\n".into(),
@@ -546,12 +594,19 @@ async fn run_turn(
         "_goose/unstable/session/update",
         json!({"sessionId": sid, "update": {"sessionUpdate":"usage_update","used":21580,"contextLimit":128000}}),
     );
-    finish(&out, &state, &sid, request_id, record, "end_turn", user_text).await;
+    finish(
+        &out, &state, &sid, request_id, record, "end_turn", user_text,
+    )
+    .await;
 }
 
 fn auto_title(user_text: &str) -> String {
     let words: Vec<&str> = user_text.split_whitespace().take(5).collect();
-    if words.is_empty() { "New chat".to_string() } else { words.join(" ") }
+    if words.is_empty() {
+        "New chat".to_string()
+    } else {
+        words.join(" ")
+    }
 }
 
 async fn finish(
