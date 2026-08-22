@@ -62,13 +62,13 @@ jobs:
       - name: Coverage summary
         run: cargo llvm-cov report --package goose-acp-client --summary-only
 
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@v5
+      # Coveralls authenticates with the automatically-provided GITHUB_TOKEN
+      # for public repositories: no account setup and no repository secret.
+      - name: Upload to Coveralls
+        uses: coverallsapp/github-action@v2
         with:
-          files: lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
-          # Keep CI green before the repository is linked on codecov.io.
-          fail_ci_if_error: false
+          file: lcov.info
+          format: lcov
 
   ios:
     name: Build check (iOS target)

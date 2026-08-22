@@ -1,7 +1,7 @@
 # Goose Mobile
 
 [![CI](https://github.com/PhillipChaffee/goose-phone-app/actions/workflows/ci.yml/badge.svg)](https://github.com/PhillipChaffee/goose-phone-app/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/PhillipChaffee/goose-phone-app/branch/main/graph/badge.svg)](https://codecov.io/gh/PhillipChaffee/goose-phone-app)
+[![Coverage Status](https://coveralls.io/repos/github/PhillipChaffee/goose-phone-app/badge.svg?branch=main)](https://coveralls.io/github/PhillipChaffee/goose-phone-app?branch=main)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **Talk to your own [goose](https://github.com/aaif-goose/goose) AI agent from your phone.**
@@ -171,7 +171,9 @@ dx serve --desktop               # run the app
 ```
 
 The coverage badge measures `goose-acp-client` — the UI-independent half of the
-workspace, where the protocol and connection logic live.
+workspace, where the protocol and connection logic live. Coverage is reported to
+Coveralls by CI using the built-in `GITHUB_TOKEN`; no account or repository
+secret is needed.
 
 ## Security
 
