@@ -27,12 +27,29 @@ pub enum Screen {
     Chat,
 }
 
+/// Top-level tab — the Claude-app-style Home/Code toggle. Each tab keeps its
+/// own navigation state (`AppCtx::screen` for Home, `AppCtx::code_screen`
+/// for Code), so switching tabs never resets where you were.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Tab {
+    Home,
+    Code,
+}
+
+/// `serde(default)` is load-bearing: settings persisted by older builds lack
+/// the code-agent fields, and a parse failure would silently wipe the saved
+/// goose server config (the storage layer falls back to `Default`).
 #[derive(Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct Settings {
     pub server_url: String,
     pub secret_key: String,
     pub fingerprint: String,
     pub working_dir: String,
+    /// Code-agent gateway on the brain, e.g. `https://brain.tailnet.ts.net:4300`.
+    pub code_server_url: String,
+    /// `OPENCODE_SERVER_PASSWORD`.
+    pub code_password: String,
 }
 
 #[derive(Clone, PartialEq)]
@@ -49,7 +66,9 @@ impl ConnState {
     }
 }
 
-#[derive(Clone, PartialEq)]
+/// One rendered transcript item. Serde derives exist for the Code tab's
+/// on-device transcript cache (issue #2, A11) — goose chats are never cached.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub enum ChatItem {
     User {
         text: String,
@@ -103,10 +122,32 @@ pub struct AppCtx {
     pub permission: Signal<Vec<PermissionRequest>>,
     pub usage: Signal<Option<Usage>>,
     pub toast: Signal<Option<String>>,
+
+    // ---- Code tab (per-chat OpenCode containers on the brain; src/code.rs) ----
+    pub tab: Signal<Tab>,
+    pub code_screen: Signal<crate::code::CodeScreen>,
+    pub code_client: Signal<Option<opencode_client::CodeClient>>,
+    pub code_conn: Signal<ConnState>,
+    pub code_chats: Signal<Vec<opencode_client::ChatMeta>>,
+    pub code_chats_loading: Signal<bool>,
+    pub code_repos: Signal<Vec<opencode_client::RepoEntry>>,
+    pub code_chat: Signal<crate::code::CodeChatState>,
+    /// Pending permission asks from code chats, tagged by chat id. A separate
+    /// queue from `permission` by construction: goose and OpenCode ids can
+    /// never collide or be cross-answered.
+    pub code_permissions: Signal<Vec<(String, opencode_client::CodePermission)>>,
+    /// On-device transcript cache — instant open while a chat's container
+    /// wakes, read-only offline. Server history stays authoritative.
+    pub code_cache: Signal<crate::code::CodeCache>,
+    /// Bumped whenever a different code chat is opened; stale SSE pumps and
+    /// poll loops observe the change and exit.
+    pub code_epoch: Signal<u64>,
 }
 
 pub fn use_app_ctx_provider() -> AppCtx {
     let settings = dioxus_sdk_storage::use_persistent("settings", Settings::default);
+    let code_cache =
+        dioxus_sdk_storage::use_persistent("code_cache", crate::code::CodeCache::default);
     let ctx = AppCtx {
         // Always start on Settings; connecting is an explicit user action.
         screen: use_signal(|| Screen::Settings),
@@ -122,6 +163,17 @@ pub fn use_app_ctx_provider() -> AppCtx {
         permission: use_signal(Vec::new),
         usage: use_signal(|| None),
         toast: use_signal(|| None),
+        tab: use_signal(|| Tab::Home),
+        code_screen: use_signal(|| crate::code::CodeScreen::List),
+        code_client: use_signal(|| None),
+        code_conn: use_signal(|| ConnState::Disconnected),
+        code_chats: use_signal(Vec::new),
+        code_chats_loading: use_signal(|| false),
+        code_repos: use_signal(Vec::new),
+        code_chat: use_signal(crate::code::CodeChatState::default),
+        code_permissions: use_signal(Vec::new),
+        code_cache,
+        code_epoch: use_signal(|| 0),
     };
     use_context_provider(|| ctx);
     ctx
