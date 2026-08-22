@@ -1,0 +1,16 @@
+[application]
+name = "Goose Mobile"
+
+[web.app]
+title = "Goose Mobile"
+
+[bundle]
+identifier = "com.goosemobile.app"
+publisher = "Goose Mobile"
+
+# iOS: no ATS exceptions are needed for the recommended setups — the app's
+# networking is pure Rust (reqwest/tungstenite), which App Transport Security
+# does not intercept, and `tailscale serve` provides real HTTPS anyway.
+
+[android]
+min_sdk = 24

@@ -1,0 +1,26 @@
+[package]
+name = "goose-acp-client"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Rust client for the goose AI agent server's ACP (Agent Client Protocol) WebSocket API"
+license = "MIT"
+
+[dependencies]
+tokio = { version = "1", features = ["sync", "time", "rt", "macros", "net"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = "1"
+webpki-roots = "0.26"
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures-util = { version = "0.3", features = ["sink"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+futures-util = { version = "0.3", features = ["sink"] }
+serde_json = "1"
