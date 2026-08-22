@@ -1,4 +1,5 @@
 pub mod chat;
+pub mod code;
 pub mod sessions;
 pub mod settings;
 

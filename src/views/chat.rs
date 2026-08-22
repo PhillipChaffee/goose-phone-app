@@ -106,7 +106,8 @@ pub fn ChatView() -> Element {
     }
 }
 
-fn render_item(index: usize, item: &ChatItem) -> Element {
+/// Shared transcript renderer — the Code tab reuses it (views/code.rs).
+pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
     match item {
         ChatItem::User { text } => {
             let html = markdown::escape_text(text);

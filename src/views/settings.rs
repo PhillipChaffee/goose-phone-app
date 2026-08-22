@@ -18,6 +18,8 @@ pub fn SettingsView() -> Element {
     let mut secret_key = use_signal(|| saved.secret_key.clone());
     let mut fingerprint = use_signal(|| saved.fingerprint.clone());
     let mut working_dir = use_signal(|| saved.working_dir.clone());
+    let mut code_server_url = use_signal(|| saved.code_server_url.clone());
+    let mut code_password = use_signal(|| saved.code_password.clone());
     let testing = use_signal(|| false);
 
     let conn = (ctx.conn)();
@@ -30,6 +32,8 @@ pub fn SettingsView() -> Element {
             secret_key: secret_key.peek().trim().to_string(),
             fingerprint: fingerprint.peek().trim().to_string(),
             working_dir: working_dir.peek().trim().to_string(),
+            code_server_url: code_server_url.peek().trim().to_string(),
+            code_password: code_password.peek().trim().to_string(),
         });
     };
 
@@ -146,6 +150,35 @@ pub fn SettingsView() -> Element {
                 }
                 p { class: "hint",
                     "Absolute path on the goose server; new chats start here."
+                }
+            }
+
+            section { class: "card",
+                h2 { "Code agents" }
+                label { class: "field-label", "Code server URL" }
+                input {
+                    class: "field",
+                    r#type: "url",
+                    placeholder: "https://brain.tailnet-name.ts.net:4300",
+                    autocapitalize: "off",
+                    autocomplete: "off",
+                    spellcheck: "false",
+                    value: "{code_server_url}",
+                    oninput: move |e| code_server_url.set(e.value()),
+                }
+                label { class: "field-label", "Code server password" }
+                input {
+                    class: "field",
+                    r#type: "password",
+                    placeholder: "OPENCODE_SERVER_PASSWORD value",
+                    autocapitalize: "off",
+                    autocomplete: "off",
+                    value: "{code_password}",
+                    oninput: move |e| code_password.set(e.value()),
+                }
+                p { class: "hint",
+                    "The code-agent gateway on the brain (docs/setup/70-code-agents.md). "
+                    "Save, then open the Code tab — it connects with these."
                 }
             }
 

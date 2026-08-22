@@ -614,3 +614,69 @@ body {
   text-align: center;
   margin-top: 10px;
 }
+
+/* ---- Home/Code tab bar ---- */
+.tabbar {
+  display: flex;
+  border-top: 1px solid var(--border, #2a2a2e);
+  background: var(--bg-raised, #161618);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  flex-shrink: 0;
+}
+.tabbar .tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 0 6px;
+  background: none;
+  border: none;
+  color: var(--fg-dim, #8a8a90);
+  font-size: 12px;
+  cursor: pointer;
+}
+.tabbar .tab.active {
+  color: var(--fg, #ececf0);
+}
+.tabbar .tab-icon {
+  font-size: 17px;
+  line-height: 1;
+}
+
+/* ---- Code tab ---- */
+.chip {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: var(--bg-raised, #232327);
+  color: var(--fg-dim, #9a9aa0);
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+.banner {
+  margin: 8px 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--bg-raised, #232327);
+  color: var(--fg-dim, #b9b9c0);
+  font-size: 13px;
+  text-align: center;
+}
+.diff-panel {
+  margin: 8px 0;
+  border: 1px solid var(--border, #2a2a2e);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.diff-panel pre {
+  margin: 0;
+  padding: 10px;
+  overflow-x: auto;
+  font-size: 12px;
+  max-height: 45vh;
+}
+select.field {
+  appearance: none;
+  width: 100%;
+}
