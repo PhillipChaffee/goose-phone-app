@@ -29,7 +29,10 @@ mod probe;
 mod tls;
 mod types;
 
-pub use client::{normalize_base_url, ws_url, AcpClient, AcpError, ConnectConfig, CLIENT_NAME};
+pub use client::{
+    config_options_from, normalize_base_url, ws_url, AcpClient, AcpError, ConnectConfig,
+    CLIENT_NAME,
+};
 pub use probe::{probe, ProbeOutcome};
 pub use tls::{ensure_crypto_provider, format_fingerprint, parse_fingerprint};
 pub use types::*;

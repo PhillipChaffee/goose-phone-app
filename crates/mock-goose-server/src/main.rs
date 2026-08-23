@@ -50,10 +50,22 @@ struct SessionData {
     snippet: String,
 }
 
-#[derive(Default)]
 struct State {
     sessions: HashMap<String, SessionData>,
     next_session: u64,
+    /// Whatever the client last selected, so a switch actually sticks and a
+    /// reload shows it.
+    model: String,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            next_session: 0,
+            model: "claude-sonnet-5".to_string(),
+        }
+    }
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -383,7 +395,8 @@ fn handle_request(
                 );
                 sid
             };
-            Ok(json!({"sessionId": sid, "modes": null, "configOptions": []}))
+            let model = state.lock().unwrap().model.clone();
+            Ok(json!({"sessionId": sid, "modes": null, "configOptions": config_options(&model)}))
         }
         "session/load" => {
             let sid = params
@@ -396,10 +409,28 @@ fn handle_request(
                     for update in &data.conversation {
                         session_update(out, sid, update);
                     }
-                    Ok(json!({"modes": null, "configOptions": []}))
+                    let model = state.lock().unwrap().model.clone();
+                    Ok(json!({"modes": null, "configOptions": config_options(&model)}))
                 }
                 None => Err((-32002, format!("session not found: {sid}"))),
             }
+        }
+        "session/set_config_option" => {
+            let sid = params
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let value = params.get("value").and_then(Value::as_str).unwrap_or("");
+            state.lock().unwrap().model = value.to_string();
+            let opts = config_options(value);
+            // The real agent pushes this after every change so a second
+            // client watching the same session stays in step.
+            session_update(
+                out,
+                sid,
+                &json!({"sessionUpdate": "config_option_update", "configOptions": opts}),
+            );
+            Ok(json!({"configOptions": config_options(value)}))
         }
         "session/list" => Ok(json!({"sessions": list_sessions(state), "nextCursor": null})),
         "session/delete" => {
@@ -427,6 +458,28 @@ struct Listed {
 
 /// The `session/list` payload: every session that has messages, newest
 /// session id first.
+/// The `configOptions` array a real agent returns, in the shape ACP schema
+/// 1.5 defines: a flattened kind tagged by `type`, and select options keyed
+/// on `value`. Only the model option is filled in — it is the one the app
+/// has a picker for.
+fn config_options(current_model: &str) -> Value {
+    json!([
+        {
+            "configId": "model",
+            "name": "Model",
+            "category": "model",
+            "type": "select",
+            "currentValue": current_model,
+            "options": [
+                {"value": "claude-opus-5", "name": "Claude Opus 5"},
+                {"value": "claude-sonnet-5", "name": "Claude Sonnet 5"},
+                {"value": "gpt-5.2", "name": "GPT-5.2"},
+                {"value": "qwen3-coder-480b", "name": "Qwen3 Coder 480B"},
+            ]
+        }
+    ])
+}
+
 fn list_sessions(state: &Shared) -> Vec<Value> {
     let mut listed: Vec<Listed> = {
         let s = state.lock().unwrap();

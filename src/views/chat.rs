@@ -28,6 +28,13 @@ pub fn ChatView() -> Element {
     let running = chat.running;
     let can_send = !running && !chat.loading;
 
+    // The agent sends every session config option; the picker only offers the
+    // model. The others (provider, mode, thinking effort) are deliberately
+    // not surfaced yet — one control at a time.
+    let config = (ctx.config_options)();
+    let model_option = config.iter().find(|o| o.config_id == "model").cloned();
+    let mut picker = use_signal(|| false);
+
     let mut submit = move || {
         let text = draft.peek().trim().to_string();
         if text.is_empty() {
@@ -86,6 +93,14 @@ pub fn ChatView() -> Element {
                 },
             }
             div { class: "composer-row",
+                if let Some(model) = model_option.as_ref() {
+                    button {
+                        class: "composer-chip action",
+                        onclick: move |_| picker.set(true),
+                        {model.current_label().unwrap_or("Model").to_string()}
+                        Icon { name: "chevron-down" }
+                    }
+                }
                 if let Some((used, limit)) = usage {
                     span { class: "composer-chip",
                         "{format_tokens(used)}/{format_tokens(limit)}"
@@ -105,6 +120,39 @@ pub fn ChatView() -> Element {
                         disabled: !can_send,
                         onclick: move |_| submit(),
                         Icon { name: "arrow-up" }
+                    }
+                }
+            }
+        }
+
+        if picker() {
+            if let Some(model) = model_option {
+                div { class: "modal-backdrop", onclick: move |_| picker.set(false),
+                    div { class: "modal sheet", onclick: move |e: Event<MouseData>| e.stop_propagation(),
+                        h2 { "{model.name}" }
+                        div { class: "choice-list",
+                            for choice in model.options.iter() {
+                                button {
+                                    key: "{choice.value}",
+                                    class: if model.current_value.as_deref() == Some(choice.value.as_str()) {
+                                        "choice selected"
+                                    } else {
+                                        "choice"
+                                    },
+                                    onclick: {
+                                        let value = choice.value.clone();
+                                        move |_| {
+                                            crate::state::set_config_option(&ctx, "model", &value);
+                                            picker.set(false);
+                                        }
+                                    },
+                                    span { class: "choice-name", "{choice.name}" }
+                                    if model.current_value.as_deref() == Some(choice.value.as_str()) {
+                                        Icon { name: "check" }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

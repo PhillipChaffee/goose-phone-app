@@ -13,7 +13,7 @@ use std::time::Duration;
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use goose_acp_client::{
-    AcpClient, AcpEvent, ConnectConfig, MessageChunk, PermissionRequest, SessionInfo,
+    AcpClient, AcpEvent, ConfigOption, ConnectConfig, MessageChunk, PermissionRequest, SessionInfo,
     SessionUpdate, ToolCallUpdate,
 };
 use serde::{Deserialize, Serialize};
@@ -170,6 +170,10 @@ pub(crate) struct AppCtx {
     /// turn blocks on it.
     pub permission: Signal<Vec<PermissionRequest>>,
     pub usage: Signal<Option<Usage>>,
+    /// Session config the agent offers — provider, model, mode, thinking
+    /// effort — with the model list already in it. Arrives with session/new
+    /// and `session/load`, and is refreshed by `config_option_update`.
+    pub config_options: Signal<Vec<ConfigOption>>,
     pub toast: Signal<Option<String>>,
 
     // ---- Code tab (per-chat OpenCode containers on the brain; src/code.rs) ----
@@ -214,6 +218,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         running_sessions: use_signal(HashSet::new),
         permission: use_signal(Vec::new),
         usage: use_signal(|| None),
+        config_options: use_signal(Vec::new),
         toast: use_signal(|| None),
         tab: use_signal(|| Tab::Home),
         drawer_open: use_signal(|| false),
@@ -407,8 +412,14 @@ async fn reload_chat(ctx: &AppCtx, session_id: String, cwd: String) {
     let result = client.session_load(&session_id, &cwd).await;
     if chat.peek().session_id.as_deref() == Some(session_id.as_str()) {
         chat.write().loading = false;
-        if let Err(e) = result {
-            show_toast(ctx, format!("Failed to reload session: {e}"));
+        match result {
+            Ok(raw) => {
+                let opts = goose_acp_client::config_options_from(&raw);
+                if !opts.is_empty() {
+                    ctx.config_options.clone().set(opts);
+                }
+            }
+            Err(e) => show_toast(ctx, format!("Failed to reload session: {e}")),
         }
     }
 }
@@ -450,6 +461,14 @@ fn apply_update(ctx: &AppCtx, session_id: &str, update: SessionUpdate) {
         }
         SessionUpdate::ToolCallUpdate(update) if is_current => {
             apply_tool_update(&mut chat, &update);
+        }
+        SessionUpdate::ConfigOptionUpdate(raw) => {
+            // The agent pushes this after every change, including ones made
+            // from another client, so the picker never shows a stale model.
+            let opts = goose_acp_client::config_options_from(&raw);
+            if !opts.is_empty() {
+                ctx.config_options.clone().set(opts);
+            }
         }
         SessionUpdate::SessionInfoUpdate(info) => {
             if let Some(title) = info.title {
@@ -627,8 +646,14 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
         let mut chat = ctx.chat;
         if chat.peek().session_id.as_deref() == Some(info.session_id.as_str()) {
             chat.write().loading = false;
-            if let Err(e) = result {
-                show_toast(&ctx, format!("Failed to load session: {e}"));
+            match result {
+                Ok(raw) => {
+                    let opts = goose_acp_client::config_options_from(&raw);
+                    if !opts.is_empty() {
+                        ctx.config_options.clone().set(opts);
+                    }
+                }
+                Err(e) => show_toast(&ctx, format!("Failed to load session: {e}")),
             }
         }
     });
@@ -655,6 +680,7 @@ pub(crate) fn new_session(ctx: &AppCtx) {
                 let mut chat = ctx.chat;
                 let mut screen = ctx.screen;
                 let mut usage = ctx.usage;
+                ctx.config_options.clone().set(resp.config_options);
                 chat.set(ChatState {
                     marks: Vec::new(),
                     last_at: 0,
@@ -860,4 +886,30 @@ pub(crate) fn relative_time(epoch: i64) -> String {
                 .map_or_else(|| "earlier".to_owned(), |name| format!("{name} {d}"))
         }
     }
+}
+
+/// Set one session config option — the model picker's only job.
+///
+/// The agent applies it to the session immediately and answers with the full
+/// option set, which is also pushed as a `config_option_update`; both paths
+/// land in `ctx.config_options`, so whichever arrives first wins and they
+/// agree.
+pub(crate) fn set_config_option(ctx: &AppCtx, config_id: &str, value: &str) {
+    let Some(client) = ctx.client.peek().clone() else {
+        return;
+    };
+    let Some(session_id) = ctx.chat.peek().session_id.clone() else {
+        return;
+    };
+    let (ctx, config_id, value) = (*ctx, config_id.to_owned(), value.to_owned());
+    spawn_forever(async move {
+        match client
+            .set_config_option(&session_id, &config_id, &value)
+            .await
+        {
+            Ok(opts) if !opts.is_empty() => ctx.config_options.clone().set(opts),
+            Ok(_) => {}
+            Err(e) => show_toast(&ctx, format!("Could not switch: {e}")),
+        }
+    });
 }

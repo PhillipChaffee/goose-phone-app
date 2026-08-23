@@ -1948,6 +1948,55 @@ details[open] > summary::before {
   background: var(--bg-secondary);
 }
 
+/* A sheet that is a list of choices: taller than an alert, shorter than a
+ * screen, and it stops at what it holds. */
+.modal.sheet {
+  max-height: 70vh;
+}
+
+.choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 -8px;
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.choice-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.choice .icon {
+  color: var(--text-success);
+}
+
+.choice.selected {
+  background: var(--bg-secondary);
+}
+
+.choice:active {
+  background: var(--bg-secondary);
+}
+
 /* ── toast ──────────────────────────────────────────────────────────── */
 
 /* A fully inverted chip: black on light, light on dark. */

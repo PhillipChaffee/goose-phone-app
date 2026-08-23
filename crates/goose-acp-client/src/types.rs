@@ -286,8 +286,58 @@ pub struct SessionListResponse {
 #[serde(rename_all = "camelCase")]
 pub struct NewSessionResponse {
     pub session_id: String,
+    /// Session configuration the agent offers — provider, model, mode and
+    /// thinking effort. This is where the list of available models arrives:
+    /// no separate call is needed, and it was previously parsed away.
+    #[serde(default)]
+    pub config_options: Vec<ConfigOption>,
     #[serde(rename = "_meta", default)]
     pub meta: Option<Value>,
+}
+
+/// One configurable knob on a session.
+///
+/// Wire shape per ACP schema 1.5 (`SessionConfigOption`): `configId`, `name`,
+/// and a flattened kind payload tagged by `type`. For `type: "select"` the
+/// payload is `currentValue` plus `options`, each of which keys on `value`
+/// (not `id`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigOption {
+    pub config_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default, rename = "type")]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub current_value: Option<String>,
+    #[serde(default)]
+    pub options: Vec<ConfigChoice>,
+}
+
+impl ConfigOption {
+    /// The label for the current value, falling back to the raw id.
+    #[must_use]
+    pub fn current_label(&self) -> Option<&str> {
+        let current = self.current_value.as_deref()?;
+        Some(
+            self.options
+                .iter()
+                .find(|o| o.value == current)
+                .map_or(current, |o| o.name.as_str()),
+        )
+    }
+}
+
+/// One selectable value of a `select` config option.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigChoice {
+    pub value: String,
+    #[serde(default)]
+    pub name: String,
 }
 
 /// One choice offered by a `session/request_permission` request.
