@@ -31,14 +31,14 @@ pub fn SessionsView() -> Element {
             div { class: "btn-row list-actions",
                 button {
                     class: "btn primary grow",
-                    onclick: move |_| new_session(ctx),
+                    onclick: move |_| new_session(&ctx),
                     "＋ New chat"
                 }
                 button {
                     class: "btn secondary",
                     disabled: loading,
                     onclick: move |_| {
-                        spawn_forever(async move { refresh_sessions(ctx, false).await });
+                        spawn_forever(async move { refresh_sessions(&ctx, false).await });
                     },
                     if loading { "…" } else { "↻" }
                 }
@@ -55,10 +55,7 @@ pub fn SessionsView() -> Element {
                         class: "session-item",
                         div {
                             class: "session-main",
-                            onclick: {
-                                let info = info.clone();
-                                move |_| open_session(ctx, info.clone())
-                            },
+                            onclick: move |_| open_session(&ctx, info.clone()),
                             div { class: "session-title", "{info.display_title()}" }
                             if let Some(snippet) = info.last_message_snippet() {
                                 div { class: "session-snippet", "{snippet}" }
@@ -123,7 +120,7 @@ pub fn SessionsView() -> Element {
                         class: "btn secondary grow",
                         disabled: loading,
                         onclick: move |_| {
-                            spawn_forever(async move { refresh_sessions(ctx, true).await });
+                            spawn_forever(async move { refresh_sessions(&ctx, true).await });
                         },
                         "Load more"
                     }

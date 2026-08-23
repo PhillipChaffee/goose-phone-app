@@ -12,8 +12,21 @@ iOS and Android from one codebase and reaching the server over Tailscale.
 Common commands:
 
 ```bash
-cargo check --workspace              # must be warning-free
-cargo test -p goose-acp-client       # protocol wire-shape tests
+cargo clippy --workspace --all-targets -- -D warnings   # the CI lint gate
+cargo test --workspace               # all tests
+cargo fmt --all -- --check           # formatting gate
 cargo run -p mock-goose-server       # fake server on :3285 (secret "mock-secret")
 dx serve --desktop                   # run the app for development
 ```
+
+Lint policy: `[workspace.lints]` in the root `Cargo.toml` turns on clippy's
+pedantic, nursery and cargo groups plus restriction picks (`unwrap_used`,
+`expect_used`, `panic`, `print_stdout`, ...). Every blanket exception is
+justified in that table; one-off exceptions go in the code as
+`#[expect(lint, reason = "...")]` — `expect`, not `allow`, so an exception
+that stops being needed fails the build instead of rotting.
+
+The toolchain is pinned in `rust-toolchain.toml` and rustup honours it
+automatically, so a local `cargo clippy` sees exactly the lints CI sees.
+Bumping the channel is a deliberate change: raise it, re-run the gate, and
+fix what the newer lints found in the same commit.

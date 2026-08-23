@@ -1,0 +1,28 @@
+# Codecov settings. Uploads come from the coverage job in
+# .github/workflows/ci.yml, which measures the two protocol libraries with
+# cargo-llvm-cov.
+#
+# Both statuses are informational on purpose: coverage is a signal to read,
+# not a gate that blocks a merge. Flip `informational: false` on the project
+# status once the number has been stable for a while.
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 2%
+        informational: true
+    patch:
+      default:
+        target: 80%
+        informational: true
+
+comment:
+  layout: "condensed_header, diff, flags, files"
+  require_changes: true
+
+ignore:
+  # Not measured, so do not let them count as uncovered: the Dioxus UI needs a
+  # renderer to execute, and the mock server is a test double.
+  - "src/**"
+  - "crates/mock-goose-server/**"

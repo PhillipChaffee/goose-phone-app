@@ -1,4 +1,4 @@
-//! Code tab: state + logic for code-agent chats — per-chat OpenCode
+//! Code tab: state + logic for code-agent chats — per-chat `OpenCode`
 //! containers on the brain, fronted by the session manager
 //! (personal-ai-setup `docs/code-agents.md`; this repo issue #2).
 //!
@@ -14,6 +14,7 @@
 //!     `once` / `always` / `reject`
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use dioxus::dioxus_core::spawn_forever;
@@ -26,8 +27,8 @@ use serde_json::Value;
 
 use crate::state::{show_toast, AppCtx, ChatItem, ConnState};
 
-#[derive(Clone, Copy, PartialEq)]
-pub enum CodeScreen {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CodeScreen {
     List,
     New,
     Chat,
@@ -35,12 +36,12 @@ pub enum CodeScreen {
 
 /// Everything the code chat screen renders.
 #[derive(Clone, PartialEq, Default)]
-pub struct CodeChatState {
+pub(crate) struct CodeChatState {
     pub chat_id: Option<String>,
     pub title: String,
     pub repo: String,
     pub branch: String,
-    /// The chat's primary OpenCode session (created lazily on first prompt).
+    /// The chat's primary `OpenCode` session (created lazily on first prompt).
     pub session_id: Option<String>,
     pub items: Vec<ChatItem>,
     /// part id -> index into `items`, for folding streamed part updates.
@@ -58,13 +59,13 @@ pub struct CodeChatState {
 /// container wakes, read-only offline. LRU-capped; server is authoritative.
 #[derive(Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct CodeCache {
+pub(crate) struct CodeCache {
     pub chats: HashMap<String, CachedChat>,
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct CachedChat {
+pub(crate) struct CachedChat {
     pub title: String,
     pub session_id: Option<String>,
     pub items: Vec<ChatItem>,
@@ -78,8 +79,7 @@ const CACHE_MAX_ITEMS: usize = 300;
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs())
 }
 
 // ------------------------------------------------------------- connection
@@ -95,10 +95,10 @@ fn build_client(ctx: &AppCtx) -> Result<CodeClient, String> {
 
 /// Connect to the manager gateway using saved settings. Returns true on
 /// success (health answered), populating the chat list and repo allowlist.
-pub async fn code_connect(ctx: AppCtx) -> bool {
+pub(crate) async fn code_connect(ctx: &AppCtx) -> bool {
     let mut conn = ctx.code_conn;
     let mut client_slot = ctx.code_client;
-    let client = match build_client(&ctx) {
+    let client = match build_client(ctx) {
         Ok(c) => c,
         Err(e) => {
             conn.set(ConnState::Failed(e));
@@ -125,7 +125,7 @@ pub async fn code_connect(ctx: AppCtx) -> bool {
     }
 }
 
-pub async fn refresh_code_chats(ctx: AppCtx) {
+pub(crate) async fn refresh_code_chats(ctx: &AppCtx) {
     let Some(client) = ctx.code_client.peek().clone() else {
         return;
     };
@@ -134,12 +134,12 @@ pub async fn refresh_code_chats(ctx: AppCtx) {
     loading.set(true);
     match client.chats().await {
         Ok(list) => chats.set(list),
-        Err(e) => show_toast(&ctx, format!("Failed to list code chats: {e}")),
+        Err(e) => show_toast(ctx, format!("Failed to list code chats: {e}")),
     }
     loading.set(false);
 }
 
-async fn refresh_repos(ctx: AppCtx) {
+async fn refresh_repos(ctx: &AppCtx) {
     let Some(client) = ctx.code_client.peek().clone() else {
         return;
     };
@@ -151,8 +151,9 @@ async fn refresh_repos(ctx: AppCtx) {
 
 /// Keep the chat list fresh while the Code tab is visible. One loop per
 /// epoch; a tab switch away lets it park (cheap no-op ticks).
-pub fn start_code_poll(ctx: AppCtx) {
+pub(crate) fn start_code_poll(ctx: &AppCtx) {
     let epoch = *ctx.code_epoch.peek();
+    let ctx = *ctx;
     spawn_forever(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;
@@ -165,7 +166,7 @@ pub fn start_code_poll(ctx: AppCtx) {
             if ctx.code_client.peek().is_none() {
                 continue;
             }
-            refresh_code_chats(ctx).await;
+            refresh_code_chats(&ctx).await;
         }
     });
 }
@@ -174,7 +175,7 @@ pub fn start_code_poll(ctx: AppCtx) {
 
 /// Open a chat: cached transcript instantly (read-only, "waking…" when the
 /// container is down), then wake + reconcile from the server, then live SSE.
-pub fn open_code_chat(ctx: AppCtx, meta: ChatMeta) {
+pub(crate) fn open_code_chat(ctx: &AppCtx, meta: ChatMeta) {
     let mut chat = ctx.code_chat;
     let mut screen = ctx.code_screen;
     let mut epoch = ctx.code_epoch;
@@ -202,12 +203,13 @@ pub fn open_code_chat(ctx: AppCtx, meta: ChatMeta) {
         diff: None,
     });
     screen.set(CodeScreen::Chat);
-    spawn_forever(attach_chat(ctx, meta.id, new_epoch));
+    let ctx = *ctx;
+    spawn_forever(async move { attach_chat(&ctx, meta.id, new_epoch).await });
 }
 
 /// Wake (implicit in any request), fetch authoritative history, catch up on
 /// pending permissions, and attach the SSE stream. Also the reconnect path.
-async fn attach_chat(ctx: AppCtx, chat_id: String, epoch: u64) {
+async fn attach_chat(ctx: &AppCtx, chat_id: String, epoch: u64) {
     let Some(client) = ctx.code_client.peek().clone() else {
         return;
     };
@@ -230,50 +232,78 @@ async fn attach_chat(ctx: AppCtx, chat_id: String, epoch: u64) {
         Err(e) => {
             chat.write().loading = false;
             chat.write().waking = false;
-            show_toast(&ctx, format!("Chat unreachable: {e}"));
+            show_toast(ctx, format!("Chat unreachable: {e}"));
             return;
         }
     };
-    chat.write().session_id = session_id.clone();
+    chat.write().session_id.clone_from(&session_id);
     chat.write().waking = false;
 
     // Authoritative history replaces whatever the cache showed (A5/A11:
     // reconcile with no duplicates — full replace by construction).
     if let Some(sid) = &session_id {
-        match client.messages(&chat_id, sid).await {
-            Ok(msgs) => {
-                if *ctx.code_epoch.peek() != epoch {
-                    return;
-                }
-                let (items, part_index, roles, running) = fold_history(&msgs);
-                {
-                    let mut c = chat.write();
-                    c.items = items;
-                    c.part_index = part_index;
-                    c.roles = roles;
-                    c.running = running;
-                }
-                write_cache(&ctx);
-            }
-            Err(e) => show_toast(&ctx, format!("History load failed: {e}")),
+        if !load_history(ctx, &client, &chat_id, sid, epoch).await {
+            return;
         }
     }
     chat.write().loading = false;
 
-    // Permission catch-up: asks raised while we were away still block their
-    // tool calls server-side.
-    if let Ok(pending) = client.permissions(&chat_id).await {
+    catch_up_permissions(ctx, &client, &chat_id).await;
+    stream_events(ctx, &client, &chat_id, epoch).await;
+}
+
+/// Replace the transcript with the server's history. Returns false when a
+/// different chat was opened while the fetch was in flight, meaning the
+/// caller must stop touching this chat's state.
+async fn load_history(
+    ctx: &AppCtx,
+    client: &CodeClient,
+    chat_id: &str,
+    session_id: &str,
+    epoch: u64,
+) -> bool {
+    match client.messages(chat_id, session_id).await {
+        Ok(msgs) => {
+            if *ctx.code_epoch.peek() != epoch {
+                return false;
+            }
+            let (items, part_index, roles, running) = fold_history(&msgs);
+            {
+                let mut chat = ctx.code_chat;
+                let mut c = chat.write();
+                c.items = items;
+                c.part_index = part_index;
+                c.roles = roles;
+                c.running = running;
+            }
+            write_cache(ctx);
+        }
+        Err(e) => show_toast(ctx, format!("History load failed: {e}")),
+    }
+    true
+}
+
+/// Permission catch-up: asks raised while we were away still block their
+/// tool calls server-side.
+async fn catch_up_permissions(ctx: &AppCtx, client: &CodeClient, chat_id: &str) {
+    if let Ok(pending) = client.permissions(chat_id).await {
         let mut queue = ctx.code_permissions;
         let mut q = queue.write();
         for p in pending {
-            if !q.iter().any(|(cid, e)| cid == &chat_id && e.id == p.id) {
-                q.push((chat_id.clone(), p));
+            if !q
+                .iter()
+                .any(|(cid, e)| cid.as_str() == chat_id && e.id == p.id)
+            {
+                q.push((chat_id.to_string(), p));
             }
         }
     }
+}
 
-    // Live stream.
-    let mut events = client.events(&chat_id);
+/// Fold the live SSE stream into the open chat until it ends, the user opens
+/// another chat, or the container goes away (which schedules a re-attach).
+async fn stream_events(ctx: &AppCtx, client: &CodeClient, chat_id: &str, epoch: u64) {
+    let mut events = client.events(chat_id);
     while let Some(event) = events.recv().await {
         if *ctx.code_epoch.peek() != epoch {
             return; // another chat was opened; detach silently
@@ -285,8 +315,7 @@ async fn attach_chat(ctx: AppCtx, chat_id: String, epoch: u64) {
                     .peek()
                     .session_id
                     .as_deref()
-                    .map(|sid| sid == part.session_id)
-                    .unwrap_or(false);
+                    .is_some_and(|sid| sid == part.session_id);
                 if is_current {
                     fold_part(&mut ctx.code_chat.clone(), &part, delta.as_deref());
                 }
@@ -305,22 +334,22 @@ async fn attach_chat(ctx: AppCtx, chat_id: String, epoch: u64) {
                 let exists = queue
                     .peek()
                     .iter()
-                    .any(|(cid, e)| cid == &chat_id && e.id == p.id);
+                    .any(|(cid, e)| cid.as_str() == chat_id && e.id == p.id);
                 if !exists {
-                    queue.write().push((chat_id.clone(), p));
+                    queue.write().push((chat_id.to_string(), p));
                 }
             }
             CodeEvent::PermissionReplied { id } => {
                 ctx.code_permissions
                     .clone()
                     .write()
-                    .retain(|(cid, p)| !(cid == &chat_id && p.id == id));
+                    .retain(|(cid, p)| !(cid.as_str() == chat_id && p.id == id));
             }
             CodeEvent::SessionIdle { session_id: sid } => {
                 let mut c = ctx.code_chat;
                 if c.peek().session_id.as_deref() == Some(sid.as_str()) {
                     c.write().running = false;
-                    write_cache(&ctx);
+                    write_cache(ctx);
                 }
             }
             CodeEvent::Disconnected { .. } => {
@@ -328,10 +357,12 @@ async fn attach_chat(ctx: AppCtx, chat_id: String, epoch: u64) {
                 // Re-attach (which also transparently wakes) after a pause,
                 // unless the user has moved on.
                 ctx.code_chat.clone().write().running = false;
-                write_cache(&ctx);
+                write_cache(ctx);
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 if *ctx.code_epoch.peek() == epoch && *ctx.tab.peek() == crate::state::Tab::Code {
-                    spawn_forever(attach_chat(ctx, chat_id.clone(), epoch));
+                    let ctx = *ctx;
+                    let chat_id = chat_id.to_string();
+                    spawn_forever(async move { attach_chat(&ctx, chat_id, epoch).await });
                 }
                 return;
             }
@@ -395,8 +426,7 @@ fn fold_part_into(
         "text" | "reasoning" => {
             let role = roles
                 .get(&part.message_id)
-                .map(String::as_str)
-                .unwrap_or("assistant");
+                .map_or("assistant", String::as_str);
             let full = part.text.clone().unwrap_or_default();
             if let Some(&idx) = part_index.get(&part.id) {
                 if let Some(
@@ -485,15 +515,15 @@ fn fold_part_into(
 
 // --------------------------------------------------------------- actions
 
-/// Send a prompt into the open code chat (creating its OpenCode session on
+/// Send a prompt into the open code chat (creating its `OpenCode` session on
 /// first use). Returns false if the message could not be submitted.
-pub fn send_code_prompt(ctx: AppCtx, text: String) -> bool {
+pub(crate) fn send_code_prompt(ctx: &AppCtx, text: String) -> bool {
     let mut chat = ctx.code_chat;
     let Some(chat_id) = chat.peek().chat_id.clone() else {
         return false;
     };
     let Some(client) = ctx.code_client.peek().clone() else {
-        show_toast(&ctx, "Code plane not connected — check Settings");
+        show_toast(ctx, "Code plane not connected — check Settings");
         return false;
     };
     {
@@ -501,6 +531,7 @@ pub fn send_code_prompt(ctx: AppCtx, text: String) -> bool {
         c.items.push(ChatItem::User { text: text.clone() });
         c.running = true;
     }
+    let ctx = *ctx;
     spawn_forever(async move {
         let sid = match ctx.code_chat.peek().session_id.clone() {
             Some(sid) => sid,
@@ -525,7 +556,7 @@ pub fn send_code_prompt(ctx: AppCtx, text: String) -> bool {
     true
 }
 
-pub fn stop_code_turn(ctx: AppCtx) {
+pub(crate) fn stop_code_turn(ctx: &AppCtx) {
     let chat = ctx.code_chat.peek();
     let (Some(chat_id), Some(sid)) = (chat.chat_id.clone(), chat.session_id.clone()) else {
         return;
@@ -534,6 +565,7 @@ pub fn stop_code_turn(ctx: AppCtx) {
     let Some(client) = ctx.code_client.peek().clone() else {
         return;
     };
+    let ctx = *ctx;
     spawn_forever(async move {
         if let Err(e) = client.abort(&chat_id, &sid).await {
             show_toast(&ctx, format!("Stop failed: {e}"));
@@ -544,7 +576,12 @@ pub fn stop_code_turn(ctx: AppCtx) {
 }
 
 /// Answer a permission ask: `once` | `always` | `reject`.
-pub fn answer_code_permission(ctx: AppCtx, chat_id: String, perm: CodePermission, response: &str) {
+pub(crate) fn answer_code_permission(
+    ctx: &AppCtx,
+    chat_id: String,
+    perm: CodePermission,
+    response: &str,
+) {
     let Some(client) = ctx.code_client.peek().clone() else {
         return;
     };
@@ -553,6 +590,7 @@ pub fn answer_code_permission(ctx: AppCtx, chat_id: String, perm: CodePermission
         .clone()
         .write()
         .retain(|(cid, p)| !(cid == &chat_id && p.id == perm.id));
+    let ctx = *ctx;
     spawn_forever(async move {
         if let Err(e) = client
             .reply_permission(&chat_id, &perm.session_id, &perm.id, &response)
@@ -564,16 +602,17 @@ pub fn answer_code_permission(ctx: AppCtx, chat_id: String, perm: CodePermission
 }
 
 /// Fetch and render the session's cumulative diff into the chat state.
-pub fn load_code_diff(ctx: AppCtx) {
+pub(crate) fn load_code_diff(ctx: &AppCtx) {
     let chat = ctx.code_chat.peek();
     let (Some(chat_id), Some(sid)) = (chat.chat_id.clone(), chat.session_id.clone()) else {
-        show_toast(&ctx, "No changes yet — the chat has no session");
+        show_toast(ctx, "No changes yet — the chat has no session");
         return;
     };
     drop(chat);
     let Some(client) = ctx.code_client.peek().clone() else {
         return;
     };
+    let ctx = *ctx;
     spawn_forever(async move {
         match client.diff(&chat_id, &sid).await {
             Ok(v) => {
@@ -608,9 +647,9 @@ fn render_diff(v: &Value) -> String {
         if !out.is_empty() {
             out.push('\n');
         }
-        out.push_str(&format!("── {path}"));
+        let _ = write!(out, "── {path}");
         if let (Some(a), Some(d)) = (adds, dels) {
-            out.push_str(&format!("  (+{a} −{d})"));
+            let _ = write!(out, "  (+{a} −{d})");
         }
         out.push('\n');
         if let Some(patch) = f
@@ -629,7 +668,7 @@ fn render_diff(v: &Value) -> String {
 
 /// The "Open PR" action is an instruction to the agent — git is its job
 /// (push is permission-gated; the ask pops here when it runs).
-pub fn request_pr(ctx: AppCtx) {
+pub(crate) fn request_pr(ctx: &AppCtx) {
     send_code_prompt(
         ctx,
         "Push this chat's branch and open a pull request for the work so far. \
@@ -639,21 +678,22 @@ pub fn request_pr(ctx: AppCtx) {
 }
 
 /// Create a new code chat and open it, sending the task as the first prompt.
-pub fn new_code_chat(ctx: AppCtx, repo: String, task: String, model: Option<String>) {
+pub(crate) fn new_code_chat(ctx: &AppCtx, repo: String, task: String, model: Option<String>) {
     let Some(client) = ctx.code_client.peek().clone() else {
-        show_toast(&ctx, "Code plane not connected — check Settings");
+        show_toast(ctx, "Code plane not connected — check Settings");
         return;
     };
+    let ctx = *ctx;
     spawn_forever(async move {
         show_toast(&ctx, format!("Preparing workspace for {repo}…"));
         match client.create_chat(&repo, &task, model.as_deref()).await {
             Ok(meta) => {
-                refresh_code_chats(ctx).await;
-                open_code_chat(ctx, meta);
+                refresh_code_chats(&ctx).await;
+                open_code_chat(&ctx, meta);
                 if !task.trim().is_empty() {
                     // First prompt after the open flow resolves the session.
                     tokio::time::sleep(Duration::from_secs(1)).await;
-                    send_code_prompt(ctx, task);
+                    send_code_prompt(&ctx, task);
                 }
             }
             Err(e) => show_toast(&ctx, format!("Create failed: {e}")),
@@ -661,16 +701,17 @@ pub fn new_code_chat(ctx: AppCtx, repo: String, task: String, model: Option<Stri
     });
 }
 
-pub fn delete_code_chat(ctx: AppCtx, chat_id: String) {
+pub(crate) fn delete_code_chat(ctx: &AppCtx, chat_id: String) {
     let Some(client) = ctx.code_client.peek().clone() else {
         return;
     };
+    let ctx = *ctx;
     spawn_forever(async move {
         match client.delete_chat(&chat_id, true).await {
             Ok(()) => {
                 let mut cache = ctx.code_cache;
                 cache.write().chats.remove(&chat_id);
-                refresh_code_chats(ctx).await;
+                refresh_code_chats(&ctx).await;
             }
             Err(e) => show_toast(&ctx, format!("Delete failed: {e}")),
         }
@@ -681,7 +722,7 @@ pub fn delete_code_chat(ctx: AppCtx, chat_id: String) {
 
 /// Write-through of the open chat's transcript into the persisted cache,
 /// truncated and LRU-capped.
-pub fn write_cache(ctx: &AppCtx) {
+pub(crate) fn write_cache(ctx: &AppCtx) {
     let chat = ctx.code_chat.peek();
     let Some(chat_id) = chat.chat_id.clone() else {
         return;
@@ -715,11 +756,11 @@ pub fn write_cache(ctx: &AppCtx) {
 }
 
 /// Human label for a chat's lifecycle status in the list.
-pub fn status_label(meta: &ChatMeta, running_turn: bool) -> (&'static str, String) {
+pub(crate) fn status_label(meta: &ChatMeta, running_turn: bool) -> (&'static str, String) {
     match (meta.status.as_str(), running_turn) {
         ("running", true) => ("dot busy", "working".to_string()),
         ("running", false) => ("dot on", "idle".to_string()),
-        ("stopped", _) | ("absent", _) => ("dot off", "asleep".to_string()),
+        ("stopped" | "absent", _) => ("dot off", "asleep".to_string()),
         (other, _) => ("dot err", other.to_string()),
     }
 }

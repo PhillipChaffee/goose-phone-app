@@ -1,10 +1,19 @@
 //! Protocol smoke test against a running server:
-//!   cargo run -p goose-acp-client --example smoke -- http://127.0.0.1:3284 SECRET [--prompt]
+//!   cargo run -p goose-acp-client --example smoke -- <http://127.0.0.1:3284> SECRET [--prompt]
 //!
 //! `--watch` instead connects and idles, reporting how long until the
 //! connection is declared dead — used to verify ping-timeout detection
-//! against a server that stops responding (see MOCK_SILENT in
+//! against a server that stops responding (see `MOCK_SILENT` in
 //! mock-goose-server).
+
+// Example code: `expect` on a fixture is a failing check, and stdout is how an
+// example reports what it verified. Both are denied for shipped code. `expect`
+// rather than `allow`: if a use goes away, so should its exception.
+#![expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "example harness: assertions and progress output are the point"
+)]
 
 use std::time::Instant;
 
@@ -78,13 +87,13 @@ async fn main() {
                         }
                         SessionUpdate::AgentThoughtChunk(_) => print!("·"),
                         SessionUpdate::ToolCall(t) => {
-                            println!("\n[tool_call {} {:?}]", t.tool_call_id, t.title)
+                            println!("\n[tool_call {} {:?}]", t.tool_call_id, t.title);
                         }
                         SessionUpdate::ToolCallUpdate(t) => {
-                            println!("\n[tool_update {} {:?}]", t.tool_call_id, t.status)
+                            println!("\n[tool_update {} {:?}]", t.tool_call_id, t.status);
                         }
                         SessionUpdate::SessionInfoUpdate(i) => {
-                            println!("\n[title -> {:?}]", i.title)
+                            println!("\n[title -> {:?}]", i.title);
                         }
                         _ => {}
                     },

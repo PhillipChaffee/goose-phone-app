@@ -1,7 +1,7 @@
-pub mod chat;
-pub mod code;
-pub mod sessions;
-pub mod settings;
+pub(crate) mod chat;
+pub(crate) mod code;
+pub(crate) mod sessions;
+pub(crate) mod settings;
 
 use dioxus::prelude::*;
 

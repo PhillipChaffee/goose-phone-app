@@ -1,7 +1,7 @@
 # Goose Mobile
 
 [![CI](https://github.com/PhillipChaffee/goose-phone-app/actions/workflows/ci.yml/badge.svg)](https://github.com/PhillipChaffee/goose-phone-app/actions/workflows/ci.yml)
-[![Coverage Status](https://coveralls.io/repos/github/PhillipChaffee/goose-phone-app/badge.svg?branch=main)](https://coveralls.io/github/PhillipChaffee/goose-phone-app?branch=main)
+[![codecov](https://codecov.io/gh/PhillipChaffee/goose-phone-app/branch/main/graph/badge.svg)](https://codecov.io/gh/PhillipChaffee/goose-phone-app)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **Talk to your own [goose](https://github.com/aaif-goose/goose) AI agent from your phone.**

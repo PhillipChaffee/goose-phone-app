@@ -1,7 +1,7 @@
 //! TLS setup for the WebSocket connection.
 //!
 //! Two modes:
-//! - Normal WebPKI validation (Mozilla roots) — works out of the box with
+//! - Normal `WebPKI` validation (Mozilla roots) — works out of the box with
 //!   `tailscale serve` (Let's Encrypt certs on the tailnet) or any real cert.
 //! - SHA-256 certificate fingerprint pinning — for `goose serve --tls`
 //!   self-signed certificates. goose prints `GOOSED_CERT_FINGERPRINT=AA:BB:…`
@@ -19,6 +19,11 @@ use tokio_tungstenite::Connector;
 
 /// Parse a SHA-256 fingerprint like `AA:BB:...` (or bare hex, any case).
 /// Empty/whitespace input means "no pin".
+///
+/// # Errors
+///
+/// A message naming the expected format if the input, once colons and
+/// whitespace are stripped, is not exactly 64 hex digits.
 pub fn parse_fingerprint(input: &str) -> Result<Option<[u8; 32]>, String> {
     let cleaned: String = input
         .chars()
@@ -37,6 +42,7 @@ pub fn parse_fingerprint(input: &str) -> Result<Option<[u8; 32]>, String> {
     Ok(Some(out))
 }
 
+#[must_use]
 pub fn format_fingerprint(fp: &[u8; 32]) -> String {
     fp.iter()
         .map(|b| format!("{b:02X}"))
@@ -115,33 +121,36 @@ pub fn ensure_crypto_provider() {
 }
 
 /// Build the tungstenite TLS connector: pinned when a fingerprint is given,
-/// WebPKI (Mozilla roots) otherwise. Ignored for plain `ws://` URLs.
-pub fn build_connector(fingerprint: Option<[u8; 32]>) -> Connector {
+/// `WebPKI` (Mozilla roots) otherwise. Ignored for plain `ws://` URLs.
+pub(crate) fn build_connector(fingerprint: Option<[u8; 32]>) -> Connector {
     ensure_crypto_provider();
-    let provider = rustls::crypto::CryptoProvider::get_default()
+    let provider = CryptoProvider::get_default()
         .cloned()
         .unwrap_or_else(|| Arc::new(rustls::crypto::ring::default_provider()));
 
-    let config = match fingerprint {
-        Some(fp) => rustls::ClientConfig::builder()
+    let config = if let Some(fp) = fingerprint {
+        rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(FingerprintVerifier {
                 fingerprint: fp,
                 provider,
             }))
-            .with_no_client_auth(),
-        None => {
-            let mut roots = rustls::RootCertStore::empty();
-            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            rustls::ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth()
-        }
+            .with_no_client_auth()
+    } else {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth()
     };
     Connector::Rustls(Arc::new(config))
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test assertions: a failing unwrap is the failing check"
+)]
 mod tests {
     use super::*;
 

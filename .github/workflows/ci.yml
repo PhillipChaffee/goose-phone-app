@@ -25,10 +25,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
+      # No toolchain step: rust-toolchain.toml pins the channel and its
+      # components, and rustup installs them on the first cargo call. One
+      # source of truth for CI and for a developer's checkout.
       - uses: Swatinem/rust-cache@v2
 
       - name: Formatting
@@ -46,29 +45,47 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
+      # Toolchain comes from rust-toolchain.toml; llvm-tools is needed only
+      # by this job, so it is added here rather than for every checkout.
+      - name: Add llvm-tools
+        run: rustup component add llvm-tools-preview
 
       - uses: taiki-e/install-action@cargo-llvm-cov
 
       - uses: Swatinem/rust-cache@v2
 
-      # Coverage is measured on the protocol library: it is the
-      # UI-independent, unit-testable half of the workspace.
+      # Coverage is measured on the two protocol libraries: they are the
+      # UI-independent, unit-testable half of the workspace. The Dioxus crate
+      # needs a renderer to execute at all, so counting its lines would report
+      # a number about the test setup rather than about the code.
       - name: Generate coverage
-        run: cargo llvm-cov --package goose-acp-client --lcov --output-path lcov.info
+        run: >
+          cargo llvm-cov --package goose-acp-client --package opencode-client
+          --lcov --output-path lcov.info
 
       - name: Coverage summary
-        run: cargo llvm-cov report --package goose-acp-client --summary-only
+        run: >
+          cargo llvm-cov report --package goose-acp-client --package opencode-client
+          --summary-only
 
-      # Coveralls authenticates with the automatically-provided GITHUB_TOKEN
-      # for public repositories: no account setup and no repository secret.
-      - name: Upload to Coveralls
-        uses: coverallsapp/github-action@v2
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
         with:
-          file: lcov.info
-          format: lcov
+          files: lcov.info
+          flags: rust
+          # ONE-TIME SETUP: sign in at codecov.io with GitHub (free for public
+          # repos) so this repository exists there, then add its upload token
+          # as the CODECOV_TOKEN secret — without it Codecov answers
+          # "Repository not found" and nothing is reported.
+          #
+          # This replaces Coveralls, which was chosen precisely because it
+          # needed no setup (517f6a2). Codecov's token-free alternative
+          # (use_oidc) does not avoid that setup — the repository still has to
+          # exist there — and Codecov requires a token for uploads landing on
+          # a protected branch, which main is (codecov-action#1806, #1817).
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # A reporting failure must not fail a build whose tests passed.
+          fail_ci_if_error: false
 
   ios:
     name: Build check (iOS target)
@@ -76,9 +93,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios
+      # Toolchain comes from rust-toolchain.toml; the iOS target is needed
+      # only by this job.
+      - name: Add the iOS target
+        run: rustup target add aarch64-apple-ios
 
       - uses: Swatinem/rust-cache@v2
 

@@ -42,10 +42,10 @@ pub fn SettingsView() -> Element {
         // Root-scope task: it navigates away from this screen and must
         // survive the unmount.
         spawn_forever(async move {
-            if establish(ctx).await {
+            if establish(&ctx).await {
                 let mut screen = ctx.screen;
                 screen.set(Screen::Sessions);
-                refresh_sessions(ctx, false).await;
+                refresh_sessions(&ctx, false).await;
             }
         });
     };
@@ -65,7 +65,7 @@ pub fn SettingsView() -> Element {
             match outcome {
                 ProbeOutcome::Ok => show_toast(&ctx, "Server reachable, secret accepted ✓"),
                 ProbeOutcome::AuthFailed => {
-                    show_toast(&ctx, "Server reachable, but the secret key was rejected")
+                    show_toast(&ctx, "Server reachable, but the secret key was rejected");
                 }
                 ProbeOutcome::Unreachable(e) => show_toast(&ctx, format!("Unreachable: {e}")),
             }

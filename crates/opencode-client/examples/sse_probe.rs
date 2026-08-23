@@ -1,6 +1,15 @@
 //! Diagnostic: attach to one chat's SSE stream and print raw event arrivals
 //! with timing. `CODE_BASE_URL`, `CODE_PASSWORD`, `CODE_CHAT_ID` env vars.
 
+// Diagnostic example: a missing env var should stop the probe on the spot,
+// and stdout is its entire output. Both are denied for shipped code.
+// `expect` rather than `allow`: if a use goes away, so should its exception.
+#![expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test/example harness: assertions and progress output are the point"
+)]
+
 use opencode_client::{CodeClient, CodeConfig};
 
 #[tokio::main(flavor = "current_thread")]

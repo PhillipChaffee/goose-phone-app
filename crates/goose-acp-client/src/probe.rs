@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crate::client::normalize_base_url;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeOutcome {
     /// Server reachable and (if a secret was given) the secret was accepted.
     Ok,
@@ -17,10 +17,12 @@ pub enum ProbeOutcome {
     Unreachable(String),
 }
 
-/// Check the server. `pinned` should be true when connecting to a
-/// `goose serve --tls` self-signed certificate: the probe then skips
-/// certificate validation and leaves the real trust decision to the
-/// fingerprint-pinned WebSocket connection.
+/// Check the server.
+///
+/// `pinned` should be true when connecting to a `goose serve --tls`
+/// self-signed certificate: the probe then skips certificate validation and
+/// leaves the real trust decision to the fingerprint-pinned WebSocket
+/// connection.
 pub async fn probe(base_url: &str, secret: &str, pinned: bool) -> ProbeOutcome {
     let base = match normalize_base_url(base_url) {
         Ok(b) => b,

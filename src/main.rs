@@ -1,4 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Dioxus's rsx!/#[component] macros expand to fully-qualified paths, so
+// unused_qualifications fires ~50 times on code no one here can edit. Scoped
+// to this crate: the library crates have no macro expansion to excuse and
+// keep the lint enforced (that is how the one real occurrence, a qualified
+// CryptoProvider::get_default() in goose-acp-client, was found).
+#![allow(unused_qualifications, reason = "Dioxus macro expansion")]
 
 mod app;
 mod code;

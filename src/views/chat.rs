@@ -34,7 +34,7 @@ pub fn ChatView() -> Element {
         }
         // Only clear the draft once the message was actually accepted, so a
         // failed send (e.g. disconnected) doesn't eat the typed text.
-        if send_prompt(ctx, text) {
+        if send_prompt(&ctx, text) {
             draft.set(String::new());
         }
     };
@@ -46,7 +46,7 @@ pub fn ChatView() -> Element {
                 onclick: move |_| {
                     let mut screen = ctx.screen;
                     screen.set(Screen::Sessions);
-                    spawn_forever(async move { crate::state::refresh_sessions(ctx, false).await });
+                    spawn_forever(async move { crate::state::refresh_sessions(&ctx, false).await });
                 },
                 "‹"
             }
@@ -91,7 +91,7 @@ pub fn ChatView() -> Element {
             if running {
                 button {
                     class: "btn danger",
-                    onclick: move |_| stop_turn(ctx),
+                    onclick: move |_| stop_turn(&ctx),
                     "Stop"
                 }
             } else {
@@ -177,10 +177,18 @@ fn tool_icon(kind: &str) -> &'static str {
 }
 
 fn format_tokens(n: u64) -> String {
+    // Scoped to this one cast, not to the whole function: anything else added
+    // here should have to justify its own arithmetic.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "token counts are orders of magnitude below 2^53, where f64 \
+                  stops representing integers exactly"
+    )]
+    let tokens = n as f64;
     if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
+        format!("{:.1}M", tokens / 1_000_000.0)
     } else if n >= 1_000 {
-        format!("{:.1}k", n as f64 / 1_000.0)
+        format!("{:.1}k", tokens / 1_000.0)
     } else {
         n.to_string()
     }
@@ -211,16 +219,18 @@ pub fn PermissionModal() -> Element {
 
     // Show which session is asking when it isn't the one on screen.
     let current = ctx.chat.read().session_id.clone();
-    let session_label = if current.as_deref() != Some(request.session_id.as_str()) {
+    let session_label = if current.as_deref() == Some(request.session_id.as_str()) {
+        None
+    } else {
         let sessions = ctx.sessions.read();
         let name = sessions
             .iter()
             .find(|s| s.session_id == request.session_id)
-            .map(|s| s.display_title())
-            .unwrap_or_else(|| request.session_id.clone());
+            .map_or_else(
+                || request.session_id.clone(),
+                goose_acp_client::SessionInfo::display_title,
+            );
         Some(format!("Session: {name}"))
-    } else {
-        None
     };
     let pending_more = queue.len().saturating_sub(1);
 
@@ -252,8 +262,8 @@ pub fn PermissionModal() -> Element {
                                 let option_id = option.option_id.clone();
                                 move |_| {
                                     answer_permission(
-                                        ctx,
-                                        request_id.clone(),
+                                        &ctx,
+                                        &request_id,
                                         Some(option_id.clone()),
                                     );
                                 }
