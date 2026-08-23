@@ -79,8 +79,7 @@ const CACHE_MAX_ITEMS: usize = 300;
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs())
 }
 
 // ------------------------------------------------------------- connection

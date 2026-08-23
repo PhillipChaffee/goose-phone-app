@@ -25,3 +25,8 @@ pedantic, nursery and cargo groups plus restriction picks (`unwrap_used`,
 justified in that table; one-off exceptions go in the code as
 `#[expect(lint, reason = "...")]` — `expect`, not `allow`, so an exception
 that stops being needed fails the build instead of rotting.
+
+The toolchain is pinned in `rust-toolchain.toml` and rustup honours it
+automatically, so a local `cargo clippy` sees exactly the lints CI sees.
+Bumping the channel is a deliberate change: raise it, re-run the gate, and
+fix what the newer lints found in the same commit.

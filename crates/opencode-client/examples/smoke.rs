@@ -135,9 +135,7 @@ async fn score_aftermath(s: &mut Score, client: &CodeClient, chat_id: &str, sess
     let diff = client.diff(chat_id, session_id).await;
     s.check(
         "diff endpoint",
-        diff.as_ref()
-            .map(serde_json::value::Value::is_array)
-            .unwrap_or(false),
+        diff.as_ref().is_ok_and(serde_json::value::Value::is_array),
         &format!("{diff:?}"),
     );
 }

@@ -25,10 +25,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
+      # No toolchain step: rust-toolchain.toml pins the channel and its
+      # components, and rustup installs them on the first cargo call. One
+      # source of truth for CI and for a developer's checkout.
       - uses: Swatinem/rust-cache@v2
 
       - name: Formatting
@@ -46,9 +45,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
+      # Toolchain comes from rust-toolchain.toml; llvm-tools is needed only
+      # by this job, so it is added here rather than for every checkout.
+      - name: Add llvm-tools
+        run: rustup component add llvm-tools-preview
 
       - uses: taiki-e/install-action@cargo-llvm-cov
 
@@ -93,9 +93,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios
+      # Toolchain comes from rust-toolchain.toml; the iOS target is needed
+      # only by this job.
+      - name: Add the iOS target
+        run: rustup target add aarch64-apple-ios
 
       - uses: Swatinem/rust-cache@v2
 

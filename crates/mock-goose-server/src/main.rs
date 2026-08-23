@@ -224,7 +224,7 @@ async fn serve_ws(ws: Ws, state: Shared) {
     // MOCK_SILENT=1 simulates a half-open connection: the socket stays open
     // but the peer stops reading and answering (so tungstenite never
     // auto-pongs). Used to verify the client's ping-timeout detection.
-    let silent_after = std::env::var("MOCK_SILENT").ok().is_some_and(|v| v == "1");
+    let silent_after = std::env::var("MOCK_SILENT").is_ok_and(|v| v == "1");
 
     let (mut sink, mut stream) = ws.split();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Message>();

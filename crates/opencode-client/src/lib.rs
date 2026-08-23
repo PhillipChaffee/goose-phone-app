@@ -668,7 +668,7 @@ impl CodeClient {
                 Self::chat_path(chat_id, "/event")
             ))
             .basic_auth("opencode", Some(&self.password))
-            .timeout(Duration::from_secs(60 * 60 * 24))
+            .timeout(Duration::from_hours(24))
             .send()
             .await?;
         if !resp.status().is_success() {
