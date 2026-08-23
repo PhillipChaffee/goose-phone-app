@@ -6,7 +6,6 @@ use crate::icons::Icon;
 use crate::state::{
     disconnect, establish, refresh_sessions, show_toast, use_app_ctx, ConnState, Screen, Settings,
 };
-use crate::views::ConnBadge;
 
 #[component]
 pub fn SettingsView() -> Element {
@@ -88,7 +87,7 @@ pub fn SettingsView() -> Element {
                 Icon { name: "menu" }
             }
             h1 { class: "title", "Settings" }
-            div { class: "topbar-actions", ConnBadge {} }
+
         }
         main { class: "scroll settings",
             section { class: "card",

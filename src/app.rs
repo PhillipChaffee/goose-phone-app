@@ -29,6 +29,8 @@ pub fn App() -> Element {
         },
     };
 
+    crate::viewport::use_visual_viewport();
+
     let toast = (ctx.toast)();
     // Two independent, backend-tagged queues; the goose modal wins ties.
     let goose_permission_open = !ctx.permission.read().is_empty();
@@ -38,7 +40,12 @@ pub fn App() -> Element {
         document::Style { {MAIN_CSS} }
         document::Meta {
             name: "viewport",
-            content: "width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover",
+            // interactive-widget=resizes-content: when the keyboard opens, shrink
+            // the layout viewport instead of scrolling the visual one. Without
+            // it iOS slides the whole page up to reveal the focused field,
+            // which carries the floating header off the top of the screen.
+            content: "width=device-width, initial-scale=1, maximum-scale=1, \
+                      viewport-fit=cover, interactive-widget=resizes-content",
         }
         div { class: "app",
             {body}

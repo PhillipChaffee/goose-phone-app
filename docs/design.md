@@ -6,170 +6,212 @@ that file are consequences of the rules below rather than free choices.
 
 ## Where the look comes from
 
-Two sources, doing different jobs.
+Three sources, doing different jobs.
 
-**The palette, type scale, radii and shadow ramp** mirror the goose desktop
-app's design tokens (`ui/desktop/src/theme/theme-tokens.ts` in the goose
-repo), so the phone and the desktop read as one product. Treat those values as
-tracking an upstream source: change one to fix a real problem here, not to
-taste, and change it in both themes.
+**The reading voice** is the Claude iOS app: agent prose set in a serif, on a
+page with no panel around it, under chrome that floats rather than sits in a
+bar. That app is the reference for what a long agent reply should feel like to
+read on a phone.
 
-**The shell — how the chrome behaves** follows current iOS. Since iOS 26
-("Liquid Glass"), navigation bars, toolbars and tab bars are no longer opaque
-bars bolted to the top and bottom edges: they are inset, translucent, floating
-layers, and content scrolls underneath them. That single change is what stops
-a phone UI reading as a stack of rectangles.
+**The shell** follows current iOS. Since iOS 26 ("Liquid Glass"), navigation
+is not an opaque bar bolted to the top edge — it is inset, translucent and
+floating, with content passing underneath. This app goes one step further and
+drops the bar entirely: what floats is the individual controls.
+
+**The palette, radii and shadow ramp** still mirror the goose desktop app's
+design tokens (`ui/desktop/src/theme/theme-tokens.ts` in the goose repo), so
+the phone and the desktop read as one product. Treat those as tracking an
+upstream source: change one to fix a real problem here, not to taste, and
+change it in both themes. Where a value is deliberately *not* upstream's, it
+is listed under Deviations and the reason is a measurement.
 
 - [Liquid Glass reference](https://github.com/conorluddy/LiquidGlassReference)
-  — a detailed writeup of the material, its shapes, and where Apple says to
-  use it and not use it.
 - [Apple Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines)
-  — the authority on tap targets, bar behavior and typography.
 - [Exploring tab bars on iOS 26](https://www.donnywals.com/exploring-tab-bars-on-ios-26-with-liquid-glass/)
-  — what the floating tab bar actually does.
 
 ## The rules
 
-### 1. Chrome floats; content scrolls under it
+### 1. Prose is serif; the interface is sans
 
-The top bar and the tab bar are inset capsules positioned over the page, not
-rows in a column. They are translucent (`backdrop-filter`) with a solid
-fallback, they cast a shadow, and they carry a hairline *ring* rather than a
-border — on a white page a white bar is otherwise carried by its shadow alone.
+`--font-serif` resolves to New York on iOS through `ui-serif`, so this costs
+no font file and no download. It is the voice of anything the agent *says*:
+markdown, message text, screen and list titles. Everything you *operate* —
+buttons, labels, metadata, status, chips — stays in the sans stack, and code
+stays monospace.
 
-Their heights are tokens (`--topbar-h`, `--tabbar-h`) because the scroll areas
-pad themselves by exactly that much. Change one and you must change nothing
-else; change the padding by hand and the two will drift.
+The split is the point. When the reply is set in a different voice from the
+controls around it, the reply stops competing with them, and it does so
+without drawing a box.
 
-### 2. Rounding is tiered, and nothing is square
+### 2. There is no top bar, and no bottom bar
+
+The top of a screen is three detached things: a circular control at the
+leading edge, the title floating over the page, and a trailing group pill.
+Each carries its own glass. Nothing spans the width.
+
+The title is centred by being taken **out of flow** — absolutely positioned at
+`left: 50%`. Centring it "between the controls" is not centring: the leading
+and trailing groups are different widths on every screen, and a flex title
+lands half a back-button to one side. That was the bug the first attempt
+shipped.
+
+Navigation is a slide-over drawer, not a tab bar. A tab bar spent 100px of
+every screen on two destinations and had no room for a third.
+
+**Every root screen must carry the drawer's hamburger.** Settings once had
+only a back chevron that rendered `if connected`, which sealed a disconnected
+user into the one screen they would be on *because* they were not connected.
+
+### 3. Chrome floats; the scrim is what makes it readable
+
+With no bar behind the title, nothing hides content scrolling up past it. The
+scroll-edge scrim (`.app::before`) covers the whole chrome band — safe area
+plus gap plus bar height — in the same material as the controls, fading out at
+its lower edge so there is no hard line across the page.
+
+Do not thin the scrim to make the page feel more open. Without it, a message
+bubble sails through the status bar and collides with the clock.
+
+### 4. Rounding is tiered, and nothing is square
 
 | tier | radius | what |
 |---|---|---|
-| identity | `--radius-full` | icon buttons, tabs, chips, send, toasts, the bars |
-| container | 16px | cards, session rows, bubbles, composer, modals, alerts |
-| control / inset | 12px | buttons, fields, tool calls, code blocks, images |
+| identity | `--radius-full` | icon buttons, chips, the group pill, the floating action, toasts |
+| container | 16–24px | cards, session rows, bubbles, the composer, modals, drawer items |
+| control / inset | 12px | buttons, fields, tool calls, code blocks, tiles |
 
 **A control never sits at a tighter radius than the container around it.**
-Mixed radii — a 4px block inside a 16px card — are what read as boxy.
+Where something is clipped by a rounded parent its own radius is *concentric*:
+the parent's minus the border. The tool-call output slab is 11px inside a 12px
+card for exactly that reason.
 
-Where something is clipped by a rounded parent, its own radius is *concentric*:
-the parent's radius minus the border. The tool-call output slab is 11px inside
-a 12px card for exactly this reason. iOS calls this corner concentricity, and
-getting it wrong is visible even when nobody can say why.
+### 5. Borders separate; shadows float
 
-### 3. Borders separate; shadows float
+Anything in normal flow — cards, session rows, tool cards, table rules — gets
+a 1px hairline and **no** shadow. Only things that leave the flow cast one:
+the floating controls, the composer, the drawer, modals, toasts. A card that
+carries both reads as trying too hard, and a card whose fill matches the page
+is doing nothing at all with its shadow.
 
-Anything in normal flow — tool cards, section rules, table cells — gets a 1px
-hairline and no shadow. Only things that leave the flow — the bars, the
-composer, modals, toasts, alerts — cast one. An element with both is rare and
-deliberate (the modal is the one that earns it).
+### 6. The agent's turn is never a panel
 
-### 4. Glass is for chrome only
+Prose on the page, in both themes. It is the longest thing on screen, and a
+box around the longest thing on screen is the boxiest possible layout. Dark
+mode used to give it a faint raised surface; the serif separates it now.
 
-Translucency belongs on navigation, tab bars and floating controls. It does
-**not** belong on content: lists, transcripts, code blocks and tables stay
-opaque. Glass over glass is mud.
-
-### 5. Controls are sized for thumbs
-
-Tap targets are 40px minimum, which clears the 44px guidance once the
-surrounding bar padding is counted. A label never goes inside a fixed-size
-circular button — it wraps and overflows. That bug shipped twice here (`‹ Back`
-and `⇪ PR`); labelled actions use `.icon-btn.action`, which is a pill sized to
-its text.
-
-### 6. State is a dot, numbers are monospace
-
-Connection state, tool status and progress are carried by an 8px coloured dot
-and monospace text — no chips, no badges with borders. Chips are reserved for
-words that carry live state ("working", "crashed").
-
-The dot is `display: inline-block`. It has to be: the session title is a
-`-webkit-box` for line clamping rather than a flex row, and an inline span
-ignores width and height — the per-session dot silently collapsed to nothing
-until this was fixed.
-
-Words are set as words. Backend status enums (`in_progress`, `fetch_unknown`)
-are mapped to UI copy before they reach the screen; uppercased machine tokens
-read as debug output and ate the width the tool title needed.
+The user's turn *is* a bubble — it is short, and it wants to read as an
+interjection.
 
 ### 7. Anything that fills is a tint, not a slab
 
-Errors and banners carry their colour as a 12% tint of the semantic colour
-with a matching hairline and coloured text, not as a saturated fill. A full
-red rectangle across the page is the loudest and most rectangular thing a
-screen can contain, and it was sitting directly above an equally solid
-button. Saturated fills are left to controls the user presses — the `Delete`
-in a destructive confirm earns one; a status message does not.
+Errors and banners carry their colour as a 12% tint of the semantic colour,
+with a matching hairline and coloured text, plus a dot. A saturated
+full-bleed rectangle is the loudest and most rectangular thing a screen can
+contain. Saturated fills are reserved for controls the user presses — the
+`Delete` in a destructive confirm earns one; a status message does not.
 
-### 8. Buttons come in twos
+### 8. State is a dot; words are words
 
-`.btn-row` and `.modal-actions` are two-column grids, and a row holding one
-button — or an odd last one — spans the full width. Four stacked full-width
-bars is a wall; buttons sized to their own labels is a ragged edge against a
-page of full-width cards. Where two solid primaries land in the same row the
-second is quietened by a sibling rule, so a row always has one obvious
-default.
+Connection state, tool status and lifecycle ride on an 8px coloured dot. In a
+bar, the dot is *all* you get — the agent name and version are ~107px of text
+that a centred title cannot clear, so Settings names the connection in its own
+body instead.
 
-Disabled controls fade (`opacity`), they do not swap to a disabled colour
-token. Painting `--text-disabled` on `--bg-disabled` put two near-identical
-greys on each other and the label vanished; on the light glass bar the same
-swap measured 1.5:1.
+Backend status enums are mapped to UI copy before they reach the screen.
+`IN_PROGRESS` and `FETCH_UNKNOWN`, uppercased and monospaced, read as debug
+output and ate the width the tool title needed.
+
+### 9. Controls are sized for thumbs, and the whole row is the target
+
+Tap targets are 40px minimum, which clears the 44px guidance once surrounding
+padding is counted. A label never goes inside a fixed-size circular button —
+it wraps and overflows.
+
+A list row is tappable across its **whole** area, not just the text block
+inside it. The handler belongs on the `li`; the trailing control and the
+confirm row stop propagation. With the handler on the inner block, 36% of a
+card — the padding ring and the column under the trash — did nothing while
+still lifting on press.
+
+### 10. Long output folds
+
+A run of two or more settled tool calls collapses to one line you can open. An
+agent that reads four files and runs a command otherwise produces five stacked
+cards and pushes the reply they were in service of off the screen. A run stays
+open when anything in it failed or is still running — which is exactly when
+you want to see it.
+
+### 11. Only offer controls that do something
+
+The composer's chip row holds facts that are real on that screen: the token
+budget on the goose tab, diff and PR on the code tab. There is deliberately no
+mode chip, because nothing backs it. A control that does nothing is worse than
+no control.
+
+The model chip is real: goose implements `session/set_config_option`, and the
+model list arrives in the `configOptions` of `session/new` and `session/load`
+with no extra call. Switching is per-session — `session/prompt` carries no
+model field — so it applies from your next message.
 
 ## Deviations, and why
 
 All commented at the point of use in the stylesheet:
 
 - **Font.** goose uses Cash Sans, which is proprietary and not in the repo. We
-  fall back to the system stack.
+  fall back to the system sans, and to the system serif for prose.
 - **Every accent colour this app also sets as text** is darkened (light) or
   lifted (dark) from the upstream token. Upstream tunes them as *fills*; as
   text they land on `--tool-surface`, not on the page, and at the upstream
-  values `--text-success` measured 2.5:1 there and `--text-info` 2.7:1. The
-  same goes for `--text-secondary`, which failed in *both* themes, and for
-  `--bg-danger`, whose white label measured 3.4:1. These are measured, not
-  taste — see below.
+  values `--text-success` measured 2.5:1 there and `--text-info` 2.7:1.
+  `--text-secondary` failed in *both* themes, and `--bg-danger`'s white label
+  measured 3.4:1. Measured, not taste.
+- **`--glass-tint` is thin (78/86%)** so the blur is visibly doing its job.
+  An earlier value of 90/93% was chosen to keep bars readable with the blur
+  absent — but the blur was never absent, it had been mismeasured, and
+  thickening the pane removed the effect the shell is built on. Where the blur
+  really is absent the answer is the `prefers-reduced-transparency` rule,
+  which asks for the preference instead of guessing at it.
 - **`.chip` reads one step brighter** than comparable secondary text, because
   secondary-on-secondary is unreadable at phone size.
 
 ## How to check your work
 
-Open [`docs/style-gallery.html`](style-gallery.html) in a browser. It renders
-all sixteen screen states — populated and empty lists, a full transcript,
-markdown, every tool state, both permission modals, the waking banner, the diff
-panel, settings, error states — in 390×844 frames against the real stylesheet,
-in whichever colour scheme your OS is set to. Every state is visible at once,
-with no build and no device.
+**Run it.** Build for a booted simulator, install, launch. An incremental
+rebuild is a few seconds. Seed the settings so a reinstall does not mean
+retyping four fields — these are read only in debug builds:
 
-Check both themes. Most mistakes in this file are contrast mistakes, and they
-only ever show up in one of them.
+```sh
+GOOSE_DEV_SERVER_URL=http://127.0.0.1:3285 \
+GOOSE_DEV_SECRET_KEY=mock-secret \
+GOOSE_DEV_WORKING_DIR=/tmp/goose-work \
+GOOSE_DEV_CODE_URL=http://127.0.0.1:4399 \
+GOOSE_DEV_CODE_PASSWORD=... \
+  dx build --platform ios --no-default-features --features mobile
+```
 
-Two things are easier to measure than to see, and `node docs/audit.js` measures
-both across every state in both themes. It exits non-zero on a finding, so it
-can gate a change:
+`cargo run -p mock-goose-server 3285` gives you the goose plane. For the code
+plane, `scripts/verify/test-code-agent-manager.sh --serve` in the
+personal-ai-setup repo stands up the manager against a mock OpenCode server
+and prints the URL and password.
 
-- **Contrast.** Every element carrying its own text, composited against the
-  first opaque background behind it, against 4.5:1 (3:1 for large or bold
-  text). Watch out when reading colours back: `color-mix()` resolves to
-  `color(srgb r g b / a)` with components in 0..1 while `rgb()` gives 0..255 —
-  scaling the wrong one makes every glass bar read as near-black and invents a
-  screenful of failures that are not there.
-- **Geometry.** Anything overflowing the 390px viewport, text clipped without
-  an ellipsis, filled or fully-bordered boxes left at radius 0, buttons under
-  32px, and any child rounded more than the parent clipping it.
+**Check both themes.** `xcrun simctl ui booted appearance dark|light`. Most
+mistakes in the stylesheet are contrast mistakes, and they only ever show up
+in one of them.
 
-Neither replaces looking. The audit is clean on a screen whose empty state is
-pinned to the top, whose buttons are a ragged row of different widths, and
-whose error is a saturated slab — all three shipped here and all three were
-found by eye.
+Two things are easier to measure than to see, and `node docs/audit.js` checks
+both — contrast against the first opaque background behind each element, and
+geometry (overflow, clipped text, square-cornered surfaces, undersized tap
+targets, radius nesting). It exits non-zero on a finding.
 
-The blur is the one thing you cannot check here at all: headless Chromium does
-not composite `backdrop-filter`, in an iframe or out of one. That is why
-`--glass-tint` is set high enough that a bar stays readable with the blur doing
-nothing — which is also the case on a real device under Reduce Transparency or
-Low Power Mode.
+**But note what the audit is actually looking at.** It runs against
+`docs/style-gallery.html`, a hand-maintained copy of the DOM the views emit —
+and that copy has drifted before, badly enough that an entire review pass
+examined markup the app no longer produced. Treat a clean audit as evidence
+about the gallery, not about the app, until the two have been reconciled.
 
-The README's screenshots come from the same place: `node docs/screenshots.js`
-captures individual gallery frames at 390×844. Re-run it when a change alters
-what those screens look like, so the README cannot quietly go stale the way
-the previous device captures did.
+The honest check is the simulator. If you want numbers out of the real DOM
+rather than pixels, `document::eval` reaches into the live WKWebView and can
+send `getBoundingClientRect` and computed styles back to Rust — that is how
+the spacing in this design was measured. Give it ~1500ms: WebKit applies
+`env(safe-area-inset-*)` after first paint, and an earlier read reports every
+bar 62px too high and every safe-area inset as zero.

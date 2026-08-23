@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 use crate::icons::Icon;
 use crate::state::{
     new_session, open_session, refresh_sessions, relative_time, rfc3339_to_epoch, show_toast,
-    use_app_ctx, Screen,
+    use_app_ctx,
 };
 use crate::views::ConnBadge;
 
@@ -36,14 +36,6 @@ pub fn SessionsView() -> Element {
                         spawn_forever(async move { refresh_sessions(&ctx, false).await });
                     },
                     if loading { "…" } else { Icon { name: "refresh" } }
-                }
-                button {
-                    class: "icon-btn",
-                    onclick: move |_| {
-                        let mut screen = ctx.screen;
-                        screen.set(Screen::Settings);
-                    },
-                    Icon { name: "gear" }
                 }
             }
         }

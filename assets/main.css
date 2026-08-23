@@ -46,8 +46,11 @@
   /* Darkened from upstream's #f94b4b so the white label on .btn.danger
    * clears 4.5:1 — at #f94b4b "Delete" and "Stop" measured 3.4:1. */
   --bg-danger: #d93030;
-  --bg-success: #91cb80;
-  --bg-warning: #fbcd44;
+  /* A status dot is a non-text indicator and needs 3:1 against the surface
+   * it sits on. Upstream's #91cb80 measured about 1.7:1 on the light glass
+   * bar, where the connection dot is the only thing reporting state. */
+  --bg-success: #4a9b34;
+  --bg-warning: #b8860b;
   --bg-disabled: #e3e6ea;
 
   --text-primary: #3f434b;
@@ -112,6 +115,7 @@
   --text-sm: 0.875rem;
   --text-md: 1rem;
   --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
   --lh-xs: 1rem;
   --lh-sm: 1.25rem;
   --lh-md: 1.5rem;
@@ -167,10 +171,13 @@
     --bg-disabled: #474e57;
 
     --text-primary: #ffffff;
-    /* Lifted from upstream's #878787 and #ff6b6b: both fail 4.5:1 against
-     * --tool-surface, the lightest surface either lands on. Same measured
-     * deviation as the light palette above. */
-    --text-secondary: #a0a0a0;
+    /* Lifted from upstream's #878787 and #ff6b6b. Tuned against
+     * --bg-secondary (#3f434b), which is the lightest surface this actually
+     * lands on — an earlier note claimed that was --tool-surface (#33373e)
+     * and was wrong, leaving the session preview and the composer chips at
+     * 3.8:1. #b8b8b8 measures 5.0:1 on #3f434b, 6.0:1 on #33373e, 7.8:1 on
+     * the page. */
+    --text-secondary: #b8b8b8;
     --text-tertiary: #606c7a;
     --text-inverse: #000000;
     --text-info: #7cacff;
@@ -218,7 +225,7 @@
 
   --text-primary: #ffffff;
   /* Same measured lift as the media-query block above. */
-  --text-secondary: #a0a0a0;
+  --text-secondary: #b8b8b8;
   --text-tertiary: #606c7a;
   --text-inverse: #000000;
   --text-info: #7cacff;
@@ -253,9 +260,24 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/* The document itself must not be scrollable.
+ *
+ * When a field is focused, iOS reveals it by scrolling the VISUAL viewport —
+ * which slides the whole page up and carries the floating header off the top
+ * of the screen. It can only do that if there is a document to scroll. Pinned
+ * like this there is not, and the only scroller left is the inner .scroll,
+ * which the layout already sizes to the space the keyboard leaves.
+ *
+ * `interactive-widget=resizes-content` in the viewport meta is the standards
+ * answer to the same problem, and it is set — but iOS 26's WKWebView did not
+ * honour it in testing, so this does the work. */
 html,
 body {
+  position: fixed;
+  inset: 0;
+  width: 100%;
   height: 100%;
+  overflow: hidden;
 }
 
 body {
@@ -293,12 +315,21 @@ pre {
   height: 100%;
 }
 
+/* Sized and placed against the VISUAL viewport, not the layout one. See
+ * src/viewport.rs: with the keyboard up iOS offsets the visual viewport
+ * rather than shrinking the layout, and everything in here is positioned
+ * against the shell. The fallbacks are what a browser without the
+ * VisualViewport API gets, which is the old behaviour. */
 .app {
-  position: relative;
+  position: absolute;
+  top: var(--vv-top, 0px);
+  left: 0;
+  right: 0;
   display: flex;
   flex-direction: column;
   height: 100vh;
   height: 100dvh;
+  height: var(--vv-height, 100dvh);
   overflow: hidden;
   background: var(--bg-primary);
 }
@@ -520,15 +551,17 @@ pre {
 
 /* ── buttons ────────────────────────────────────────────────────────── */
 
-/* True circles, 40px so the tap target clears the 44px guidance once the
- * bar's padding is counted. The glyph is set larger than body text because a
- * chevron or gear at 16px reads as a smudge, not a control. */
+/* True circles at the HIG's 44pt. They used to be 40px on the argument that
+ * the surrounding bar padding made up the difference — but there is no bar
+ * any more, these float on their own, and nothing is padding them. The glyph
+ * is set larger than body text because a chevron or gear at 16px reads as a
+ * smudge, not a control. */
 .icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   flex-shrink: 0;
   padding: 0;
   border: 0;
@@ -546,7 +579,7 @@ pre {
  * "⇪ PR" and the old "‹ Back" were doing. */
 .icon-btn.action {
   width: auto;
-  min-width: 40px;
+  min-width: 44px;
   padding: 0 12px;
   background: var(--bg-secondary);
   color: var(--text-primary);
@@ -613,8 +646,12 @@ pre {
   opacity: 0.9;
 }
 
+/* The fill alone is 1.08:1 against the light page — "Test connection" had no
+ * visible button at all. The hairline is what gives it an edge; in dark the
+ * fill already separates and the border just firms it up. */
 .btn.secondary {
   background: var(--bg-secondary);
+  border-color: var(--border-primary);
   color: var(--text-primary);
 }
 
@@ -1000,7 +1037,10 @@ select.field {
   margin-top: -8px;
 }
 
+/* The lift is a shadow, and a shadow on a near-black page is nothing at all,
+ * so a press in dark had no feedback. The tint is what carries it there. */
 .session-item:active {
+  background: var(--bg-secondary);
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
 }
@@ -1031,10 +1071,13 @@ select.field {
   gap: 8px;
 }
 
+/* Secondary, not tertiary: this is the row's only recency signal, and
+ * tertiary measured 2.2:1 in light. Tertiary stays for dots and rules, which
+ * are non-text and only need 3:1. */
 .session-age {
   flex-shrink: 0;
   margin-left: auto;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-size: var(--text-xs);
   line-height: var(--lh-sm);
 }
@@ -1519,6 +1562,7 @@ details[open] > summary::before {
   gap: 6px;
   height: 32px;
   padding: 0 12px;
+  border: 1px solid var(--border-primary);
   border-radius: var(--radius-full);
   background: var(--bg-secondary);
   color: var(--text-secondary);
@@ -1528,13 +1572,21 @@ details[open] > summary::before {
 }
 
 .composer-chip.action {
-  border: 0;
   font-family: inherit;
   cursor: pointer;
 }
 
+.composer-chip.action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.composer-chip.action:active:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
 .composer-chip .icon {
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 
 /* Send is a filled circle at the trailing end, always in the same place. */
@@ -1607,6 +1659,8 @@ details[open] > summary::before {
 /* The reading voice. Everything the agent says is prose, and prose is set in
  * the serif; the interface around it stays sans. */
 .md {
+  /* A pasted URL is one unbreakable word and ran off the side of the page. */
+  overflow-wrap: anywhere;
   font-family: var(--font-serif);
   font-size: var(--text-md);
   line-height: 1.65;
@@ -1885,6 +1939,20 @@ details[open] > summary::before {
   transform: translateX(0);
 }
 
+/* The panel is 300px wide and the action floats bottom-right, so the two
+ * overlap and the drawer cut the pill in half. It is also not an action that
+ * applies while you are choosing a destination. */
+.app:has(.drawer.open) .fab {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Closed, the panel is only translated out of view — its shadow still spilled
+ * a grey band down the left edge of every screen in light mode. */
+.drawer:not(.open) {
+  box-shadow: none;
+}
+
 /* Not display:none when closed — the panel has to be in the tree for the
  * slide to animate, so it is moved out of view and made unclickable instead. */
 .drawer-scrim {
@@ -1903,7 +1971,9 @@ details[open] > summary::before {
 }
 
 .drawer-brand {
-  margin: 0 8px 24px;
+  /* 12px matches .drawer-item's padding, so the wordmark starts on the same
+   * line as the icons below it. */
+  margin: 0 12px 24px;
   font-family: var(--font-serif);
   font-size: var(--text-xl);
   font-weight: 600;
@@ -1936,8 +2006,10 @@ details[open] > summary::before {
   color: var(--text-secondary);
 }
 
+/* Tertiary, not secondary: at 1.08:1 against the light page the selected
+ * destination was indistinguishable from the unselected ones. */
 .drawer-item.active {
-  background: var(--bg-secondary);
+  background: var(--bg-tertiary);
 }
 
 .drawer-item.active .icon {

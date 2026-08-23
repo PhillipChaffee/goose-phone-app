@@ -13,7 +13,7 @@ use crate::code::{
     stop_code_turn, CodeScreen,
 };
 use crate::icons::Icon;
-use crate::state::{relative_time_secs, use_app_ctx, ConnState, Screen, Tab};
+use crate::state::{relative_time_secs, use_app_ctx, ConnState};
 use crate::views::chat::render_transcript;
 
 #[component]
@@ -79,16 +79,6 @@ pub fn CodeSessionsView() -> Element {
                         spawn_forever(async move { refresh_code_chats(&ctx).await });
                     },
                     if loading { "…" } else { Icon { name: "refresh" } }
-                }
-                button {
-                    class: "icon-btn",
-                    onclick: move |_| {
-                        let mut tab = ctx.tab;
-                        let mut screen = ctx.screen;
-                        tab.set(Tab::Home);
-                        screen.set(Screen::Settings);
-                    },
-                    Icon { name: "gear" }
                 }
             }
         }
