@@ -1,6 +1,6 @@
 //! Wire types for the Agent Client Protocol (ACP) as served by `goose serve`.
 //!
-//! Field names on the wire are camelCase; enum discriminants are snake_case.
+//! Field names on the wire are camelCase; enum discriminants are `snake_case`.
 //! Discriminated unions are internally tagged: `ContentBlock` by `type`,
 //! session updates by `sessionUpdate`.
 
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// A block of prompt/message content (ACP `ContentBlock`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
     Text {
@@ -52,22 +52,20 @@ impl ContentBlock {
     /// Plain-text rendering of the block for a chat transcript.
     pub fn text_repr(&self) -> String {
         match self {
-            ContentBlock::Text { text, .. } => text.clone(),
-            ContentBlock::Image { mime_type, .. } => format!("[image: {mime_type}]"),
-            ContentBlock::Audio { mime_type, .. } => format!("[audio: {mime_type}]"),
-            ContentBlock::ResourceLink { uri, name, .. } => {
+            Self::Text { text, .. } => text.clone(),
+            Self::Image { mime_type, .. } => format!("[image: {mime_type}]"),
+            Self::Audio { mime_type, .. } => format!("[audio: {mime_type}]"),
+            Self::ResourceLink { uri, name, .. } => {
                 format!("[{}]({uri})", name.as_deref().unwrap_or(uri))
             }
-            ContentBlock::Resource { resource, .. } => resource
+            Self::Resource { resource, .. } => resource
                 .get("text")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| "[resource]".to_string()),
+                .and_then(Value::as_str).map_or_else(|| "[resource]".to_string(), str::to_string),
         }
     }
 
     pub fn text(text: impl Into<String>) -> Self {
-        ContentBlock::Text {
+        Self::Text {
             text: text.into(),
             annotations: None,
             meta: None,
@@ -106,6 +104,7 @@ pub struct ToolCallUpdate {
 
 impl ToolCallUpdate {
     /// Name of the underlying goose tool, e.g. `developer__shell`, when present.
+    #[must_use] 
     pub fn tool_name(&self) -> Option<&str> {
         self.meta
             .as_ref()?
@@ -197,41 +196,41 @@ impl SessionUpdate {
 
         match tag.as_str() {
             "user_message_chunk" => match parse::<MessageChunk>(&raw) {
-                Some(c) => SessionUpdate::UserMessageChunk(c),
-                None => SessionUpdate::Unknown { tag, raw },
+                Some(c) => Self::UserMessageChunk(c),
+                None => Self::Unknown { tag, raw },
             },
             "agent_message_chunk" => match parse::<MessageChunk>(&raw) {
-                Some(c) => SessionUpdate::AgentMessageChunk(c),
-                None => SessionUpdate::Unknown { tag, raw },
+                Some(c) => Self::AgentMessageChunk(c),
+                None => Self::Unknown { tag, raw },
             },
             "agent_thought_chunk" => match parse::<MessageChunk>(&raw) {
-                Some(c) => SessionUpdate::AgentThoughtChunk(c),
-                None => SessionUpdate::Unknown { tag, raw },
+                Some(c) => Self::AgentThoughtChunk(c),
+                None => Self::Unknown { tag, raw },
             },
             "tool_call" => match parse::<ToolCallUpdate>(&raw) {
-                Some(c) => SessionUpdate::ToolCall(c),
-                None => SessionUpdate::Unknown { tag, raw },
+                Some(c) => Self::ToolCall(c),
+                None => Self::Unknown { tag, raw },
             },
             "tool_call_update" => match parse::<ToolCallUpdate>(&raw) {
-                Some(c) => SessionUpdate::ToolCallUpdate(c),
-                None => SessionUpdate::Unknown { tag, raw },
+                Some(c) => Self::ToolCallUpdate(c),
+                None => Self::Unknown { tag, raw },
             },
             "session_info_update" => match parse::<SessionInfoUpdate>(&raw) {
-                Some(c) => SessionUpdate::SessionInfoUpdate(c),
-                None => SessionUpdate::Unknown { tag, raw },
+                Some(c) => Self::SessionInfoUpdate(c),
+                None => Self::Unknown { tag, raw },
             },
-            "plan" => SessionUpdate::Plan(raw),
-            "usage_update" => SessionUpdate::UsageUpdate(raw),
-            "current_mode_update" => SessionUpdate::CurrentModeUpdate(raw),
-            "config_option_update" => SessionUpdate::ConfigOptionUpdate(raw),
-            "available_commands_update" => SessionUpdate::AvailableCommandsUpdate(raw),
-            _ => SessionUpdate::Unknown { tag, raw },
+            "plan" => Self::Plan(raw),
+            "usage_update" => Self::UsageUpdate(raw),
+            "current_mode_update" => Self::CurrentModeUpdate(raw),
+            "config_option_update" => Self::ConfigOptionUpdate(raw),
+            "available_commands_update" => Self::AvailableCommandsUpdate(raw),
+            _ => Self::Unknown { tag, raw },
         }
     }
 }
 
 /// One entry from `session/list`.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
     pub session_id: String,
@@ -250,6 +249,7 @@ impl SessionInfo {
         self.meta.as_ref()?.get(key)
     }
 
+    #[must_use] 
     pub fn display_title(&self) -> String {
         self.title
             .clone()
@@ -257,10 +257,12 @@ impl SessionInfo {
             .unwrap_or_else(|| self.session_id.clone())
     }
 
+    #[must_use] 
     pub fn message_count(&self) -> Option<u64> {
         self.meta_field("messageCount")?.as_u64()
     }
 
+    #[must_use] 
     pub fn last_message_snippet(&self) -> Option<String> {
         Some(self.meta_field("lastMessageSnippet")?.as_str()?.to_string())
     }
@@ -284,7 +286,7 @@ pub struct NewSessionResponse {
 }
 
 /// One choice offered by a `session/request_permission` request.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionOption {
     pub option_id: String,

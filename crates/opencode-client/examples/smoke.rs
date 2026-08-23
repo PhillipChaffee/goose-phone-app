@@ -69,9 +69,7 @@ async fn main() {
         "no repos — is the test stack up?",
     );
     let repo = repos
-        .first()
-        .map(|r| r.name.clone())
-        .unwrap_or_else(|| "testrepo".into());
+        .first().map_or_else(|| "testrepo".into(), |r| r.name.clone());
 
     let chat = match client.create_chat(&repo, "smoke: push and PR", None).await {
         Ok(c) => c,
@@ -160,7 +158,7 @@ async fn main() {
     let diff = client.diff(&chat.id, &session.id).await;
     s.check(
         "diff endpoint",
-        diff.as_ref().map(|d| d.is_array()).unwrap_or(false),
+        diff.as_ref().map(serde_json::value::Value::is_array).unwrap_or(false),
         &format!("{diff:?}"),
     );
 

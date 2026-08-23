@@ -56,7 +56,7 @@ pub fn SessionsView() -> Element {
                         div {
                             class: "session-main",
                             onclick: {
-                                let info = info.clone();
+                                let info = info;
                                 move |_| open_session(ctx, info.clone())
                             },
                             div { class: "session-title", "{info.display_title()}" }

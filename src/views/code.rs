@@ -128,7 +128,7 @@ pub fn CodeSessionsView() -> Element {
                             div {
                                 class: "session-main",
                                 onclick: {
-                                    let meta = meta.clone();
+                                    let meta = meta;
                                     move |_| open_code_chat(ctx, meta.clone())
                                 },
                                 div { class: "session-title",
@@ -424,9 +424,7 @@ pub fn CodePermissionModal() -> Element {
         let chats = ctx.code_chats.read();
         chats
             .iter()
-            .find(|c| c.id == chat_id)
-            .map(|c| c.title.clone())
-            .unwrap_or_else(|| chat_id.clone())
+            .find(|c| c.id == chat_id).map_or_else(|| chat_id.clone(), |c| c.title.clone())
     };
     let pending_more = queue.len().saturating_sub(1);
     let title = if perm.title.is_empty() {
@@ -469,8 +467,8 @@ pub fn CodePermissionModal() -> Element {
                     button {
                         class: "btn danger-outline",
                         onclick: {
-                            let chat_id = chat_id.clone();
-                            let perm = perm.clone();
+                            let chat_id = chat_id;
+                            let perm = perm;
                             move |_| answer_code_permission(ctx, chat_id.clone(), perm.clone(), "reject")
                         },
                         "Reject"

@@ -1,4 +1,4 @@
-//! Code tab: state + logic for code-agent chats — per-chat OpenCode
+//! Code tab: state + logic for code-agent chats — per-chat `OpenCode`
 //! containers on the brain, fronted by the session manager
 //! (personal-ai-setup `docs/code-agents.md`; this repo issue #2).
 //!
@@ -26,8 +26,8 @@ use serde_json::Value;
 
 use crate::state::{show_toast, AppCtx, ChatItem, ConnState};
 
-#[derive(Clone, Copy, PartialEq)]
-pub enum CodeScreen {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CodeScreen {
     List,
     New,
     Chat,
@@ -35,12 +35,12 @@ pub enum CodeScreen {
 
 /// Everything the code chat screen renders.
 #[derive(Clone, PartialEq, Default)]
-pub struct CodeChatState {
+pub(crate) struct CodeChatState {
     pub chat_id: Option<String>,
     pub title: String,
     pub repo: String,
     pub branch: String,
-    /// The chat's primary OpenCode session (created lazily on first prompt).
+    /// The chat's primary `OpenCode` session (created lazily on first prompt).
     pub session_id: Option<String>,
     pub items: Vec<ChatItem>,
     /// part id -> index into `items`, for folding streamed part updates.
@@ -58,13 +58,13 @@ pub struct CodeChatState {
 /// container wakes, read-only offline. LRU-capped; server is authoritative.
 #[derive(Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct CodeCache {
+pub(crate) struct CodeCache {
     pub chats: HashMap<String, CachedChat>,
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct CachedChat {
+pub(crate) struct CachedChat {
     pub title: String,
     pub session_id: Option<String>,
     pub items: Vec<ChatItem>,
@@ -95,7 +95,7 @@ fn build_client(ctx: &AppCtx) -> Result<CodeClient, String> {
 
 /// Connect to the manager gateway using saved settings. Returns true on
 /// success (health answered), populating the chat list and repo allowlist.
-pub async fn code_connect(ctx: AppCtx) -> bool {
+pub(crate) async fn code_connect(ctx: AppCtx) -> bool {
     let mut conn = ctx.code_conn;
     let mut client_slot = ctx.code_client;
     let client = match build_client(&ctx) {
@@ -125,7 +125,7 @@ pub async fn code_connect(ctx: AppCtx) -> bool {
     }
 }
 
-pub async fn refresh_code_chats(ctx: AppCtx) {
+pub(crate) async fn refresh_code_chats(ctx: AppCtx) {
     let Some(client) = ctx.code_client.peek().clone() else {
         return;
     };
@@ -151,7 +151,7 @@ async fn refresh_repos(ctx: AppCtx) {
 
 /// Keep the chat list fresh while the Code tab is visible. One loop per
 /// epoch; a tab switch away lets it park (cheap no-op ticks).
-pub fn start_code_poll(ctx: AppCtx) {
+pub(crate) fn start_code_poll(ctx: AppCtx) {
     let epoch = *ctx.code_epoch.peek();
     spawn_forever(async move {
         loop {
@@ -174,7 +174,7 @@ pub fn start_code_poll(ctx: AppCtx) {
 
 /// Open a chat: cached transcript instantly (read-only, "waking…" when the
 /// container is down), then wake + reconcile from the server, then live SSE.
-pub fn open_code_chat(ctx: AppCtx, meta: ChatMeta) {
+pub(crate) fn open_code_chat(ctx: AppCtx, meta: ChatMeta) {
     let mut chat = ctx.code_chat;
     let mut screen = ctx.code_screen;
     let mut epoch = ctx.code_epoch;
@@ -285,8 +285,7 @@ async fn attach_chat(ctx: AppCtx, chat_id: String, epoch: u64) {
                     .peek()
                     .session_id
                     .as_deref()
-                    .map(|sid| sid == part.session_id)
-                    .unwrap_or(false);
+                    .is_some_and(|sid| sid == part.session_id);
                 if is_current {
                     fold_part(&mut ctx.code_chat.clone(), &part, delta.as_deref());
                 }
@@ -395,8 +394,7 @@ fn fold_part_into(
         "text" | "reasoning" => {
             let role = roles
                 .get(&part.message_id)
-                .map(String::as_str)
-                .unwrap_or("assistant");
+                .map_or("assistant", String::as_str);
             let full = part.text.clone().unwrap_or_default();
             if let Some(&idx) = part_index.get(&part.id) {
                 if let Some(
@@ -485,9 +483,9 @@ fn fold_part_into(
 
 // --------------------------------------------------------------- actions
 
-/// Send a prompt into the open code chat (creating its OpenCode session on
+/// Send a prompt into the open code chat (creating its `OpenCode` session on
 /// first use). Returns false if the message could not be submitted.
-pub fn send_code_prompt(ctx: AppCtx, text: String) -> bool {
+pub(crate) fn send_code_prompt(ctx: AppCtx, text: String) -> bool {
     let mut chat = ctx.code_chat;
     let Some(chat_id) = chat.peek().chat_id.clone() else {
         return false;
@@ -525,7 +523,7 @@ pub fn send_code_prompt(ctx: AppCtx, text: String) -> bool {
     true
 }
 
-pub fn stop_code_turn(ctx: AppCtx) {
+pub(crate) fn stop_code_turn(ctx: AppCtx) {
     let chat = ctx.code_chat.peek();
     let (Some(chat_id), Some(sid)) = (chat.chat_id.clone(), chat.session_id.clone()) else {
         return;
@@ -544,7 +542,7 @@ pub fn stop_code_turn(ctx: AppCtx) {
 }
 
 /// Answer a permission ask: `once` | `always` | `reject`.
-pub fn answer_code_permission(ctx: AppCtx, chat_id: String, perm: CodePermission, response: &str) {
+pub(crate) fn answer_code_permission(ctx: AppCtx, chat_id: String, perm: CodePermission, response: &str) {
     let Some(client) = ctx.code_client.peek().clone() else {
         return;
     };
@@ -564,7 +562,7 @@ pub fn answer_code_permission(ctx: AppCtx, chat_id: String, perm: CodePermission
 }
 
 /// Fetch and render the session's cumulative diff into the chat state.
-pub fn load_code_diff(ctx: AppCtx) {
+pub(crate) fn load_code_diff(ctx: AppCtx) {
     let chat = ctx.code_chat.peek();
     let (Some(chat_id), Some(sid)) = (chat.chat_id.clone(), chat.session_id.clone()) else {
         show_toast(&ctx, "No changes yet — the chat has no session");
@@ -629,7 +627,7 @@ fn render_diff(v: &Value) -> String {
 
 /// The "Open PR" action is an instruction to the agent — git is its job
 /// (push is permission-gated; the ask pops here when it runs).
-pub fn request_pr(ctx: AppCtx) {
+pub(crate) fn request_pr(ctx: AppCtx) {
     send_code_prompt(
         ctx,
         "Push this chat's branch and open a pull request for the work so far. \
@@ -639,7 +637,7 @@ pub fn request_pr(ctx: AppCtx) {
 }
 
 /// Create a new code chat and open it, sending the task as the first prompt.
-pub fn new_code_chat(ctx: AppCtx, repo: String, task: String, model: Option<String>) {
+pub(crate) fn new_code_chat(ctx: AppCtx, repo: String, task: String, model: Option<String>) {
     let Some(client) = ctx.code_client.peek().clone() else {
         show_toast(&ctx, "Code plane not connected — check Settings");
         return;
@@ -661,7 +659,7 @@ pub fn new_code_chat(ctx: AppCtx, repo: String, task: String, model: Option<Stri
     });
 }
 
-pub fn delete_code_chat(ctx: AppCtx, chat_id: String) {
+pub(crate) fn delete_code_chat(ctx: AppCtx, chat_id: String) {
     let Some(client) = ctx.code_client.peek().clone() else {
         return;
     };
@@ -681,7 +679,7 @@ pub fn delete_code_chat(ctx: AppCtx, chat_id: String) {
 
 /// Write-through of the open chat's transcript into the persisted cache,
 /// truncated and LRU-capped.
-pub fn write_cache(ctx: &AppCtx) {
+pub(crate) fn write_cache(ctx: &AppCtx) {
     let chat = ctx.code_chat.peek();
     let Some(chat_id) = chat.chat_id.clone() else {
         return;
@@ -715,11 +713,11 @@ pub fn write_cache(ctx: &AppCtx) {
 }
 
 /// Human label for a chat's lifecycle status in the list.
-pub fn status_label(meta: &ChatMeta, running_turn: bool) -> (&'static str, String) {
+pub(crate) fn status_label(meta: &ChatMeta, running_turn: bool) -> (&'static str, String) {
     match (meta.status.as_str(), running_turn) {
         ("running", true) => ("dot busy", "working".to_string()),
         ("running", false) => ("dot on", "idle".to_string()),
-        ("stopped", _) | ("absent", _) => ("dot off", "asleep".to_string()),
+        ("stopped" | "absent", _) => ("dot off", "asleep".to_string()),
         (other, _) => ("dot err", other.to_string()),
     }
 }

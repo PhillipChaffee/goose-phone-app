@@ -6,7 +6,7 @@
 //! session/load.
 //!
 //!   cargo run -p mock-goose-server -- [port]          (default 3285)
-//!   MOCK_SECRET=...                                    (default mock-secret)
+//!   `MOCK_SECRET`=...                                    (default mock-secret)
 //!
 //! Prompt keywords: "slow" = long stream (time to hit Stop);
 //! "notool" = skip the tool call / permission prompt.
@@ -539,7 +539,7 @@ async fn run_turn(
 
         let outcome = tokio::select! {
             r = rx => r.unwrap_or(Value::Null),
-            _ = cancel.notified() => {
+            () = cancel.notified() => {
                 finish(&out, &state, &sid, request_id, record, "cancelled", user_text).await;
                 return;
             }
@@ -547,8 +547,7 @@ async fn run_turn(
         let allowed = outcome
             .pointer("/outcome/optionId")
             .and_then(Value::as_str)
-            .map(|o| o.starts_with("allow"))
-            .unwrap_or(false);
+            .is_some_and(|o| o.starts_with("allow"));
 
         if allowed {
             emit(

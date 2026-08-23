@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crate::client::normalize_base_url;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeOutcome {
     /// Server reachable and (if a secret was given) the secret was accepted.
     Ok,

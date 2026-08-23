@@ -115,8 +115,7 @@ async fn handle_ws(sock: TcpStream, behavior: PromptBehavior) {
             .headers()
             .get("X-Secret-Key")
             .and_then(|v| v.to_str().ok())
-            .map(|v| v == SECRET)
-            .unwrap_or(false)
+            .is_some_and(|v| v == SECRET)
             || req.uri().query().unwrap_or("").contains(SECRET);
         if req.uri().path() == "/acp" && authed {
             Ok(resp)
@@ -448,7 +447,7 @@ async fn permission_request_is_surfaced_and_answered() {
                 update: SessionUpdate::ToolCallUpdate(t),
                 ..
             } => {
-                tool_status = t.status.clone();
+                tool_status = t.status;
                 break;
             }
             _ => {}

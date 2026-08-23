@@ -17,7 +17,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async_tls_with_config, MaybeTlsStream, WebSocketStream};
 
 use crate::tls;
-use crate::types::*;
+use crate::types::{AcpEvent, InitializeInfo, NewSessionResponse, SessionListResponse, ContentBlock, PermissionRequest, SessionUpdate};
 
 pub const CLIENT_NAME: &str = "goose-mobile";
 
@@ -52,7 +52,7 @@ pub struct ConnectConfig {
     /// with `--dangerously-unauthenticated`.
     pub secret: String,
     /// SHA-256 pin for a `goose serve --tls` self-signed cert
-    /// (`GOOSED_CERT_FINGERPRINT`). `None` = normal WebPKI validation.
+    /// (`GOOSED_CERT_FINGERPRINT`). `None` = normal `WebPKI` validation.
     pub fingerprint: Option<[u8; 32]>,
 }
 
@@ -123,7 +123,7 @@ impl AcpClient {
     /// together with the event stream and the agent's identity.
     pub async fn connect(
         cfg: &ConnectConfig,
-    ) -> Result<(AcpClient, mpsc::Receiver<AcpEvent>, InitializeInfo), AcpError> {
+    ) -> Result<(Self, mpsc::Receiver<AcpEvent>, InitializeInfo), AcpError> {
         let url = ws_url(&cfg.base_url)?;
         let mut request = url
             .into_client_request()
@@ -145,7 +145,7 @@ impl AcpClient {
         let (event_tx, event_rx) = mpsc::channel(1024);
         tokio::spawn(actor(socket, cmd_rx, event_tx));
 
-        let client = AcpClient { tx: cmd_tx };
+        let client = Self { tx: cmd_tx };
         let init = client
             .request_with_timeout(
                 "initialize",

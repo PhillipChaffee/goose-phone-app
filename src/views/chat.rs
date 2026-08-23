@@ -211,16 +211,14 @@ pub fn PermissionModal() -> Element {
 
     // Show which session is asking when it isn't the one on screen.
     let current = ctx.chat.read().session_id.clone();
-    let session_label = if current.as_deref() != Some(request.session_id.as_str()) {
+    let session_label = if current.as_deref() == Some(request.session_id.as_str()) {
+        None
+    } else {
         let sessions = ctx.sessions.read();
         let name = sessions
             .iter()
-            .find(|s| s.session_id == request.session_id)
-            .map(|s| s.display_title())
-            .unwrap_or_else(|| request.session_id.clone());
+            .find(|s| s.session_id == request.session_id).map_or_else(|| request.session_id.clone(), goose_acp_client::SessionInfo::display_title);
         Some(format!("Session: {name}"))
-    } else {
-        None
     };
     let pending_more = queue.len().saturating_sub(1);
 

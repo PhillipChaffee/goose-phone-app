@@ -1,5 +1,5 @@
 //! Client for the brain's code-agent plane (personal-ai-setup issue #17,
-//! this repo issue #2): the session manager's API plus the per-chat OpenCode
+//! this repo issue #2): the session manager's API plus the per-chat `OpenCode`
 //! servers it fronts, all behind one TLS + Basic-auth gateway on the tailnet.
 //!
 //! Two layers, one base URL:
@@ -32,7 +32,7 @@ pub enum CodeError {
     Other(String),
 }
 
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct CodeConfig {
     /// Gateway base, e.g. `https://brain.tailnet.ts.net:4300`.
     pub base_url: String,
@@ -41,7 +41,7 @@ pub struct CodeConfig {
 }
 
 /// One repo from the manager's allowlist.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct RepoEntry {
     pub name: String,
     #[serde(default)]
@@ -72,14 +72,15 @@ pub struct ChatMeta {
 }
 
 impl ChatMeta {
+    #[must_use] 
     pub fn is_running(&self) -> bool {
         self.status == "running"
     }
 }
 
-/// A pending permission ask from a chat's OpenCode server. Answer with
+/// A pending permission ask from a chat's `OpenCode` server. Answer with
 /// [`CodeClient::reply_permission`] using `once` / `always` / `reject`.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CodePermission {
     pub id: String,
@@ -93,7 +94,7 @@ pub struct CodePermission {
 
 impl Default for CodePermission {
     fn default() -> Self {
-        CodePermission {
+        Self {
             id: String::new(),
             session_id: String::new(),
             title: String::new(),
@@ -103,7 +104,7 @@ impl Default for CodePermission {
     }
 }
 
-/// One message part as OpenCode's API ships it. Kept lenient: only the
+/// One message part as `OpenCode`'s API ships it. Kept lenient: only the
 /// fields the transcript fold needs are typed, everything else stays raw.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
@@ -257,7 +258,7 @@ impl CodeClient {
             // chat (container start + server boot ≈ up to 90s gateway-side).
             .timeout(Duration::from_secs(150))
             .build()?;
-        Ok(CodeClient {
+        Ok(Self {
             http,
             base,
             password: cfg.password.clone(),
@@ -369,7 +370,7 @@ impl CodeClient {
         Ok(serde_json::from_value(v).unwrap_or_default())
     }
 
-    /// Create the chat's OpenCode session in its workspace.
+    /// Create the chat's `OpenCode` session in its workspace.
     pub async fn create_session(&self, chat_id: &str) -> Result<SessionMeta, CodeError> {
         let v = Self::json_of(
             self.req(
@@ -496,6 +497,7 @@ impl CodeClient {
     /// Attach to a chat's SSE stream. Events (including a final
     /// [`CodeEvent::Disconnected`]) arrive on the returned receiver; drop it
     /// to detach. Reconnection policy belongs to the caller.
+    #[must_use] 
     pub fn events(&self, chat_id: &str) -> mpsc::Receiver<CodeEvent> {
         let (tx, rx) = mpsc::channel(256);
         let this = self.clone();
