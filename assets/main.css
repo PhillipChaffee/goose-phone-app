@@ -63,6 +63,10 @@
   --agent-surface: transparent;
   --agent-padding: 0;
 
+  /* One step off the page, for in-flow blocks that are their own object:
+   * tool calls. Not a shadow — these do not float. */
+  --tool-surface: #f4f6f7;
+
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
@@ -129,6 +133,10 @@
     --agent-surface: #1f2126;
     --agent-padding: 10px 16px;
 
+    /* A lighter step in dark, where the agent surface goes darker than the
+     * page — a tool call should read as sitting on top of the reply. */
+    --tool-surface: #2a2d32;
+
     --code-chip-bg: transparent;
     --code-chip-fg: var(--block-teal);
 
@@ -165,6 +173,7 @@
 
   --agent-surface: #1f2126;
   --agent-padding: 10px 16px;
+  --tool-surface: #2a2d32;
 
   --code-chip-bg: transparent;
   --code-chip-fg: var(--block-teal);
@@ -680,10 +689,11 @@ select.field {
 
 /* ── tool calls ─────────────────────────────────────────────────────── */
 
-/* A wireframe inset, not a filled card: transparent, hairline, clipped. */
+/* Its own object on the page: a surface one step off the background, with a
+ * hairline to separate it. In flow, so no shadow. */
 .tool {
   margin-top: 16px;
-  background: transparent;
+  background: var(--tool-surface);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   overflow: hidden;
