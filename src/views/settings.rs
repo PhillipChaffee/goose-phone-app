@@ -218,6 +218,14 @@ pub fn SettingsView() -> Element {
             }
 
             section { class: "about",
+                // The bar shows connection state as a bare dot, so the thing
+                // it is connected to gets named here instead.
+                if let ConnState::Connected { agent } = &conn {
+                    p { class: "about-conn",
+                        span { class: "dot on" }
+                        " Connected to {agent}"
+                    }
+                }
                 p { "Connects to a remote goose AI agent over its ACP WebSocket API." }
                 p { "Reach a private server from anywhere with the Tailscale app enabled on this phone." }
             }

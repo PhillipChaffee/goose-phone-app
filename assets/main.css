@@ -443,12 +443,12 @@ pre {
   white-space: nowrap;
 }
 
-/* In a bar the connection state is just its dot. The agent name and version
- * are 107px of text that a centred title cannot clear, and rule 6 of the
- * design guide already says state rides on a dot. The full label survives on
- * Settings, where the badge sits inside .topbar-actions rather than directly
- * in the bar, and where naming what you are connected to is the point. */
-.topbar > .conn-badge .conn-label {
+/* In a bar the connection state is just its dot — everywhere, however the
+ * badge is nested. The agent name and version are ~107px of text, and a
+ * centred title cannot clear them: on Settings the two ran straight into each
+ * other. Rule 6 of the design guide already says state rides on a dot, and
+ * Settings names what it is connected to in its own body instead. */
+.topbar .conn-label {
   display: none;
 }
 
@@ -932,6 +932,14 @@ select.field {
 
 .about p {
   margin-bottom: 6px;
+}
+
+.about-conn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--text-primary);
 }
 
 /* ── session list ───────────────────────────────────────────────────── */
@@ -1460,6 +1468,20 @@ details[open] > summary::before {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* With no chips to show, the control row holds one button and the two-row
+ * shape becomes a tall box with a lone circle floating in it. Fold back to a
+ * single row in that case. */
+.composer:has(.composer-row > .send:only-child) {
+  flex-direction: row;
+  align-items: flex-end;
+  padding: 6px 6px 6px 14px;
+}
+
+.composer:has(.composer-row > .send:only-child) .input {
+  align-self: center;
+  padding: 8px 0;
 }
 
 /* Chips carry the facts that belong to this turn — token budget here, the

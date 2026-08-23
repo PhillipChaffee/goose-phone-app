@@ -566,7 +566,12 @@ pub(crate) fn send_code_prompt(ctx: &AppCtx, text: String) -> bool {
     }
     let ctx = *ctx;
     spawn_forever(async move {
-        let sid = match ctx.code_chat.peek().session_id.clone() {
+        // Bound to a local first: a `peek()` guard used directly as the match
+        // scrutinee stays alive across every arm, and the create path below
+        // writes to the same signal — which aborted the app on the first
+        // prompt of any new code session.
+        let existing = ctx.code_chat.peek().session_id.clone();
+        let sid = match existing {
             Some(sid) => sid,
             None => match client.create_session(&chat_id).await {
                 Ok(s) => {
