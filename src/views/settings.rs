@@ -76,12 +76,12 @@ pub fn SettingsView() -> Element {
         header { class: "topbar",
             if connected {
                 button {
-                    class: "icon-btn",
+                    class: "icon-btn back",
                     onclick: move |_| {
                         let mut screen = ctx.screen;
                         screen.set(Screen::Sessions);
                     },
-                    "‹ Back"
+                    "‹"
                 }
             }
             h1 { class: "title", "Goose Mobile" }

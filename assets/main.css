@@ -20,7 +20,17 @@
  *
  * BORDERS SEPARATE, SHADOWS FLOAT. Anything in normal flow (tool cards,
  * dividers, table cells) gets a 1px hairline and no shadow; only things that
- * leave the flow — the composer, modals, toasts — cast one.
+ * leave the flow — the bars, the composer, modals, toasts — cast one.
+ *
+ * CHROME FLOATS, CONTENT SCROLLS UNDER IT. The top bar and tab bar are not
+ * edge-to-edge boxes bolted to the frame: they are inset capsules floating
+ * over the page, translucent, with the content passing beneath them. This is
+ * the current iOS pattern (nav bars, toolbars and tab bars became floating
+ * glass in iOS 26) and it is the single thing that stops a phone UI reading
+ * as a stack of rectangles. Their heights are tokens because the scroll
+ * areas pad themselves by exactly that much — change one, not the other.
+ *
+ * Full rationale and sources: docs/design.md
  */
 
 /* ── tokens: light ──────────────────────────────────────────────────── */
@@ -99,6 +109,19 @@
 
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  /* Floating chrome. --edge is the gutter every floating thing shares, so the
+   * bars, the composer and the alerts all line up down the same margin. */
+  --edge: 12px;
+  --topbar-h: 52px;
+  --tabbar-h: 58px;
+  --glass-blur: blur(20px) saturate(180%);
+  --glass-tint: 78%;
+
+  /* Anything that floats over content sits above it. */
+  --z-chrome: 20;
+  --z-toast: 60;
+  --z-modal: 100;
 }
 
 /* ── tokens: dark ───────────────────────────────────────────────────── */
@@ -140,6 +163,9 @@
     --code-chip-bg: transparent;
     --code-chip-fg: var(--block-teal);
 
+    /* Dark glass needs to be more opaque or the text on it loses contrast. */
+    --glass-tint: 86%;
+
     --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.2);
     --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.2);
     --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.3), 0 4px 6px -4px rgb(0 0 0 / 0.2);
@@ -177,6 +203,7 @@
 
   --code-chip-bg: transparent;
   --code-chip-fg: var(--block-teal);
+  --glass-tint: 86%;
 
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.2);
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.2);
@@ -212,32 +239,65 @@ body {
 }
 
 .app {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100vh;
   height: 100dvh;
+  overflow: hidden;
   background: var(--bg-primary);
+}
+
+/* The shared material for floating chrome: a tinted, blurred pane. The solid
+ * background is the fallback — where backdrop-filter is unsupported the bars
+ * are simply opaque, which is correct, just less alive. */
+.topbar,
+.tabbar {
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-md);
+}
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .topbar,
+  .tabbar {
+    background: color-mix(in srgb, var(--bg-primary) var(--glass-tint), transparent);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    /* A hairline ring, not a border: on a white page a white bar is carried
+     * by its shadow alone and the edge disappears. Inset so it does not
+     * count as a separator between it and anything else. */
+    box-shadow: var(--shadow-md), inset 0 0 0 1px var(--border-primary);
+  }
 }
 
 /* ── top bar ────────────────────────────────────────────────────────── */
 
 .topbar {
+  position: absolute;
+  top: calc(var(--safe-top) + 8px);
+  left: var(--edge);
+  right: var(--edge);
+  z-index: var(--z-chrome);
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 48px;
-  padding: calc(8px + var(--safe-top)) 12px 8px;
-  background: var(--bg-primary);
-  border-bottom: 1px solid var(--border-primary);
-  flex-shrink: 0;
+  gap: 4px;
+  height: var(--topbar-h);
+  padding: 0 6px;
+  border-radius: var(--radius-full);
 }
 
+/* Centred like a native title, and allowed to shrink before the controls do
+ * so a long chat name never pushes them off the bar. */
 .topbar .title {
   flex: 1;
   min-width: 0;
+  padding: 0 6px;
   font-size: var(--text-md);
-  font-weight: 500;
+  font-weight: 600;
   line-height: var(--lh-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ellipsis {
@@ -248,24 +308,54 @@ body {
 
 /* ── buttons ────────────────────────────────────────────────────────── */
 
-/* Icon buttons are true circles sized to their height: ghost at rest,
- * stepping to a surface on press. */
+/* True circles, 40px so the tap target clears the 44px guidance once the
+ * bar's padding is counted. The glyph is set larger than body text because a
+ * chevron or gear at 16px reads as a smudge, not a control. */
 .icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
   flex-shrink: 0;
   padding: 0;
   border: 0;
   border-radius: var(--radius-full);
   background: transparent;
   color: var(--text-secondary);
-  font-size: var(--text-md);
+  font-size: 20px;
   line-height: 1;
   cursor: pointer;
   transition: background-color 120ms ease, color 120ms ease;
+}
+
+/* A labelled action in a bar: sized to its text, not squeezed into a circle.
+ * A label in a fixed 40px circle wraps and overflows — which is exactly what
+ * "⇪ PR" and the old "‹ Back" were doing. */
+.icon-btn.action {
+  width: auto;
+  min-width: 40px;
+  padding: 0 12px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.icon-btn.action:disabled {
+  background: transparent;
+  color: var(--text-disabled);
+}
+
+/* The back chevron carries a whole navigation gesture on one thin glyph, so
+ * it gets the size and weight to look deliberate, and optical centring —
+ * "‹" sits right of centre in most fonts. */
+.icon-btn.back {
+  color: var(--text-primary);
+  font-size: 28px;
+  font-weight: 300;
+  padding-right: 3px;
 }
 
 .icon-btn:active:not(:disabled) {
@@ -432,11 +522,20 @@ body {
 
 /* ── scroll regions ─────────────────────────────────────────────────── */
 
+/* Content runs the full height of the shell and passes beneath the bars; the
+ * padding is what keeps the first and last rows out from under them. */
 .scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: calc(var(--safe-top) + var(--topbar-h) + 20px) 16px
+    calc(var(--safe-bottom) + var(--tabbar-h) + 24px);
   -webkit-overflow-scrolling: touch;
+}
+
+/* On chat screens the composer sits below the scroll area and already clears
+ * the tab bar, so the transcript only needs its own breathing room. */
+.scroll.chat {
+  padding-bottom: 8px;
 }
 
 .empty {
@@ -520,12 +619,14 @@ select.field {
   line-height: var(--lh-sm);
 }
 
-/* Saturated fills rather than tinted surfaces, so an error is unmissable —
- * but rounded like everything else rather than a full-bleed strip. */
+/* Saturated fills rather than tinted surfaces, so an error is unmissable.
+ * Shaped and elevated like the other floating things — an alert is an
+ * interruption, not a band painted across the page. */
 .error-box {
   margin: 0 0 16px;
-  padding: 10px 16px;
-  border-radius: var(--radius-lg);
+  padding: 12px 16px;
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
   background: var(--bg-danger);
   color: var(--text-inverse);
   font-size: var(--text-sm);
@@ -550,9 +651,13 @@ select.field {
   gap: 8px;
 }
 
-/* A card that behaves: it does not tint on press, it lifts. */
+/* A card that behaves: it does not tint on press, it lifts.
+ * It wraps because the delete confirmation is a sibling of the row body —
+ * without this it competes for the same line and crushes the title to one
+ * word per line. */
 .session-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: 8px;
   padding: 12px 16px;
@@ -595,18 +700,27 @@ select.field {
   line-height: var(--lh-sm);
 }
 
+/* Flex so a long id and a timestamp wrap as whole items with even gaps,
+ * instead of the date breaking across lines mid-value. */
 .session-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 6px;
   margin-top: 6px;
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  line-height: var(--lh-xs);
+  line-height: 1.5;
 }
 
+/* Full width so it drops onto its own line under the row it belongs to. */
 .confirm-row {
+  flex-basis: 100%;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
+  padding-top: 4px;
   font-size: var(--text-sm);
   line-height: var(--lh-sm);
 }
@@ -761,8 +875,9 @@ select.field {
 }
 
 /* Sections are introduced by a hairline. Nothing nests, nothing gets its own
- * radius or fill — depth is expressed with rules, not boxes. */
-.tool-output {
+ * radius or fill — depth is expressed with rules, not boxes. Scoped to the
+ * card, because the permission modal reuses this element standalone. */
+.tool > .tool-output {
   border-top: 1px solid var(--border-primary);
 }
 
@@ -779,11 +894,13 @@ select.field {
   display: none;
 }
 
-/* Sits at the bottom of the tool card, so it takes that card's corners. */
+/* Inside the card it closes the box, so it takes that card's bottom corners
+ * (11px inside a 12px border). Standalone — in the modal — it is just a slab
+ * and rounds on all four. */
 .tool-output pre {
   margin: 0;
   padding: 10px 12px;
-  border-radius: 0 0 11px 11px;
+  border-radius: var(--radius-lg);
   background: var(--code-bg);
   color: var(--code-fg);
   font-family: var(--font-mono);
@@ -791,6 +908,21 @@ select.field {
   line-height: var(--lh-sm);
   white-space: pre;
   overflow-x: auto;
+}
+
+.tool > .tool-output pre {
+  border-radius: 0 0 11px 11px;
+}
+
+/* In the modal the disclosure is a standalone block: it needs its own gap
+ * before the actions, and its summary lines up with the modal's own text
+ * rather than being indented like a card's section header. */
+.modal .tool-output {
+  margin-bottom: 16px;
+}
+
+.modal .tool-output summary {
+  padding: 0 0 6px;
 }
 
 /* ── typing indicator ───────────────────────────────────────────────── */
@@ -848,7 +980,7 @@ select.field {
   align-items: flex-end;
   gap: 6px;
   flex-shrink: 0;
-  margin: 8px 12px calc(8px + var(--safe-bottom));
+  margin: 0 var(--edge) calc(var(--safe-bottom) + var(--tabbar-h) + 16px);
   padding: 6px 6px 6px 4px;
   background: var(--bg-primary);
   border: 1px solid var(--border-primary);
@@ -1004,7 +1136,7 @@ select.field {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: var(--z-modal);
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -1071,8 +1203,8 @@ select.field {
 .toast {
   position: fixed;
   left: 50%;
-  bottom: calc(88px + var(--safe-bottom));
-  z-index: 60;
+  bottom: calc(var(--safe-bottom) + var(--tabbar-h) + 24px);
+  z-index: var(--z-toast);
   transform: translateX(-50%);
   max-width: calc(100% - 32px);
   padding: 8px 16px;
@@ -1101,12 +1233,16 @@ select.field {
 /* Full-radius pills that fill with the tertiary surface when selected —
  * the same shape the session rows use. */
 .tabbar {
+  position: absolute;
+  bottom: calc(var(--safe-bottom) + 8px);
+  left: var(--edge);
+  right: var(--edge);
+  z-index: var(--z-chrome);
   display: flex;
   gap: 4px;
-  flex-shrink: 0;
-  padding: 6px 12px calc(6px + var(--safe-bottom));
-  background: var(--bg-primary);
-  border-top: 1px solid var(--border-primary);
+  height: var(--tabbar-h);
+  padding: 5px;
+  border-radius: var(--radius-full);
 }
 
 .tabbar .tab {
@@ -1114,8 +1250,9 @@ select.field {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
-  padding: 6px 0;
+  justify-content: center;
+  gap: 1px;
+  padding: 0;
   border: 0;
   border-radius: var(--radius-full);
   background: transparent;
@@ -1153,12 +1290,13 @@ select.field {
   line-height: var(--lh-sm);
 }
 
-/* Same treatment as .error-box, inset from the edges it sits between. */
+/* Same treatment as .error-box. */
 .banner {
   flex-shrink: 0;
-  margin: 8px 12px 0;
-  padding: 8px 16px;
-  border-radius: var(--radius-lg);
+  margin: 0 0 16px;
+  padding: 10px 16px;
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
   background: var(--bg-info);
   color: var(--text-inverse);
   font-size: var(--text-xs);

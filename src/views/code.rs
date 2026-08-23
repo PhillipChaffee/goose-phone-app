@@ -203,7 +203,7 @@ pub fn CodeNewView() -> Element {
     rsx! {
         header { class: "topbar",
             button {
-                class: "icon-btn",
+                class: "icon-btn back",
                 onclick: move |_| {
                     let mut screen = ctx.code_screen;
                     screen.set(CodeScreen::List);
@@ -305,7 +305,7 @@ pub fn CodeChatView() -> Element {
     rsx! {
         header { class: "topbar",
             button {
-                class: "icon-btn",
+                class: "icon-btn back",
                 onclick: move |_| {
                     let mut screen = ctx.code_screen;
                     screen.set(CodeScreen::List);
@@ -321,7 +321,7 @@ pub fn CodeChatView() -> Element {
                 "±"
             }
             button {
-                class: "icon-btn",
+                class: "icon-btn action",
                 title: "Push branch + open a PR",
                 disabled: !can_send,
                 onclick: move |_| request_pr(&ctx),

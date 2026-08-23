@@ -42,7 +42,7 @@ pub fn ChatView() -> Element {
     rsx! {
         header { class: "topbar",
             button {
-                class: "icon-btn",
+                class: "icon-btn back",
                 onclick: move |_| {
                     let mut screen = ctx.screen;
                     screen.set(Screen::Sessions);
