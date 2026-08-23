@@ -9,7 +9,15 @@
  * Light is the base; dark comes from the system preference, or from
  * data-theme on the root element when the user overrides it.
  *
- * The rule that holds the whole sheet together:
+ * Two rules hold the sheet together.
+ *
+ * ROUNDING IS TIERED, and nothing is square: pills (--radius-full) for
+ * anything whose shape is its identity — icon buttons, tabs, chips, send;
+ * 16px for containers that hold other things — cards, bubbles, the composer,
+ * modals; 12px for controls and insets inside them — buttons, fields, tool
+ * calls, code blocks. A control never sits at a tighter radius than the
+ * container around it, which is what makes a UI read as boxy.
+ *
  * BORDERS SEPARATE, SHADOWS FLOAT. Anything in normal flow (tool cards,
  * dividers, table cells) gets a 1px hairline and no shadow; only things that
  * leave the flow — the composer, modals, toasts — cast one.
@@ -265,7 +273,7 @@ body {
   color: var(--text-danger);
 }
 
-/* Text buttons are 6px rectangles; the round variant is .icon-btn above. */
+/* Text buttons take the control radius; the round variant is .icon-btn. */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -274,7 +282,7 @@ body {
   min-height: 40px;
   padding: 0 16px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   background: transparent;
   color: var(--text-primary);
   font-family: inherit;
@@ -436,7 +444,7 @@ body {
   padding: 16px;
   background: var(--bg-primary);
   border: 1px solid var(--border-primary);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   box-shadow: var(--shadow-sm);
 }
 
@@ -469,7 +477,7 @@ body {
   padding: 8px 12px;
   background: var(--bg-primary);
   border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-family: inherit;
   font-size: var(--text-sm);
@@ -503,11 +511,12 @@ select.field {
   line-height: var(--lh-sm);
 }
 
-/* Alerts sit outside the token system on purpose: saturated, full-bleed, no
- * radius and no border, butting against their container's edges. */
+/* Saturated fills rather than tinted surfaces, so an error is unmissable —
+ * but rounded like everything else rather than a full-bleed strip. */
 .error-box {
-  margin: -16px -16px 16px;
+  margin: 0 0 16px;
   padding: 10px 16px;
+  border-radius: var(--radius-lg);
   background: var(--bg-danger);
   color: var(--text-inverse);
   font-size: var(--text-sm);
@@ -540,7 +549,7 @@ select.field {
   padding: 12px 16px;
   background: var(--bg-primary);
   border: 1px solid var(--border-primary);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   box-shadow: var(--shadow-sm);
   transition: box-shadow 140ms ease, transform 140ms ease;
 }
@@ -617,7 +626,7 @@ select.field {
   max-width: 85%;
   padding: 10px 16px;
   background: var(--text-primary);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   color: var(--bg-primary);
 }
 
@@ -635,7 +644,7 @@ select.field {
   align-self: flex-start;
   padding: var(--agent-padding);
   background: var(--agent-surface);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   color: var(--text-primary);
 }
 
@@ -676,7 +685,7 @@ select.field {
   margin-top: 16px;
   background: transparent;
   border: 1px solid var(--border-primary);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
@@ -760,9 +769,11 @@ select.field {
   display: none;
 }
 
+/* Sits at the bottom of the tool card, so it takes that card's corners. */
 .tool-output pre {
   margin: 0;
   padding: 10px 12px;
+  border-radius: 0 0 11px 11px;
   background: var(--code-bg);
   color: var(--code-fg);
   font-family: var(--font-mono);
@@ -907,7 +918,7 @@ select.field {
 .md pre {
   padding: 12px;
   background: var(--code-bg);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-lg);
   color: var(--code-fg);
   overflow-x: auto;
 }
@@ -926,7 +937,7 @@ select.field {
 .md code {
   padding: 2px 4px;
   background: var(--code-chip-bg);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   color: var(--code-chip-fg);
   font-family: var(--font-mono);
   font-size: 0.75rem;
@@ -975,7 +986,7 @@ select.field {
 
 .md img {
   max-width: 100%;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 /* ── modals ─────────────────────────────────────────────────────────── */
@@ -999,7 +1010,7 @@ select.field {
   padding: 24px 20px calc(24px + var(--safe-bottom));
   background: var(--bg-primary);
   border: 1px solid var(--border-primary);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   box-shadow: var(--shadow-lg);
 }
 
@@ -1022,7 +1033,7 @@ select.field {
   padding: 10px 12px;
   background: transparent;
   border: 1px solid var(--border-primary);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -1056,7 +1067,7 @@ select.field {
   max-width: calc(100% - 32px);
   padding: 8px 16px;
   background: var(--bg-inverse);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   box-shadow: var(--shadow-lg);
   color: var(--text-inverse);
   font-size: var(--text-xs);
@@ -1132,10 +1143,12 @@ select.field {
   line-height: var(--lh-sm);
 }
 
-/* An informational strip: saturated and full-bleed, like .error-box. */
+/* Same treatment as .error-box, inset from the edges it sits between. */
 .banner {
   flex-shrink: 0;
+  margin: 8px 12px 0;
   padding: 8px 16px;
+  border-radius: var(--radius-lg);
   background: var(--bg-info);
   color: var(--text-inverse);
   font-size: var(--text-xs);
@@ -1176,7 +1189,7 @@ select.field {
 
 ::-webkit-scrollbar-thumb {
   background: var(--border-secondary);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
 }
 
 /* ── reduced motion ─────────────────────────────────────────────────── */
