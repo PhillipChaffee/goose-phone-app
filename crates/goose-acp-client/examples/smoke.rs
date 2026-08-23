@@ -6,6 +6,18 @@
 //! against a server that stops responding (see MOCK_SILENT in
 //! mock-goose-server).
 
+// Test/example code: unwrapping a fixture is a failing check, and stdout is
+// how an example reports what it verified. Both are denied for shipped code.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "test/example harness: assertions and progress output are the point"
+)]
+
+
 use std::time::Instant;
 
 use goose_acp_client::{probe, AcpClient, AcpEvent, ConnectConfig, SessionUpdate};

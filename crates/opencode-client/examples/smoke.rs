@@ -15,6 +15,18 @@
 //! idle → verify the PR URL in the transcript → diff → delete. Exits
 //! non-zero on any failure.
 
+// Test/example code: unwrapping a fixture is a failing check, and stdout is
+// how an example reports what it verified. Both are denied for shipped code.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "test/example harness: assertions and progress output are the point"
+)]
+
+
 use opencode_client::{CodeClient, CodeConfig, CodeEvent};
 
 fn env(name: &str) -> String {

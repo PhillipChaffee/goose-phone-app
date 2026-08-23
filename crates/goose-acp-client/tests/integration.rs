@@ -2,6 +2,18 @@
 //! as `goose serve`: the auth surface (`/status`, `/acp` 401/406) and ACP
 //! JSON-RPC over a WebSocket.
 
+// Test/example code: unwrapping a fixture is a failing check, and stdout is
+// how an example reports what it verified. Both are denied for shipped code.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "test/example harness: assertions and progress output are the point"
+)]
+
+
 use std::net::SocketAddr;
 use std::time::Duration;
 

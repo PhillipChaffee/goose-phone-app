@@ -1,6 +1,18 @@
 //! Diagnostic: attach to one chat's SSE stream and print raw event arrivals
 //! with timing. `CODE_BASE_URL`, `CODE_PASSWORD`, `CODE_CHAT_ID` env vars.
 
+// Test/example code: unwrapping a fixture is a failing check, and stdout is
+// how an example reports what it verified. Both are denied for shipped code.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "test/example harness: assertions and progress output are the point"
+)]
+
+
 use opencode_client::{CodeClient, CodeConfig};
 
 #[tokio::main(flavor = "current_thread")]

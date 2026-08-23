@@ -5,6 +5,63 @@ members = [
     "crates/opencode-client",
 ]
 
+# ---------------------------------------------------------------- lint policy
+#
+# Strict by default: clippy's pedantic, nursery and cargo groups are on for
+# every crate in the workspace, plus a shortlist of `restriction` lints that
+# catch the failure modes this app actually has (a panic on a phone is a
+# crash, not a stack trace someone reads). Every exception below carries its
+# reason; one-off exceptions live in the code as
+# `#[expect(lint, reason = "...")]`, which fails the build when it stops
+# being needed.
+#
+# CI runs `cargo clippy --workspace --all-targets -- -D warnings`, so these
+# warn levels are errors there while staying non-blocking in a local build.
+#
+# Deliberately NOT enabled: `missing_docs`. It fires 332 times across the two
+# client crates, and the docs it asks for are restatements of the item name.
+# The half that carries information — `missing_errors_doc`,
+# `missing_panics_doc` (both pedantic) — is on and enforced.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+# Dioxus's rsx!/#[component] macros expand to fully-qualified paths, so this
+# fires on generated code we cannot edit.
+unused_qualifications = "allow"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+
+# --- group exceptions, with reasons ---
+# A duplicated transitive dependency version is the dependency graph's
+# business, not this code's: nothing in this repo can resolve it.
+multiple_crate_versions = "allow"
+# Dioxus futures run on a single-threaded UI executor and hold !Send handles
+# by design; requiring Send would mean not using the framework.
+future_not_send = "allow"
+# Nursery style lint that regularly makes match-on-Option harder to read.
+option_if_let_else = "allow"
+# Directly contradicts `unreachable_pub`, which we prefer: pub(crate) in a
+# private module is exactly what unreachable_pub asks for.
+redundant_pub_crate = "allow"
+
+# --- restriction picks: not on by default, wanted here ---
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+exit = "warn"
+
 [package]
 name = "goose-mobile"
 version = "0.1.0"
@@ -23,6 +80,9 @@ serde_json = "1"
 tokio = { version = "1", features = ["sync", "time", "macros"] }
 futures-util = "0.3"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+
+[lints]
+workspace = true
 
 [features]
 default = ["desktop"]

@@ -11,6 +11,17 @@
 //! Prompt keywords: "slow" = long stream (time to hit Stop);
 //! "notool" = skip the tool call / permission prompt.
 
+// This binary is a test double, not shipped code: it prints its listening
+// address on purpose, and an unwrap on a fixture here is a failing test rather
+// than a crash on someone's phone. The reasons those lints are denied
+// workspace-wide do not apply to it.
+#![allow(
+    clippy::print_stdout,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test double: stdout is its interface and fixtures are trusted"
+)]
+
 use std::collections::HashMap;
 use std::io;
 use std::pin::Pin;
