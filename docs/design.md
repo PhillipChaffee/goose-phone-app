@@ -144,19 +144,24 @@ with no build and no device.
 Check both themes. Most mistakes in this file are contrast mistakes, and they
 only ever show up in one of them.
 
-Two things are worth measuring rather than judging by eye, because the gallery
-cannot show you either:
+Two things are easier to measure than to see, and `node docs/audit.js` measures
+both across every state in both themes. It exits non-zero on a finding, so it
+can gate a change:
 
-- **Contrast.** Walk every element that has its own text, composite it against
-  the first opaque background behind it, and compare against 4.5:1 (3:1 for
-  large or bold text). Note that `color-mix()` resolves to
+- **Contrast.** Every element carrying its own text, composited against the
+  first opaque background behind it, against 4.5:1 (3:1 for large or bold
+  text). Watch out when reading colours back: `color-mix()` resolves to
   `color(srgb r g b / a)` with components in 0..1 while `rgb()` gives 0..255 —
   scaling the wrong one makes every glass bar read as near-black and invents a
   screenful of failures that are not there.
-- **Geometry.** Walk for anything that overflows the 390px viewport, any text
-  clipped without an ellipsis, any filled or fully-bordered box left at radius
-  0, any button under 32px, and any child rounded more than the parent
-  clipping it.
+- **Geometry.** Anything overflowing the 390px viewport, text clipped without
+  an ellipsis, filled or fully-bordered boxes left at radius 0, buttons under
+  32px, and any child rounded more than the parent clipping it.
+
+Neither replaces looking. The audit is clean on a screen whose empty state is
+pinned to the top, whose buttons are a ragged row of different widths, and
+whose error is a saturated slab — all three shipped here and all three were
+found by eye.
 
 The blur is the one thing you cannot check here at all: headless Chromium does
 not composite `backdrop-filter`, in an iframe or out of one. That is why

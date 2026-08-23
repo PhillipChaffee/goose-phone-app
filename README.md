@@ -165,7 +165,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace           # unit + integration tests
 cargo llvm-cov -p goose-acp-client --summary-only   # coverage
 dx serve --desktop               # run the app
+node docs/audit.js               # UI geometry + contrast, every state, both themes
+node docs/screenshots.js         # regenerate the images above
 ```
+
+`docs/audit.js` rebuilds all sixteen screen states as standalone 390×844
+documents and checks each one for overflow, clipped text, square-cornered
+surfaces, undersized tap targets, radius-nesting mistakes and text below the
+WCAG AA contrast threshold. It exits non-zero on a finding. The rules it
+enforces, and why they are the rules, are in [`docs/design.md`](docs/design.md).
 
 ```
 ├── src/                     # Dioxus app
@@ -174,6 +182,8 @@ dx serve --desktop               # run the app
 ├── crates/goose-acp-client/ # ACP protocol library (reusable, UI-independent)
 ├── crates/mock-goose-server/# fake goose server for testing
 ├── scripts/check-server.sh  # verify a server is app-ready
+├── docs/design.md           # the design rules, and why they are the rules
+├── docs/style-gallery.html  # every screen state, against the real stylesheet
 └── docs/iphone-setup.md     # iPhone deployment walkthrough
 ```
 
