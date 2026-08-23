@@ -1,12 +1,15 @@
-/* Goose Mobile — the goose design language on a phone.
+/* Goose Mobile — the design system.
  *
- * Tokens, type scale, radii and elevation rules are lifted from the goose
- * desktop app (ui/desktop/src/theme/theme-tokens.ts and styles/main.css) so
- * the two feel like one product. Desktop writes its tokens onto :root from
- * JS; here they are plain CSS, with light as the base and dark applied from
- * the system preference — or forced with data-theme on the root element.
+ * ATTRIBUTION, and the reason these numbers are not free to taste: the
+ * palette, type scale, radii and shadow ramp mirror the goose desktop app's
+ * design tokens, so the two read as one product. Treat them as tracking an
+ * upstream source — change a value to fix a real problem here, not to
+ * preference, and change it in both themes.
  *
- * The rule that holds the whole thing together, straight from goose:
+ * Light is the base; dark comes from the system preference, or from
+ * data-theme on the root element when the user overrides it.
+ *
+ * The rule that holds the whole sheet together:
  * BORDERS SEPARATE, SHADOWS FLOAT. Anything in normal flow (tool cards,
  * dividers, table cells) gets a 1px hairline and no shadow; only things that
  * leave the flow — the composer, modals, toasts — cast one.
@@ -33,9 +36,9 @@
   --text-inverse: #ffffff;
   --text-info: #5c98f9;
   --text-danger: #f94b4b;
-  /* goose's success/warning tokens are tuned as fills, not as text on white
-   * (#91cb80 and #fbcd44 both fail contrast there). Darkened for the one
-   * place this app uses them as text: tool-call status labels. */
+  /* Upstream tunes success/warning as fills (#91cb80, #fbcd44); as text on
+   * white they both fail contrast. Darkened for the one place this app sets
+   * them as text — tool-call status labels. Not a mistake to "correct". */
   --text-success: #6fae5c;
   --text-warning: #b8860b;
   --text-disabled: #cbd1d6;
@@ -44,11 +47,11 @@
   --border-secondary: #cbd1d6;
   --border-danger: #f94b4b;
 
-  /* Brand. goose uses these sparingly; here it is the inline-code tint. */
+  /* Accent. Used in exactly one place: the inline-code tint on dark. */
   --block-teal: #13bbaf;
 
-  /* The assistant's surface. Light mode has none: goose renders the agent's
-   * reply as plain text on the page. */
+  /* The assistant's surface. Light mode has none — the reply is plain text
+   * on the page, which is what keeps a transcript reading as prose. */
   --agent-surface: transparent;
   --agent-padding: 0;
 
@@ -74,12 +77,12 @@
   --lh-sm: 1.25rem;
   --lh-md: 1.5rem;
 
-  /* Code slabs stay this dark in both themes, like goose's oneDark blocks. */
+  /* Code slabs stay this dark in both themes. */
   --code-bg: #282c34;
   --code-fg: #e6e6e6;
   --code-chip-bg: var(--bg-secondary);
-  /* goose's raw #ff4f00 is a 3.3:1 hue on this fill at 12px; same colour,
-   * darkened until it passes. */
+  /* The upstream burnt orange (#ff4f00) is 3.3:1 on this fill at 12px; same
+   * hue, darkened until it passes. */
   --code-chip-fg: #c2410c;
 
   --safe-top: env(safe-area-inset-top, 0px);
@@ -262,7 +265,7 @@ body {
   color: var(--text-danger);
 }
 
-/* Rectangles at 6px — goose's "pill" button is not actually a pill. */
+/* Text buttons are 6px rectangles; the round variant is .icon-btn above. */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -459,7 +462,7 @@ body {
   line-height: var(--lh-xs);
 }
 
-/* Ring-less focus, exactly as goose: the border steps up, nothing glows. */
+/* Ring-less focus: the border steps up a shade, nothing glows. */
 .field {
   width: 100%;
   min-height: 40px;
@@ -500,8 +503,8 @@ select.field {
   line-height: var(--lh-sm);
 }
 
-/* Alerts break the token system on purpose in goose: saturated, full-bleed,
- * no radius, no border — they butt against their container's edges. */
+/* Alerts sit outside the token system on purpose: saturated, full-bleed, no
+ * radius and no border, butting against their container's edges. */
 .error-box {
   margin: -16px -16px 16px;
   padding: 10px 16px;
@@ -625,9 +628,9 @@ select.field {
   line-height: var(--lh-sm);
 }
 
-/* The agent's turn has no bubble in light mode — plain text on the page, the
- * way goose renders it. Dark mode gives it a faint raised surface so it
- * separates from the near-black page. */
+/* The agent's turn has no bubble in light mode — plain text on the page.
+ * Dark mode gives it a faint raised surface so it separates from the
+ * near-black page. */
 .bubble.assistant {
   align-self: flex-start;
   padding: var(--agent-padding);
@@ -917,9 +920,9 @@ select.field {
   line-height: var(--lh-sm);
 }
 
-/* Inline code is a chip tinted burnt orange, exactly as goose does it on a
- * light surface. On dark, goose drops the chip and switches to a teal tint —
- * orange on slate is muddy, and the chips make a paragraph look speckled. */
+/* Inline code is a burnt-orange chip on light. On dark the chip disappears
+ * and the tint goes teal: orange on slate is muddy, and a run of chips makes
+ * a paragraph look speckled. */
 .md code {
   padding: 2px 4px;
   background: var(--code-chip-bg);
@@ -987,7 +990,7 @@ select.field {
   background: rgb(0 0 0 / 0.5);
 }
 
-/* One of the few places goose uses a border AND a shadow. */
+/* The one element that carries both a border and a shadow. */
 .modal {
   width: 100%;
   max-width: 560px;
@@ -1043,7 +1046,7 @@ select.field {
 
 /* ── toast ──────────────────────────────────────────────────────────── */
 
-/* Fully inverted chip, like goose's tooltips. */
+/* A fully inverted chip: black on light, light on dark. */
 .toast {
   position: fixed;
   left: 50%;
@@ -1074,8 +1077,8 @@ select.field {
 
 /* ── tab bar ────────────────────────────────────────────────────────── */
 
-/* goose's sidebar rows are full-radius pills that fill with
- * background-tertiary when selected; the phone's tabs borrow that shape. */
+/* Full-radius pills that fill with the tertiary surface when selected —
+ * the same shape the session rows use. */
 .tabbar {
   display: flex;
   gap: 4px;
@@ -1115,8 +1118,8 @@ select.field {
 
 /* ── chips, banners, diff ───────────────────────────────────────────── */
 
-/* Reads a step brighter than goose's sidebar tags: these carry live state
- * ("working", "crashed"), and secondary-on-secondary fails on a phone. */
+/* A step brighter than other secondary text: these carry live state
+ * ("working", "crashed"), and secondary-on-secondary fails at phone size. */
 .chip {
   display: inline-flex;
   align-items: center;
@@ -1129,7 +1132,7 @@ select.field {
   line-height: var(--lh-sm);
 }
 
-/* An informational strip: saturated and full-bleed, like goose's alerts. */
+/* An informational strip: saturated and full-bleed, like .error-box. */
 .banner {
   flex-shrink: 0;
   padding: 8px 16px;

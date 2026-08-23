@@ -26,12 +26,14 @@ justified in that table; one-off exceptions go in the code as
 `#[expect(lint, reason = "...")]` — `expect`, not `allow`, so an exception
 that stops being needed fails the build instead of rotting.
 
-Styling: `assets/main.css` is the whole design system — goose's semantic
-tokens (see `ui/desktop/src/theme/theme-tokens.ts` in the goose repo), light
-and dark, with `data-theme` on the root element overriding the system
-preference. `docs/style-gallery.html` renders every screen in a 390x844 frame
-against that stylesheet: open it in a browser after a CSS change and every
-state is visible at once, with no build and no device.
+Styling: `assets/main.css` is the whole design system — semantic tokens,
+light and dark, with `data-theme` on the root element overriding the system
+preference. Its header says where the token values come from and why they are
+not free to adjust to taste; read it before changing a colour.
+
+`docs/style-gallery.html` renders every screen in a 390x844 frame against
+that stylesheet: open it in a browser after a CSS change and every state is
+visible at once, with no build and no device.
 
 The toolchain is pinned in `rust-toolchain.toml` and rustup honours it
 automatically, so a local `cargo clippy` sees exactly the lints CI sees.
