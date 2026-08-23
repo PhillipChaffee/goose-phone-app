@@ -107,3 +107,8 @@ with no build and no device.
 
 Check both themes. Most mistakes in this file are contrast mistakes, and they
 only ever show up in one of them.
+
+The README's screenshots come from the same place: `node docs/screenshots.js`
+captures individual gallery frames at 390×844. Re-run it when a change alters
+what those screens look like, so the README cannot quietly go stale the way
+the previous device captures did.

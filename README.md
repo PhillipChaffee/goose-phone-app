@@ -1,7 +1,7 @@
 # Goose Mobile
 
 [![CI](https://github.com/PhillipChaffee/goose-phone-app/actions/workflows/ci.yml/badge.svg)](https://github.com/PhillipChaffee/goose-phone-app/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/PhillipChaffee/goose-phone-app/branch/main/graph/badge.svg)](https://codecov.io/gh/PhillipChaffee/goose-phone-app)
+[![Coverage Status](https://coveralls.io/repos/github/PhillipChaffee/goose-phone-app/badge.svg?branch=main)](https://coveralls.io/github/PhillipChaffee/goose-phone-app?branch=main)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **Talk to your own [goose](https://github.com/aaif-goose/goose) AI agent from your phone.**
@@ -18,12 +18,10 @@ for **iOS**, **Android**, and desktop.
   <img src="docs/images/sessions.png" alt="Session list" width="32%">
 </p>
 
-> **Screenshots are out of date.** They predate both the Home/Code tabs and the
-> current design, and need re-shooting from a running build. For an accurate
-> picture of every screen — populated and empty lists, a full transcript, tool
-> states, permission modals, settings, error states, in light and dark — open
-> [`docs/style-gallery.html`](docs/style-gallery.html) in a browser; it renders
-> them against the stylesheet the app actually ships.
+<sub>Rendered at 390×844 from [`docs/style-gallery.html`](docs/style-gallery.html)
+against the stylesheet the app ships, with fixture content — regenerate them
+with `node docs/screenshots.js`. Every screen and state, in both themes, is in
+the gallery itself.</sub>
 
 ## Features
 
@@ -136,6 +134,7 @@ Tap **Test connection**, then **Save & Connect**.
 
 <p align="center">
   <img src="docs/images/settings.png" alt="Settings screen" width="45%">
+  <img src="docs/images/code-chat.png" alt="A code agent working, in light mode" width="45%">
 </p>
 
 ## Connection options
