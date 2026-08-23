@@ -148,7 +148,7 @@ pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
                     div { class: "tool-head",
                         span { class: "tool-icon", "{icon}" }
                         span { class: "tool-title", "{title}" }
-                        span { class: "tool-status", "{status}" }
+                        span { class: "tool-status", "{tool_status_label(status)}" }
                     }
                     if has_output {
                         details { class: "tool-output",
@@ -158,6 +158,30 @@ pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Human wording for a tool's status.
+///
+/// The two backends speak different vocabularies — ACP emits
+/// `pending`/`in_progress`/`completed`/`failed`, OpenCode emits
+/// `pending`/`running`/`completed`/`error` — and neither is UI copy. The
+/// class name still carries the raw value, so the colour rules keep working
+/// on both. Anything unrecognised is tidied rather than dropped: a backend
+/// that grows a new state shows that state instead of nothing.
+fn tool_status_label(status: &str) -> String {
+    match status {
+        "pending" => "Queued".to_owned(),
+        "in_progress" | "running" => "Running".to_owned(),
+        "completed" => "Done".to_owned(),
+        "failed" | "error" => "Failed".to_owned(),
+        other => {
+            let mut words = other.replace('_', " ");
+            if let Some(first) = words.get_mut(..1) {
+                first.make_ascii_uppercase();
+            }
+            words
         }
     }
 }

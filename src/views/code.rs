@@ -143,7 +143,7 @@ pub fn CodeSessionsView() -> Element {
                                 div { class: "session-meta",
                                     span { "{meta.repo}" }
                                     if !meta.branch.is_empty() {
-                                        span { "· {meta.branch}" }
+                                        span { "{meta.branch}" }
                                     }
                                 }
                             }

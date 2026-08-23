@@ -63,10 +63,10 @@ pub fn SessionsView() -> Element {
                             div { class: "session-meta",
                                 span { "{info.session_id}" }
                                 if let Some(count) = info.message_count() {
-                                    span { "· {count} msgs" }
+                                    span { "{count} msgs" }
                                 }
                                 if let Some(ts) = &info.updated_at {
-                                    span { "· {short_timestamp(ts)}" }
+                                    span { "{short_timestamp(ts)}" }
                                 }
                             }
                         }
