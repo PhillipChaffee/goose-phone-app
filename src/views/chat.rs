@@ -165,7 +165,7 @@ pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
 /// Human wording for a tool's status.
 ///
 /// The two backends speak different vocabularies — ACP emits
-/// `pending`/`in_progress`/`completed`/`failed`, OpenCode emits
+/// `pending`/`in_progress`/`completed`/`failed`, `OpenCode` emits
 /// `pending`/`running`/`completed`/`error` — and neither is UI copy. The
 /// class name still carries the raw value, so the colour rules keep working
 /// on both. Anything unrecognised is tidied rather than dropped: a backend
