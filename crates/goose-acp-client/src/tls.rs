@@ -19,6 +19,11 @@ use tokio_tungstenite::Connector;
 
 /// Parse a SHA-256 fingerprint like `AA:BB:...` (or bare hex, any case).
 /// Empty/whitespace input means "no pin".
+///
+/// # Errors
+///
+/// A message naming the expected format if the input, once colons and
+/// whitespace are stripped, is not exactly 64 hex digits.
 pub fn parse_fingerprint(input: &str) -> Result<Option<[u8; 32]>, String> {
     let cleaned: String = input
         .chars()
@@ -37,7 +42,7 @@ pub fn parse_fingerprint(input: &str) -> Result<Option<[u8; 32]>, String> {
     Ok(Some(out))
 }
 
-#[must_use] 
+#[must_use]
 pub fn format_fingerprint(fp: &[u8; 32]) -> String {
     fp.iter()
         .map(|b| format!("{b:02X}"))
@@ -119,17 +124,19 @@ pub fn ensure_crypto_provider() {
 /// `WebPKI` (Mozilla roots) otherwise. Ignored for plain `ws://` URLs.
 pub(crate) fn build_connector(fingerprint: Option<[u8; 32]>) -> Connector {
     ensure_crypto_provider();
-    let provider = rustls::crypto::CryptoProvider::get_default()
+    let provider = CryptoProvider::get_default()
         .cloned()
         .unwrap_or_else(|| Arc::new(rustls::crypto::ring::default_provider()));
 
-    let config = if let Some(fp) = fingerprint { rustls::ClientConfig::builder()
-    .dangerous()
-    .with_custom_certificate_verifier(Arc::new(FingerprintVerifier {
-        fingerprint: fp,
-        provider,
-    }))
-    .with_no_client_auth() } else {
+    let config = if let Some(fp) = fingerprint {
+        rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(FingerprintVerifier {
+                fingerprint: fp,
+                provider,
+            }))
+            .with_no_client_auth()
+    } else {
         let mut roots = rustls::RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         rustls::ClientConfig::builder()
@@ -140,6 +147,10 @@ pub(crate) fn build_connector(fingerprint: Option<[u8; 32]>) -> Connector {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test assertions: a failing unwrap is the failing check"
+)]
 mod tests {
     use super::*;
 

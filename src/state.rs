@@ -199,8 +199,7 @@ pub(crate) fn show_toast(ctx: &AppCtx, message: impl Into<String>) {
 }
 
 fn connect_config(settings: &Settings) -> Result<ConnectConfig, String> {
-    let fingerprint =
-        goose_acp_client::parse_fingerprint(&settings.fingerprint)?;
+    let fingerprint = goose_acp_client::parse_fingerprint(&settings.fingerprint)?;
     Ok(ConnectConfig {
         base_url: settings.server_url.clone(),
         secret: settings.secret_key.clone(),
@@ -209,7 +208,7 @@ fn connect_config(settings: &Settings) -> Result<ConnectConfig, String> {
 }
 
 /// Connect (or reconnect) using the saved settings. Returns true on success.
-pub(crate) async fn establish(ctx: AppCtx) -> bool {
+pub(crate) async fn establish(ctx: &AppCtx) -> bool {
     let mut conn = ctx.conn;
     let mut client_slot = ctx.client;
     let mut want = ctx.want_connected;
@@ -238,7 +237,8 @@ pub(crate) async fn establish(ctx: AppCtx) -> bool {
                 format!("{} {}", info.agent_name, info.agent_version)
             };
             conn.set(ConnState::Connected { agent });
-            spawn_forever(pump(ctx, events));
+            let ctx = *ctx;
+            spawn_forever(async move { pump(&ctx, events).await });
             true
         }
         Err(e) => {
@@ -257,7 +257,7 @@ pub(crate) fn disconnect(ctx: &AppCtx) {
 }
 
 /// Read events off the connection and fold them into UI state.
-async fn pump(ctx: AppCtx, mut events: mpsc::Receiver<AcpEvent>) {
+async fn pump(ctx: &AppCtx, mut events: mpsc::Receiver<AcpEvent>) {
     let mut chat = ctx.chat;
     let mut permission = ctx.permission;
     let mut usage = ctx.usage;
@@ -300,7 +300,8 @@ async fn pump(ctx: AppCtx, mut events: mpsc::Receiver<AcpEvent>) {
                 permission.write().clear();
                 if *ctx.want_connected.peek() {
                     conn.set(ConnState::Failed(format!("Connection lost: {reason}")));
-                    spawn_forever(reconnect_loop(ctx));
+                    let ctx = *ctx;
+                    spawn_forever(async move { reconnect_loop(&ctx).await });
                 } else {
                     conn.set(ConnState::Disconnected);
                 }
@@ -313,7 +314,7 @@ async fn pump(ctx: AppCtx, mut events: mpsc::Receiver<AcpEvent>) {
 /// Retry until connected or the user disconnects: quick ramp, then a steady
 /// 30-second cadence (covers long VPN outages and phone sleep — suspended
 /// timers resume on wake).
-async fn reconnect_loop(ctx: AppCtx) {
+async fn reconnect_loop(ctx: &AppCtx) {
     let mut ramp = [2u64, 4, 8, 15].into_iter();
     loop {
         let delay = ramp.next().unwrap_or(30);
@@ -340,7 +341,7 @@ async fn reconnect_loop(ctx: AppCtx) {
     }
 }
 
-async fn reload_chat(ctx: AppCtx, session_id: String, cwd: String) {
+async fn reload_chat(ctx: &AppCtx, session_id: String, cwd: String) {
     let Some(client) = ctx.client.peek().clone() else {
         return;
     };
@@ -354,12 +355,12 @@ async fn reload_chat(ctx: AppCtx, session_id: String, cwd: String) {
     if chat.peek().session_id.as_deref() == Some(session_id.as_str()) {
         chat.write().loading = false;
         if let Err(e) = result {
-            show_toast(&ctx, format!("Failed to reload session: {e}"));
+            show_toast(ctx, format!("Failed to reload session: {e}"));
         }
     }
 }
 
-fn apply_update(ctx: AppCtx, session_id: &str, update: SessionUpdate) {
+fn apply_update(ctx: &AppCtx, session_id: &str, update: SessionUpdate) {
     let mut chat = ctx.chat;
     let is_current = chat.peek().session_id.as_deref() == Some(session_id);
 
@@ -388,12 +389,12 @@ fn apply_update(ctx: AppCtx, session_id: &str, update: SessionUpdate) {
             });
         }
         SessionUpdate::ToolCallUpdate(update) if is_current => {
-            apply_tool_update(&mut chat, update);
+            apply_tool_update(&mut chat, &update);
         }
         SessionUpdate::SessionInfoUpdate(info) => {
             if let Some(title) = info.title {
                 if is_current {
-                    chat.write().title = title.clone();
+                    chat.write().title.clone_from(&title);
                 }
                 let mut sessions = ctx.sessions;
                 let mut list = sessions.write();
@@ -406,6 +407,7 @@ fn apply_update(ctx: AppCtx, session_id: &str, update: SessionUpdate) {
     }
 }
 
+#[derive(Clone, Copy)]
 enum ChunkKind {
     User,
     Assistant,
@@ -456,7 +458,7 @@ fn push_chunk(chat: &mut Signal<ChatState>, chunk: MessageChunk, kind: ChunkKind
     });
 }
 
-fn apply_tool_update(chat: &mut Signal<ChatState>, update: ToolCallUpdate) {
+fn apply_tool_update(chat: &mut Signal<ChatState>, update: &ToolCallUpdate) {
     let mut c = chat.write();
     let Some(ChatItem::Tool {
         title,
@@ -499,7 +501,7 @@ fn apply_tool_update(chat: &mut Signal<ChatState>, update: ToolCallUpdate) {
 }
 
 /// Fetch the first page of sessions (or the next page when `more` is true).
-pub(crate) async fn refresh_sessions(ctx: AppCtx, more: bool) {
+pub(crate) async fn refresh_sessions(ctx: &AppCtx, more: bool) {
     let Some(client) = ctx.client.peek().clone() else {
         return;
     };
@@ -518,13 +520,13 @@ pub(crate) async fn refresh_sessions(ctx: AppCtx, more: bool) {
                 sessions.set(page.sessions);
             }
         }
-        Err(e) => show_toast(&ctx, format!("Failed to list sessions: {e}")),
+        Err(e) => show_toast(ctx, format!("Failed to list sessions: {e}")),
     }
     loading.set(false);
 }
 
 /// Open an existing session: switch to the chat screen and replay history.
-pub(crate) fn open_session(ctx: AppCtx, info: SessionInfo) {
+pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
     let mut screen = ctx.screen;
     let mut chat = ctx.chat;
     let mut usage = ctx.usage;
@@ -542,6 +544,7 @@ pub(crate) fn open_session(ctx: AppCtx, info: SessionInfo) {
     usage.set(None);
     screen.set(Screen::Chat);
 
+    let ctx = *ctx;
     spawn_forever(async move {
         let Some(client) = ctx.client.peek().clone() else {
             let mut chat = ctx.chat;
@@ -563,15 +566,16 @@ pub(crate) fn open_session(ctx: AppCtx, info: SessionInfo) {
 }
 
 /// Create a fresh session in the configured working directory and open it.
-pub(crate) fn new_session(ctx: AppCtx) {
+pub(crate) fn new_session(ctx: &AppCtx) {
     let working_dir = ctx.settings.peek().working_dir.trim().to_string();
     if working_dir.is_empty() || !working_dir.starts_with('/') {
         show_toast(
-            &ctx,
+            ctx,
             "Set an absolute working directory (a path on the server) in Settings first",
         );
         return;
     }
+    let ctx = *ctx;
     spawn_forever(async move {
         let Some(client) = ctx.client.peek().clone() else {
             show_toast(&ctx, "Not connected — reconnect in Settings");
@@ -600,13 +604,13 @@ pub(crate) fn new_session(ctx: AppCtx) {
 
 /// Send the user's message and run the agent turn. Returns false (leaving the
 /// caller's draft untouched) if the message could not be submitted.
-pub(crate) fn send_prompt(ctx: AppCtx, text: String) -> bool {
+pub(crate) fn send_prompt(ctx: &AppCtx, text: String) -> bool {
     let mut chat = ctx.chat;
     let Some(session_id) = chat.peek().session_id.clone() else {
         return false;
     };
     let Some(client) = ctx.client.peek().clone() else {
-        show_toast(&ctx, "Not connected — reconnect in Settings");
+        show_toast(ctx, "Not connected — reconnect in Settings");
         return false;
     };
     {
@@ -617,6 +621,7 @@ pub(crate) fn send_prompt(ctx: AppCtx, text: String) -> bool {
     let mut running_sessions = ctx.running_sessions;
     running_sessions.write().insert(session_id.clone());
 
+    let ctx = *ctx;
     spawn_forever(async move {
         let result = client.prompt(&session_id, &text).await;
 
@@ -646,14 +651,14 @@ pub(crate) fn send_prompt(ctx: AppCtx, text: String) -> bool {
 /// Stop the current chat's running turn. Any open permission prompt for the
 /// session is answered "cancelled" FIRST (the frames travel in order, so the
 /// parked run unparks and then observes the cancel), matching goose Desktop.
-pub(crate) fn stop_turn(ctx: AppCtx) {
+pub(crate) fn stop_turn(ctx: &AppCtx) {
     let Some(session_id) = ctx.chat.peek().session_id.clone() else {
         return;
     };
     let Some(client) = ctx.client.peek().clone() else {
         return;
     };
-    answer_pending_permissions(&ctx, &client, &session_id);
+    answer_pending_permissions(ctx, &client, &session_id);
     client.cancel(&session_id);
 }
 
@@ -672,14 +677,14 @@ fn answer_pending_permissions(ctx: &AppCtx, client: &AcpClient, session_id: &str
 }
 
 /// Answer the front-of-queue permission request and remove it.
-pub(crate) fn answer_permission(ctx: AppCtx, request_id: Value, option_id: Option<String>) {
+pub(crate) fn answer_permission(ctx: &AppCtx, request_id: &Value, option_id: Option<String>) {
     if let Some(client) = ctx.client.peek().clone() {
         client.respond_permission(request_id.clone(), option_id);
     }
     let mut permission = ctx.permission;
     permission
         .write()
-        .retain(|req| req.request_id != request_id);
+        .retain(|req| req.request_id != *request_id);
 }
 
 /// Human-friendly `updatedAt` (RFC3339 → "YYYY-MM-DD HH:MM").

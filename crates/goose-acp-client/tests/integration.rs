@@ -2,17 +2,14 @@
 //! as `goose serve`: the auth surface (`/status`, `/acp` 401/406) and ACP
 //! JSON-RPC over a WebSocket.
 
-// Test/example code: unwrapping a fixture is a failing check, and stdout is
-// how an example reports what it verified. Both are denied for shipped code.
-#![allow(
+// Test code: a failing unwrap, or a panic on the wrong variant, IS the failing
+// check. Both are denied for shipped code. `expect` rather than `allow`: if a
+// use goes away, so should its exception.
+#![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     clippy::panic,
-    clippy::print_stdout,
-    clippy::print_stderr,
-    reason = "test/example harness: assertions and progress output are the point"
+    reason = "test harness: an unwrap or a wrong-variant panic is the assertion"
 )]
-
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -105,28 +102,48 @@ async fn spawn_ws_stub(behavior: PromptBehavior) -> SocketAddr {
     addr
 }
 
-// The error type here is fixed by `accept_hdr_async`'s callback signature.
-#[allow(clippy::result_large_err)]
-async fn handle_ws(sock: TcpStream, behavior: PromptBehavior) {
-    // Reject the upgrade unless the shared secret is present, exactly as the
-    // real server does.
-    let check = |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
-        let authed = req
-            .headers()
-            .get("X-Secret-Key")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v == SECRET)
-            || req.uri().query().unwrap_or("").contains(SECRET);
-        if req.uri().path() == "/acp" && authed {
-            Ok(resp)
-        } else {
-            let mut err = ErrorResponse::new(None);
-            *err.status_mut() = StatusCode::UNAUTHORIZED;
-            Err(err)
-        }
-    };
+type WsStream = tokio_tungstenite::WebSocketStream<TcpStream>;
+type WsTx = futures_util::stream::SplitSink<WsStream, Message>;
+type WsRx = futures_util::stream::SplitStream<WsStream>;
 
-    let Ok(ws) = tokio_tungstenite::accept_hdr_async(sock, check).await else {
+/// Reject the upgrade unless the shared secret is present, exactly as the real
+/// server does.
+#[expect(
+    clippy::result_large_err,
+    reason = "error type is fixed by `accept_hdr_async`'s callback signature"
+)]
+fn check_secret(req: &Request, resp: Response) -> Result<Response, ErrorResponse> {
+    let authed = req
+        .headers()
+        .get("X-Secret-Key")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v == SECRET)
+        || req.uri().query().unwrap_or("").contains(SECRET);
+    if req.uri().path() == "/acp" && authed {
+        Ok(resp)
+    } else {
+        let mut err = ErrorResponse::new(None);
+        *err.status_mut() = StatusCode::UNAUTHORIZED;
+        Err(err)
+    }
+}
+
+async fn send(tx: &mut WsTx, frame: Value) {
+    let _ = tx.send(Message::Text(frame.to_string().into())).await;
+}
+
+/// Send a `session/update` notification carrying `update`.
+async fn notify(tx: &mut WsTx, session_id: &str, update: Value) {
+    send(
+        tx,
+        json!({"jsonrpc":"2.0","method":"session/update",
+               "params":{"sessionId": session_id, "update": update}}),
+    )
+    .await;
+}
+
+async fn handle_ws(sock: TcpStream, behavior: PromptBehavior) {
+    let Ok(ws) = tokio_tungstenite::accept_hdr_async(sock, check_secret).await else {
         return;
     };
     let (mut tx, mut rx) = ws.split();
@@ -139,19 +156,19 @@ async fn handle_ws(sock: TcpStream, behavior: PromptBehavior) {
         let id = frame.get("id").cloned();
         let method = frame.get("method").and_then(Value::as_str).unwrap_or("");
 
-        let reply = |v: Value| Message::Text(v.to_string().into());
-
         match method {
             "initialize" => {
-                let _ = tx
-                    .send(reply(json!({
+                send(
+                    &mut tx,
+                    json!({
                         "jsonrpc": "2.0", "id": id,
                         "result": {
                             "protocolVersion": 1,
                             "agentInfo": {"name": "stub-goose", "version": "1.47.0"}
                         }
-                    })))
-                    .await;
+                    }),
+                )
+                .await;
             }
             "session/new" => {
                 // Mirror the server's absolute-path requirement.
@@ -165,11 +182,12 @@ async fn handle_ws(sock: TcpStream, behavior: PromptBehavior) {
                     json!({"jsonrpc":"2.0","id":id,
                            "error":{"code":-32602,"message":"cwd must be absolute"}})
                 };
-                let _ = tx.send(reply(out)).await;
+                send(&mut tx, out).await;
             }
             "session/list" => {
-                let _ = tx
-                    .send(reply(json!({
+                send(
+                    &mut tx,
+                    json!({
                         "jsonrpc": "2.0", "id": id,
                         "result": {"sessions": [{
                             "sessionId": "20260820_1",
@@ -178,119 +196,153 @@ async fn handle_ws(sock: TcpStream, behavior: PromptBehavior) {
                             "updatedAt": "2026-08-20T10:00:00Z",
                             "_meta": {"messageCount": 4, "lastMessageSnippet": "all done"}
                         }], "nextCursor": null}
-                    })))
-                    .await;
+                    }),
+                )
+                .await;
             }
             "session/prompt" => {
-                let sid = frame
-                    .pointer("/params/sessionId")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let note = |update: Value| {
-                    Message::Text(
-                        json!({"jsonrpc":"2.0","method":"session/update",
-                               "params":{"sessionId": sid, "update": update}})
-                        .to_string()
-                        .into(),
-                    )
-                };
-
-                if behavior == PromptBehavior::Disconnect {
+                if !serve_prompt(&mut tx, &mut rx, &frame, id, behavior).await {
                     return; // drop the socket mid-turn
                 }
-
-                let _ = tx
-                    .send(note(json!({
-                        "sessionUpdate": "agent_thought_chunk",
-                        "messageId": "th1",
-                        "content": {"type": "text", "text": "thinking"}
-                    })))
-                    .await;
-                let _ = tx
-                    .send(note(json!({
-                        "sessionUpdate": "tool_call",
-                        "toolCallId": "tc1",
-                        "title": "shell: ls",
-                        "kind": "execute",
-                        "status": "pending",
-                        "_meta": {"goose": {"toolCall": {"toolName": "developer__shell"}}}
-                    })))
-                    .await;
-
-                let mut allowed = true;
-                if behavior == PromptBehavior::AskPermission {
-                    let _ = tx
-                        .send(reply(json!({
-                            "jsonrpc": "2.0", "id": "perm-1",
-                            "method": "session/request_permission",
-                            "params": {
-                                "sessionId": sid,
-                                "toolCall": {"toolCallId": "tc1", "title": "shell: ls"},
-                                "options": [
-                                    {"optionId": "allow_once", "name": "allow_once", "kind": "allow_once"},
-                                    {"optionId": "reject_once", "name": "reject_once", "kind": "reject_once"}
-                                ]
-                            }
-                        })))
-                        .await;
-                    // Wait for the client's answer to that request.
-                    while let Some(Ok(Message::Text(t))) = rx.next().await {
-                        let v: Value = serde_json::from_str(&t).unwrap_or(Value::Null);
-                        if v.get("id").and_then(Value::as_str) == Some("perm-1") {
-                            allowed = v
-                                .pointer("/result/outcome/optionId")
-                                .and_then(Value::as_str)
-                                == Some("allow_once");
-                            break;
-                        }
-                    }
-                }
-
-                let _ = tx
-                    .send(note(json!({
-                        "sessionUpdate": "tool_call_update",
-                        "toolCallId": "tc1",
-                        "status": if allowed { "completed" } else { "failed" },
-                        "content": [{"type": "content",
-                                     "content": {"type": "text", "text": "file_a"}}]
-                    })))
-                    .await;
-                let _ = tx
-                    .send(note(json!({
-                        "sessionUpdate": "agent_message_chunk",
-                        "messageId": "m1",
-                        "content": {"type": "text", "text": "Hello "}
-                    })))
-                    .await;
-                let _ = tx
-                    .send(note(json!({
-                        "sessionUpdate": "agent_message_chunk",
-                        "messageId": "m1",
-                        "content": {"type": "text", "text": "world"}
-                    })))
-                    .await;
-                let _ = tx
-                    .send(reply(json!({
-                        "jsonrpc": "2.0", "id": id,
-                        "result": {"stopReason": "end_turn"}
-                    })))
-                    .await;
             }
             "session/delete" => {
-                let _ = tx
-                    .send(reply(json!({"jsonrpc":"2.0","id":id,"result":{}})))
-                    .await;
+                send(&mut tx, json!({"jsonrpc":"2.0","id":id,"result":{}})).await;
             }
             "unknown/method" => {
-                let _ = tx
-                    .send(reply(json!({"jsonrpc":"2.0","id":id,
-                        "error":{"code":-32601,"message":"method not found"}})))
-                    .await;
+                send(
+                    &mut tx,
+                    json!({"jsonrpc":"2.0","id":id,
+                        "error":{"code":-32601,"message":"method not found"}}),
+                )
+                .await;
             }
             _ => {}
         }
     }
+}
+
+/// Stream one turn — thought, tool call, assistant text — and answer the
+/// pending `session/prompt` request. Returns `false` when the stub should drop
+/// the connection mid-turn instead.
+async fn serve_prompt(
+    tx: &mut WsTx,
+    rx: &mut WsRx,
+    frame: &Value,
+    id: Option<Value>,
+    behavior: PromptBehavior,
+) -> bool {
+    let sid = frame
+        .pointer("/params/sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+
+    if behavior == PromptBehavior::Disconnect {
+        return false;
+    }
+
+    notify(
+        tx,
+        &sid,
+        json!({
+            "sessionUpdate": "agent_thought_chunk",
+            "messageId": "th1",
+            "content": {"type": "text", "text": "thinking"}
+        }),
+    )
+    .await;
+    notify(
+        tx,
+        &sid,
+        json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "tc1",
+            "title": "shell: ls",
+            "kind": "execute",
+            "status": "pending",
+            "_meta": {"goose": {"toolCall": {"toolName": "developer__shell"}}}
+        }),
+    )
+    .await;
+
+    let allowed = if behavior == PromptBehavior::AskPermission {
+        ask_permission(tx, rx, &sid).await
+    } else {
+        true
+    };
+
+    notify(
+        tx,
+        &sid,
+        json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "tc1",
+            "status": if allowed { "completed" } else { "failed" },
+            "content": [{"type": "content",
+                         "content": {"type": "text", "text": "file_a"}}]
+        }),
+    )
+    .await;
+    notify(
+        tx,
+        &sid,
+        json!({
+            "sessionUpdate": "agent_message_chunk",
+            "messageId": "m1",
+            "content": {"type": "text", "text": "Hello "}
+        }),
+    )
+    .await;
+    notify(
+        tx,
+        &sid,
+        json!({
+            "sessionUpdate": "agent_message_chunk",
+            "messageId": "m1",
+            "content": {"type": "text", "text": "world"}
+        }),
+    )
+    .await;
+    send(
+        tx,
+        json!({
+            "jsonrpc": "2.0", "id": id,
+            "result": {"stopReason": "end_turn"}
+        }),
+    )
+    .await;
+    true
+}
+
+/// Ask the client for tool permission and wait for its answer. A client that
+/// goes away without answering counts as allowing, as in the `Stream` case.
+async fn ask_permission(tx: &mut WsTx, rx: &mut WsRx, session_id: &str) -> bool {
+    send(
+        tx,
+        json!({
+            "jsonrpc": "2.0", "id": "perm-1",
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": session_id,
+                "toolCall": {"toolCallId": "tc1", "title": "shell: ls"},
+                "options": [
+                    {"optionId": "allow_once", "name": "allow_once", "kind": "allow_once"},
+                    {"optionId": "reject_once", "name": "reject_once", "kind": "reject_once"}
+                ]
+            }
+        }),
+    )
+    .await;
+    while let Some(Ok(Message::Text(t))) = rx.next().await {
+        let v: Value = serde_json::from_str(&t).unwrap_or(Value::Null);
+        if v.get("id").and_then(Value::as_str) == Some("perm-1") {
+            return v
+                .pointer("/result/outcome/optionId")
+                .and_then(Value::as_str)
+                == Some("allow_once");
+        }
+    }
+    true
 }
 
 fn config(addr: SocketAddr, secret: &str) -> ConnectConfig {

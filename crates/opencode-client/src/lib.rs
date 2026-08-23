@@ -72,7 +72,7 @@ pub struct ChatMeta {
 }
 
 impl ChatMeta {
-    #[must_use] 
+    #[must_use]
     pub fn is_running(&self) -> bool {
         self.status == "running"
     }
@@ -246,7 +246,25 @@ pub struct CodeClient {
     password: String,
 }
 
+/// Hand-written so the gateway password never reaches a log line; the
+/// derived form would print it verbatim.
+impl std::fmt::Debug for CodeClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CodeClient")
+            .field("base", &self.base)
+            .field("password", &"<redacted>")
+            .finish_non_exhaustive()
+    }
+}
+
 impl CodeClient {
+    /// Build a client for the gateway described by `cfg`.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Other`] if `cfg.base_url` is blank once trimmed, and
+    /// [`CodeError::Http`] if reqwest cannot build its TLS-backed client
+    /// (a broken rustls or root-certificate setup on the device).
     pub fn new(cfg: &CodeConfig) -> Result<Self, CodeError> {
         let base = cfg.base_url.trim().trim_end_matches('/').to_string();
         if base.is_empty() {
@@ -289,20 +307,53 @@ impl CodeClient {
 
     // ------------------------------------------------------------ manager
 
+    /// The manager's liveness probe (`GET /api/health`).
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or the request
+    /// outruns the client timeout, and [`CodeError::Status`] on a non-2xx
+    /// answer — 401 when `password` is wrong, 502 while the manager behind
+    /// the gateway is restarting.
     pub async fn health(&self) -> Result<Value, CodeError> {
         Self::json_of(self.req(reqwest::Method::GET, "/api/health").send().await?).await
     }
 
+    /// The manager's repo allowlist (`GET /api/repos`).
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or the request
+    /// outruns the client timeout, and [`CodeError::Status`] on a non-2xx
+    /// answer (401 for a wrong `password`). A 2xx body that does not decode
+    /// as `{"repos": [...]}` yields an empty list rather than an error.
     pub async fn repos(&self) -> Result<Vec<RepoEntry>, CodeError> {
         let v = Self::json_of(self.req(reqwest::Method::GET, "/api/repos").send().await?).await?;
         Ok(serde_json::from_value(v.get("repos").cloned().unwrap_or_default()).unwrap_or_default())
     }
 
+    /// The metadata index of every chat the manager knows (`GET /api/chats`).
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or the request
+    /// outruns the client timeout, and [`CodeError::Status`] on a non-2xx
+    /// answer (401 for a wrong `password`). A 2xx body that does not decode
+    /// as `{"chats": [...]}` yields an empty list rather than an error.
     pub async fn chats(&self) -> Result<Vec<ChatMeta>, CodeError> {
         let v = Self::json_of(self.req(reqwest::Method::GET, "/api/chats").send().await?).await?;
         Ok(serde_json::from_value(v.get("chats").cloned().unwrap_or_default()).unwrap_or_default())
     }
 
+    /// Create a chat on `repo` with `task` as its opening instruction.
+    /// `model` is `provider/model`; `None` leaves the manager's default.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] on transport failure or timeout,
+    /// [`CodeError::Status`] on a non-2xx answer — 400 for a repo outside the
+    /// allowlist, 401 for a wrong `password` — and [`CodeError::Other`] if
+    /// the created chat's payload does not decode as a [`ChatMeta`].
     pub async fn create_chat(
         &self,
         repo: &str,
@@ -323,6 +374,14 @@ impl CodeClient {
         serde_json::from_value(v).map_err(|e| CodeError::Other(format!("bad chat payload: {e}")))
     }
 
+    /// Start a stopped chat's container. Any request to the chat wakes it
+    /// anyway; this is the explicit form, useful to pay the start cost early.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] on transport failure, or if the container start
+    /// outruns the client's 150s request timeout; [`CodeError::Status`] on a
+    /// non-2xx answer (404 for a `chat_id` the manager does not know).
     pub async fn wake_chat(&self, chat_id: &str) -> Result<(), CodeError> {
         Self::json_of(
             self.req(reqwest::Method::POST, &format!("/api/chats/{chat_id}/wake"))
@@ -333,6 +392,13 @@ impl CodeClient {
         .map(|_| ())
     }
 
+    /// Stop a running chat's container; its workspace and branch survive.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] on transport failure or timeout, and
+    /// [`CodeError::Status`] on a non-2xx answer (404 for a `chat_id` the
+    /// manager does not know).
     pub async fn stop_chat(&self, chat_id: &str) -> Result<(), CodeError> {
         Self::json_of(
             self.req(reqwest::Method::POST, &format!("/api/chats/{chat_id}/stop"))
@@ -343,6 +409,13 @@ impl CodeClient {
         .map(|_| ())
     }
 
+    /// Delete a chat. With `purge`, its workspace is discarded too.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] on transport failure or timeout, and
+    /// [`CodeError::Status`] on a non-2xx answer (404 for a `chat_id` the
+    /// manager does not know).
     pub async fn delete_chat(&self, chat_id: &str, purge: bool) -> Result<(), CodeError> {
         let q = if purge { "?purge=1" } else { "" };
         Self::json_of(
@@ -360,6 +433,15 @@ impl CodeClient {
         format!("/chat/{chat_id}{sub}")
     }
 
+    /// The sessions on a chat's own `OpenCode` server (`GET /session`).
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or waking a stopped
+    /// chat outruns the client's 150s request timeout, and
+    /// [`CodeError::Status`] on a non-2xx answer (404 for an unknown
+    /// `chat_id`). A 2xx body that does not decode as a session list yields
+    /// an empty list rather than an error.
     pub async fn sessions(&self, chat_id: &str) -> Result<Vec<SessionMeta>, CodeError> {
         let v = Self::json_of(
             self.req(reqwest::Method::GET, &Self::chat_path(chat_id, "/session"))
@@ -371,6 +453,14 @@ impl CodeClient {
     }
 
     /// Create the chat's `OpenCode` session in its workspace.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or waking a stopped
+    /// chat outruns the client's 150s request timeout,
+    /// [`CodeError::Status`] on a non-2xx answer (404 for an unknown
+    /// `chat_id`), and [`CodeError::Other`] if the new session's payload does
+    /// not decode as a [`SessionMeta`].
     pub async fn create_session(&self, chat_id: &str) -> Result<SessionMeta, CodeError> {
         let v = Self::json_of(
             self.req(
@@ -385,6 +475,16 @@ impl CodeClient {
         serde_json::from_value(v).map_err(|e| CodeError::Other(format!("bad session payload: {e}")))
     }
 
+    /// Every message of a session with its parts (`GET .../message`), the
+    /// transcript the UI folds.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or waking a stopped
+    /// chat outruns the client's 150s request timeout, and
+    /// [`CodeError::Status`] on a non-2xx answer (404 for an unknown
+    /// `chat_id` or `session_id`). A 2xx body that does not decode as a
+    /// message list yields an empty list rather than an error.
     pub async fn messages(
         &self,
         chat_id: &str,
@@ -403,7 +503,17 @@ impl CodeClient {
     }
 
     /// Fire-and-forget prompt: the turn runs server-side; progress arrives
-    /// over the SSE stream. `model` is `provider/model`.
+    /// over the SSE stream. `model` is `provider/model`; one without a `/`
+    /// is dropped and the session's own model is used.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or waking a stopped
+    /// chat outruns the client's 150s request timeout, and
+    /// [`CodeError::Status`] on a non-2xx answer — 404 for an unknown
+    /// `chat_id` or `session_id`, 400 for a model the server rejects. A turn
+    /// that fails *after* this returns surfaces on the event stream, not
+    /// here.
     pub async fn prompt_async(
         &self,
         chat_id: &str,
@@ -430,6 +540,13 @@ impl CodeClient {
         .map(|_| ())
     }
 
+    /// Cancel the session's in-flight turn.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] on transport failure or timeout, and
+    /// [`CodeError::Status`] on a non-2xx answer (404 for an unknown
+    /// `chat_id` or `session_id`).
     pub async fn abort(&self, chat_id: &str, session_id: &str) -> Result<(), CodeError> {
         Self::json_of(
             self.req(
@@ -444,6 +561,13 @@ impl CodeClient {
     }
 
     /// The session's cumulative diff (`FileDiff[]`, kept raw for rendering).
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or waking a stopped
+    /// chat outruns the client's 150s request timeout, and
+    /// [`CodeError::Status`] on a non-2xx answer (404 for an unknown
+    /// `chat_id` or `session_id`).
     pub async fn diff(&self, chat_id: &str, session_id: &str) -> Result<Value, CodeError> {
         Self::json_of(
             self.req(
@@ -457,6 +581,14 @@ impl CodeClient {
     }
 
     /// Pending permission asks (reconnect catch-up).
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or waking a stopped
+    /// chat outruns the client's 150s request timeout, and
+    /// [`CodeError::Status`] on a non-2xx answer (404 for an unknown
+    /// `chat_id`). A 2xx body that does not decode as a permission list
+    /// yields an empty list rather than an error.
     pub async fn permissions(&self, chat_id: &str) -> Result<Vec<CodePermission>, CodeError> {
         let v = Self::json_of(
             self.req(
@@ -470,7 +602,15 @@ impl CodeClient {
         Ok(serde_json::from_value(v).unwrap_or_default())
     }
 
-    /// `response`: `once` | `always` | `reject`.
+    /// Answer a pending permission ask. `response`: `once` | `always` |
+    /// `reject`.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] on transport failure or timeout, and
+    /// [`CodeError::Status`] on a non-2xx answer — 404 for an ask that has
+    /// already been answered or expired, 400 for a `response` outside the
+    /// three accepted words.
     pub async fn reply_permission(
         &self,
         chat_id: &str,
@@ -497,7 +637,7 @@ impl CodeClient {
     /// Attach to a chat's SSE stream. Events (including a final
     /// [`CodeEvent::Disconnected`]) arrive on the returned receiver; drop it
     /// to detach. Reconnection policy belongs to the caller.
-    #[must_use] 
+    #[must_use]
     pub fn events(&self, chat_id: &str) -> mpsc::Receiver<CodeEvent> {
         let (tx, rx) = mpsc::channel(256);
         let this = self.clone();
@@ -589,6 +729,10 @@ fn parse_sse_frame(frame: &[u8]) -> Option<CodeEvent> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::panic,
+    reason = "test assertions: an unexpected event kind is a test failure, and panic! carries the offending value into the report"
+)]
 mod tests {
     use super::*;
     use serde_json::json;

@@ -15,19 +15,21 @@
 //! idle → verify the PR URL in the transcript → diff → delete. Exits
 //! non-zero on any failure.
 
-// Test/example code: unwrapping a fixture is a failing check, and stdout is
-// how an example reports what it verified. Both are denied for shipped code.
-#![allow(
-    clippy::unwrap_used,
+// Test/example code: a fixture that does not arrive is a failing check, and
+// stdout is how an example reports what it verified. Both are denied for
+// shipped code. `expect` rather than `allow`: if a use goes away, so should
+// its exception.
+#![expect(
     clippy::expect_used,
     clippy::panic,
     clippy::print_stdout,
-    clippy::print_stderr,
     reason = "test/example harness: assertions and progress output are the point"
 )]
 
+use std::time::Duration;
 
-use opencode_client::{CodeClient, CodeConfig, CodeEvent};
+use opencode_client::{ChatMeta, CodeClient, CodeConfig, CodeEvent};
+use tokio::sync::mpsc::Receiver;
 
 fn env(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("set {name}"))
@@ -50,6 +52,105 @@ impl Score {
     }
 }
 
+/// What one streamed turn produced.
+struct Turn {
+    saw_permission: bool,
+    deltas: String,
+    idle: bool,
+}
+
+/// Consume the stream: answer the push ask when it arrives, accumulate
+/// deltas, stop at idle.
+async fn run_turn(
+    client: &CodeClient,
+    chat_id: &str,
+    session_id: &str,
+    events: &mut Receiver<CodeEvent>,
+) -> Turn {
+    let mut turn = Turn {
+        saw_permission: false,
+        deltas: String::new(),
+        idle: false,
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while let Ok(Some(event)) = tokio::time::timeout_at(deadline, events.recv()).await {
+        match event {
+            CodeEvent::PermissionAsked(p) => {
+                turn.saw_permission = true;
+                client
+                    .reply_permission(chat_id, &p.session_id, &p.id, "once")
+                    .await
+                    .expect("permission reply");
+            }
+            CodeEvent::PartUpdated { delta: Some(d), .. } => turn.deltas.push_str(&d),
+            CodeEvent::SessionIdle { session_id: done } if done == session_id => {
+                turn.idle = true;
+                break;
+            }
+            CodeEvent::Disconnected { reason } => {
+                println!("FAIL  stream dropped — {reason}");
+                break;
+            }
+            _ => {}
+        }
+    }
+    turn
+}
+
+fn score_turn(s: &mut Score, turn: &Turn) {
+    s.check(
+        "blocking git-push permission ask arrived and was answered",
+        turn.saw_permission,
+        "no ask on the stream",
+    );
+    s.check(
+        "streamed deltas accumulated",
+        turn.deltas.contains("checking the workspace"),
+        &format!("got: {:?}", turn.deltas),
+    );
+    s.check(
+        "turn reached session.idle",
+        turn.idle,
+        "no idle before timeout",
+    );
+}
+
+/// What the turn left behind: the PR URL in the transcript, then the diff.
+async fn score_aftermath(s: &mut Score, client: &CodeClient, chat_id: &str, session_id: &str) {
+    let msgs = client
+        .messages(chat_id, session_id)
+        .await
+        .unwrap_or_default();
+    let transcript: String = msgs
+        .iter()
+        .flat_map(|m| m.parts.iter())
+        .filter_map(|p| p.text.clone())
+        .collect();
+    s.check(
+        "PR URL in the transcript",
+        transcript.contains("/pull/"),
+        &transcript.chars().take(200).collect::<String>(),
+    );
+
+    let diff = client.diff(chat_id, session_id).await;
+    s.check(
+        "diff endpoint",
+        diff.as_ref()
+            .map(serde_json::value::Value::is_array)
+            .unwrap_or(false),
+        &format!("{diff:?}"),
+    );
+}
+
+fn score_chat(s: &mut Score, chat: &ChatMeta) {
+    s.check("chat created", !chat.id.is_empty(), "empty id");
+    s.check(
+        "chat branch is agent/-prefixed",
+        chat.branch.starts_with("agent/"),
+        &chat.branch,
+    );
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let mut s = Score { pass: 0, fail: 0 };
@@ -69,7 +170,8 @@ async fn main() {
         "no repos — is the test stack up?",
     );
     let repo = repos
-        .first().map_or_else(|| "testrepo".into(), |r| r.name.clone());
+        .first()
+        .map_or_else(|| "testrepo".into(), |r| r.name.clone());
 
     let chat = match client.create_chat(&repo, "smoke: push and PR", None).await {
         Ok(c) => c,
@@ -78,18 +180,13 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    s.check("chat created", !chat.id.is_empty(), "empty id");
-    s.check(
-        "chat branch is agent/-prefixed",
-        chat.branch.starts_with("agent/"),
-        &chat.branch,
-    );
+    score_chat(&mut s, &chat);
 
     let session = client.create_session(&chat.id).await.expect("session");
     s.check("session created", !session.id.is_empty(), "empty id");
 
     let mut events = client.events(&chat.id);
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     client
         .prompt_async(
@@ -101,66 +198,9 @@ async fn main() {
         .await
         .expect("prompt_async");
 
-    // Consume the stream: answer the push ask when it arrives, accumulate
-    // deltas, stop at idle.
-    let mut saw_permission = false;
-    let mut deltas = String::new();
-    let mut idle = false;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
-    while let Ok(Some(event)) = tokio::time::timeout_at(deadline, events.recv()).await {
-        match event {
-            CodeEvent::PermissionAsked(p) => {
-                saw_permission = true;
-                client
-                    .reply_permission(&chat.id, &p.session_id, &p.id, "once")
-                    .await
-                    .expect("permission reply");
-            }
-            CodeEvent::PartUpdated { delta: Some(d), .. } => deltas.push_str(&d),
-            CodeEvent::SessionIdle { session_id } if session_id == session.id => {
-                idle = true;
-                break;
-            }
-            CodeEvent::Disconnected { reason } => {
-                println!("FAIL  stream dropped — {reason}");
-                break;
-            }
-            _ => {}
-        }
-    }
-    s.check(
-        "blocking git-push permission ask arrived and was answered",
-        saw_permission,
-        "no ask on the stream",
-    );
-    s.check(
-        "streamed deltas accumulated",
-        deltas.contains("checking the workspace"),
-        &format!("got: {deltas:?}"),
-    );
-    s.check("turn reached session.idle", idle, "no idle before timeout");
-
-    let msgs = client
-        .messages(&chat.id, &session.id)
-        .await
-        .unwrap_or_default();
-    let transcript: String = msgs
-        .iter()
-        .flat_map(|m| m.parts.iter())
-        .filter_map(|p| p.text.clone())
-        .collect();
-    s.check(
-        "PR URL in the transcript",
-        transcript.contains("/pull/"),
-        &transcript.chars().take(200).collect::<String>(),
-    );
-
-    let diff = client.diff(&chat.id, &session.id).await;
-    s.check(
-        "diff endpoint",
-        diff.as_ref().map(serde_json::value::Value::is_array).unwrap_or(false),
-        &format!("{diff:?}"),
-    );
+    let turn = run_turn(&client, &chat.id, &session.id, &mut events).await;
+    score_turn(&mut s, &turn);
+    score_aftermath(&mut s, &client, &chat.id, &session.id).await;
 
     let deleted = client.delete_chat(&chat.id, true).await;
     s.check(

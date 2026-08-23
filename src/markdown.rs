@@ -11,8 +11,7 @@ pub(crate) fn to_html(markdown: &str) -> String {
     // existence to arbitrary hosts the agent mentions).
     let mut in_image = false;
     let parser = Parser::new_ext(markdown, options).filter_map(move |event| match event {
-        Event::Html(raw) => Some(Event::Text(raw)),
-        Event::InlineHtml(raw) => Some(Event::Text(raw)),
+        Event::Html(raw) | Event::InlineHtml(raw) => Some(Event::Text(raw)),
         Event::Start(Tag::Image { dest_url, .. }) => {
             in_image = true;
             Some(Event::Text(format!("[image: {dest_url}]").into()))

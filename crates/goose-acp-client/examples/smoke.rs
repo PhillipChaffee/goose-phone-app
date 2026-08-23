@@ -6,17 +6,14 @@
 //! against a server that stops responding (see `MOCK_SILENT` in
 //! mock-goose-server).
 
-// Test/example code: unwrapping a fixture is a failing check, and stdout is
-// how an example reports what it verified. Both are denied for shipped code.
-#![allow(
-    clippy::unwrap_used,
+// Example code: `expect` on a fixture is a failing check, and stdout is how an
+// example reports what it verified. Both are denied for shipped code. `expect`
+// rather than `allow`: if a use goes away, so should its exception.
+#![expect(
     clippy::expect_used,
-    clippy::panic,
     clippy::print_stdout,
-    clippy::print_stderr,
-    reason = "test/example harness: assertions and progress output are the point"
+    reason = "example harness: assertions and progress output are the point"
 )]
-
 
 use std::time::Instant;
 

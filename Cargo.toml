@@ -28,9 +28,7 @@ missing_debug_implementations = "warn"
 unreachable_pub = "warn"
 trivial_casts = "warn"
 trivial_numeric_casts = "warn"
-# Dioxus's rsx!/#[component] macros expand to fully-qualified paths, so this
-# fires on generated code we cannot edit.
-unused_qualifications = "allow"
+unused_qualifications = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

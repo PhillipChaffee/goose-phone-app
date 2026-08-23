@@ -60,7 +60,8 @@ impl ContentBlock {
             }
             Self::Resource { resource, .. } => resource
                 .get("text")
-                .and_then(Value::as_str).map_or_else(|| "[resource]".to_string(), str::to_string),
+                .and_then(Value::as_str)
+                .map_or_else(|| "[resource]".to_string(), str::to_string),
         }
     }
 
@@ -104,7 +105,7 @@ pub struct ToolCallUpdate {
 
 impl ToolCallUpdate {
     /// Name of the underlying goose tool, e.g. `developer__shell`, when present.
-    #[must_use] 
+    #[must_use]
     pub fn tool_name(&self) -> Option<&str> {
         self.meta
             .as_ref()?
@@ -135,7 +136,9 @@ impl ToolCallUpdate {
                     if !out.is_empty() {
                         out.push('\n');
                     }
-                    out.push_str(&format!("[diff: {path}]"));
+                    out.push_str("[diff: ");
+                    out.push_str(path);
+                    out.push(']');
                     if let Some(new_text) = item.get("newText").and_then(Value::as_str) {
                         out.push('\n');
                         out.push_str(new_text);
@@ -182,6 +185,12 @@ pub enum SessionUpdate {
     Unknown { tag: String, raw: Value },
 }
 
+/// Deserialize a whole `session/update` payload into one of the typed
+/// variants, or `None` if it does not fit the shape that tag implies.
+fn parse<T: serde::de::DeserializeOwned>(raw: &Value) -> Option<T> {
+    serde_json::from_value(raw.clone()).ok()
+}
+
 impl SessionUpdate {
     pub fn from_value(raw: Value) -> Self {
         let tag = raw
@@ -189,10 +198,6 @@ impl SessionUpdate {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-
-        fn parse<T: serde::de::DeserializeOwned>(raw: &Value) -> Option<T> {
-            serde_json::from_value(raw.clone()).ok()
-        }
 
         match tag.as_str() {
             "user_message_chunk" => match parse::<MessageChunk>(&raw) {
@@ -249,7 +254,7 @@ impl SessionInfo {
         self.meta.as_ref()?.get(key)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn display_title(&self) -> String {
         self.title
             .clone()
@@ -257,12 +262,12 @@ impl SessionInfo {
             .unwrap_or_else(|| self.session_id.clone())
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn message_count(&self) -> Option<u64> {
         self.meta_field("messageCount")?.as_u64()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn last_message_snippet(&self) -> Option<String> {
         Some(self.meta_field("lastMessageSnippet")?.as_str()?.to_string())
     }
@@ -337,6 +342,11 @@ pub enum AcpEvent {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test assertions: a failing unwrap or a wrong-variant panic is the failing check"
+)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -355,7 +365,7 @@ mod tests {
             "sessionUpdate": "agent_message_chunk",
             "content": {"type": "text", "text": "Hi!"},
             "messageId": "msg_20260821_1_ab12",
-            "_meta": {"goose": {"created": 1755763200u64, "messageId": "msg_20260821_1_ab12"}}
+            "_meta": {"goose": {"created": 1_755_763_200u64, "messageId": "msg_20260821_1_ab12"}}
         });
         match SessionUpdate::from_value(raw) {
             SessionUpdate::AgentMessageChunk(c) => {

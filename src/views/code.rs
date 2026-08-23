@@ -29,8 +29,8 @@ pub fn CodeSessionsView() -> Element {
             && !ctx.settings.peek().code_server_url.trim().is_empty()
         {
             spawn_forever(async move {
-                if crate::code::code_connect(ctx).await {
-                    start_code_poll(ctx);
+                if crate::code::code_connect(&ctx).await {
+                    start_code_poll(&ctx);
                 }
             });
         }
@@ -81,8 +81,8 @@ pub fn CodeSessionsView() -> Element {
                         class: "btn primary grow",
                         onclick: move |_| {
                             spawn_forever(async move {
-                                if crate::code::code_connect(ctx).await {
-                                    start_code_poll(ctx);
+                                if crate::code::code_connect(&ctx).await {
+                                    start_code_poll(&ctx);
                                 }
                             });
                         },
@@ -110,7 +110,7 @@ pub fn CodeSessionsView() -> Element {
                         class: "btn secondary",
                         disabled: loading,
                         onclick: move |_| {
-                            spawn_forever(async move { refresh_code_chats(ctx).await });
+                            spawn_forever(async move { refresh_code_chats(&ctx).await });
                         },
                         if loading { "…" } else { "↻" }
                     }
@@ -127,10 +127,7 @@ pub fn CodeSessionsView() -> Element {
                             class: "session-item",
                             div {
                                 class: "session-main",
-                                onclick: {
-                                    let meta = meta;
-                                    move |_| open_code_chat(ctx, meta.clone())
-                                },
+                                onclick: move |_| open_code_chat(&ctx, meta.clone()),
                                 div { class: "session-title",
                                     {
                                         let turn = running_chat.as_deref() == Some(meta.id.as_str())
@@ -159,7 +156,7 @@ pub fn CodeSessionsView() -> Element {
                                             let id = meta.id.clone();
                                             move |_| {
                                                 confirm_delete.set(None);
-                                                delete_code_chat(ctx, id.clone());
+                                                delete_code_chat(&ctx, id.clone());
                                             }
                                         },
                                         "Delete"
@@ -262,7 +259,7 @@ pub fn CodeNewView() -> Element {
                     onclick: move |_| {
                         let m = model.peek().trim().to_string();
                         new_code_chat(
-                            ctx,
+                            &ctx,
                             repo.peek().clone(),
                             task.peek().trim().to_string(),
                             if m.is_empty() { None } else { Some(m) },
@@ -300,7 +297,7 @@ pub fn CodeChatView() -> Element {
         if text.is_empty() {
             return;
         }
-        if send_code_prompt(ctx, text) {
+        if send_code_prompt(&ctx, text) {
             draft.set(String::new());
         }
     };
@@ -312,7 +309,7 @@ pub fn CodeChatView() -> Element {
                 onclick: move |_| {
                     let mut screen = ctx.code_screen;
                     screen.set(CodeScreen::List);
-                    spawn_forever(async move { refresh_code_chats(ctx).await });
+                    spawn_forever(async move { refresh_code_chats(&ctx).await });
                 },
                 "‹"
             }
@@ -320,14 +317,14 @@ pub fn CodeChatView() -> Element {
             button {
                 class: "icon-btn",
                 title: "Show diff",
-                onclick: move |_| load_code_diff(ctx),
+                onclick: move |_| load_code_diff(&ctx),
                 "±"
             }
             button {
                 class: "icon-btn",
                 title: "Push branch + open a PR",
                 disabled: !can_send,
-                onclick: move |_| request_pr(ctx),
+                onclick: move |_| request_pr(&ctx),
                 "⇪ PR"
             }
         }
@@ -389,7 +386,7 @@ pub fn CodeChatView() -> Element {
             if running {
                 button {
                     class: "btn danger",
-                    onclick: move |_| stop_code_turn(ctx),
+                    onclick: move |_| stop_code_turn(&ctx),
                     "Stop"
                 }
             } else {
@@ -424,7 +421,8 @@ pub fn CodePermissionModal() -> Element {
         let chats = ctx.code_chats.read();
         chats
             .iter()
-            .find(|c| c.id == chat_id).map_or_else(|| chat_id.clone(), |c| c.title.clone())
+            .find(|c| c.id == chat_id)
+            .map_or_else(|| chat_id.clone(), |c| c.title.clone())
     };
     let pending_more = queue.len().saturating_sub(1);
     let title = if perm.title.is_empty() {
@@ -451,7 +449,9 @@ pub fn CodePermissionModal() -> Element {
                         onclick: {
                             let chat_id = chat_id.clone();
                             let perm = perm.clone();
-                            move |_| answer_code_permission(ctx, chat_id.clone(), perm.clone(), "once")
+                            move |_| {
+                                answer_code_permission(&ctx, chat_id.clone(), perm.clone(), "once");
+                            }
                         },
                         "Allow once"
                     }
@@ -460,16 +460,16 @@ pub fn CodePermissionModal() -> Element {
                         onclick: {
                             let chat_id = chat_id.clone();
                             let perm = perm.clone();
-                            move |_| answer_code_permission(ctx, chat_id.clone(), perm.clone(), "always")
+                            move |_| {
+                                answer_code_permission(&ctx, chat_id.clone(), perm.clone(), "always");
+                            }
                         },
                         "Always allow"
                     }
                     button {
                         class: "btn danger-outline",
-                        onclick: {
-                            let chat_id = chat_id;
-                            let perm = perm;
-                            move |_| answer_code_permission(ctx, chat_id.clone(), perm.clone(), "reject")
+                        onclick: move |_| {
+                            answer_code_permission(&ctx, chat_id.clone(), perm.clone(), "reject");
                         },
                         "Reject"
                     }

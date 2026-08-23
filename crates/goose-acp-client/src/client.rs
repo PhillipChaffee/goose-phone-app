@@ -17,7 +17,10 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async_tls_with_config, MaybeTlsStream, WebSocketStream};
 
 use crate::tls;
-use crate::types::{AcpEvent, InitializeInfo, NewSessionResponse, SessionListResponse, ContentBlock, PermissionRequest, SessionUpdate};
+use crate::types::{
+    AcpEvent, ContentBlock, InitializeInfo, NewSessionResponse, PermissionRequest,
+    SessionListResponse, SessionUpdate,
+};
 
 pub const CLIENT_NAME: &str = "goose-mobile";
 
@@ -56,19 +59,15 @@ pub struct ConnectConfig {
     pub fingerprint: Option<[u8; 32]>,
 }
 
-/// Normalize user input to an `http(s)://host[:port]` base with no trailing
-/// slash or path.
-pub fn normalize_base_url(input: &str) -> Result<String, AcpError> {
+/// Split user input into the `(scheme, host[:port])` pair the public URL
+/// helpers are built from. A missing scheme defaults to `http`; any path,
+/// query or fragment is dropped.
+fn split_base_url(input: &str) -> Result<(&'static str, &str), AcpError> {
     let trimmed = input.trim().trim_end_matches('/');
     if trimmed.is_empty() {
         return Err(AcpError::Config("server URL is empty".into()));
     }
-    let with_scheme = if trimmed.contains("://") {
-        trimmed.to_string()
-    } else {
-        format!("http://{trimmed}")
-    };
-    let (scheme, rest) = with_scheme.split_once("://").unwrap();
+    let (scheme, rest) = trimmed.split_once("://").unwrap_or(("http", trimmed));
     let scheme = match scheme {
         "http" | "ws" => "http",
         "https" | "wss" => "https",
@@ -82,17 +81,31 @@ pub fn normalize_base_url(input: &str) -> Result<String, AcpError> {
     if host.is_empty() {
         return Err(AcpError::Config("server URL has no host".into()));
     }
+    Ok((scheme, host))
+}
+
+/// Normalize user input to an `http(s)://host[:port]` base with no trailing
+/// slash or path.
+///
+/// # Errors
+///
+/// [`AcpError::Config`] if the input is blank, carries no host, or names a
+/// scheme other than `http`, `https`, `ws` or `wss`.
+pub fn normalize_base_url(input: &str) -> Result<String, AcpError> {
+    let (scheme, host) = split_base_url(input)?;
     Ok(format!("{scheme}://{host}"))
 }
 
 /// Derive the ACP WebSocket URL from a normalized base URL.
+///
+/// # Errors
+///
+/// [`AcpError::Config`] for the same inputs [`normalize_base_url`] rejects:
+/// blank, host-less, or an unsupported scheme.
 pub fn ws_url(base_url: &str) -> Result<String, AcpError> {
-    let base = normalize_base_url(base_url)?;
-    Ok(if let Some(rest) = base.strip_prefix("https://") {
-        format!("wss://{rest}/acp")
-    } else {
-        format!("ws://{}/acp", base.strip_prefix("http://").unwrap())
-    })
+    let (scheme, host) = split_base_url(base_url)?;
+    let ws_scheme = if scheme == "https" { "wss" } else { "ws" };
+    Ok(format!("{ws_scheme}://{host}/acp"))
 }
 
 enum Cmd {
@@ -121,6 +134,14 @@ pub struct AcpClient {
 impl AcpClient {
     /// Connect, perform the ACP `initialize` handshake, and return the handle
     /// together with the event stream and the agent's identity.
+    ///
+    /// # Errors
+    ///
+    /// [`AcpError::Config`] if `base_url` is unusable or the secret cannot go
+    /// in an HTTP header; [`AcpError::Timeout`] if the socket is not up within
+    /// 20 s or `initialize` is unanswered for 15 s; [`AcpError::Connect`] if
+    /// the server refuses the upgrade — a 401/403 there means the secret was
+    /// rejected; [`AcpError::Rpc`] if the agent itself fails `initialize`.
     pub async fn connect(
         cfg: &ConnectConfig,
     ) -> Result<(Self, mpsc::Receiver<AcpEvent>, InitializeInfo), AcpError> {
@@ -139,7 +160,7 @@ impl AcpClient {
         let (socket, _response) = tokio::time::timeout(Duration::from_secs(20), connect)
             .await
             .map_err(|_| AcpError::Timeout)?
-            .map_err(|e| AcpError::Connect(describe_ws_error(e)))?;
+            .map_err(|e| AcpError::Connect(describe_ws_error(&e)))?;
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = mpsc::channel(1024);
@@ -189,6 +210,12 @@ impl AcpClient {
 
     /// Send a JSON-RPC request and await its response (no timeout — used for
     /// `session/prompt`, which stays pending for the whole agent turn).
+    ///
+    /// # Errors
+    ///
+    /// [`AcpError::Closed`] if the connection task is gone or the socket dies
+    /// before the response arrives, or [`AcpError::Rpc`] carrying the agent's
+    /// JSON-RPC error object.
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, AcpError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
@@ -201,6 +228,11 @@ impl AcpClient {
         reply_rx.await.map_err(|_| AcpError::Closed)?
     }
 
+    /// # Errors
+    ///
+    /// [`AcpError::Timeout`] if no response arrives within `timeout`; the
+    /// request is abandoned, not cancelled on the server. Otherwise as
+    /// [`Self::request`]: [`AcpError::Closed`] or [`AcpError::Rpc`].
     pub async fn request_with_timeout(
         &self,
         method: &str,
@@ -227,6 +259,13 @@ impl AcpClient {
     // ---- convenience wrappers -------------------------------------------
 
     /// Create a session. `cwd` must be an absolute path on the *server*.
+    ///
+    /// # Errors
+    ///
+    /// [`AcpError::Rpc`] if the server rejects `cwd` (relative paths and paths
+    /// it cannot open are refused), [`AcpError::Timeout`] after 60 s,
+    /// [`AcpError::Closed`] if the connection drops, or
+    /// [`AcpError::Transport`] if the reply is not a [`NewSessionResponse`].
     pub async fn session_new(&self, cwd: &str) -> Result<NewSessionResponse, AcpError> {
         let result = self
             .request_with_timeout(
@@ -244,6 +283,12 @@ impl AcpClient {
 
     /// Load an existing session. The server replays its history as
     /// `session/update` events *before* this resolves.
+    ///
+    /// # Errors
+    ///
+    /// [`AcpError::Rpc`] if the server does not know `session_id` or refuses
+    /// `cwd`, [`AcpError::Timeout`] if the replay takes longer than 120 s, or
+    /// [`AcpError::Closed`] if the connection drops mid-replay.
     pub async fn session_load(&self, session_id: &str, cwd: &str) -> Result<Value, AcpError> {
         self.request_with_timeout(
             "session/load",
@@ -257,6 +302,12 @@ impl AcpClient {
         .await
     }
 
+    /// # Errors
+    ///
+    /// [`AcpError::Rpc`] if the server rejects the cursor,
+    /// [`AcpError::Timeout`] after 30 s, [`AcpError::Closed`] if the
+    /// connection drops, or [`AcpError::Transport`] if the reply is not a
+    /// [`SessionListResponse`].
     pub async fn session_list(
         &self,
         cursor: Option<String>,
@@ -278,6 +329,13 @@ impl AcpClient {
 
     /// Send a user message; resolves at end of turn with the stop reason
     /// (`end_turn`, `max_tokens`, `refusal`, `cancelled`, …).
+    ///
+    /// # Errors
+    ///
+    /// [`AcpError::Rpc`] if the agent fails the turn (an unknown session id, a
+    /// provider error), or [`AcpError::Closed`] if the connection drops before
+    /// the turn ends. There is no timeout — a turn may legitimately run for
+    /// minutes.
     pub async fn prompt(&self, session_id: &str, text: &str) -> Result<String, AcpError> {
         let result = self
             .request(
@@ -301,6 +359,11 @@ impl AcpClient {
         self.notify("session/cancel", json!({"sessionId": session_id}));
     }
 
+    /// # Errors
+    ///
+    /// [`AcpError::Rpc`] if the server does not know `session_id`,
+    /// [`AcpError::Timeout`] after 30 s, or [`AcpError::Closed`] if the
+    /// connection drops.
     pub async fn session_delete(&self, session_id: &str) -> Result<(), AcpError> {
         self.request_with_timeout(
             "session/delete",
@@ -311,6 +374,11 @@ impl AcpClient {
         .map(|_| ())
     }
 
+    /// # Errors
+    ///
+    /// [`AcpError::Rpc`] if the server does not know `session_id` or does not
+    /// implement this unstable goose extension, [`AcpError::Timeout`] after
+    /// 30 s, or [`AcpError::Closed`] if the connection drops.
     pub async fn session_rename(&self, session_id: &str, title: &str) -> Result<(), AcpError> {
         self.request_with_timeout(
             "_goose/unstable/session/rename",
@@ -335,9 +403,9 @@ impl AcpClient {
     }
 }
 
-fn describe_ws_error(e: tokio_tungstenite::tungstenite::Error) -> String {
+fn describe_ws_error(e: &tokio_tungstenite::tungstenite::Error) -> String {
     use tokio_tungstenite::tungstenite::Error as WsError;
-    match &e {
+    match e {
         WsError::Http(resp) => match resp.status().as_u16() {
             401 | 403 => "authentication failed — check the secret key".to_string(),
             code => format!("server rejected the connection (HTTP {code})"),
@@ -347,6 +415,19 @@ fn describe_ws_error(e: tokio_tungstenite::tungstenite::Error) -> String {
 }
 
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// How many pings may go unanswered before the connection counts as dead. A
+/// phone that moves between networks — or a NAT/VPN gateway that drops an idle
+/// mapping — leaves a half-open socket: sends still "succeed" into a dead
+/// connection. Any inbound frame proves liveness; silence across two ping
+/// intervals means the connection is gone.
+const MAX_MISSED_PONGS: u32 = 2;
+
+/// Whether the actor keeps looping, or stops with the reason it ended.
+enum Step {
+    Continue,
+    Stop(String),
+}
 
 async fn actor(
     socket: Socket,
@@ -360,122 +441,156 @@ async fn actor(
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     keepalive.reset(); // don't ping immediately
 
-    // Pings we have sent with nothing heard back since. A phone that moves
-    // between networks — or a NAT/VPN gateway that drops an idle mapping —
-    // leaves a half-open socket: sends still "succeed" into a dead
-    // connection. Any inbound frame proves liveness; silence across two
-    // ping intervals means the connection is gone.
-    const MAX_MISSED_PONGS: u32 = 2;
+    // Pings we have sent with nothing heard back since.
     let mut unanswered_pings: u32 = 0;
 
-    let mut reason = "connection closed".to_string();
-
-    loop {
-        tokio::select! {
+    let reason = loop {
+        let step = tokio::select! {
             cmd = cmd_rx.recv() => {
-                match cmd {
-                    None | Some(Cmd::Close) => {
-                        let _ = sink.send(Message::Close(None)).await;
-                        reason = "closed by client".to_string();
-                        break;
-                    }
-                    Some(Cmd::Request { method, params, reply }) => {
-                        let id = next_id;
-                        next_id += 1;
-                        let frame = json!({
-                            "jsonrpc": "2.0",
-                            "id": id,
-                            "method": method,
-                            "params": params,
-                        });
-                        if sink.send(Message::Text(frame.to_string().into())).await.is_err() {
-                            let _ = reply.send(Err(AcpError::Closed));
-                            reason = "send failed".to_string();
-                            break;
-                        }
-                        pending.insert(id, reply);
-                    }
-                    Some(Cmd::Notify { method, params }) => {
-                        let frame = json!({
-                            "jsonrpc": "2.0",
-                            "method": method,
-                            "params": params,
-                        });
-                        if sink.send(Message::Text(frame.to_string().into())).await.is_err() {
-                            reason = "send failed".to_string();
-                            break;
-                        }
-                    }
-                    Some(Cmd::Respond { id, result }) => {
-                        let frame = match result {
-                            Ok(value) => json!({"jsonrpc": "2.0", "id": id, "result": value}),
-                            Err((code, message)) => json!({
-                                "jsonrpc": "2.0",
-                                "id": id,
-                                "error": {"code": code, "message": message},
-                            }),
-                        };
-                        if sink.send(Message::Text(frame.to_string().into())).await.is_err() {
-                            reason = "send failed".to_string();
-                            break;
-                        }
-                    }
-                }
+                handle_command(cmd, &mut sink, &mut pending, &mut next_id).await
             }
             msg = stream.next() => {
                 // Anything received — data, pong, even a ping — proves the
                 // peer is still there.
                 unanswered_pings = 0;
-                match msg {
-                    None => break,
-                    Some(Err(e)) => {
-                        reason = e.to_string();
-                        break;
-                    }
-                    Some(Ok(Message::Text(text))) => {
-                        if let Ok(value) = serde_json::from_str::<Value>(text.as_str()) {
-                            match value {
-                                Value::Array(batch) => {
-                                    for item in batch {
-                                        handle_incoming(item, &mut pending, &event_tx, &mut sink).await;
-                                    }
-                                }
-                                other => handle_incoming(other, &mut pending, &event_tx, &mut sink).await,
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Ping(payload))) => {
-                        let _ = sink.send(Message::Pong(payload)).await;
-                    }
-                    Some(Ok(Message::Close(frame))) => {
-                        if let Some(frame) = frame {
-                            reason = format!("closed by server: {}", frame.reason);
-                        } else {
-                            reason = "closed by server".to_string();
-                        }
-                        break;
-                    }
-                    Some(Ok(_)) => {}
-                }
+                handle_frame(msg, &mut pending, &event_tx, &mut sink).await
             }
             _ = keepalive.tick() => {
                 if unanswered_pings >= MAX_MISSED_PONGS {
-                    reason = "server stopped responding (no pong)".to_string();
-                    break;
+                    Step::Stop("server stopped responding (no pong)".to_string())
+                } else if sink.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    Step::Stop("keepalive failed".to_string())
+                } else {
+                    unanswered_pings += 1;
+                    Step::Continue
                 }
-                if sink.send(Message::Ping(Vec::new().into())).await.is_err() {
-                    reason = "keepalive failed".to_string();
-                    break;
-                }
-                unanswered_pings += 1;
             }
+        };
+        if let Step::Stop(reason) = step {
+            break reason;
         }
-    }
+    };
 
     for (_, reply) in pending.drain() {
         let _ = reply.send(Err(AcpError::Closed));
     }
     let _ = event_tx.send(AcpEvent::Disconnected { reason }).await;
+}
+
+/// Write one JSON-RPC frame; a failed send means the socket is already gone.
+async fn send_frame<S>(sink: &mut S, frame: &Value) -> Step
+where
+    S: futures_util::Sink<Message> + Unpin,
+{
+    if sink
+        .send(Message::Text(frame.to_string().into()))
+        .await
+        .is_err()
+    {
+        Step::Stop("send failed".to_string())
+    } else {
+        Step::Continue
+    }
+}
+
+/// Handle one queued command. `None` means every [`AcpClient`] handle was
+/// dropped, which closes the connection just like [`AcpClient::close`].
+async fn handle_command<S>(
+    cmd: Option<Cmd>,
+    sink: &mut S,
+    pending: &mut HashMap<u64, oneshot::Sender<Result<Value, AcpError>>>,
+    next_id: &mut u64,
+) -> Step
+where
+    S: futures_util::Sink<Message> + Unpin,
+{
+    match cmd {
+        None | Some(Cmd::Close) => {
+            let _ = sink.send(Message::Close(None)).await;
+            Step::Stop("closed by client".to_string())
+        }
+        Some(Cmd::Request {
+            method,
+            params,
+            reply,
+        }) => {
+            let id = *next_id;
+            *next_id += 1;
+            let frame = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": method,
+                "params": params,
+            });
+            match send_frame(sink, &frame).await {
+                Step::Continue => {
+                    pending.insert(id, reply);
+                    Step::Continue
+                }
+                stop @ Step::Stop(_) => {
+                    let _ = reply.send(Err(AcpError::Closed));
+                    stop
+                }
+            }
+        }
+        Some(Cmd::Notify { method, params }) => {
+            let frame = json!({
+                "jsonrpc": "2.0",
+                "method": method,
+                "params": params,
+            });
+            send_frame(sink, &frame).await
+        }
+        Some(Cmd::Respond { id, result }) => {
+            let frame = match result {
+                Ok(value) => json!({"jsonrpc": "2.0", "id": id, "result": value}),
+                Err((code, message)) => json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {"code": code, "message": message},
+                }),
+            };
+            send_frame(sink, &frame).await
+        }
+    }
+}
+
+/// Handle one frame off the socket. `None` is a clean end of stream.
+async fn handle_frame<S>(
+    msg: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
+    pending: &mut HashMap<u64, oneshot::Sender<Result<Value, AcpError>>>,
+    event_tx: &mpsc::Sender<AcpEvent>,
+    sink: &mut S,
+) -> Step
+where
+    S: futures_util::Sink<Message> + Unpin,
+{
+    match msg {
+        None => Step::Stop("connection closed".to_string()),
+        Some(Err(e)) => Step::Stop(e.to_string()),
+        Some(Ok(Message::Text(text))) => {
+            if let Ok(value) = serde_json::from_str::<Value>(text.as_str()) {
+                match value {
+                    Value::Array(batch) => {
+                        for item in batch {
+                            handle_incoming(item, pending, event_tx, sink).await;
+                        }
+                    }
+                    other => handle_incoming(other, pending, event_tx, sink).await,
+                }
+            }
+            Step::Continue
+        }
+        Some(Ok(Message::Ping(payload))) => {
+            let _ = sink.send(Message::Pong(payload)).await;
+            Step::Continue
+        }
+        Some(Ok(Message::Close(frame))) => Step::Stop(frame.map_or_else(
+            || "closed by server".to_string(),
+            |frame| format!("closed by server: {}", frame.reason),
+        )),
+        Some(Ok(_)) => Step::Continue,
+    }
 }
 
 async fn handle_incoming<S>(
@@ -491,109 +606,130 @@ async fn handle_incoming<S>(
 
     match (method, id) {
         // Response to one of our requests.
-        (None, Some(id)) => {
-            let Some(id) = id.as_u64() else { return };
-            let Some(reply) = pending.remove(&id) else {
-                return;
-            };
-            let result = if let Some(error) = value.get("error") {
-                Err(AcpError::Rpc {
-                    code: error.get("code").and_then(Value::as_i64).unwrap_or(-32603),
-                    message: error
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown error")
-                        .to_string(),
-                    data: error.get("data").cloned(),
-                })
-            } else {
-                Ok(value.get("result").cloned().unwrap_or(Value::Null))
-            };
-            let _ = reply.send(result);
-        }
+        (None, Some(id)) => complete_request(&value, &id, pending),
         // Request from the agent — must be answered.
-        (Some(method), Some(id)) => match method {
-            "session/request_permission" => {
-                let params = value.get("params").cloned().unwrap_or(Value::Null);
-                let session_id = params
-                    .get("sessionId")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let tool_call = params
-                    .get("toolCall")
-                    .cloned()
-                    .map(|v| serde_json::from_value(v).unwrap_or_default())
-                    .unwrap_or_default();
-                let options = params
-                    .get("options")
-                    .cloned()
-                    .map(|v| serde_json::from_value(v).unwrap_or_default())
-                    .unwrap_or_default();
-                let _ = event_tx
-                    .send(AcpEvent::Permission(PermissionRequest {
-                        request_id: id,
-                        session_id,
-                        tool_call,
-                        options,
-                    }))
-                    .await;
-            }
-            // We advertise no fs/terminal/elicitation capabilities, so
-            // anything else is out of contract — refuse politely.
-            other => {
-                let frame = json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "error": {"code": -32601, "message": format!("method not supported by this client: {other}")},
-                });
-                let _ = sink.send(Message::Text(frame.to_string().into())).await;
-            }
-        },
+        (Some(method), Some(id)) => answer_agent_request(method, id, &value, event_tx, sink).await,
         // Notification from the agent.
-        (Some(method), None) => {
-            let params = value.get("params").cloned().unwrap_or(Value::Null);
-            match method {
-                "session/update" => {
-                    let session_id = params
-                        .get("sessionId")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    let update = params.get("update").cloned().unwrap_or(Value::Null);
-                    let _ = event_tx
-                        .send(AcpEvent::Update {
-                            session_id,
-                            update: SessionUpdate::from_value(update),
-                        })
-                        .await;
-                }
-                "_goose/unstable/session/update" => {
-                    let session_id = params
-                        .get("sessionId")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    let update = params.get("update").cloned().unwrap_or(Value::Null);
-                    let _ = event_tx
-                        .send(AcpEvent::GooseUpdate { session_id, update })
-                        .await;
-                }
-                "$/cancel_request" => {
-                    if let Some(request_id) = params.get("requestId").cloned() {
-                        let _ = event_tx
-                            .send(AcpEvent::RequestCancelled { request_id })
-                            .await;
-                    }
-                }
-                _ => {}
-            }
-        }
+        (Some(method), None) => forward_notification(method, &value, event_tx).await,
         (None, None) => {}
     }
 }
 
+/// Resolve the caller waiting on this JSON-RPC id, if it is still waiting.
+fn complete_request(
+    value: &Value,
+    id: &Value,
+    pending: &mut HashMap<u64, oneshot::Sender<Result<Value, AcpError>>>,
+) {
+    let Some(id) = id.as_u64() else { return };
+    let Some(reply) = pending.remove(&id) else {
+        return;
+    };
+    let result = if let Some(error) = value.get("error") {
+        Err(AcpError::Rpc {
+            code: error.get("code").and_then(Value::as_i64).unwrap_or(-32603),
+            message: error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+                .to_string(),
+            data: error.get("data").cloned(),
+        })
+    } else {
+        Ok(value.get("result").cloned().unwrap_or(Value::Null))
+    };
+    let _ = reply.send(result);
+}
+
+fn session_id_of(params: &Value) -> String {
+    params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Answer an agent-initiated request. Permission prompts go to the UI; we
+/// advertise no fs/terminal/elicitation capabilities, so anything else is out
+/// of contract and is refused politely.
+async fn answer_agent_request<S>(
+    method: &str,
+    id: Value,
+    value: &Value,
+    event_tx: &mpsc::Sender<AcpEvent>,
+    sink: &mut S,
+) where
+    S: futures_util::Sink<Message> + Unpin,
+{
+    if method == "session/request_permission" {
+        let params = value.get("params").cloned().unwrap_or(Value::Null);
+        let session_id = session_id_of(&params);
+        let tool_call = params
+            .get("toolCall")
+            .cloned()
+            .map(|v| serde_json::from_value(v).unwrap_or_default())
+            .unwrap_or_default();
+        let options = params
+            .get("options")
+            .cloned()
+            .map(|v| serde_json::from_value(v).unwrap_or_default())
+            .unwrap_or_default();
+        let _ = event_tx
+            .send(AcpEvent::Permission(PermissionRequest {
+                request_id: id,
+                session_id,
+                tool_call,
+                options,
+            }))
+            .await;
+    } else {
+        let frame = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": -32601, "message": format!("method not supported by this client: {method}")},
+        });
+        let _ = sink.send(Message::Text(frame.to_string().into())).await;
+    }
+}
+
+/// Turn an agent notification into an [`AcpEvent`]. Unknown methods are
+/// ignored, as JSON-RPC requires.
+async fn forward_notification(method: &str, value: &Value, event_tx: &mpsc::Sender<AcpEvent>) {
+    let params = value.get("params").cloned().unwrap_or(Value::Null);
+    match method {
+        "session/update" => {
+            let session_id = session_id_of(&params);
+            let update = params.get("update").cloned().unwrap_or(Value::Null);
+            let _ = event_tx
+                .send(AcpEvent::Update {
+                    session_id,
+                    update: SessionUpdate::from_value(update),
+                })
+                .await;
+        }
+        "_goose/unstable/session/update" => {
+            let session_id = session_id_of(&params);
+            let update = params.get("update").cloned().unwrap_or(Value::Null);
+            let _ = event_tx
+                .send(AcpEvent::GooseUpdate { session_id, update })
+                .await;
+        }
+        "$/cancel_request" => {
+            if let Some(request_id) = params.get("requestId").cloned() {
+                let _ = event_tx
+                    .send(AcpEvent::RequestCancelled { request_id })
+                    .await;
+            }
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test assertions: a failing unwrap is the failing check"
+)]
 mod tests {
     use super::*;
 
