@@ -1,21 +1,169 @@
-/* Goose Mobile — dark, mobile-first chat UI */
+/* Goose Mobile — the goose design language on a phone.
+ *
+ * Tokens, type scale, radii and elevation rules are lifted from the goose
+ * desktop app (ui/desktop/src/theme/theme-tokens.ts and styles/main.css) so
+ * the two feel like one product. Desktop writes its tokens onto :root from
+ * JS; here they are plain CSS, with light as the base and dark applied from
+ * the system preference — or forced with data-theme on the root element.
+ *
+ * The rule that holds the whole thing together, straight from goose:
+ * BORDERS SEPARATE, SHADOWS FLOAT. Anything in normal flow (tool cards,
+ * dividers, table cells) gets a 1px hairline and no shadow; only things that
+ * leave the flow — the composer, modals, toasts — cast one.
+ */
+
+/* ── tokens: light ──────────────────────────────────────────────────── */
 
 :root {
-  --bg: #0e1113;
-  --panel: #171c1f;
-  --panel-2: #1e2528;
-  --border: #2a3237;
-  --text: #e8edef;
-  --text-dim: #9aa7ad;
-  --accent: #35b57c;
-  --accent-dim: #22684c;
-  --user-bubble: #234337;
-  --danger: #e5534b;
-  --warn: #d4a72c;
-  --radius: 14px;
+  color-scheme: light dark;
+
+  --bg-primary: #ffffff;
+  --bg-secondary: #f4f6f7;
+  --bg-tertiary: #e3e6ea;
+  --bg-inverse: #000000;
+  --bg-info: #5c98f9;
+  --bg-danger: #f94b4b;
+  --bg-success: #91cb80;
+  --bg-warning: #fbcd44;
+  --bg-disabled: #e3e6ea;
+
+  --text-primary: #3f434b;
+  --text-secondary: #878787;
+  --text-tertiary: #a7b0b9;
+  --text-inverse: #ffffff;
+  --text-info: #5c98f9;
+  --text-danger: #f94b4b;
+  /* goose's success/warning tokens are tuned as fills, not as text on white
+   * (#91cb80 and #fbcd44 both fail contrast there). Darkened for the one
+   * place this app uses them as text: tool-call status labels. */
+  --text-success: #6fae5c;
+  --text-warning: #b8860b;
+  --text-disabled: #cbd1d6;
+
+  --border-primary: #e3e6ea;
+  --border-secondary: #cbd1d6;
+  --border-danger: #f94b4b;
+
+  /* Brand. goose uses these sparingly; here it is the inline-code tint. */
+  --block-teal: #13bbaf;
+
+  /* The assistant's surface. Light mode has none: goose renders the agent's
+   * reply as plain text on the page. */
+  --agent-surface: transparent;
+  --agent-padding: 0;
+
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.125rem;
+  --lh-xs: 1rem;
+  --lh-sm: 1.25rem;
+  --lh-md: 1.5rem;
+
+  /* Code slabs stay this dark in both themes, like goose's oneDark blocks. */
+  --code-bg: #282c34;
+  --code-fg: #e6e6e6;
+  --code-chip-bg: var(--bg-secondary);
+  /* goose's raw #ff4f00 is a 3.3:1 hue on this fill at 12px; same colour,
+   * darkened until it passes. */
+  --code-chip-fg: #c2410c;
+
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
+
+/* ── tokens: dark ───────────────────────────────────────────────────── */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg-primary: #22252a;
+    --bg-secondary: #3f434b;
+    --bg-tertiary: #474e57;
+    --bg-inverse: #cbd1d6;
+    --bg-info: #7cacff;
+    --bg-danger: #ff6b6b;
+    --bg-success: #a3d795;
+    --bg-warning: #ffd966;
+    --bg-disabled: #474e57;
+
+    --text-primary: #ffffff;
+    --text-secondary: #878787;
+    --text-tertiary: #606c7a;
+    --text-inverse: #000000;
+    --text-info: #7cacff;
+    --text-danger: #ff6b6b;
+    --text-success: #a3d795;
+    --text-warning: #ffd966;
+    --text-disabled: #525b68;
+
+    --border-primary: #3f434b;
+    --border-secondary: #525b68;
+    --border-danger: #ff6b6b;
+
+    /* Dark is the only mode where the agent gets a surface of its own. */
+    --agent-surface: #1f2126;
+    --agent-padding: 10px 16px;
+
+    --code-chip-bg: transparent;
+    --code-chip-fg: var(--block-teal);
+
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.2);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.2);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.3), 0 4px 6px -4px rgb(0 0 0 / 0.2);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg-primary: #22252a;
+  --bg-secondary: #3f434b;
+  --bg-tertiary: #474e57;
+  --bg-inverse: #cbd1d6;
+  --bg-info: #7cacff;
+  --bg-danger: #ff6b6b;
+  --bg-success: #a3d795;
+  --bg-warning: #ffd966;
+  --bg-disabled: #474e57;
+
+  --text-primary: #ffffff;
+  --text-secondary: #878787;
+  --text-tertiary: #606c7a;
+  --text-inverse: #000000;
+  --text-info: #7cacff;
+  --text-danger: #ff6b6b;
+  --text-success: #a3d795;
+  --text-warning: #ffd966;
+  --text-disabled: #525b68;
+
+  --border-primary: #3f434b;
+  --border-secondary: #525b68;
+  --border-danger: #ff6b6b;
+
+  --agent-surface: #1f2126;
+  --agent-padding: 10px 16px;
+
+  --code-chip-bg: transparent;
+  --code-chip-fg: var(--block-teal);
+
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.2);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.2);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.3), 0 4px 6px -4px rgb(0 0 0 / 0.2);
+}
+
+/* ── base ───────────────────────────────────────────────────────────── */
 
 * {
   box-sizing: border-box;
@@ -30,13 +178,13 @@ body {
 }
 
 body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
-    Arial, sans-serif;
-  font-size: 16px;
-  line-height: 1.45;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: var(--lh-md);
   overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
 }
 
 #main {
@@ -48,218 +196,355 @@ body {
   flex-direction: column;
   height: 100vh;
   height: 100dvh;
+  background: var(--bg-primary);
 }
 
-/* ---- top bar -------------------------------------------------------- */
+/* ── top bar ────────────────────────────────────────────────────────── */
 
 .topbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: calc(10px + var(--safe-top)) 14px 10px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
+  gap: 8px;
+  min-height: 48px;
+  padding: calc(8px + var(--safe-top)) 12px 8px;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border-primary);
   flex-shrink: 0;
 }
 
 .topbar .title {
-  font-size: 17px;
-  font-weight: 650;
   flex: 1;
   min-width: 0;
+  font-size: var(--text-md);
+  font-weight: 500;
+  line-height: var(--lh-md);
 }
 
 .ellipsis {
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+/* ── buttons ────────────────────────────────────────────────────────── */
+
+/* Icon buttons are true circles sized to their height: ghost at rest,
+ * stepping to a surface on press. */
 .icon-btn {
-  background: none;
-  border: none;
-  color: var(--text);
-  font-size: 18px;
-  padding: 6px 10px;
-  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  line-height: 1;
   cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
 }
 
-.icon-btn:active {
-  background: var(--panel-2);
+.icon-btn:active:not(:disabled) {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
 }
 
-.icon-btn.trash {
-  color: var(--text-dim);
-  font-size: 15px;
+.icon-btn:disabled {
+  color: var(--text-disabled);
+  cursor: default;
 }
 
+.icon-btn.trash:active:not(:disabled) {
+  color: var(--text-danger);
+}
+
+/* Rectangles at 6px — goose's "pill" button is not actually a pill. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  line-height: var(--lh-sm);
+  cursor: pointer;
+  transition: opacity 120ms ease, background-color 120ms ease;
+}
+
+/* The default action is an inverted surface — black on white, light on dark.
+ * Presses alpha-dim the fill rather than picking a second colour. */
+.btn.primary {
+  background: var(--bg-inverse);
+  color: var(--text-inverse);
+}
+
+.btn.primary:active:not(:disabled) {
+  opacity: 0.9;
+}
+
+.btn.secondary {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.btn.secondary:active:not(:disabled) {
+  opacity: 0.8;
+}
+
+.btn.danger {
+  background: var(--bg-danger);
+  color: var(--text-inverse);
+}
+
+.btn.danger:active:not(:disabled) {
+  opacity: 0.9;
+}
+
+.btn.danger-outline {
+  background: transparent;
+  border-color: var(--border-danger);
+  color: var(--text-danger);
+}
+
+.btn.danger-outline:active:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
+/* Every variant reads as disabled, not just the primary one. */
+.btn:disabled {
+  background: var(--bg-disabled);
+  border-color: transparent;
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+.btn.small {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.btn.grow {
+  flex: 1;
+}
+
+.btn-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.list-actions {
+  margin-top: 0;
+}
+
+/* ── connection badge + status dots ─────────────────────────────────── */
+
+/* State rides on a bare 8px dot; numbers are monospace. No chips. */
 .conn-badge {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
-  color: var(--text-dim);
-  max-width: 40vw;
-  overflow: hidden;
+  flex-shrink: 0;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  cursor: pointer;
 }
 
 .conn-label {
-  white-space: nowrap;
+  max-width: 96px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
+  width: 8px;
+  height: 8px;
   flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background: var(--text-tertiary);
 }
 
-.dot.on { background: var(--accent); }
-.dot.off { background: #555f66; }
-.dot.err { background: var(--danger); }
+.dot.on {
+  background: var(--bg-success);
+}
+
+.dot.off {
+  background: var(--text-tertiary);
+}
+
+.dot.err {
+  background: var(--bg-danger);
+}
+
 .dot.busy {
-  background: var(--warn);
-  animation: pulse 1s ease-in-out infinite;
+  background: var(--bg-warning);
+  animation: pulse 1.4s ease-in-out infinite;
 }
 
 @keyframes pulse {
-  50% { opacity: 0.35; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
-/* ---- scrolling content ---------------------------------------------- */
+/* ── scroll regions ─────────────────────────────────────────────────── */
 
 .scroll {
   flex: 1;
   overflow-y: auto;
+  padding: 16px;
   -webkit-overflow-scrolling: touch;
-  padding: 14px;
 }
 
 .empty {
-  color: var(--text-dim);
+  padding: 48px 24px;
   text-align: center;
-  padding: 32px 16px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
 }
 
-/* ---- settings ------------------------------------------------------- */
+/* ── cards, fields, settings ────────────────────────────────────────── */
+
+.card {
+  padding: 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
 
 .settings .card {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 16px;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .settings h2 {
-  font-size: 14px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-dim);
   margin-bottom: 12px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: var(--lh-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .field-label {
   display: block;
-  font-size: 13px;
-  color: var(--text-dim);
-  margin: 12px 0 6px;
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
 }
 
+/* Ring-less focus, exactly as goose: the border steps up, nothing glows. */
 .field {
   width: 100%;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  color: var(--text);
-  padding: 12px;
-  font-size: 15px;
+  min-height: 40px;
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+.field::placeholder {
+  color: var(--text-secondary);
 }
 
 .field:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--border-secondary);
+}
+
+select.field {
+  appearance: none;
+  padding-right: 34px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%),
+    linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
+  background-position: calc(100% - 18px) calc(50% + 1px),
+    calc(100% - 13px) calc(50% + 1px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
 }
 
 .hint {
-  font-size: 12px;
-  color: var(--text-dim);
   margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
 }
 
+/* Alerts break the token system on purpose in goose: saturated, full-bleed,
+ * no radius, no border — they butt against their container's edges. */
 .error-box {
-  background: rgba(229, 83, 75, 0.12);
-  border: 1px solid var(--danger);
-  color: #f1a7a3;
-  border-radius: 10px;
-  padding: 12px;
-  margin-bottom: 14px;
-  font-size: 14px;
-  word-break: break-word;
+  margin: -16px -16px 16px;
+  padding: 10px 16px;
+  background: var(--bg-danger);
+  color: var(--text-inverse);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
 }
 
 .about {
-  color: var(--text-dim);
-  font-size: 13px;
-  text-align: center;
-  padding: 18px 8px calc(18px + var(--safe-bottom));
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
 }
 
-.about p { margin-bottom: 6px; }
-
-/* ---- buttons -------------------------------------------------------- */
-
-.btn {
-  border: none;
-  border-radius: 10px;
-  padding: 12px 18px;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-  color: var(--text);
+.about p {
+  margin-bottom: 6px;
 }
 
-.btn.primary { background: var(--accent); color: #08130e; }
-.btn.primary:disabled { background: var(--accent-dim); color: #4c5a55; }
-.btn.secondary {
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-}
-.btn.danger { background: var(--danger); }
-.btn.danger-outline {
-  background: none;
-  border: 1px solid var(--danger);
-  color: var(--danger);
-}
-.btn.small { padding: 6px 12px; font-size: 13px; }
-.btn.grow { flex: 1; }
-
-.btn-row {
-  display: flex;
-  gap: 10px;
-  margin: 10px 0;
-}
-
-.list-actions { margin-top: 0; }
-
-/* ---- session list --------------------------------------------------- */
+/* ── session list ───────────────────────────────────────────────────── */
 
 .session-list {
-  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
+/* A card that behaves: it does not tint on press, it lifts. */
 .session-item {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px 14px;
-  margin-bottom: 10px;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 140ms ease, transform 140ms ease;
+}
+
+.session-item:active {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
 }
 
 .session-main {
@@ -269,414 +554,636 @@ body {
 }
 
 .session-title {
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.session-snippet {
-  color: var(--text-dim);
-  font-size: 13px;
-  margin-top: 3px;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  font-size: var(--text-md);
+  font-weight: 400;
+  line-height: var(--lh-md);
+}
+
+.session-snippet {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
 }
 
 .session-meta {
-  display: flex;
-  gap: 6px;
-  color: var(--text-dim);
-  font-size: 11.5px;
-  margin-top: 5px;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
 }
 
 .confirm-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
-  color: var(--text-dim);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
 }
 
-/* ---- chat ----------------------------------------------------------- */
+/* ── chat transcript ────────────────────────────────────────────────── */
 
 .chat {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  padding-bottom: 24px;
 }
 
 .bubble {
-  max-width: 86%;
-  border-radius: var(--radius);
-  padding: 10px 14px;
-  word-wrap: break-word;
+  margin-top: 16px;
+  max-width: 90%;
 }
 
+.bubble:first-child {
+  margin-top: 0;
+}
+
+/* The user's turn is an inverted pill — dark on light, light on dark. */
 .bubble.user {
   align-self: flex-end;
-  background: var(--user-bubble);
-  border: 1px solid #2f5a49;
+  width: fit-content;
+  max-width: 85%;
+  padding: 10px 16px;
+  background: var(--text-primary);
+  border-radius: var(--radius-lg);
+  color: var(--bg-primary);
 }
 
 .bubble.user .bubble-text {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
 }
 
+/* The agent's turn has no bubble in light mode — plain text on the page, the
+ * way goose renders it. Dark mode gives it a faint raised surface so it
+ * separates from the near-black page. */
 .bubble.assistant {
   align-self: flex-start;
-  background: var(--panel);
-  border: 1px solid var(--border);
+  padding: var(--agent-padding);
+  background: var(--agent-surface);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
 }
 
+/* ── thinking ───────────────────────────────────────────────────────── */
+
+/* The quietest element in the app: no box, no fill — a whisper under the
+ * answer. */
 .thought {
-  align-self: flex-start;
-  max-width: 86%;
-  background: none;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-  padding: 8px 12px;
-  color: var(--text-dim);
-  font-size: 14px;
+  margin-top: 16px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
 }
 
 .thought summary {
+  list-style: none;
   cursor: pointer;
   font-style: italic;
+  color: var(--text-secondary);
 }
 
-.thought .md { margin-top: 8px; }
+.thought summary::-webkit-details-marker {
+  display: none;
+}
 
+.thought .md {
+  margin-top: 6px;
+  padding-left: 18px;
+  font-style: italic;
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* ── tool calls ─────────────────────────────────────────────────────── */
+
+/* A wireframe inset, not a filled card: transparent, hairline, clipped. */
 .tool {
-  align-self: stretch;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--warn);
-  border-radius: 10px;
-  padding: 8px 12px;
-  font-size: 14px;
+  margin-top: 16px;
+  background: transparent;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  overflow: hidden;
 }
-
-.tool.status-completed { border-left-color: var(--accent); }
-.tool.status-failed { border-left-color: var(--danger); }
-.tool.status-in_progress { border-left-color: var(--warn); }
 
 .tool-head {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  padding: 8px 12px;
 }
 
-.tool-icon { flex-shrink: 0; }
+.tool-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
 
 .tool-title {
   flex: 1;
   min-width: 0;
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
 }
 
 .tool-status {
-  font-size: 11px;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   flex-shrink: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
+/* Both backends' vocabularies are covered, so no state falls through: ACP
+ * emits pending/in_progress/completed/failed, OpenCode emits
+ * pending/running/completed/error. */
+.tool.status-completed .tool-status {
+  color: var(--text-success);
+}
+
+.tool.status-failed .tool-status,
+.tool.status-error .tool-status {
+  color: var(--text-danger);
+}
+
+.tool.status-in_progress .tool-status,
+.tool.status-running .tool-status {
+  color: var(--text-warning);
+}
+
+.tool.status-pending .tool-status {
+  color: var(--text-tertiary);
+}
+
+.tool.status-failed,
+.tool.status-error {
+  border-color: var(--border-danger);
+}
+
+/* Sections are introduced by a hairline. Nothing nests, nothing gets its own
+ * radius or fill — depth is expressed with rules, not boxes. */
 .tool-output {
-  margin-top: 6px;
+  border-top: 1px solid var(--border-primary);
 }
 
 .tool-output summary {
+  padding: 6px 12px;
+  list-style: none;
   cursor: pointer;
-  font-size: 12px;
-  color: var(--text-dim);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.tool-output summary::-webkit-details-marker {
+  display: none;
 }
 
 .tool-output pre {
-  margin-top: 6px;
-  background: var(--bg);
-  border-radius: 8px;
-  padding: 10px;
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--code-bg);
+  color: var(--code-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  white-space: pre;
   overflow-x: auto;
-  font-size: 12.5px;
-  max-height: 40vh;
-  overflow-y: auto;
 }
 
+/* ── typing indicator ───────────────────────────────────────────────── */
+
 .typing {
-  align-self: flex-start;
   display: flex;
-  gap: 5px;
-  padding: 12px 16px;
+  align-items: center;
+  gap: 4px;
+  margin-top: 16px;
+  padding: 4px 2px;
 }
 
 .dot-anim {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-dim);
-  animation: bounce 1.2s infinite;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--text-tertiary);
+  animation: bounce 1.2s ease-in-out infinite;
 }
 
-.dot-anim:nth-child(2) { animation-delay: 0.15s; }
-.dot-anim:nth-child(3) { animation-delay: 0.3s; }
+.dot-anim:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.dot-anim:nth-child(3) {
+  animation-delay: 0.3s;
+}
 
 @keyframes bounce {
-  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-  30% { transform: translateY(-5px); opacity: 1; }
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
 }
 
 .usage {
-  font-size: 11.5px;
-  color: var(--text-dim);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   flex-shrink: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
 }
 
-/* ---- composer ------------------------------------------------------- */
+/* ── composer ───────────────────────────────────────────────────────── */
 
+/* A floating outlined card inset from the edges — not a docked bar. */
 .composer {
   display: flex;
   align-items: flex-end;
-  gap: 10px;
-  padding: 10px 14px calc(10px + var(--safe-bottom));
-  background: var(--panel);
-  border-top: 1px solid var(--border);
+  gap: 6px;
   flex-shrink: 0;
+  margin: 8px 12px calc(8px + var(--safe-bottom));
+  padding: 6px 6px 6px 4px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
 }
 
+/* Chromeless: every bit of framing comes from the card around it. */
 .input {
   flex: 1;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  color: var(--text);
-  font-size: 15px;
-  font-family: inherit;
-  padding: 12px;
-  resize: none;
+  min-width: 0;
   max-height: 120px;
+  padding: 8px 4px 8px 12px;
+  background: transparent;
+  border: 0;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  resize: none;
+}
+
+.input::placeholder {
+  color: var(--text-secondary);
 }
 
 .input:focus {
   outline: none;
-  border-color: var(--accent);
 }
 
-/* ---- markdown ------------------------------------------------------- */
+/* Send and stop are round, sized to the composer's rhythm. */
+.composer .btn {
+  min-height: 32px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+}
 
-.md > * + * { margin-top: 8px; }
+/* ── markdown prose ─────────────────────────────────────────────────── */
 
+.md {
+  font-size: var(--text-sm);
+  line-height: 1.714;
+}
+
+.md > * + * {
+  margin-top: 8px;
+}
+
+/* Headings are regular weight — size carries the hierarchy, not boldness. */
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.md h1 {
+  font-size: 1.5rem;
+}
+
+.md h2 {
+  font-size: 1.25rem;
+}
+
+.md h3 {
+  font-size: 1.125rem;
+}
+
+.md h4 {
+  font-size: 1rem;
+}
+
+/* Code slabs stay dark in both themes. */
 .md pre {
-  background: var(--bg);
-  border-radius: 8px;
-  padding: 10px;
+  padding: 12px;
+  background: var(--code-bg);
+  border-radius: var(--radius-sm);
+  color: var(--code-fg);
   overflow-x: auto;
-  font-size: 13px;
-}
-
-.md code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.92em;
-  background: rgba(255, 255, 255, 0.07);
-  border-radius: 4px;
-  padding: 1px 5px;
 }
 
 .md pre code {
-  background: none;
   padding: 0;
+  background: transparent;
+  color: inherit;
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* Inline code is a chip tinted burnt orange, exactly as goose does it on a
+ * light surface. On dark, goose drops the chip and switches to a teal tint —
+ * orange on slate is muddy, and the chips make a paragraph look speckled. */
+.md code {
+  padding: 2px 4px;
+  background: var(--code-chip-bg);
+  border-radius: var(--radius-sm);
+  color: var(--code-chip-fg);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
 }
 
 .md ul,
 .md ol {
-  padding-left: 22px;
+  padding-left: 20px;
+}
+
+.md li + li {
+  margin-top: 4px;
 }
 
 .md blockquote {
-  border-left: 3px solid var(--border);
-  padding-left: 10px;
-  color: var(--text-dim);
+  padding-left: 12px;
+  border-left: 2px solid var(--border-primary);
+  color: var(--text-secondary);
 }
 
 .md table {
-  border-collapse: collapse;
   display: block;
-  overflow-x: auto;
   max-width: 100%;
+  border-collapse: collapse;
+  overflow-x: auto;
+  font-size: var(--text-xs);
 }
 
 .md th,
 .md td {
-  border: 1px solid var(--border);
-  padding: 6px 10px;
-  font-size: 14px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-primary);
+  text-align: left;
 }
 
-.md a { color: #6cb6ff; }
-
-.md h1, .md h2, .md h3, .md h4 {
-  line-height: 1.3;
-  margin-top: 12px;
+.md th {
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
-.md h1 { font-size: 1.25em; }
-.md h2 { font-size: 1.15em; }
-.md h3 { font-size: 1.05em; }
+.md a {
+  color: var(--text-info);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 
-/* ---- modal ---------------------------------------------------------- */
+.md img {
+  max-width: 100%;
+  border-radius: var(--radius-md);
+}
+
+/* ── modals ─────────────────────────────────────────────────────────── */
 
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  z-index: 50;
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  z-index: 50;
+  background: rgb(0 0 0 / 0.5);
 }
 
+/* One of the few places goose uses a border AND a shadow. */
 .modal {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius) var(--radius) 0 0;
-  padding: 20px 18px calc(20px + var(--safe-bottom));
   width: 100%;
   max-width: 560px;
-  max-height: 80vh;
+  max-height: 85vh;
   overflow-y: auto;
+  padding: 24px 20px calc(24px + var(--safe-bottom));
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: var(--shadow-lg);
 }
 
 .modal h2 {
-  font-size: 16px;
-  margin-bottom: 8px;
+  margin-bottom: 16px;
+  font-size: var(--text-lg);
+  font-weight: 500;
+  line-height: var(--lh-md);
+}
+
+.modal-session {
+  margin-bottom: 12px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
 }
 
 .modal-tool {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13.5px;
-  background: var(--bg);
-  border-radius: 8px;
-  padding: 10px;
-  margin-bottom: 10px;
-  word-break: break-all;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  background: transparent;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  overflow-x: auto;
 }
 
 .modal-actions {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 14px;
-}
-
-/* ---- toast ---------------------------------------------------------- */
-
-.toast {
-  position: fixed;
-  left: 50%;
-  bottom: calc(90px + var(--safe-bottom));
-  transform: translateX(-50%);
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 12px;
-  padding: 10px 16px;
-  font-size: 14px;
-  max-width: 88vw;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
-  z-index: 60;
-  animation: toast-in 0.2s ease-out;
-}
-
-@keyframes toast-in {
-  from { opacity: 0; transform: translate(-50%, 8px); }
-  to { opacity: 1; transform: translate(-50%, 0); }
-}
-
-.modal-session {
-  font-size: 12.5px;
-  color: var(--warn);
-  margin-bottom: 6px;
 }
 
 .modal-pending {
-  font-size: 12px;
-  color: var(--text-dim);
+  margin-top: 12px;
   text-align: center;
-  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
 }
 
-/* ---- Home/Code tab bar ---- */
+/* ── toast ──────────────────────────────────────────────────────────── */
+
+/* Fully inverted chip, like goose's tooltips. */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(88px + var(--safe-bottom));
+  z-index: 60;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 8px 16px;
+  background: var(--bg-inverse);
+  border-radius: 6px;
+  box-shadow: var(--shadow-lg);
+  color: var(--text-inverse);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  animation: toast-in 150ms ease;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* ── tab bar ────────────────────────────────────────────────────────── */
+
+/* goose's sidebar rows are full-radius pills that fill with
+ * background-tertiary when selected; the phone's tabs borrow that shape. */
 .tabbar {
   display: flex;
-  border-top: 1px solid var(--border, #2a2a2e);
-  background: var(--bg-raised, #161618);
-  padding-bottom: env(safe-area-inset-bottom, 0);
+  gap: 4px;
   flex-shrink: 0;
+  padding: 6px 12px calc(6px + var(--safe-bottom));
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-primary);
 }
+
 .tabbar .tab {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 8px 0 6px;
-  background: none;
-  border: none;
-  color: var(--fg-dim, #8a8a90);
-  font-size: 12px;
+  padding: 6px 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
   cursor: pointer;
-}
-.tabbar .tab.active {
-  color: var(--fg, #ececf0);
-}
-.tabbar .tab-icon {
-  font-size: 17px;
-  line-height: 1;
+  transition: background-color 120ms ease, color 120ms ease;
 }
 
-/* ---- Code tab ---- */
-.chip {
-  font-size: 11px;
-  padding: 1px 7px;
-  border-radius: 9px;
-  background: var(--bg-raised, #232327);
-  color: var(--fg-dim, #9a9aa0);
-  margin-left: 6px;
-  vertical-align: 1px;
+.tabbar .tab.active {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
+
+.tabbar .tab-icon {
+  font-size: var(--text-md);
+  line-height: 1.2;
+}
+
+/* ── chips, banners, diff ───────────────────────────────────────────── */
+
+/* Reads a step brighter than goose's sidebar tags: these carry live state
+ * ("working", "crashed"), and secondary-on-secondary fails on a phone. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-full);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* An informational strip: saturated and full-bleed, like goose's alerts. */
 .banner {
-  margin: 8px 12px;
-  padding: 8px 12px;
-  border-radius: 10px;
-  background: var(--bg-raised, #232327);
-  color: var(--fg-dim, #b9b9c0);
-  font-size: 13px;
+  flex-shrink: 0;
+  padding: 8px 16px;
+  background: var(--bg-info);
+  color: var(--text-inverse);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
   text-align: center;
 }
+
 .diff-panel {
-  margin: 8px 0;
-  border: 1px solid var(--border, #2a2a2e);
-  border-radius: 10px;
-  overflow: hidden;
+  flex-shrink: 0;
+  max-height: 45%;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-primary);
 }
+
 .diff-panel pre {
   margin: 0;
-  padding: 10px;
+  padding: 12px;
+  background: var(--code-bg);
+  color: var(--code-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  white-space: pre;
   overflow-x: auto;
-  font-size: 12px;
-  max-height: 45vh;
 }
-select.field {
-  appearance: none;
-  width: 100%;
+
+/* ── scrollbars ─────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-secondary);
+  border-radius: var(--radius-md);
+}
+
+/* ── reduced motion ─────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
