@@ -75,17 +75,19 @@ pub fn SettingsView() -> Element {
 
     rsx! {
         header { class: "topbar",
-            if connected {
-                button {
-                    class: "icon-btn back",
-                    onclick: move |_| {
-                        let mut screen = ctx.screen;
-                        screen.set(Screen::Sessions);
-                    },
-                    Icon { name: "chevron-left" }
-                }
+            // Always present. Settings is a drawer destination, not a pushed
+            // screen, and the back chevron it replaces only rendered when
+            // connected — which left a disconnected user with no way off this
+            // screen once the tab bar went away.
+            button {
+                class: "icon-btn menu",
+                onclick: move |_| {
+                    let mut open = ctx.drawer_open;
+                    open.set(true);
+                },
+                Icon { name: "menu" }
             }
-            h1 { class: "title", "Goose Mobile" }
+            h1 { class: "title", "Settings" }
             div { class: "topbar-actions", ConnBadge {} }
         }
         main { class: "scroll settings",

@@ -13,7 +13,7 @@ use crate::code::{
     stop_code_turn, CodeScreen,
 };
 use crate::icons::Icon;
-use crate::state::{use_app_ctx, ConnState, Screen, Tab};
+use crate::state::{relative_time_secs, use_app_ctx, ConnState, Screen, Tab};
 use crate::views::chat::render_transcript;
 
 #[component]
@@ -42,6 +42,14 @@ pub fn CodeSessionsView() -> Element {
 
     rsx! {
         header { class: "topbar",
+            button {
+                class: "icon-btn menu",
+                onclick: move |_| {
+                    let mut open = ctx.drawer_open;
+                    open.set(true);
+                },
+                Icon { name: "menu" }
+            }
             h1 { class: "title", "Code" }
             span { class: "conn-badge",
                 match &conn {
@@ -63,18 +71,28 @@ pub fn CodeSessionsView() -> Element {
                     },
                 }
             }
-            button {
-                class: "icon-btn",
-                onclick: move |_| {
-                    let mut tab = ctx.tab;
-                    let mut screen = ctx.screen;
-                    tab.set(Tab::Home);
-                    screen.set(Screen::Settings);
-                },
-                Icon { name: "gear" }
+            div { class: "topbar-actions",
+                button {
+                    class: "icon-btn",
+                    disabled: loading,
+                    onclick: move |_| {
+                        spawn_forever(async move { refresh_code_chats(&ctx).await });
+                    },
+                    if loading { "…" } else { Icon { name: "refresh" } }
+                }
+                button {
+                    class: "icon-btn",
+                    onclick: move |_| {
+                        let mut tab = ctx.tab;
+                        let mut screen = ctx.screen;
+                        tab.set(Tab::Home);
+                        screen.set(Screen::Settings);
+                    },
+                    Icon { name: "gear" }
+                }
             }
         }
-        main { class: "scroll",
+        main { class: "scroll has-fab",
             if let ConnState::Failed(error) = &conn {
                 p { class: "error-box", "{error}" }
                 div { class: "btn-row",
@@ -98,25 +116,6 @@ pub fn CodeSessionsView() -> Element {
             }
 
             if conn.is_connected() {
-                div { class: "btn-row list-actions",
-                    button {
-                        class: "btn primary grow",
-                        onclick: move |_| {
-                            let mut screen = ctx.code_screen;
-                            screen.set(CodeScreen::New);
-                        },
-                        "＋ New session"
-                    }
-                    button {
-                        class: "btn secondary",
-                        disabled: loading,
-                        onclick: move |_| {
-                            spawn_forever(async move { refresh_code_chats(&ctx).await });
-                        },
-                        if loading { "…" } else { Icon { name: "refresh" } }
-                    }
-                }
-
                 if chats.is_empty() && !loading {
                     p { class: "empty", "No code sessions yet — start one against a repo." }
                 }
@@ -127,24 +126,30 @@ pub fn CodeSessionsView() -> Element {
                             key: "{meta.id}",
                             class: "session-item",
                             onclick: move |_| open_code_chat(&ctx, meta.clone()),
+                            div { class: "session-tile", Icon { name: "code" } }
                             div {
                                 class: "session-main",
-                                div { class: "session-title",
+                                div { class: "session-head",
+                                    div { class: "session-title", "{meta.title}" }
+                                    span { class: "session-age",
+                                        {relative_time_secs(meta.last_active)}
+                                    }
+                                }
+                                div { class: "session-meta",
                                     {
                                         let turn = running_chat.as_deref() == Some(meta.id.as_str())
                                             && running_turn;
                                         let (dot, label) = status_label(&meta, turn);
                                         rsx! {
-                                            span { class: "{dot}" }
-                                            span { " {meta.title} " }
-                                            span { class: "chip", "{label}" }
+                                            span { class: "chip",
+                                                span { class: "{dot}" }
+                                                "{label}"
+                                            }
+                                            span { "{meta.repo}" }
+                                            if !meta.branch.is_empty() {
+                                                span { "{meta.branch}" }
+                                            }
                                         }
-                                    }
-                                }
-                                div { class: "session-meta",
-                                    span { "{meta.repo}" }
-                                    if !meta.branch.is_empty() {
-                                        span { "{meta.branch}" }
                                     }
                                 }
                             }
@@ -184,6 +189,18 @@ pub fn CodeSessionsView() -> Element {
                         }
                     }
                 }
+            }
+        }
+
+        if conn.is_connected() {
+            button {
+                class: "fab",
+                onclick: move |_| {
+                    let mut screen = ctx.code_screen;
+                    screen.set(CodeScreen::New);
+                },
+                Icon { name: "plus" }
+                "New session"
             }
         }
     }
@@ -317,7 +334,17 @@ pub fn CodeChatView() -> Element {
                 },
                 Icon { name: "chevron-left" }
             }
-            h1 { class: "title ellipsis", "{chat.title}" }
+            div { class: "titlegroup",
+                h1 { class: "title ellipsis", "{chat.title}" }
+                if !chat.repo.is_empty() {
+                    span { class: "subtitle ellipsis",
+                        "{chat.repo}"
+                        if !chat.branch.is_empty() {
+                            " · {chat.branch}"
+                        }
+                    }
+                }
+            }
             div { class: "topbar-actions" }
         }
 

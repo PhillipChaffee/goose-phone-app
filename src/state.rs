@@ -39,7 +39,7 @@ pub(crate) enum Tab {
 /// `serde(default)` is load-bearing: settings persisted by older builds lack
 /// the code-agent fields, and a parse failure would silently wipe the saved
 /// goose server config (the storage layer falls back to `Default`).
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Settings {
     pub server_url: String,
@@ -50,6 +50,48 @@ pub(crate) struct Settings {
     pub code_server_url: String,
     /// `OPENCODE_SERVER_PASSWORD`.
     pub code_password: String,
+}
+
+/// A compile-time seed for a development build.
+///
+/// Installing over the app wipes its container, so every rebuild otherwise
+/// means retyping four fields before anything can be tested against a local
+/// server. Setting these when you build fills them in instead:
+///
+/// ```sh
+/// GOOSE_DEV_SERVER_URL=http://127.0.0.1:3285 \
+/// GOOSE_DEV_SECRET_KEY=mock-secret \
+/// GOOSE_DEV_CODE_URL=http://127.0.0.1:4399 \
+/// GOOSE_DEV_CODE_PASSWORD=... \
+///   dx build --platform ios --no-default-features --features mobile
+/// ```
+///
+/// A release build expands to an empty string no matter what was set, so a
+/// development endpoint cannot ride along into one.
+macro_rules! dev_seed {
+    ($name:literal) => {{
+        #[cfg(debug_assertions)]
+        {
+            option_env!($name).unwrap_or("").to_owned()
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            String::new()
+        }
+    }};
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            server_url: dev_seed!("GOOSE_DEV_SERVER_URL"),
+            secret_key: dev_seed!("GOOSE_DEV_SECRET_KEY"),
+            fingerprint: String::new(),
+            working_dir: dev_seed!("GOOSE_DEV_WORKING_DIR"),
+            code_server_url: dev_seed!("GOOSE_DEV_CODE_URL"),
+            code_password: dev_seed!("GOOSE_DEV_CODE_PASSWORD"),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -132,6 +174,9 @@ pub(crate) struct AppCtx {
 
     // ---- Code tab (per-chat OpenCode containers on the brain; src/code.rs) ----
     pub tab: Signal<Tab>,
+    /// The navigation drawer. It replaced a bottom tab bar, which cost 100px
+    /// of every screen to show two destinations.
+    pub drawer_open: Signal<bool>,
     pub code_screen: Signal<crate::code::CodeScreen>,
     pub code_client: Signal<Option<opencode_client::CodeClient>>,
     pub code_conn: Signal<ConnState>,
@@ -171,6 +216,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         usage: use_signal(|| None),
         toast: use_signal(|| None),
         tab: use_signal(|| Tab::Home),
+        drawer_open: use_signal(|| false),
         code_screen: use_signal(|| crate::code::CodeScreen::List),
         code_client: use_signal(|| None),
         code_conn: use_signal(|| ConnState::Disconnected),
@@ -773,6 +819,17 @@ pub(crate) fn rfc3339_to_epoch(ts: &str) -> Option<i64> {
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
+
+/// Age of a floating-point Unix timestamp, as the `OpenCode` API reports it.
+/// The fractional part is sub-second and the value is far inside i64, so the
+/// saturating cast cannot lose anything that matters here.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "sub-second precision is irrelevant to a row badge, and the               value is many orders of magnitude inside i64"
+)]
+pub(crate) fn relative_time_secs(epoch: f64) -> String {
+    relative_time(epoch as i64)
+}
 
 /// Age of `epoch` as a list-row badge: "now", "5m", "2h", "3d", then a date.
 /// Recent things get a duration because that is what you are tracking; old

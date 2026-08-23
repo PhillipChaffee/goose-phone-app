@@ -139,7 +139,6 @@
    * below uses it too, so "Output" lines up with the tool title above it. */
   --tool-gutter: 18px;
   --topbar-h: 52px;
-  --tabbar-h: 58px;
   --glass-blur: blur(20px) saturate(180%);
   /* Thin enough that the blur is visibly doing its job. Where the blur is
    * genuinely absent the answer is the prefers-reduced-transparency rule
@@ -315,8 +314,7 @@ pre {
  * title readable is the scroll-edge scrim further down this file. */
 .glass,
 .topbar > .icon-btn,
-.topbar-actions,
-.tabbar {
+.topbar-actions {
   background: var(--bg-primary);
   box-shadow: var(--shadow-md);
 }
@@ -333,8 +331,7 @@ pre {
 @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
   .glass,
   .topbar > .icon-btn,
-  .topbar-actions,
-  .tabbar {
+  .topbar-actions {
     background: color-mix(in srgb, var(--bg-primary) var(--glass-tint), transparent);
     -webkit-backdrop-filter: var(--glass-blur);
     backdrop-filter: var(--glass-blur);
@@ -352,8 +349,7 @@ pre {
 @media (prefers-reduced-transparency: reduce) {
   .glass,
   .topbar > .icon-btn,
-  .topbar-actions,
-  .tabbar {
+  .topbar-actions {
     background: var(--bg-primary);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
@@ -464,6 +460,37 @@ pre {
 
 /* The trailing group is one cell, so any number of controls can live there
  * without each claiming a column of its own. */
+/* A two-line title: the thing, then where it lives. Takes the centre cell of
+ * the bar the same way a single-line title does. */
+.titlegroup {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 180px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+}
+
+.titlegroup > .title {
+  position: static;
+  transform: none;
+  max-width: 100%;
+}
+
+.subtitle {
+  max-width: 100%;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+/* A status chip that carries its own dot. */
+.chip .dot {
+  margin-right: 2px;
+}
+
 /* The trailing controls share one pill, the way the reference apps group a
  * secondary action next to an overflow menu. One control in it still reads as
  * a circle, because the pill is exactly as wide as what it holds. */
@@ -656,7 +683,7 @@ pre {
 .fab {
   position: absolute;
   right: var(--edge);
-  bottom: calc(var(--safe-bottom) + var(--chrome-gap) + var(--tabbar-h) + 12px);
+  bottom: calc(var(--safe-bottom) + var(--chrome-gap) + 12px);
   z-index: var(--z-chrome);
   display: inline-flex;
   align-items: center;
@@ -680,9 +707,7 @@ pre {
 
 /* The list keeps clear of the floating action's landing zone. */
 .scroll.has-fab {
-  padding-bottom: calc(
-    var(--safe-bottom) + var(--chrome-gap) + var(--tabbar-h) + 24px + 60px
-  );
+  padding-bottom: calc(var(--safe-bottom) + var(--chrome-gap) + 24px + 60px);
 }
 
 /* A lone refresh keeps its place in the bar rather than joining the fab. */
@@ -775,7 +800,7 @@ pre {
   flex: 1;
   overflow-y: auto;
   padding: calc(var(--safe-top) + var(--chrome-gap) + var(--topbar-h) + 20px) 16px
-    calc(var(--safe-bottom) + var(--chrome-gap) + var(--tabbar-h) + 24px);
+    calc(var(--safe-bottom) + var(--chrome-gap) + 24px);
   -webkit-overflow-scrolling: touch;
 }
 
@@ -1456,7 +1481,7 @@ details[open] > summary::before {
   flex-direction: column;
   gap: 6px;
   flex-shrink: 0;
-  margin: 0 var(--edge) calc(var(--safe-bottom) + var(--chrome-gap) + var(--tabbar-h) + 16px);
+  margin: 0 var(--edge) calc(var(--safe-bottom) + var(--chrome-gap));
   padding: 10px 10px 8px;
   background: var(--bg-primary);
   border: 1px solid var(--border-primary);
@@ -1834,13 +1859,102 @@ details[open] > summary::before {
   line-height: var(--lh-xs);
 }
 
+/* ── drawer ─────────────────────────────────────────────────────────── */
+
+/* A panel over the page, not a column beside it: at phone width there is no
+ * room for both. The page dims and stays put behind it, so closing the drawer
+ * returns you to exactly what you left. */
+.drawer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  flex-direction: column;
+  width: min(300px, 82%);
+  padding: calc(var(--safe-top) + 20px) 16px calc(var(--safe-bottom) + 20px);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-lg);
+  transform: translateX(-100%);
+  transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+}
+
+.drawer.open {
+  transform: translateX(0);
+}
+
+/* Not display:none when closed — the panel has to be in the tree for the
+ * slide to animate, so it is moved out of view and made unclickable instead. */
+.drawer-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: calc(var(--z-modal) - 1);
+  background: rgb(0 0 0 / 0.4);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms ease;
+}
+
+.drawer-scrim.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.drawer-brand {
+  margin: 0 8px 24px;
+  font-family: var(--font-serif);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  line-height: var(--lh-md);
+}
+
+.drawer-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 48px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-md);
+  cursor: pointer;
+  text-align: left;
+}
+
+.drawer-item .icon {
+  color: var(--text-secondary);
+}
+
+.drawer-item.active {
+  background: var(--bg-secondary);
+}
+
+.drawer-item.active .icon {
+  color: var(--text-primary);
+}
+
+.drawer-item:active {
+  background: var(--bg-secondary);
+}
+
 /* ── toast ──────────────────────────────────────────────────────────── */
 
 /* A fully inverted chip: black on light, light on dark. */
 .toast {
   position: fixed;
   left: 50%;
-  bottom: calc(var(--safe-bottom) + var(--tabbar-h) + 24px);
+  bottom: calc(var(--safe-bottom) + var(--chrome-gap) + 80px);
   z-index: var(--z-toast);
   transform: translateX(-50%);
   max-width: calc(100% - 32px);
@@ -1863,52 +1977,6 @@ details[open] > summary::before {
     opacity: 1;
     transform: translate(-50%, 0);
   }
-}
-
-/* ── tab bar ────────────────────────────────────────────────────────── */
-
-/* Full-radius pills that fill with the tertiary surface when selected —
- * the same shape the session rows use. */
-.tabbar {
-  position: absolute;
-  bottom: calc(var(--safe-bottom) + var(--chrome-gap));
-  left: var(--edge);
-  right: var(--edge);
-  z-index: var(--z-chrome);
-  display: flex;
-  gap: 4px;
-  height: var(--tabbar-h);
-  padding: 5px;
-  border-radius: var(--radius-full);
-}
-
-.tabbar .tab {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--text-secondary);
-  font-family: inherit;
-  font-size: var(--text-xs);
-  line-height: var(--lh-xs);
-  cursor: pointer;
-  transition: background-color 120ms ease, color 120ms ease;
-}
-
-.tabbar .tab.active {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-}
-
-.tabbar .tab-icon {
-  font-size: var(--text-md);
-  line-height: 1.2;
 }
 
 /* ── chips, banners, diff ───────────────────────────────────────────── */

@@ -18,7 +18,15 @@ pub fn SessionsView() -> Element {
 
     rsx! {
         header { class: "topbar",
-            h1 { class: "title", "Sessions" }
+            button {
+                class: "icon-btn menu",
+                onclick: move |_| {
+                    let mut open = ctx.drawer_open;
+                    open.set(true);
+                },
+                Icon { name: "menu" }
+            }
+            h1 { class: "title", "Chats" }
             ConnBadge {}
             div { class: "topbar-actions",
                 button {

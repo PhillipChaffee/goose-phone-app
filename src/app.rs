@@ -42,26 +42,7 @@ pub fn App() -> Element {
         }
         div { class: "app",
             {body}
-            nav { class: "tabbar",
-                button {
-                    class: if tab == Tab::Home { "tab active" } else { "tab" },
-                    onclick: move |_| {
-                        let mut t = ctx.tab;
-                        t.set(Tab::Home);
-                    },
-                    span { class: "tab-icon", Icon { name: "home" } }
-                    span { "Home" }
-                }
-                button {
-                    class: if tab == Tab::Code { "tab active" } else { "tab" },
-                    onclick: move |_| {
-                        let mut t = ctx.tab;
-                        t.set(Tab::Code);
-                    },
-                    span { class: "tab-icon", Icon { name: "code" } }
-                    span { "Code" }
-                }
-            }
+            Drawer {}
             if goose_permission_open {
                 views::chat::PermissionModal {}
             } else if code_permission_open {
@@ -72,4 +53,77 @@ pub fn App() -> Element {
             }
         }
     }
+}
+
+/// The navigation drawer.
+///
+/// It replaced a bottom tab bar, which spent 100px of every screen on two
+/// destinations and left no room for a third. Destinations live here; the
+/// screen underneath keeps its own back stack, so opening the drawer and
+/// coming back leaves you where you were.
+#[component]
+fn Drawer() -> Element {
+    let ctx = crate::state::use_app_ctx();
+    let mut open = ctx.drawer_open;
+    let tab = (ctx.tab)();
+    let on_settings = tab == Tab::Home && (ctx.screen)() == Screen::Settings;
+
+    // A destination is "here" only when its own stack is at its root: from a
+    // chat, Chats is somewhere to go back to, not where you are.
+    let chats_here = tab == Tab::Home && (ctx.screen)() == Screen::Sessions;
+    let code_here = tab == Tab::Code;
+
+    rsx! {
+        div {
+            class: if open() { "drawer-scrim open" } else { "drawer-scrim" },
+            onclick: move |_| open.set(false),
+        }
+        aside { class: if open() { "drawer open" } else { "drawer" },
+            h2 { class: "drawer-brand", "goose" }
+            nav { class: "drawer-nav",
+                button {
+                    class: if chats_here { "drawer-item active" } else { "drawer-item" },
+                    onclick: move |_| navigate(&ctx, Destination::Chats),
+                    Icon { name: "message" }
+                    "Chats"
+                }
+                button {
+                    class: if code_here { "drawer-item active" } else { "drawer-item" },
+                    onclick: move |_| navigate(&ctx, Destination::Code),
+                    Icon { name: "code" }
+                    "Code"
+                }
+                button {
+                    class: if on_settings { "drawer-item active" } else { "drawer-item" },
+                    onclick: move |_| navigate(&ctx, Destination::Settings),
+                    Icon { name: "gear" }
+                    "Settings"
+                }
+            }
+        }
+    }
+}
+
+/// Go to a destination and close the drawer behind you.
+fn navigate(ctx: &crate::state::AppCtx, to: Destination) {
+    let (mut tab, mut screen, mut open) = (ctx.tab, ctx.screen, ctx.drawer_open);
+    match to {
+        Destination::Chats => {
+            tab.set(Tab::Home);
+            screen.set(Screen::Sessions);
+        }
+        Destination::Code => tab.set(Tab::Code),
+        Destination::Settings => {
+            tab.set(Tab::Home);
+            screen.set(Screen::Settings);
+        }
+    }
+    open.set(false);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Destination {
+    Chats,
+    Code,
+    Settings,
 }
