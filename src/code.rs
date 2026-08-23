@@ -44,6 +44,10 @@ pub(crate) struct CodeChatState {
     /// The chat's primary `OpenCode` session (created lazily on first prompt).
     pub session_id: Option<String>,
     pub items: Vec<ChatItem>,
+    /// See `ChatState::marks` — same purpose, and the same reason it is not
+    /// an item: `part_index` below indexes into `items`.
+    pub marks: Vec<(usize, i64)>,
+    pub last_at: i64,
     /// part id -> index into `items`, for folding streamed part updates.
     pub part_index: HashMap<String, usize>,
     /// message id -> role, learned from history + `message.updated` events.
@@ -185,6 +189,8 @@ pub(crate) fn open_code_chat(ctx: &AppCtx, meta: ChatMeta) {
     let cached = ctx.code_cache.peek().chats.get(&meta.id).cloned();
     let waking = !meta.is_running();
     chat.set(CodeChatState {
+        marks: Vec::new(),
+        last_at: 0,
         chat_id: Some(meta.id.clone()),
         title: if meta.title.is_empty() {
             meta.id.clone()
@@ -384,10 +390,15 @@ fn fold_history(
     let mut items = Vec::new();
     let mut part_index = HashMap::new();
     let mut roles = HashMap::new();
+    let (mut replay_marks, mut replay_at) = (Vec::new(), 0);
+    let mut gap = GapSink {
+        marks: &mut replay_marks,
+        last_at: &mut replay_at,
+    };
     for msg in msgs {
         roles.insert(msg.info.id.clone(), msg.info.role.clone());
         for part in &msg.parts {
-            fold_part_into(&mut items, &mut part_index, &roles, part, None);
+            fold_part_into(&mut items, &mut part_index, &roles, part, None, &mut gap);
         }
     }
     // Heuristic: OpenCode marks completion via session.idle events, not the
@@ -402,13 +413,25 @@ fn fold_part(chat: &mut Signal<CodeChatState>, part: &Part, delta: Option<&str>)
         part_index,
         roles,
         running,
+        marks,
+        last_at,
         ..
     } = &mut *c;
     // A streamed part means the turn is alive.
     if part.kind == "text" || part.kind == "reasoning" || part.kind == "tool" {
         *running = true;
     }
-    fold_part_into(items, part_index, roles, part, delta);
+    let mut gap = GapSink { marks, last_at };
+    fold_part_into(items, part_index, roles, part, delta, &mut gap);
+}
+
+/// Where time-gap marks accumulate as items are appended.
+///
+/// History replay passes a throwaway: it rebuilds the whole transcript in one
+/// instant, so every gap it could compute would be zero anyway.
+pub(crate) struct GapSink<'a> {
+    pub marks: &'a mut Vec<(usize, i64)>,
+    pub last_at: &'a mut i64,
 }
 
 /// The single folding rule for both history and live updates:
@@ -421,6 +444,7 @@ fn fold_part_into(
     roles: &HashMap<String, String>,
     part: &Part,
     delta: Option<&str>,
+    gap: &mut GapSink<'_>,
 ) {
     match part.kind.as_str() {
         "text" | "reasoning" => {
@@ -462,6 +486,7 @@ fn fold_part_into(
                 },
             };
             part_index.insert(part.id.clone(), items.len());
+            crate::state::mark_gap(items.len(), gap.marks, gap.last_at);
             items.push(item);
         }
         "tool" => {
@@ -500,6 +525,7 @@ fn fold_part_into(
                 return;
             }
             part_index.insert(part.id.clone(), items.len());
+            crate::state::mark_gap(items.len(), gap.marks, gap.last_at);
             items.push(ChatItem::Tool {
                 id,
                 title,
@@ -528,7 +554,14 @@ pub(crate) fn send_code_prompt(ctx: &AppCtx, text: String) -> bool {
     };
     {
         let mut c = chat.write();
-        c.items.push(ChatItem::User { text: text.clone() });
+        let CodeChatState {
+            items,
+            marks,
+            last_at,
+            ..
+        } = &mut *c;
+        crate::state::mark_gap(items.len(), marks, last_at);
+        items.push(ChatItem::User { text: text.clone() });
         c.running = true;
     }
     let ctx = *ctx;

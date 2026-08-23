@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::code::CodeScreen;
+use crate::icons::Icon;
 use crate::state::{use_app_ctx_provider, Screen, Tab};
 use crate::views;
 
@@ -48,7 +49,7 @@ pub fn App() -> Element {
                         let mut t = ctx.tab;
                         t.set(Tab::Home);
                     },
-                    span { class: "tab-icon", "⌂" }
+                    span { class: "tab-icon", Icon { name: "home" } }
                     span { "Home" }
                 }
                 button {
@@ -57,7 +58,7 @@ pub fn App() -> Element {
                         let mut t = ctx.tab;
                         t.set(Tab::Code);
                     },
-                    span { class: "tab-icon", "</>" }
+                    span { class: "tab-icon", Icon { name: "code" } }
                     span { "Code" }
                 }
             }

@@ -2,6 +2,7 @@ use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use goose_acp_client::{probe, ProbeOutcome};
 
+use crate::icons::Icon;
 use crate::state::{
     disconnect, establish, refresh_sessions, show_toast, use_app_ctx, ConnState, Screen, Settings,
 };
@@ -81,11 +82,11 @@ pub fn SettingsView() -> Element {
                         let mut screen = ctx.screen;
                         screen.set(Screen::Sessions);
                     },
-                    "‹"
+                    Icon { name: "chevron-left" }
                 }
             }
             h1 { class: "title", "Goose Mobile" }
-            ConnBadge {}
+            div { class: "topbar-actions", ConnBadge {} }
         }
         main { class: "scroll settings",
             section { class: "card",
@@ -102,9 +103,11 @@ pub fn SettingsView() -> Element {
                     oninput: move |e| server_url.set(e.value()),
                 }
                 p { class: "hint",
-                    "Over Tailscale: use your server's MagicDNS name. With `tailscale serve` "
-                    "fronting goose this is an https:// URL; a plain `goose serve` on the tailnet "
-                    "is http://host:3284."
+                    "Over Tailscale: use your server's MagicDNS name. With "
+                    code { "tailscale serve" }
+                    " fronting goose this is an https:// URL; a plain "
+                    code { "goose serve" }
+                    " on the tailnet is http://host:3284."
                 }
 
                 label { class: "field-label", "Secret key" }
@@ -122,7 +125,7 @@ pub fn SettingsView() -> Element {
                 input {
                     class: "field",
                     r#type: "text",
-                    placeholder: "AA:BB:CC:… (only for goose serve --tls self-signed)",
+                    placeholder: "AA:BB:CC:…",
                     autocapitalize: "off",
                     autocomplete: "off",
                     spellcheck: "false",

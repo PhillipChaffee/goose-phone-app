@@ -12,8 +12,9 @@ use crate::code::{
     refresh_code_chats, request_pr, send_code_prompt, start_code_poll, status_label,
     stop_code_turn, CodeScreen,
 };
+use crate::icons::Icon;
 use crate::state::{use_app_ctx, ConnState, Screen, Tab};
-use crate::views::chat::render_item;
+use crate::views::chat::render_transcript;
 
 #[component]
 pub fn CodeSessionsView() -> Element {
@@ -70,7 +71,7 @@ pub fn CodeSessionsView() -> Element {
                     tab.set(Tab::Home);
                     screen.set(Screen::Settings);
                 },
-                "⚙"
+                Icon { name: "gear" }
             }
         }
         main { class: "scroll",
@@ -112,7 +113,7 @@ pub fn CodeSessionsView() -> Element {
                         onclick: move |_| {
                             spawn_forever(async move { refresh_code_chats(&ctx).await });
                         },
-                        if loading { "…" } else { "↻" }
+                        if loading { "…" } else { Icon { name: "refresh" } }
                     }
                 }
 
@@ -125,9 +126,9 @@ pub fn CodeSessionsView() -> Element {
                         li {
                             key: "{meta.id}",
                             class: "session-item",
+                            onclick: move |_| open_code_chat(&ctx, meta.clone()),
                             div {
                                 class: "session-main",
-                                onclick: move |_| open_code_chat(&ctx, meta.clone()),
                                 div { class: "session-title",
                                     {
                                         let turn = running_chat.as_deref() == Some(meta.id.as_str())
@@ -148,7 +149,7 @@ pub fn CodeSessionsView() -> Element {
                                 }
                             }
                             if confirm_delete.read().as_deref() == Some(meta.id.as_str()) {
-                                div { class: "confirm-row",
+                                div { class: "confirm-row", onclick: move |e: Event<MouseData>| e.stop_propagation(),
                                     span { "Delete chat + workspace?" }
                                     button {
                                         class: "btn danger small",
@@ -172,9 +173,12 @@ pub fn CodeSessionsView() -> Element {
                                     class: "icon-btn trash",
                                     onclick: {
                                         let id = meta.id.clone();
-                                        move |_| confirm_delete.set(Some(id.clone()))
+                                        move |e: Event<MouseData>| {
+                                            e.stop_propagation();
+                                            confirm_delete.set(Some(id.clone()));
+                                        }
                                     },
-                                    "🗑"
+                                    Icon { name: "trash" }
                                 }
                             }
                         }
@@ -208,7 +212,7 @@ pub fn CodeNewView() -> Element {
                     let mut screen = ctx.code_screen;
                     screen.set(CodeScreen::List);
                 },
-                "‹"
+                Icon { name: "chevron-left" }
             }
             h1 { class: "title", "New code session" }
         }
@@ -311,22 +315,10 @@ pub fn CodeChatView() -> Element {
                     screen.set(CodeScreen::List);
                     spawn_forever(async move { refresh_code_chats(&ctx).await });
                 },
-                "‹"
+                Icon { name: "chevron-left" }
             }
             h1 { class: "title ellipsis", "{chat.title}" }
-            button {
-                class: "icon-btn",
-                title: "Show diff",
-                onclick: move |_| load_code_diff(&ctx),
-                "±"
-            }
-            button {
-                class: "icon-btn action",
-                title: "Push branch + open a PR",
-                disabled: !can_send,
-                onclick: move |_| request_pr(&ctx),
-                "⇪ PR"
-            }
+            div { class: "topbar-actions" }
         }
 
         main { class: "scroll chat", id: "code-chat-scroll",
@@ -338,9 +330,7 @@ pub fn CodeChatView() -> Element {
             if chat.loading && chat.items.is_empty() {
                 p { class: "empty", "Loading history…" }
             }
-            for (index, item) in chat.items.iter().enumerate() {
-                {render_item(index, item)}
-            }
+            {render_transcript(&chat.items, &chat.marks)}
             if let Some(diff) = &chat.diff {
                 div { class: "diff-panel",
                     div { class: "tool-head",
@@ -383,18 +373,37 @@ pub fn CodeChatView() -> Element {
                     }
                 },
             }
-            if running {
+            div { class: "composer-row",
                 button {
-                    class: "btn danger",
-                    onclick: move |_| stop_code_turn(&ctx),
-                    "Stop"
+                    class: "composer-chip action",
+                    title: "Show diff",
+                    onclick: move |_| load_code_diff(&ctx),
+                    Icon { name: "diff" }
+                    "Diff"
                 }
-            } else {
                 button {
-                    class: "btn primary",
+                    class: "composer-chip action",
+                    title: "Push branch + open a PR",
                     disabled: !can_send,
-                    onclick: move |_| submit(),
-                    "Send"
+                    onclick: move |_| request_pr(&ctx),
+                    Icon { name: "pull-request" }
+                    "PR"
+                }
+                if running {
+                    button {
+                        class: "send stop",
+                        title: "Stop",
+                        onclick: move |_| stop_code_turn(&ctx),
+                        Icon { name: "stop" }
+                    }
+                } else {
+                    button {
+                        class: "send",
+                        title: "Send",
+                        disabled: !can_send,
+                        onclick: move |_| submit(),
+                        Icon { name: "arrow-up" }
+                    }
                 }
             }
         }

@@ -2,6 +2,7 @@ use dioxus::dioxus_core::spawn_forever;
 use dioxus::document;
 use dioxus::prelude::*;
 
+use crate::icons::Icon;
 use crate::markdown;
 use crate::state::{answer_permission, send_prompt, stop_turn, use_app_ctx, ChatItem, Screen};
 
@@ -48,21 +49,17 @@ pub fn ChatView() -> Element {
                     screen.set(Screen::Sessions);
                     spawn_forever(async move { crate::state::refresh_sessions(&ctx, false).await });
                 },
-                "‹"
+                Icon { name: "chevron-left" }
             }
             h1 { class: "title ellipsis", "{chat.title}" }
-            if let Some((used, limit)) = usage {
-                span { class: "usage", "{format_tokens(used)}/{format_tokens(limit)}" }
-            }
+            div { class: "topbar-actions" }
         }
 
         main { class: "scroll chat", id: "chat-scroll",
             if chat.loading {
                 p { class: "empty", "Loading history…" }
             }
-            for (index, item) in chat.items.iter().enumerate() {
-                {render_item(index, item)}
-            }
+            {render_transcript(&chat.items, &chat.marks)}
             if running {
                 div { class: "typing",
                     span { class: "dot-anim" }
@@ -88,21 +85,124 @@ pub fn ChatView() -> Element {
                     }
                 },
             }
-            if running {
-                button {
-                    class: "btn danger",
-                    onclick: move |_| stop_turn(&ctx),
-                    "Stop"
+            div { class: "composer-row",
+                if let Some((used, limit)) = usage {
+                    span { class: "composer-chip",
+                        "{format_tokens(used)}/{format_tokens(limit)}"
+                    }
                 }
-            } else {
-                button {
-                    class: "btn primary",
-                    disabled: !can_send,
-                    onclick: move |_| submit(),
-                    "Send"
+                if running {
+                    button {
+                        class: "send stop",
+                        title: "Stop",
+                        onclick: move |_| stop_turn(&ctx),
+                        Icon { name: "stop" }
+                    }
+                } else {
+                    button {
+                        class: "send",
+                        title: "Send",
+                        disabled: !can_send,
+                        onclick: move |_| submit(),
+                        Icon { name: "arrow-up" }
+                    }
                 }
             }
         }
+    }
+}
+
+/// Render a whole transcript, folding runs of tool calls into one line.
+///
+/// An agent that reads four files and runs a command produces five cards in
+/// a row, and the reply they were in service of scrolls off the top. A run is
+/// collapsed to a single summary the reader can open — unless something in it
+/// failed or is still going, in which case it stays open, because that is
+/// exactly when you want to see it.
+pub(crate) fn render_transcript(items: &[ChatItem], marks: &[(usize, i64)]) -> Element {
+    let mut out: Vec<Element> = Vec::new();
+    let mut i = 0;
+    while i < items.len() {
+        for (at, secs) in marks.iter().filter(|(at, _)| *at == i) {
+            let label = clock_label(*secs);
+            out.push(rsx! {
+                div { key: "mark-{at}", class: "timemark", span { "{label}" } }
+            });
+        }
+        if !matches!(items[i], ChatItem::Tool { .. }) {
+            out.push(render_item(i, &items[i]));
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < items.len() && matches!(items[i], ChatItem::Tool { .. }) {
+            i += 1;
+        }
+        let run = &items[start..i];
+        let unsettled = run.iter().any(|it| {
+            matches!(it, ChatItem::Tool { status, .. }
+                if !matches!(status.as_str(), "completed"))
+        });
+        if run.len() < 2 || unsettled {
+            for (offset, item) in run.iter().enumerate() {
+                out.push(render_item(start + offset, item));
+            }
+        } else {
+            let summary = tool_run_summary(run);
+            let cards = run
+                .iter()
+                .enumerate()
+                .map(|(offset, item)| render_item(start + offset, item));
+            out.push(rsx! {
+                details { key: "run-{start}", class: "tool-run",
+                    summary { "{summary}" }
+                    {cards}
+                }
+            });
+        }
+    }
+    rsx! { {out.into_iter()} }
+}
+
+/// Wall-clock "HH:MM" for a mark. Local time is not available without a
+/// timezone database, so this is UTC — which is what the servers log in too,
+/// and the mark exists to say "there was a gap here", not to be a clock.
+fn clock_label(secs: i64) -> String {
+    let mins = secs.div_euclid(60);
+    format!(
+        "{:02}:{:02}",
+        mins.div_euclid(60).rem_euclid(24),
+        mins.rem_euclid(60)
+    )
+}
+
+/// "Used 4 tools" plus what they were, when they were all the same thing.
+fn tool_run_summary(run: &[ChatItem]) -> String {
+    let mut kinds: Vec<&str> = run
+        .iter()
+        .filter_map(|it| match it {
+            ChatItem::Tool { kind, .. } => Some(kind.as_str()),
+            _ => None,
+        })
+        .collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    let n = run.len();
+    match kinds.as_slice() {
+        [one] => format!("Used {n} tools · {}", tool_kind_phrase(one, n)),
+        _ => format!("Used {n} tools"),
+    }
+}
+
+fn tool_kind_phrase(kind: &str, n: usize) -> String {
+    let plural = if n == 1 { "" } else { "s" };
+    match kind {
+        "execute" => format!("ran {n} command{plural}"),
+        "read" => format!("read {n} file{plural}"),
+        "edit" => format!("edited {n} file{plural}"),
+        "search" => format!("ran {n} search{}", if n == 1 { "" } else { "es" }),
+        "fetch" => format!("fetched {n} URL{plural}"),
+        other => format!("{other} x{n}"),
     }
 }
 
@@ -146,7 +246,7 @@ pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
             rsx! {
                 div { key: "{index}", class: "tool status-{status}",
                     div { class: "tool-head",
-                        span { class: "tool-icon", "{icon}" }
+                        span { class: "tool-icon", Icon { name: "{icon}" } }
                         span { class: "tool-title", "{title}" }
                         span { class: "tool-status", "{tool_status_label(status)}" }
                     }
@@ -186,17 +286,19 @@ fn tool_status_label(status: &str) -> String {
     }
 }
 
+/// Icon name for a tool kind. These were emoji; see `crate::icons` for why
+/// they are not any more.
 fn tool_icon(kind: &str) -> &'static str {
     match kind {
-        "execute" => "❯_",
-        "read" => "📄",
-        "edit" => "✏️",
-        "delete" => "🗑",
-        "move" => "📦",
-        "search" => "🔍",
-        "fetch" => "🌐",
-        "think" => "💭",
-        _ => "🔧",
+        "execute" => "terminal",
+        "read" => "file",
+        "edit" => "pencil",
+        "delete" => "trash",
+        "move" => "package",
+        "search" => "search",
+        "fetch" => "globe",
+        "think" => "think",
+        _ => "wrench",
     }
 }
 
@@ -276,11 +378,11 @@ pub fn PermissionModal() -> Element {
                     for option in request.options.iter() {
                         button {
                             key: "{option.option_id}",
-                            class: if option.kind.as_deref().unwrap_or("").starts_with("allow") {
-                                "btn primary"
-                            } else {
-                                "btn danger-outline"
-                            },
+                            class: permission_button_class(
+                                option.kind.as_deref(),
+                                option.name.as_deref(),
+                                &option.option_id,
+                            ),
                             onclick: {
                                 let request_id = request.request_id.clone();
                                 let option_id = option.option_id.clone();
@@ -301,6 +403,30 @@ pub fn PermissionModal() -> Element {
                 }
             }
         }
+    }
+}
+
+/// Which button treatment a permission option gets.
+///
+/// Keyed off what the option *is*, never off where it appears in the list:
+/// the backend decides that order, and on a real ACP server "always allow"
+/// arrived first, so an order-dependent rule painted the broadest possible
+/// grant as the solid default and the one-shot grant as the quiet secondary.
+/// The safest allow is the default; a broader allow is available but never
+/// the thing your thumb lands on.
+fn permission_button_class(
+    kind: Option<&str>,
+    name: Option<&str>,
+    option_id: &str,
+) -> &'static str {
+    let raw = name.or(kind).unwrap_or(option_id);
+    if !raw.starts_with("allow") {
+        return "btn danger-outline";
+    }
+    if raw.contains("always") {
+        "btn secondary"
+    } else {
+        "btn primary"
     }
 }
 

@@ -8,6 +8,7 @@
 
 mod app;
 mod code;
+mod icons;
 mod markdown;
 mod state;
 mod views;

@@ -96,6 +96,13 @@ pub(crate) struct ChatState {
     pub cwd: String,
     pub title: String,
     pub items: Vec<ChatItem>,
+    /// Where a long pause happened: `(index of the item after the pause,
+    /// unix seconds)`. Kept beside `items` rather than as an item of its own
+    /// because `CodeChatState::part_index` holds indices into that vector and
+    /// inserting into it would silently misroute streamed part updates.
+    pub marks: Vec<(usize, i64)>,
+    /// When the last item was appended, for deciding the above.
+    pub last_at: i64,
     pub running: bool,
     pub loading: bool,
 }
@@ -376,7 +383,14 @@ fn apply_update(ctx: &AppCtx, session_id: &str, update: SessionUpdate) {
         }
         SessionUpdate::ToolCall(call) if is_current => {
             let mut c = chat.write();
-            c.items.push(ChatItem::Tool {
+            let ChatState {
+                items,
+                marks,
+                last_at,
+                ..
+            } = &mut *c;
+            mark_gap(items.len(), marks, last_at);
+            items.push(ChatItem::Tool {
                 id: call.tool_call_id.clone(),
                 title: call
                     .title
@@ -451,7 +465,14 @@ fn push_chunk(chat: &mut Signal<ChatState>, chunk: MessageChunk, kind: ChunkKind
         _ => {}
     }
 
-    c.items.push(match kind {
+    let ChatState {
+        items,
+        marks,
+        last_at,
+        ..
+    } = &mut *c;
+    mark_gap(items.len(), marks, last_at);
+    items.push(match kind {
         ChunkKind::User => ChatItem::User { text },
         ChunkKind::Assistant => ChatItem::Assistant { message_id, text },
         ChunkKind::Thought => ChatItem::Thought { message_id, text },
@@ -534,6 +555,8 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
     let running = ctx.running_sessions.peek().contains(&info.session_id);
 
     chat.set(ChatState {
+        marks: Vec::new(),
+        last_at: 0,
         session_id: Some(info.session_id.clone()),
         cwd: cwd.clone(),
         title: info.display_title(),
@@ -587,6 +610,8 @@ pub(crate) fn new_session(ctx: &AppCtx) {
                 let mut screen = ctx.screen;
                 let mut usage = ctx.usage;
                 chat.set(ChatState {
+                    marks: Vec::new(),
+                    last_at: 0,
                     session_id: Some(resp.session_id),
                     cwd: working_dir,
                     title: "New chat".to_string(),
@@ -615,7 +640,14 @@ pub(crate) fn send_prompt(ctx: &AppCtx, text: String) -> bool {
     };
     {
         let mut c = chat.write();
-        c.items.push(ChatItem::User { text: text.clone() });
+        let ChatState {
+            items,
+            marks,
+            last_at,
+            ..
+        } = &mut *c;
+        mark_gap(items.len(), marks, last_at);
+        items.push(ChatItem::User { text: text.clone() });
         c.running = true;
     }
     let mut running_sessions = ctx.running_sessions;
@@ -687,13 +719,88 @@ pub(crate) fn answer_permission(ctx: &AppCtx, request_id: &Value, option_id: Opt
         .retain(|req| req.request_id != *request_id);
 }
 
-/// Human-friendly `updatedAt` (RFC3339 → "YYYY-MM-DD HH:MM").
-pub(crate) fn short_timestamp(ts: &str) -> String {
-    let date = ts.get(0..10).unwrap_or(ts);
-    let time = ts.get(11..16).unwrap_or("");
-    if time.is_empty() {
-        date.to_string()
-    } else {
-        format!("{date} {time}")
+/// A pause long enough that the reader wants to know when things resumed.
+/// Ten minutes: shorter and an ordinary think-time would litter the
+/// transcript with rules.
+const GAP_SECS: i64 = 600;
+
+/// Unix seconds now.
+pub(crate) fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs().cast_signed())
+}
+
+/// Record a time mark before the item about to be appended at `items_len`,
+/// if enough time has passed since the last one.
+///
+/// Only live appends are stamped. History arrives from the server in one
+/// burst with no per-message times, so a replayed transcript carries no
+/// marks — which is honest: we do not know when those turns happened.
+pub(crate) fn mark_gap(items_len: usize, marks: &mut Vec<(usize, i64)>, last_at: &mut i64) {
+    let now = now_secs();
+    if *last_at != 0 && now - *last_at >= GAP_SECS {
+        marks.push((items_len, now));
+    }
+    *last_at = now;
+}
+
+/// Days since the Unix epoch for a civil date, by Howard Hinnant's
+/// `days_from_civil`. Written out rather than pulling in a date crate: this
+/// and `relative_time` below are the only date arithmetic the app does.
+const fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// Unix seconds for an RFC3339 timestamp, or `None` if it is not one.
+/// Offsets are ignored — every timestamp the servers send is UTC, and an
+/// hour of drift cannot change which side of a "2h" boundary a row lands on
+/// in a way anybody would notice.
+pub(crate) fn rfc3339_to_epoch(ts: &str) -> Option<i64> {
+    let num = |r: std::ops::Range<usize>| ts.get(r)?.parse::<i64>().ok();
+    let (y, m, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (hh, mm) = (num(11..13).unwrap_or(0), num(14..16).unwrap_or(0));
+    let ss = num(17..19).unwrap_or(0);
+    Some(days_from_civil(y, m, d) * 86_400 + hh * 3_600 + mm * 60 + ss)
+}
+
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/// Age of `epoch` as a list-row badge: "now", "5m", "2h", "3d", then a date.
+/// Recent things get a duration because that is what you are tracking; old
+/// things get a date because "47d" is not a fact anybody holds in their head.
+pub(crate) fn relative_time(epoch: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs().cast_signed());
+    let age = now - epoch;
+    match age {
+        ..60 => "now".to_owned(),
+        60..3_600 => format!("{}m", age / 60),
+        3_600..86_400 => format!("{}h", age / 3_600),
+        86_400..604_800 => format!("{}d", age / 86_400),
+        _ => {
+            // Walk back from the epoch day to a civil date for the label.
+            let mut days = epoch.div_euclid(86_400) + 719_468;
+            let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+            days -= era * 146_097;
+            let doy = days - (365 * (days / 365) + (days / 365) / 4 - (days / 365) / 100);
+            let yoe = (days - doy / 365) / 365;
+            let doy = days - (365 * yoe + yoe / 4 - yoe / 100);
+            let mp = (5 * doy + 2) / 153;
+            let d = doy - (153 * mp + 2) / 5 + 1;
+            let m = if mp < 10 { mp + 3 } else { mp - 9 };
+            MONTHS
+                .get(usize::try_from(m - 1).unwrap_or(0))
+                .map_or_else(|| "earlier".to_owned(), |name| format!("{name} {d}"))
+        }
     }
 }

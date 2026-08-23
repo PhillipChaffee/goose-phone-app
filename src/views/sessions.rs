@@ -1,8 +1,10 @@
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 
+use crate::icons::Icon;
 use crate::state::{
-    new_session, open_session, refresh_sessions, short_timestamp, show_toast, use_app_ctx, Screen,
+    new_session, open_session, refresh_sessions, relative_time, rfc3339_to_epoch, show_toast,
+    use_app_ctx, Screen,
 };
 use crate::views::ConnBadge;
 
@@ -18,32 +20,26 @@ pub fn SessionsView() -> Element {
         header { class: "topbar",
             h1 { class: "title", "Sessions" }
             ConnBadge {}
-            button {
-                class: "icon-btn",
-                onclick: move |_| {
-                    let mut screen = ctx.screen;
-                    screen.set(Screen::Settings);
-                },
-                "⚙"
-            }
-        }
-        main { class: "scroll",
-            div { class: "btn-row list-actions",
+            div { class: "topbar-actions",
                 button {
-                    class: "btn primary grow",
-                    onclick: move |_| new_session(&ctx),
-                    "＋ New chat"
-                }
-                button {
-                    class: "btn secondary",
+                    class: "icon-btn",
                     disabled: loading,
                     onclick: move |_| {
                         spawn_forever(async move { refresh_sessions(&ctx, false).await });
                     },
-                    if loading { "…" } else { "↻" }
+                    if loading { "…" } else { Icon { name: "refresh" } }
+                }
+                button {
+                    class: "icon-btn",
+                    onclick: move |_| {
+                        let mut screen = ctx.screen;
+                        screen.set(Screen::Settings);
+                    },
+                    Icon { name: "gear" }
                 }
             }
-
+        }
+        main { class: "scroll has-fab",
             if sessions.is_empty() && !loading {
                 p { class: "empty", "No sessions yet — start a new chat." }
             }
@@ -53,25 +49,31 @@ pub fn SessionsView() -> Element {
                     li {
                         key: "{info.session_id}",
                         class: "session-item",
+                        onclick: move |_| open_session(&ctx, info.clone()),
+                        div { class: "session-tile", Icon { name: "message" } }
                         div {
                             class: "session-main",
-                            onclick: move |_| open_session(&ctx, info.clone()),
-                            div { class: "session-title", "{info.display_title()}" }
-                            if let Some(snippet) = info.last_message_snippet() {
-                                div { class: "session-snippet", "{snippet}" }
+                            div { class: "session-head",
+                                div { class: "session-title", "{info.display_title()}" }
+                                if let Some(age) = info.updated_at.as_deref()
+                                    .and_then(rfc3339_to_epoch)
+                                    .map(relative_time)
+                                {
+                                    span { class: "session-age", "{age}" }
+                                }
                             }
                             div { class: "session-meta",
-                                span { "{info.session_id}" }
                                 if let Some(count) = info.message_count() {
                                     span { "{count} msgs" }
                                 }
-                                if let Some(ts) = &info.updated_at {
-                                    span { "{short_timestamp(ts)}" }
-                                }
+                                span { "{info.session_id}" }
+                            }
+                            if let Some(snippet) = info.last_message_snippet() {
+                                div { class: "session-quote", "{snippet}" }
                             }
                         }
                         if confirm_delete.read().as_deref() == Some(info.session_id.as_str()) {
-                            div { class: "confirm-row",
+                            div { class: "confirm-row", onclick: move |e: Event<MouseData>| e.stop_propagation(),
                                 span { "Delete?" }
                                 button {
                                     class: "btn danger small",
@@ -105,9 +107,12 @@ pub fn SessionsView() -> Element {
                                 class: "icon-btn trash",
                                 onclick: {
                                     let session_id = info.session_id.clone();
-                                    move |_| confirm_delete.set(Some(session_id.clone()))
+                                    move |e: Event<MouseData>| {
+                                        e.stop_propagation();
+                                        confirm_delete.set(Some(session_id.clone()));
+                                    }
                                 },
-                                "🗑"
+                                Icon { name: "trash" }
                             }
                         }
                     }
@@ -126,6 +131,13 @@ pub fn SessionsView() -> Element {
                     }
                 }
             }
+        }
+
+        button {
+            class: "fab",
+            onclick: move |_| new_session(&ctx),
+            Icon { name: "plus" }
+            "New chat"
         }
     }
 }
