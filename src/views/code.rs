@@ -528,7 +528,15 @@ fn render_diff_file(ctx: &AppCtx, state: &DiffState, file: &DiffFile, wrap: bool
     let binary = file.info.is_binary();
     let deleted = file.info.status == FileStatus::Deleted;
 
-    let rows = diff_rows(&ctx, state, file);
+    // Only for a card that is actually showing them. Re-hunking every file on
+    // every render meant a session touching twenty files paid for twenty
+    // parses to display one — and <details open=false> does not render its
+    // children, so the work was thrown away.
+    let rows = if open {
+        Some(diff_rows(&ctx, state, file))
+    } else {
+        None
+    };
 
     rsx! {
         details {
@@ -588,7 +596,7 @@ fn render_diff_file(ctx: &AppCtx, state: &DiffState, file: &DiffFile, wrap: bool
             // what keeps a twenty-file diff cheap.
             if open {
                 div { class: if wrap { "diff-body" } else { "diff-body nowrap" },
-                    {rows.into_iter()}
+                    {rows.into_iter().flatten()}
                 }
             }
         }
@@ -675,7 +683,11 @@ fn diff_rows(ctx: &AppCtx, state: &DiffState, file: &DiffFile) -> Vec<Element> {
     if rendered.dropped > 0 {
         rows.push(rsx! {
             p { key: "capped-{path}", class: "diff-note",
-                "{rendered.dropped} more lines — too long to render in one screen."
+                if rendered.dropped_changes > 0 {
+                    "{rendered.dropped} more lines, {rendered.dropped_changes} of them changes — too long to render in one screen."
+                } else {
+                    "{rendered.dropped} more unchanged lines — too long to render in one screen."
+                }
             }
         });
     }

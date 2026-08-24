@@ -104,6 +104,13 @@ pub(crate) enum Block {
 pub(crate) struct Rendered {
     pub blocks: Vec<Block>,
     pub dropped: usize,
+    /// How many of the dropped rows were actual changes rather than context.
+    ///
+    /// The cap fills in document order, so a file whose changes are scattered
+    /// through it can exhaust the budget early and lose changes at the end.
+    /// Saying "too long to render" would describe that as mere overflow; a
+    /// reader needs to know the screen is hiding edits, not just lines.
+    pub dropped_changes: usize,
 }
 
 /// Parse a unified patch into numbered lines.
@@ -273,6 +280,10 @@ pub(crate) fn blocks(
     Rendered {
         blocks,
         dropped: lines.len() - cursor,
+        dropped_changes: lines[cursor..]
+            .iter()
+            .filter(|l| l.kind != LineKind::Context)
+            .count(),
     }
 }
 
