@@ -189,6 +189,39 @@ pub(crate) fn choice_label(name: &str, value: &str) -> String {
     name.to_owned()
 }
 
+/// What the composer chip says about thinking effort, after the model name —
+/// or `None` when there is nothing worth saying.
+///
+/// A default is not worth saying. The chip is for what is true and notable
+/// about the next message, and every session has a default; spelling one out
+/// as "Default" turns the one place effort is visible at a glance into a place
+/// it is usually noise. Both backends have their own way of writing it down
+/// and both are filtered here rather than at each call site: `OpenCode`
+/// records the literal string `default` on a session whose turn asked for no
+/// variant (see `SessionModel::effort`), while the app carries `None` for the
+/// same state and goose sends no value at all until one is set.
+///
+/// The two long tiers are shortened, because the chip has nowhere to put
+/// them. On the goose composer at 360pt the label is 120px and "Claude Sonnet
+/// 5" wants 94 of it, so a six-letter tier standing beside it took the name
+/// down to "Claude…" — the chip stopped answering the one question it exists
+/// to answer, in order to answer the second one. `medium`, which goose
+/// serves, and `minimal`, which `OpenCode` does, are the only tiers either
+/// backend has that are long enough to do that, and neither short form is
+/// ambiguous next to the `Max` already on the chip. The sheet the chip opens
+/// spells every tier out in full, and `.chip-effort` caps anything a backend
+/// sends that is not on either ladder.
+pub(crate) fn chip_effort(current: Option<&str>) -> Option<String> {
+    let raw = current
+        .map(str::trim)
+        .filter(|v| !v.is_empty() && *v != "default")?;
+    Some(match raw.to_ascii_lowercase().as_str() {
+        "minimal" => "Min".to_owned(),
+        "medium" => "Med".to_owned(),
+        _ => choice_label(raw, raw),
+    })
+}
+
 fn humanize(raw: &str) -> String {
     let mut words = raw.replace('_', " ");
     if let Some(first) = words.get_mut(..1) {
@@ -450,6 +483,47 @@ mod tests {
             assert!(
                 crate::icons::path_for(name).is_some(),
                 "mode {mode} asks for a missing icon: {name}"
+            );
+        }
+    }
+
+    /// Every spelling of "no tier was asked for" leaves the chip saying the
+    /// model name alone.
+    #[test]
+    fn a_default_effort_is_not_worth_a_chip() {
+        assert_eq!(chip_effort(None), None);
+        assert_eq!(chip_effort(Some("")), None);
+        assert_eq!(chip_effort(Some("   ")), None);
+        assert_eq!(chip_effort(Some("default")), None);
+    }
+
+    /// A tier the reader chose is exactly what the chip is for, and it arrives
+    /// as a backend enum rather than as UI copy.
+    #[test]
+    fn a_chosen_effort_reaches_the_chip_as_copy() {
+        assert_eq!(chip_effort(Some("max")), Some("Max".to_owned()));
+        assert_eq!(chip_effort(Some("xhigh")), Some("Xhigh".to_owned()));
+        assert_eq!(chip_effort(Some("off")), Some("Off".to_owned()));
+    }
+
+    /// No tier either backend serves is long enough to crowd the model name
+    /// off the chip. Five characters is what `.chip-effort` gives one before
+    /// it starts clipping (assets/main.css), and the goose row at 360pt has
+    /// only 120px of label to divide between the two.
+    #[test]
+    fn every_tier_a_backend_serves_fits_the_chip() {
+        assert_eq!(chip_effort(Some("medium")), Some("Med".to_owned()));
+        assert_eq!(chip_effort(Some("minimal")), Some("Min".to_owned()));
+        // goose's ladder, then OpenCode's; `off` and `none` reach the chip
+        // only when a reader picked them from a list that offered something
+        // else, which is a choice worth stating.
+        for tier in [
+            "off", "low", "medium", "high", "max", "none", "minimal", "xhigh",
+        ] {
+            let shown = chip_effort(Some(tier)).unwrap_or_default();
+            assert!(
+                shown.chars().count() <= 5,
+                "{tier} reaches the chip as {shown}"
             );
         }
     }

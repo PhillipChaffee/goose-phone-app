@@ -380,6 +380,7 @@ pre {
 .glass,
 .topbar > .icon-btn,
 .topbar-actions,
+.scroll-bottom,
 .ptr {
   background: var(--bg-primary);
   box-shadow: var(--shadow-md);
@@ -473,7 +474,8 @@ pre {
 @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
   .glass,
   .topbar > .icon-btn,
-  .topbar-actions {
+  .topbar-actions,
+  .scroll-bottom {
     background: color-mix(in srgb, var(--bg-primary) var(--glass-tint), transparent);
     -webkit-backdrop-filter: var(--glass-blur);
     backdrop-filter: var(--glass-blur);
@@ -491,7 +493,8 @@ pre {
 @media (prefers-reduced-transparency: reduce) {
   .glass,
   .topbar > .icon-btn,
-  .topbar-actions {
+  .topbar-actions,
+  .scroll-bottom {
     background: var(--bg-primary);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
@@ -1770,6 +1773,66 @@ details[open] > summary::before {
   color: var(--text-danger);
 }
 
+/* ── scroll to bottom ───────────────────────────────────────────────── */
+
+/* A slot with no height, sitting between the transcript and everything under
+ * it. The button hangs out of it, so it floats above whatever comes next — the
+ * action row on the code tab, the composer on the goose tab — and follows that
+ * as the composer grows with the draft and as the shell tracks the visual
+ * viewport. Pinning it to the bottom of the screen instead would bury it under
+ * the composer, and under the keyboard the moment one opened. */
+.scroll-bottom-slot {
+  position: relative;
+  flex-shrink: 0;
+  height: 0;
+}
+
+/* Shown only while the transcript is scrolled away from its bottom. That is a
+ * class a passive JS listener puts on <body> (src/viewport.rs): deciding it in
+ * Rust would mean an onscroll handler, and the native renderer sends every
+ * listened-to event through a synchronous XHR — a blocking round trip on every
+ * frame of every scroll. Rust owns the button and its tap; JS owns whether it
+ * is there to be tapped. */
+.scroll-bottom {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  z-index: var(--z-chrome);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  color: var(--text-primary);
+  font-size: 20px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 8px);
+  transition: opacity 140ms ease, transform 140ms ease;
+  cursor: pointer;
+}
+
+body.away-from-bottom .scroll-bottom {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
+}
+
+.scroll-bottom:active {
+  background: var(--bg-secondary);
+}
+
+/* The fade is not motion and stays; the 8px rise is. */
+@media (prefers-reduced-motion: reduce) {
+  .scroll-bottom {
+    transition: opacity 140ms ease;
+    transform: translate(-50%, 0);
+  }
+}
+
 /* ── composer ───────────────────────────────────────────────────────── */
 
 /* A floating outlined card inset from the edges — not a docked bar. */
@@ -1794,6 +1857,17 @@ details[open] > summary::before {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* Near the end of the context window a fourth chip appears, and at 360pt four
+ * of them do not fit: something has to be crushed, and every candidate is
+ * worse than the alternative — a model name under six characters identifies
+ * nothing, a tier squeezed to zero disappears silently, and a mode that
+ * vanishes when you approach a limit is a mystery. So the row takes a second
+ * line instead, for the one case that needs it. The composer grows by 34px at
+ * the moment the reader most needs to see why. */
+.composer-row:has(.composer-chip.warn) {
+  flex-wrap: wrap;
 }
 
 /* With no chips to show, the control row holds one button and the two-row
@@ -1851,8 +1925,25 @@ details[open] > summary::before {
  *
  * min-width here as well as on the chip: this is itself a flex item, and
  * without it the label holds its full content width and spills out of a chip
- * that has already given way — the pill closes in and the text stays put. */
+ * that has already given way — the pill closes in and the text stays put.
+ *
+ * The label holds two facts, and they give way in a fixed order, so it is a
+ * flex row rather than one ellipsised string: ellipsising the string would eat
+ * the effort tier first, since it comes last, and the tier is the entire
+ * reason the chip says anything beyond a name. The name gives way instead —
+ * but only down to a point, because a name cut to one word has stopped
+ * naming anything. See .chip-effort for where that point is. */
 .chip-label {
+  display: flex;
+  align-items: baseline;
+  /* A word space. "Opus 5 Max" is one phrase, not two controls in a row. */
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+}
+
+.chip-model {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1877,11 +1968,58 @@ details[open] > summary::before {
  * whatever the mode was called. It holds every mode OpenCode ships and all of
  * goose's but `Manual approval`. */
 .composer-chip.mode {
-  flex-shrink: 0;
+  /* Shrinks, but last and least. `flex-shrink: 0` was right when the row held
+   * a model chip and this one: the mode label is short and had nothing to
+   * give. It stopped being right when the model chip grew a tier beside the
+   * name, because then the whole deficit landed on the name — at 360pt with a
+   * long model, a tier and the context readout, "Claude Sonnet 5" was
+   * rendered in 5.8px, which is not a truncation, it is an absence.
+   *
+   * A tenth of the model chip's willingness, so the name gives way first and
+   * this only starts to move once the name is at its floor below. */
+  flex-shrink: 0.1;
 }
 
 .composer-chip.mode .chip-label {
   max-width: 7ch;
+}
+
+/* The name is the one thing on this chip that cannot go. The tier is beside
+ * it precisely because it is short, and the mode is restated by the sheet it
+ * opens, but a model rendered as four characters tells you nothing and there
+ * are two of them in this app whose first four characters are the same.
+ * Six is enough to tell "Claude…" from "Qwen3…" from "anthr…". */
+.chip-model {
+  min-width: 6ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Dimmer than the model name, and no dimmer than that. --text-tertiary is the
+ * reflex for "quieter still" and measures 2.03:1 on a chip's --bg-secondary
+ * fill in light and 1.85:1 in dark — under even the 3:1 a non-text indicator
+ * gets, let alone the 4.5:1 this is. There is no headroom below secondary on
+ * this fill, so the step is taken from the other end: the name lifts to
+ * primary (9.16:1 light, 9.93:1 dark) and the tier keeps the secondary the
+ * chip was already using (4.64:1 and 5.00:1).
+ *
+ * Pinned, and bounded — the pin alone was the bug. The tier is the fact this
+ * label grew a second element to carry, so it must not be the part that
+ * ellipsises; but an unbounded pinned item spends the label's whole budget
+ * before the name gets any, and the goose row's label is 120px at 360pt while
+ * "Claude Sonnet 5" wants 94 of it. A six-letter tier left the name reading
+ * "Claude…", which is the one thing the chip cannot afford to stop saying.
+ * Five characters clears every tier either backend serves — `Xhigh`, the
+ * widest, measures 4.3 of them, and session_settings.rs shortens goose's
+ * `medium` and OpenCode's `minimal` on the way here — so the cap only ever
+ * bites on a word neither of them has, and it bites the tier rather than the
+ * name. */
+.chip-effort {
+  flex-shrink: 0;
+  max-width: 5ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-secondary);
 }
 
 .composer-chip > .icon {

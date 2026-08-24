@@ -198,6 +198,40 @@ a send button pushed off the edge — the row was within its bounds the whole
 time it was useless.
 
 The sheet has exactly two kinds of row, and which one a setting gets is
+**The settings chip's face is the model, then the effort tier** — `Opus 5
+Max`, the tier in the quieter of the two voices. Effort was invisible until
+the sheet was open, which is a poor place to hide the one setting that changes
+what a message costs and how long it takes. Nothing is said when there is no
+tier to state: `OpenCode` writes "no variant was asked for" as the literal
+string `default` and the app carries it as `None`, and goose ships a lone `off`
+whenever the session's model cannot reason at all — a chip reading `Claude
+Sonnet 5 Off` claims something was switched off rather than never offered. The
+two are told apart by tone rather than by size, and the step is taken by
+lifting the name rather than by dimming the tier: on a chip's `--bg-secondary`
+fill there is no headroom under `--text-secondary` (4.64:1 light, 5.00:1 dark),
+and `--text-tertiary` measures 2.03:1 and 1.85:1 there — under even the 3:1 a
+non-text indicator gets. So the name goes to `--text-primary` (9.16:1, 9.93:1)
+and the tier keeps the secondary the chip already had.
+
+**Neither half may eat the other.** The name is what gives way when the chip
+runs out of room — it is the long one, and the sheet the chip opens states it
+in full — but only as far as it can give way and still be a name. The goose
+row is the tight one: its chips and send button share 306px at 360pt, which
+leaves the label 120 and `Claude Sonnet 5` wants 94 of them, so a tier that is
+pinned *and* unbounded spends the whole difference and the chip comes back
+reading `Claude…`, which cannot tell Opus from Sonnet. Three things hold the
+tier to about a fifth of the label instead: `chip_effort` shortens the two long
+tiers either backend serves (goose's `medium`, `OpenCode`'s `minimal`) on the
+way to the chip, `.chip-effort` caps what arrives at five characters, and the
+token chip stopped spending 20px on decimals it could not use — `128k/200k`,
+not `128.0k/200.0k`, since a tenth of a thousand is a hundred tokens and no
+one is deciding anything on it. `docs/measure-composer.js` fails if the tier
+takes more than 40px, or if a name that has been ellipsised is left holding
+less than twice what the tier holds.
+
+Everything adjustable lives behind that one chip rather than getting a chip of
+its own — four settings would be four chips and a composer that is mostly
+chrome. The sheet has exactly two kinds of row, and which one a setting gets is
 decided by whether choosing would change anything:
 
 | row | shape | when |
@@ -233,6 +267,33 @@ voice. They were built by unrelated code and read like two products until they
 were made to agree. The code tab has no Provider row and that is not a gap: a
 model there *is* `opencode/claude-sonnet-4-5`, provider included, so the row
 would either duplicate Model or decide nothing.
+
+**The way back to the bottom of a transcript appears only when you are not at
+it.** A transcript follows its own bottom as a turn streams, so for most of a
+conversation a button offering to take you there would do nothing, and this
+rule is why it is not on screen for that whole time. It hangs
+out of a zero-height slot directly above the composer rather than being
+positioned against the bottom of the screen: the composer grows with the draft
+and the whole shell rides the visual viewport when the keyboard opens, and
+either one would swallow a button anchored to the frame.
+
+Whether it is visible is decided in JS, and so is whether new content still
+pins the transcript — one fact, "the reader is at the bottom", rather than two
+that can disagree (`src/viewport.rs`). Asking Rust would mean an `onscroll`
+handler, which the native renderer answers with a synchronous XHR: a blocking
+round trip on every frame of every scroll. The pin used to be unconditional,
+which meant reading back during a turn was impossible, because the next
+streamed part dragged you to the bottom again.
+
+That fact is answered from the transcript's *height* as well as from its
+scroll offset, because the keyboard moves the bottom of a conversation away
+from a reader who has not scrolled at all: the shell shrinks to the visual
+viewport, the transcript loses that height with `scrollTop` exactly where it
+was, and no scroll event is fired to notice. A growing draft does the same
+from the other end. Both are heard through a `ResizeObserver`, and a reader
+who was at the bottom is taken there again rather than told they have left a
+place they never moved from — being at the bottom is a place, which is what
+every native chat means by it when the keyboard covers the last message.
 
 **What backs each row.**
 
@@ -340,11 +401,37 @@ the app actually assembles, at whatever width you give it, with the longest
 model and mode names any server has offered — and fails if the send button
 leaves the screen, if a label spills past its pill, or if a label is clipped
 down to an ellipsis and nothing else. Run it at 360 as well as 402; 402 is the
+model names any server has offered and every effort tier that can reach a chip
+— and fails if the send button leaves the screen, if the tier is squeezed out
+through the side of the pill, if the tier takes more than the 40px it is
+allowed, or if a name that has had to ellipsise is left holding less than
+twice what the tier holds. That last pair is what the earlier version missed
+by trying `Max` alone: it is the cheapest tier there is, and the only one
+nothing goes wrong with. Run it at 360 and 375 as well as 402; 402 is the
 width where the damage is smallest.
 
-Both audit `docs/gallery-states.json`, which is **captured out of the running
-app**, not transcribed from it. Drive the app to the states you want and run
-`scripts/capture-gallery.py /tmp/applog.txt`; the app prints its `.app`
+`node docs/measure-ptr.js both` and `node docs/measure-scroll-bottom.js both`
+cover the two controls no screenshot will ever catch. Against a local mock a
+refresh settles in about 120ms, so the pull indicator exists for two frames;
+and the scroll-to-bottom button is only on screen while a transcript is
+scrolled up, which is never a state the capture settles in. Both restate their
+markup instead of reading the gallery — that is exactly the drift the gallery
+exists to prevent, and it is accepted here only because the alternative is not
+checking them at all, so keep them in step with the views. Both measure what a
+screenshot would have shown: hidden when it should be, present and in the right
+place when it should be, in both themes.
+
+The scroll-to-bottom check goes one further and drives the button's *rule*,
+because placement was never the half that broke. It reads the three scripts
+out of `src/viewport.rs` — restating a script would let the copy drift while
+still passing — and walks a real scroller through streaming, reading back, the
+keyboard opening and closing under a reader in both positions, a draft growing
+to four lines, and a tap. One rule is checked at every step: the button is on
+screen precisely when the transcript is not at its bottom.
+
+The audit reads `docs/gallery-states.json`, which is **captured out of the
+running app**, not transcribed from it. Drive the app to the states you want
+and run `scripts/capture-gallery.py /tmp/applog.txt`; the app prints its `.app`
 subtree to the console whenever the UI settles in a new state
 (`src/domdump.rs`, debug builds only) and the script writes both the JSON and
 `docs/style-gallery.html` from it.

@@ -1,5 +1,4 @@
 use dioxus::dioxus_core::spawn_forever;
-use dioxus::document;
 use dioxus::prelude::*;
 
 use goose_acp_client::ConfigOption;
@@ -11,9 +10,14 @@ use crate::state::{
     Screen, Usage,
 };
 use crate::views::session_settings::{
-    choice_label, mode_icon, ChoicePickerSheet, SessionSettingsSheet, SettingChoice, SettingRow,
+    chip_effort, choice_label, mode_icon, ChoicePickerSheet, SessionSettingsSheet, SettingChoice,
+    SettingRow,
 };
-use crate::views::{ConfirmDelete, MenuItem, OverflowButton, OverflowSheet};
+use crate::views::{ConfirmDelete, MenuItem, OverflowButton, OverflowSheet, ScrollToBottom};
+
+/// The transcript's scroller, named so the pin and the scroll-to-bottom
+/// button address the same element.
+const SCROLL_ID: &str = "chat-scroll";
 
 #[component]
 pub fn ChatView() -> Element {
@@ -26,12 +30,7 @@ pub fn ChatView() -> Element {
     // chat signal is read INSIDE the effect so it re-runs on every change.
     use_effect(move || {
         let _ = ctx.chat.read().items.len();
-        document::eval(
-            "requestAnimationFrame(() => { \
-               const el = document.getElementById('chat-scroll'); \
-               if (el) el.scrollTop = el.scrollHeight; \
-             });",
-        );
+        crate::viewport::pin_transcript(SCROLL_ID);
     });
 
     let running = chat.running;
@@ -47,6 +46,17 @@ pub fn ChatView() -> Element {
         .find(|o| o.config_id == "model")
         .and_then(ConfigOption::current_label)
         .map_or_else(|| "Session".to_owned(), str::to_owned);
+    // The effort rides on the chip after the model, so the setting is visible
+    // without opening the sheet. Only when it is a choice: goose ships
+    // `thinking_effort` as a lone `off` whenever the session's model cannot
+    // reason, and "Claude Sonnet 5 Off" reads as something switched off rather
+    // than as something the model never had. `is_adjustable` is already the
+    // question "would choosing change anything", and this is the same one.
+    let effort = config
+        .iter()
+        .find(|o| o.config_id == "thinking_effort")
+        .filter(|o| o.is_adjustable())
+        .and_then(|o| chip_effort(o.current_value.as_deref()));
     let rows = goose_setting_rows(&config, usage);
     // A goose that stops offering a mode simply has no mode chip: this is
     // `None` and everything below skips it, rather than the chip appearing
@@ -66,6 +76,10 @@ pub fn ChatView() -> Element {
         // failed send (e.g. disconnected) doesn't eat the typed text.
         if send_prompt(&ctx, text) {
             draft.set(String::new());
+            // Your own message always takes you back to the bottom, whatever
+            // you had scrolled up to read. Without this the transcript stays
+            // where it was and the message you just sent is off screen.
+            crate::viewport::scroll_to_bottom(SCROLL_ID);
         }
     };
 
@@ -92,7 +106,7 @@ pub fn ChatView() -> Element {
             }
         }
 
-        main { class: "scroll chat", id: "chat-scroll",
+        main { class: "scroll chat", id: SCROLL_ID,
             if chat.loading {
                 p { class: "empty", "Loading history…" }
             }
@@ -105,6 +119,8 @@ pub fn ChatView() -> Element {
                 }
             }
         }
+
+        ScrollToBottom { scroller: SCROLL_ID }
 
         footer { class: "composer",
             textarea {
@@ -128,7 +144,12 @@ pub fn ChatView() -> Element {
                         class: "composer-chip action model",
                         title: "Session settings",
                         onclick: move |_| sheet.set(true),
-                        span { class: "chip-label", "{chip_label}" }
+                        span { class: "chip-label",
+                            span { class: "chip-model", "{chip_label}" }
+                            if let Some(effort) = effort {
+                                span { class: "chip-effort", "{effort}" }
+                            }
+                        }
                         Icon { name: "chevron-down" }
                     }
                 }
@@ -143,9 +164,9 @@ pub fn ChatView() -> Element {
                         }
                     }
                 }
-                if let Some((used, limit)) = usage {
-                    span { class: "composer-chip", title: "Context used",
-                        "{context_percent(used, limit)}"
+                if let Some(percent) = crowding(usage) {
+                    span { class: "composer-chip warn", title: "Context used",
+                        "{percent}%"
                     }
                 }
                 if running {
@@ -535,14 +556,37 @@ fn tool_icon(kind: &str) -> &'static str {
 /// window should read as full rather than as 103%. Widened to `u128` first,
 /// so scaling by 100 cannot wrap and cannot saturate — saturating would turn
 /// a nearly-full window into "1%", which is the opposite of the truth.
-fn context_percent(used: u64, limit: u64) -> String {
+/// The context readout, but only once it is worth the room it costs.
+///
+/// It used to be there always. Four chips do not fit a 360pt composer — a
+/// model name, its effort tier, a mode and this came to 306px of a 306px row,
+/// and the model name was rendered in under six of them. Something had to
+/// leave, and this is the one whose absence costs least: the window is stated
+/// in full in the settings sheet, and "12% used" is not a fact anyone acts on.
+/// Near the end of the window it becomes the most useful thing in the row, so
+/// that is when it appears — which is also what the reference app does, as a
+/// notice rather than a permanent readout.
+///
+/// Returns `None` below the threshold, so the chip does not render at all
+/// rather than rendering empty.
+fn crowding(usage: Option<Usage>) -> Option<u128> {
+    const SPEAK_UP_AT: u128 = 75;
+    let (used, limit) = usage?;
     if limit == 0 {
-        return "—".to_owned();
+        return None;
     }
-    let percent = u128::from(used) * 100 / u128::from(limit);
-    format!("{}%", percent.min(100))
+    let percent = (u128::from(used) * 100 / u128::from(limit)).min(100);
+    (percent >= SPEAK_UP_AT).then_some(percent)
 }
 
+/// A token count, as short as it can be said without losing anything.
+///
+/// The decimal earns its place under ten thousand, where a tenth of a
+/// thousand is a tenth of what is on screen. Above that it is noise that
+/// costs room: "128.0k/200.0k" measured 106px of the 306px the goose
+/// composer's chip row has at 360pt, which is what left the model name with
+/// nothing to give when the effort tier arrived beside it. "128k/200k" says
+/// the same thing in 86.
 pub(crate) fn format_tokens(n: u64) -> String {
     // Scoped to this one cast, not to the whole function: anything else added
     // here should have to justify its own arithmetic.
@@ -554,6 +598,8 @@ pub(crate) fn format_tokens(n: u64) -> String {
     let tokens = n as f64;
     if n >= 1_000_000 {
         format!("{:.1}M", tokens / 1_000_000.0)
+    } else if n >= 10_000 {
+        format!("{:.0}k", tokens / 1_000.0)
     } else if n >= 1_000 {
         format!("{:.1}k", tokens / 1_000.0)
     } else {
@@ -684,19 +730,26 @@ fn permission_label(name: Option<&str>, option_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{context_percent, goose_setting_rows, is_mode_chip, mode_choices, ConfigOption};
+    use super::{
+        crowding, format_tokens, goose_setting_rows, is_mode_chip, mode_choices, ConfigOption,
+    };
     use goose_acp_client::ConfigChoice;
 
-    /// The chip reports a fraction of a window, so it needs a window; and a
-    /// turn that overran one should read as full rather than as 103%.
+    /// The readout costs a chip in a row that has none to spare, so it only
+    /// appears when it is the most useful thing there — and a turn that
+    /// overran its own window reads as full rather than as 103%.
     #[test]
-    fn context_percent_needs_a_window_and_stops_at_full() {
-        assert_eq!(context_percent(128_000, 200_000), "64%");
-        assert_eq!(context_percent(0, 200_000), "0%");
-        assert_eq!(context_percent(206_000, 200_000), "100%");
-        assert_eq!(context_percent(1, 0), "—");
+    fn the_context_chip_speaks_up_only_near_the_end_of_the_window() {
+        assert_eq!(crowding(None), None);
+        assert_eq!(crowding(Some((128_000, 200_000))), None); // 64%, not yet
+        assert_eq!(crowding(Some((150_000, 200_000))), Some(75));
+        assert_eq!(crowding(Some((190_000, 200_000))), Some(95));
+        // Overran, and clamped rather than reading 103%.
+        assert_eq!(crowding(Some((206_000, 200_000))), Some(100));
+        // A server that has not said what the window is says nothing here.
+        assert_eq!(crowding(Some((1, 0))), None);
         // No overflow on a window the size of a whole model's training set.
-        assert_eq!(context_percent(u64::MAX, u64::MAX), "100%");
+        assert_eq!(crowding(Some((u64::MAX, u64::MAX))), Some(100));
     }
 
     fn choice(value: &str, name: &str, description: Option<&str>) -> ConfigChoice {
@@ -784,7 +837,7 @@ mod tests {
         assert_eq!(rows[1].value, "—");
         assert_eq!(
             goose_setting_rows(&config, Some((1_000, 200_000)))[1].value,
-            "200.0k tokens"
+            "200k tokens"
         );
     }
 
@@ -814,5 +867,20 @@ mod tests {
         assert_eq!(choices[1].label, "Manual approval");
         assert_eq!(choices[1].note, None);
         assert_eq!(choices[1].icon.as_deref(), Some("shield-check"));
+    }
+
+    /// A count keeps its decimal only where the decimal is a real difference.
+    /// Above ten thousand it is a hundred tokens, and it is spent on the one
+    /// row in the app that has no width to spare.
+    #[test]
+    fn a_token_count_carries_a_decimal_only_while_it_says_something() {
+        assert_eq!(format_tokens(0), "0");
+        assert_eq!(format_tokens(842), "842");
+        assert_eq!(format_tokens(1_200), "1.2k");
+        assert_eq!(format_tokens(9_400), "9.4k");
+        assert_eq!(format_tokens(10_000), "10k");
+        assert_eq!(format_tokens(128_400), "128k");
+        assert_eq!(format_tokens(200_000), "200k");
+        assert_eq!(format_tokens(1_500_000), "1.5M");
     }
 }
