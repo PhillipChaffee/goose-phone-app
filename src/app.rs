@@ -30,6 +30,22 @@ pub fn App() -> Element {
     };
 
     crate::viewport::use_visual_viewport();
+    #[cfg(debug_assertions)]
+    crate::domdump::use_dom_dump(
+        match tab {
+            Tab::Home => match (ctx.screen)() {
+                Screen::Settings => "settings",
+                Screen::Sessions => "chats",
+                Screen::Chat => "chat",
+            },
+            Tab::Code => match (ctx.code_screen)() {
+                CodeScreen::List => "code-list",
+                CodeScreen::New => "code-new",
+                CodeScreen::Chat => "code-chat",
+            },
+        }
+        .to_owned(),
+    );
 
     let toast = (ctx.toast)();
     // Two independent, backend-tagged queues; the goose modal wins ties.

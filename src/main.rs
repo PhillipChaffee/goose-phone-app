@@ -8,6 +8,8 @@
 
 mod app;
 mod code;
+#[cfg(debug_assertions)]
+mod domdump;
 mod icons;
 mod markdown;
 mod state;

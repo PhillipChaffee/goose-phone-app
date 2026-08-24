@@ -123,9 +123,11 @@ output and ate the width the tool title needed.
 
 ### 9. Controls are sized for thumbs, and the whole row is the target
 
-Tap targets are 40px minimum, which clears the 44px guidance once surrounding
-padding is counted. A label never goes inside a fixed-size circular button —
-it wraps and overflows.
+Icon buttons are 44px — the HIG's number. They were 40px on the argument that
+surrounding bar padding made up the difference, which stopped being true the
+moment the bar went away and the controls started floating on their own. A
+label never goes inside a fixed-size circular button — it wraps and
+overflows.
 
 A list row is tappable across its **whole** area, not just the text block
 inside it. The handler belongs on the `li`; the trailing control and the
@@ -203,15 +205,25 @@ both — contrast against the first opaque background behind each element, and
 geometry (overflow, clipped text, square-cornered surfaces, undersized tap
 targets, radius nesting). It exits non-zero on a finding.
 
-**But note what the audit is actually looking at.** It runs against
-`docs/style-gallery.html`, a hand-maintained copy of the DOM the views emit —
-and that copy has drifted before, badly enough that an entire review pass
-examined markup the app no longer produced. Treat a clean audit as evidence
-about the gallery, not about the app, until the two have been reconciled.
+It audits `docs/gallery-states.json`, which is **captured out of the running
+app**, not transcribed from it. Drive the app to the states you want and run
+`scripts/capture-gallery.py /tmp/applog.txt`; every screen change prints its
+`.app` subtree to the console (`src/domdump.rs`, debug builds only) and the
+script writes both the JSON and `docs/style-gallery.html` from it.
 
-The honest check is the simulator. If you want numbers out of the real DOM
-rather than pixels, `document::eval` reaches into the live WKWebView and can
-send `getBoundingClientRect` and computed styles back to Rust — that is how
-the spacing in this design was measured. Give it ~1500ms: WebKit applies
-`env(safe-area-inset-*)` after first paint, and an earlier read reports every
-bar 62px too high and every safe-area inset as zero.
+That arrangement is deliberate. The gallery used to be a hand-written copy of
+the views' markup and it drifted — far enough that a whole review pass
+examined states the app no longer produced, while a clean audit said nothing
+was wrong. Do not hand-edit the gallery; re-capture it.
+
+What the gallery still cannot tell you: safe-area insets are zero in a
+browser, so the floating chrome sits higher than it does on a device, and
+`backdrop-filter` behaves differently. Positions and material are what the
+simulator is for.
+
+If you want numbers out of the real DOM rather than pixels, `document::eval`
+reaches into the live WKWebView and can send `getBoundingClientRect` and
+computed styles back to Rust — that is how the spacing in this design was
+measured, and how the keyboard bug was finally diagnosed after two wrong
+guesses. Give it ~1500ms: WebKit applies `env(safe-area-inset-*)` after first
+paint, and an earlier read reports every bar 62px too high.

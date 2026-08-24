@@ -25,9 +25,8 @@ const os = require('os');
 const path = require('path');
 const { chromium } = require('playwright');
 
-const GALLERY = path.join(__dirname, 'style-gallery.html');
+const STATES = path.join(__dirname, 'gallery-states.json');
 const CSS = path.join(__dirname, '..', 'assets', 'main.css');
-const CHROME = '/opt/pw-browsers/chromium';
 
 // ── geometry ────────────────────────────────────────────────────────────
 const GEOMETRY = () => {
@@ -49,9 +48,14 @@ const GEOMETRY = () => {
     if (r.width === 0 || r.height === 0) continue;
     const tag = el.tagName.toLowerCase();
 
-    if (r.right > vw + 0.5 || r.left < -0.5) {
+    // Wholly outside the viewport is parked, not overflowing: the closed
+    // drawer is translated fully off the left edge on purpose. Only something
+    // that is partly visible can be said to spill.
+    const parked = r.right <= 0.5 || r.left >= vw - 0.5;
+    if (!parked && (r.right > vw + 0.5 || r.left < -0.5)) {
       out.push(`OVERFLOW-X   ${name(el)} left=${r.left.toFixed(0)} right=${r.right.toFixed(0)} vw=${vw}`);
     }
+    if (parked) continue;
     if (el.scrollWidth > el.clientWidth + 1 && cs.overflowX === 'hidden' && cs.textOverflow !== 'ellipsis') {
       out.push(`CLIPPED-X    ${name(el)} scroll=${el.scrollWidth} client=${el.clientWidth}`);
     }
@@ -60,7 +64,10 @@ const GEOMETRY = () => {
     // border-top is a rule, not a box, and is meant to be square.
     const filled = cs.backgroundColor !== 'rgba(0, 0, 0, 0)';
     const boxed = px(cs.borderTopWidth) > 0 && px(cs.borderLeftWidth) > 0 && px(cs.borderBottomWidth) > 0;
-    const fullScreen = r.width >= vw - 0.5 && r.height >= vh - 0.5;
+    // A surface that spans the whole viewport in either axis is a page or a
+    // panel; square corners are correct for both.
+    const fullScreen = (r.width >= vw - 0.5 && r.height >= vh - 0.5)
+      || r.height >= vh - 0.5;
     if ((filled || boxed) && !fullScreen && Math.max(...rad(cs)) === 0
         && r.width > 24 && r.height > 12 && tag !== 'html' && tag !== 'body') {
       out.push(`SQUARE       ${name(el)} ${r.width.toFixed(0)}x${r.height.toFixed(0)}`);
@@ -152,30 +159,30 @@ const CONTRAST = () => {
 };
 
 (async () => {
-  if (!fs.existsSync(CHROME)) {
-    console.error(`Chromium not found at ${CHROME}; set executablePath for your machine.`);
-    process.exit(1);
-  }
   const arg = process.argv[2] || 'both';
   const themes = arg === 'both' ? ['light', 'dark'] : [arg];
 
-  // Each <template data-label> in the gallery is one screen state.
-  const src = fs.readFileSync(GALLERY, 'utf8');
-  const states = [...src.matchAll(/<template([^>]*data-label[^>]*)>([\s\S]*?)<\/template>/g)].map((m) => {
-    const attr = (k) => (m[1].match(new RegExp(`${k}="([^"]*)"`)) || [])[1] || '';
-    return { label: attr('data-label'), scroll: attr('data-scroll'), body: m[2] };
-  });
+  // The states are captured out of the running app by
+  // scripts/capture-gallery.py — the same data the gallery is built from, so
+  // this audits markup the app actually produced rather than a transcription
+  // of it.
+  if (!fs.existsSync(STATES)) {
+    console.error(`no ${STATES}; run scripts/capture-gallery.py first`);
+    process.exit(1);
+  }
+  const states = Object.entries(JSON.parse(fs.readFileSync(STATES, 'utf8')))
+    .map(([label, body]) => ({ label, body, scroll: '' }));
   if (states.length === 0) {
-    console.error(`no <template data-label> states found in ${GALLERY}`);
+    console.error(`${STATES} is empty`);
     process.exit(1);
   }
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-audit-'));
-  const browser = await chromium.launch({ executablePath: CHROME });
+  const browser = await chromium.launch();
   let findings = 0;
 
   for (const theme of themes) {
-    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const page = await browser.newPage({ viewport: { width: 402, height: 874 } });
     await page.emulateMedia({ colorScheme: theme });
 
     for (const [i, state] of states.entries()) {

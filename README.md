@@ -18,10 +18,10 @@ for **iOS**, **Android**, and desktop.
   <img src="docs/images/sessions.png" alt="Session list" width="32%">
 </p>
 
-<sub>Rendered at 390×844 from [`docs/style-gallery.html`](docs/style-gallery.html)
-against the stylesheet the app ships, with fixture content — regenerate them
-with `node docs/screenshots.js`. Every screen and state, in both themes, is in
-the gallery itself.</sub>
+<sub>Real captures from the running app on an iPhone 17 Pro simulator —
+`scripts/shoot-simulator.sh <name>`. Every screen, in both themes, is in
+[`docs/style-gallery.html`](docs/style-gallery.html), which is generated from
+the app's own DOM rather than written by hand.</sub>
 
 ## Features
 
@@ -166,14 +166,17 @@ cargo test --workspace           # unit + integration tests
 cargo llvm-cov -p goose-acp-client --summary-only   # coverage
 dx serve --desktop               # run the app
 node docs/audit.js               # UI geometry + contrast, every state, both themes
-node docs/screenshots.js         # regenerate the images above
+scripts/capture-gallery.py       # regenerate the gallery from the running app
+scripts/shoot-simulator.sh chat  # regenerate a README image from the simulator
 ```
 
-`docs/audit.js` rebuilds all sixteen screen states as standalone 390×844
-documents and checks each one for overflow, clipped text, square-cornered
-surfaces, undersized tap targets, radius-nesting mistakes and text below the
-WCAG AA contrast threshold. It exits non-zero on a finding. The rules it
-enforces, and why they are the rules, are in [`docs/design.md`](docs/design.md).
+`docs/audit.js` rebuilds every captured state as a standalone 402×874 document
+and checks each for overflow, clipped text, square-cornered surfaces,
+undersized tap targets, radius-nesting mistakes and text below the WCAG AA
+contrast threshold. It exits non-zero on a finding. The states it reads are
+captured from the running app, so it cannot drift from what ships. The rules
+it enforces, and why they are the rules, are in
+[`docs/design.md`](docs/design.md).
 
 ```
 ├── src/                     # Dioxus app
