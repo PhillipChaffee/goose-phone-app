@@ -1,5 +1,4 @@
 use dioxus::dioxus_core::spawn_forever;
-use dioxus::document;
 use dioxus::prelude::*;
 
 use goose_acp_client::ConfigOption;
@@ -11,9 +10,13 @@ use crate::state::{
     Screen, Usage,
 };
 use crate::views::session_settings::{
-    choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
+    chip_effort, choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
 };
-use crate::views::{ConfirmDelete, MenuItem, OverflowButton, OverflowSheet};
+use crate::views::{ConfirmDelete, MenuItem, OverflowButton, OverflowSheet, ScrollToBottom};
+
+/// The transcript's scroller, named so the pin and the scroll-to-bottom
+/// button address the same element.
+const SCROLL_ID: &str = "chat-scroll";
 
 #[component]
 pub fn ChatView() -> Element {
@@ -26,12 +29,7 @@ pub fn ChatView() -> Element {
     // chat signal is read INSIDE the effect so it re-runs on every change.
     use_effect(move || {
         let _ = ctx.chat.read().items.len();
-        document::eval(
-            "requestAnimationFrame(() => { \
-               const el = document.getElementById('chat-scroll'); \
-               if (el) el.scrollTop = el.scrollHeight; \
-             });",
-        );
+        crate::viewport::pin_transcript(SCROLL_ID);
     });
 
     let running = chat.running;
@@ -47,6 +45,17 @@ pub fn ChatView() -> Element {
         .find(|o| o.config_id == "model")
         .and_then(ConfigOption::current_label)
         .map_or_else(|| "Session".to_owned(), str::to_owned);
+    // The effort rides on the chip after the model, so the setting is visible
+    // without opening the sheet. Only when it is a choice: goose ships
+    // `thinking_effort` as a lone `off` whenever the session's model cannot
+    // reason, and "Claude Sonnet 5 Off" reads as something switched off rather
+    // than as something the model never had. `is_adjustable` is already the
+    // question "would choosing change anything", and this is the same one.
+    let effort = config
+        .iter()
+        .find(|o| o.config_id == "thinking_effort")
+        .filter(|o| o.is_adjustable())
+        .and_then(|o| chip_effort(o.current_value.as_deref()));
     let rows = goose_setting_rows(&config, usage);
     let mut sheet = use_signal(|| false);
     let mut confirm_delete = use_signal(|| false);
@@ -61,6 +70,10 @@ pub fn ChatView() -> Element {
         // failed send (e.g. disconnected) doesn't eat the typed text.
         if send_prompt(&ctx, text) {
             draft.set(String::new());
+            // Your own message always takes you back to the bottom, whatever
+            // you had scrolled up to read. Without this the transcript stays
+            // where it was and the message you just sent is off screen.
+            crate::viewport::scroll_to_bottom(SCROLL_ID);
         }
     };
 
@@ -87,7 +100,7 @@ pub fn ChatView() -> Element {
             }
         }
 
-        main { class: "scroll chat", id: "chat-scroll",
+        main { class: "scroll chat", id: SCROLL_ID,
             if chat.loading {
                 p { class: "empty", "Loading history…" }
             }
@@ -100,6 +113,8 @@ pub fn ChatView() -> Element {
                 }
             }
         }
+
+        ScrollToBottom { scroller: SCROLL_ID }
 
         footer { class: "composer",
             textarea {
@@ -123,7 +138,12 @@ pub fn ChatView() -> Element {
                         class: "composer-chip action",
                         title: "Session settings",
                         onclick: move |_| sheet.set(true),
-                        span { class: "chip-label", "{chip_label}" }
+                        span { class: "chip-label",
+                            span { class: "chip-model", "{chip_label}" }
+                            if let Some(effort) = effort {
+                                span { class: "chip-effort", "{effort}" }
+                            }
+                        }
                         Icon { name: "chevron-down" }
                     }
                 }

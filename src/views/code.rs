@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 
 use dioxus::dioxus_core::spawn_forever;
-use dioxus::document;
 use dioxus::prelude::*;
 use opencode_client::FileStatus;
 
@@ -22,9 +21,11 @@ use crate::icons::Icon;
 use crate::state::{relative_time_secs, use_app_ctx, AppCtx, ConnState};
 use crate::views::chat::{format_tokens, render_transcript};
 use crate::views::session_settings::{
-    choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
+    chip_effort, choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
 };
-use crate::views::{ConfirmDelete, MenuItem, OverflowButton, OverflowSheet, SwipeDelete};
+use crate::views::{
+    ConfirmDelete, MenuItem, OverflowButton, OverflowSheet, ScrollToBottom, SwipeDelete,
+};
 use opencode_client::ModelInfo;
 
 #[component]
@@ -513,6 +514,10 @@ pub fn CodeNewView() -> Element {
     }
 }
 
+/// The transcript's scroller, named so the pin and the scroll-to-bottom
+/// button address the same element.
+const SCROLL_ID: &str = "code-chat-scroll";
+
 #[component]
 pub fn CodeChatView() -> Element {
     let ctx = use_app_ctx();
@@ -521,12 +526,7 @@ pub fn CodeChatView() -> Element {
 
     use_effect(move || {
         let _ = ctx.code_chat.read().items.len();
-        document::eval(
-            "requestAnimationFrame(() => { \
-               const el = document.getElementById('code-chat-scroll'); \
-               if (el) el.scrollTop = el.scrollHeight; \
-             });",
-        );
+        crate::viewport::pin_transcript(SCROLL_ID);
     });
 
     let running = chat.running;
@@ -539,6 +539,10 @@ pub fn CodeChatView() -> Element {
     let mut chat_confirm_delete = use_signal(|| false);
     let mut menu = use_signal(|| false);
     let chip_label = code_chip_label(chat.model.as_deref(), &models);
+    // No catalogue lookup: a model switch clears the tier (`set_code_model`)
+    // and the server's own record arrives already filtered, so whatever is
+    // here is a tier the next turn will really ask for.
+    let effort = chip_effort(chat.effort.as_deref());
     // None until the fetch on chat open lands, and None for a session that has
     // changed nothing — the chip says "Diff" alone rather than "+0 −0", which
     // would be a claim it cannot back before the diff has been read.
@@ -554,6 +558,9 @@ pub fn CodeChatView() -> Element {
         }
         if send_code_prompt(&ctx, text) {
             draft.set(String::new());
+            // Your own message always takes you back to the bottom, whatever
+            // you had scrolled up to read.
+            crate::viewport::scroll_to_bottom(SCROLL_ID);
         }
     };
 
@@ -593,7 +600,7 @@ pub fn CodeChatView() -> Element {
             }
         }
 
-        main { class: "scroll chat", id: "code-chat-scroll",
+        main { class: "scroll chat", id: SCROLL_ID,
             if chat.waking {
                 div { class: "banner",
                     "Waking the container — showing the cached transcript…"
@@ -611,6 +618,8 @@ pub fn CodeChatView() -> Element {
                 }
             }
         }
+
+        ScrollToBottom { scroller: SCROLL_ID }
 
         // Above the composer, not inside it. Diff and PR are about the work
         // the session has produced; the composer is about the next thing you
@@ -663,7 +672,12 @@ pub fn CodeChatView() -> Element {
                         ensure_code_models(&ctx);
                         sheet.set(true);
                     },
-                    span { class: "chip-label", "{chip_label}" }
+                    span { class: "chip-label",
+                        span { class: "chip-model", "{chip_label}" }
+                        if let Some(effort) = effort {
+                            span { class: "chip-effort", "{effort}" }
+                        }
+                    }
                     Icon { name: "chevron-down" }
                 }
                 if running {

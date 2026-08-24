@@ -84,6 +84,118 @@ pub(crate) fn use_close_open_row() {
     });
 }
 
+/// Whether the reader is still at the bottom of the open transcript.
+///
+/// Two things follow from the answer: whether new content pins the transcript
+/// to its bottom, and whether the scroll-to-bottom button is on screen. Both
+/// are the same question, so they are one piece of state rather than two that
+/// can disagree.
+///
+/// It is answered in JS for the reason written above `CLOSE_OPEN_ROW`: an
+/// `onscroll` handler in Rust would put a blocking round trip on every frame
+/// of every scroll. Rust owns the button and its tap; this owns whether the
+/// button is there to be tapped.
+///
+/// Three pieces of script share two globals. `window.__transcript` names the
+/// scroller the answer is about and is claimed by [`pin_transcript`] when a
+/// chat screen mounts, so this listener matches nothing until a transcript
+/// exists and a second transcript replaces the first rather than both being
+/// watched. `window.__atBottom` is the answer: written here as the reader
+/// scrolls, and overridden by the other two only where the reader's position
+/// is not in question — a transcript too short to scroll, one that has just
+/// replaced another, or a tap on the button. It is deliberately read as
+/// `!== false`, because before this listener has run there is nothing to have
+/// scrolled away from and the pin must not wait on it.
+const TRANSCRIPT_BOTTOM: &str = r"
+(() => {
+  if (window.__tbWired) return;
+  window.__tbWired = true;
+  // Slack, so the button cannot flicker. Content appended to a transcript
+  // that was already at its bottom leaves it a few pixels short until the
+  // next frame pins it again, and an exact test would flash the button on
+  // for that frame of every streamed part.
+  const NEAR = 48;
+  document.addEventListener('scroll', (e) => {
+    const el = e.target;
+    if (el !== window.__transcript) return;
+    const away = el.scrollHeight - el.scrollTop - el.clientHeight > NEAR;
+    window.__atBottom = !away;
+    document.body.classList.toggle('away-from-bottom', away);
+  }, { capture: true, passive: true });
+})();
+";
+
+/// Wire the transcript-bottom listener. Once, for the whole app.
+pub(crate) fn use_transcript_bottom() {
+    use_effect(move || {
+        document::eval(TRANSCRIPT_BOTTOM);
+    });
+}
+
+/// Keep `id`'s transcript pinned to its bottom as it grows — unless the reader
+/// has scrolled up, in which case leave them where they put themselves.
+///
+/// It used to pin unconditionally, which meant a streaming turn dragged you
+/// back to the bottom on every part and reading back during a turn was
+/// impossible.
+///
+/// Everything happens inside the frame callback, the element lookup included:
+/// the eval is dispatched from an effect and can reach the webview before it
+/// has applied the mutations that render the transcript.
+pub(crate) fn pin_transcript(id: &str) {
+    document::eval(&pin_script(id));
+}
+
+fn pin_script(id: &str) -> String {
+    format!(
+        "requestAnimationFrame(() => {{ \
+           const el = document.getElementById('{id}'); \
+           if (!el) return; \
+           const fresh = window.__transcript !== el; \
+           window.__transcript = el; \
+           /* A transcript with nothing to scroll is at its bottom by \
+              definition, and a transcript that has just replaced another has \
+              not been read back from. Either way the answer is stale, and \
+              nothing else will correct it: the listener only hears about \
+              scrolling, and a screen with none never scrolls. That is the \
+              state 'New chat' leaves behind when it empties the transcript \
+              under a reader who had scrolled up. */ \
+           if (fresh || el.scrollHeight - el.clientHeight < 8) {{ \
+             window.__atBottom = true; \
+             document.body.classList.remove('away-from-bottom'); \
+           }} \
+           if (window.__atBottom === false) return; \
+           el.scrollTop = el.scrollHeight; \
+         }});"
+    )
+}
+
+/// Take `id`'s transcript back to its bottom, whatever the reader did — the
+/// scroll-to-bottom button's tap.
+///
+/// A jump rather than a smooth scroll, for the same reason the pin above is
+/// one: a transcript is thousands of pixels tall, an animation over that is a
+/// blur, and it would fire a scroll event per frame — each of which would put
+/// the button back on screen until the animation caught up with it.
+pub(crate) fn scroll_to_bottom(id: &str) {
+    document::eval(&jump_script(id));
+}
+
+fn jump_script(id: &str) -> String {
+    // An IIFE, not a bare statement: a top-level `const` is a global lexical
+    // binding that outlives the script, so the second tap would throw
+    // "Identifier has already been declared" and do nothing at all.
+    format!(
+        "(() => {{ \
+           const el = document.getElementById('{id}'); \
+           if (!el) return; \
+           window.__atBottom = true; \
+           document.body.classList.remove('away-from-bottom'); \
+           el.scrollTop = el.scrollHeight; \
+         }})();"
+    )
+}
+
 /// Pull a list down to refresh it.
 ///
 /// The gesture lives here rather than on the elements for the reason given
@@ -214,4 +326,22 @@ pub(crate) fn use_pull_to_refresh() {
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{jump_script, pin_script};
+
+    /// Both scripts are `format!` over a wall of escaped braces, and getting
+    /// one wrong fails silently on a device: the JS either does not parse or
+    /// looks up an element called `{id}`, and the transcript simply stops
+    /// following the agent with nothing to say why.
+    #[test]
+    fn each_script_addresses_the_scroller_it_was_given() {
+        for script in [pin_script("chat-scroll"), jump_script("chat-scroll")] {
+            assert!(script.contains("getElementById('chat-scroll')"), "{script}");
+            assert!(!script.contains("{{") && !script.contains("}}"), "{script}");
+        }
+        assert!(jump_script("code-chat-scroll").contains("'code-chat-scroll'"));
+    }
 }

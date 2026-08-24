@@ -53,7 +53,12 @@ const CSS = path.join(__dirname, '..', 'assets', 'main.css');
 // really produced, rather than hand-writing a copy of it, which is the same
 // reason the gallery is generated.
 const LONGEST = {
+  // The model name moved into .chip-model when the chip grew an effort tier
+  // beside it; a state captured before that has it straight on .chip-label.
+  // Both are named, and the swap only writes into whichever one is actually
+  // holding the text — see below.
   '.chip-label': 'Qwen3 Coder 480B A35B Instruct',
+  '.chip-model': 'Qwen3 Coder 480B A35B Instruct',
   '.session-title': 'Refactor the transcript folding so streamed parts land in order',
   '.topbar > .title': 'Refactor the transcript folding so streamed parts land in order',
 };
@@ -356,7 +361,15 @@ const CONTRAST = () => {
       if (state.swap) {
         await page.evaluate((swap) => {
           for (const [sel, text] of Object.entries(swap)) {
-            document.querySelectorAll(sel).forEach((el) => { el.textContent = text; });
+            document.querySelectorAll(sel).forEach((el) => {
+              // Never into a wrapper. The longest string belongs in the
+              // element that holds the text, and writing it onto a parent
+              // deletes the parent's other children — stressing .chip-label
+              // that way would take the effort tier out of the chip and audit
+              // an arrangement the app does not build.
+              if (el.firstElementChild) return;
+              el.textContent = text;
+            });
           }
         }, state.swap);
       }

@@ -133,6 +133,24 @@ pub(crate) fn choice_label(name: &str, value: &str) -> String {
     name.to_owned()
 }
 
+/// What the composer chip says about thinking effort, after the model name —
+/// or `None` when there is nothing worth saying.
+///
+/// A default is not worth saying. The chip is for what is true and notable
+/// about the next message, and every session has a default; spelling one out
+/// as "Default" turns the one place effort is visible at a glance into a place
+/// it is usually noise. Both backends have their own way of writing it down
+/// and both are filtered here rather than at each call site: `OpenCode`
+/// records the literal string `default` on a session whose turn asked for no
+/// variant (see `SessionModel::effort`), while the app carries `None` for the
+/// same state and goose sends no value at all until one is set.
+pub(crate) fn chip_effort(current: Option<&str>) -> Option<String> {
+    let raw = current
+        .map(str::trim)
+        .filter(|v| !v.is_empty() && *v != "default")?;
+    Some(choice_label(raw, raw))
+}
+
 fn humanize(raw: &str) -> String {
     let mut words = raw.replace('_', " ");
     if let Some(first) = words.get_mut(..1) {
@@ -299,6 +317,25 @@ mod tests {
     fn a_current_value_outside_the_choices_still_shows() {
         let row = SettingRow::select("model", "Model", Some("retired_model"), Vec::new(), None);
         assert_eq!(row.value, "Retired model");
+    }
+
+    /// Every spelling of "no tier was asked for" leaves the chip saying the
+    /// model name alone.
+    #[test]
+    fn a_default_effort_is_not_worth_a_chip() {
+        assert_eq!(chip_effort(None), None);
+        assert_eq!(chip_effort(Some("")), None);
+        assert_eq!(chip_effort(Some("   ")), None);
+        assert_eq!(chip_effort(Some("default")), None);
+    }
+
+    /// A tier the reader chose is exactly what the chip is for, and it arrives
+    /// as a backend enum rather than as UI copy.
+    #[test]
+    fn a_chosen_effort_reaches_the_chip_as_copy() {
+        assert_eq!(chip_effort(Some("max")), Some("Max".to_owned()));
+        assert_eq!(chip_effort(Some("xhigh")), Some("Xhigh".to_owned()));
+        assert_eq!(chip_effort(Some("off")), Some("Off".to_owned()));
     }
 
     #[test]

@@ -51,6 +51,32 @@ pub fn SwipeDelete(on_delete: EventHandler<()>) -> Element {
     }
 }
 
+/// The way back to the bottom of a transcript you have read up from.
+///
+/// Rendered on every chat screen; whether it is *visible* is decided in JS
+/// (`crate::viewport`), because the alternative is an `onscroll` handler in
+/// Rust and a blocking round trip on every frame of every scroll. Rust owns
+/// that the button exists and what a tap does, and nothing else about it.
+///
+/// The slot around it has no height and sits between the transcript and
+/// everything below it, so the button hangs above whatever comes next and
+/// moves with it. It has to: the composer grows with the draft, and the whole
+/// shell tracks the visual viewport when the keyboard opens, so anything
+/// placed against the bottom of the screen ends up behind one or the other.
+#[component]
+pub fn ScrollToBottom(scroller: &'static str) -> Element {
+    rsx! {
+        div { class: "scroll-bottom-slot",
+            button {
+                class: "scroll-bottom",
+                title: "Jump to the latest",
+                onclick: move |_| crate::viewport::scroll_to_bottom(scroller),
+                Icon { name: "arrow-down" }
+            }
+        }
+    }
+}
+
 /// The confirmation a swipe earns, as a sheet rather than a row in the card.
 ///
 /// Both planes delete for good: goose's `session/delete` is not a soft
