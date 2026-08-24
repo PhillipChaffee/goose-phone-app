@@ -23,10 +23,15 @@ loop the app is developed in.
   <img src="docs/images/permission.png" alt="A permission request sheet: the tool call and its JSON details, with Allow once, Always allow, Reject and Always reject" width="32%">
 </p>
 
-<sub>Real captures from the running app on an iOS simulator —
-`scripts/shoot-simulator.sh <name>`. Every screen state is in
-[`docs/style-gallery.html`](docs/style-gallery.html), which is generated from
-the app's own DOM rather than written by hand, and viewable in either theme.</sub>
+<sub>The running app, not mock-ups: the two lists are simulator captures
+(`scripts/shoot-simulator.sh <name>`), the permission sheet is a render of the
+markup the app emitted, as is the code-agent transcript further down. All of
+them are behind the current build — the per-row trash can has since moved
+behind a swipe, the settings gear into the drawer, and the bottom tab bar under
+that transcript has been replaced by the drawer. For markup that cannot drift
+there is [`docs/style-gallery.html`](docs/style-gallery.html): seventeen screen
+states dumped from the app's own DOM rather than written by hand, viewable in
+either theme.</sub>
 
 ## Features
 
@@ -177,7 +182,8 @@ the code-agent manager. The goose side works without it, and vice versa.
 ## Try it without a server
 
 The workspace ships a protocol-faithful mock of `goose serve`, so you can exercise
-every feature with no server and no API key:
+the whole goose side with no server and no API key. It mocks goose only — the Code
+destination still needs the code-agent manager:
 
 ```bash
 cargo run -p mock-goose-server     # http://127.0.0.1:3285, secret "mock-secret"
@@ -197,6 +203,7 @@ dx serve --desktop               # run the app
 node docs/audit.js               # UI geometry + contrast, every state, both themes
 scripts/capture-gallery.py       # regenerate the gallery from the running app
 scripts/shoot-simulator.sh chat  # regenerate a README image from the simulator
+node scripts/make-og-card.js     # regenerate the project page's social preview
 ```
 
 `docs/audit.js` rebuilds every captured state as a standalone 402×874 document
@@ -218,7 +225,7 @@ it enforces, and why they are the rules, are in
 ├── crates/mock-goose-server/# fake goose server for testing
 ├── scripts/check-server.sh  # verify a server is app-ready
 ├── docs/design.md           # the design rules, and why they are the rules
-├── docs/style-gallery.html  # every screen state, against the real stylesheet
+├── docs/style-gallery.html  # the captured screen states, against the real stylesheet
 ├── docs/index.html          # the project page, for GitHub Pages from /docs
 └── docs/iphone-setup.md     # iPhone deployment walkthrough
 ```

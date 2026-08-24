@@ -7,6 +7,29 @@
 <meta name="description" content="A Rust app (Dioxus) that puts a goose agent and containerised OpenCode code agents on your phone, over your own Tailscale network. One codebase for iOS, Android and desktop.">
 <meta name="color-scheme" content="light dark">
 <link rel="canonical" href="https://phillipchaffee.github.io/goose-phone-app/">
+
+<!-- Sharing. Slack and iMessage fall back to <title> + description, but
+     Discord, X, Mastodon and LinkedIn unfurl nothing without these, which
+     for a project whose argument is visual is the wrong first impression.
+     The card is images/og-card.png — drawn at 1200x630 in these same tokens
+     by scripts/make-og-card.js, because no screenshot in images/ is that
+     shape. Absolute URLs: a scraper does not resolve relative ones. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Goose Mobile">
+<meta property="og:title" content="Goose Mobile — your own AI agents, on your phone">
+<meta property="og:description" content="A Rust app (Dioxus) that puts a goose agent and containerised OpenCode code agents on your phone, over your own Tailscale network. One codebase for iOS, Android and desktop.">
+<meta property="og:url" content="https://phillipchaffee.github.io/goose-phone-app/">
+<meta property="og:image" content="https://phillipchaffee.github.io/goose-phone-app/images/og-card.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Goose Mobile — your own AI agents, on your phone. A Rust client for a goose server and for containerised code agents, over your own Tailscale network. iOS, Android, desktop.">
+<meta name="twitter:card" content="summary_large_image">
+
+<!-- Inline, so the page stays one file and Pages is not asked for a
+     /favicon.ico it does not have. The glyph is the app's own message icon,
+     copied from the markup in docs/gallery-states.json. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%233f434b'/%3E%3Cpath d='M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.9-.9L3 21l1.9-5.1A8.4 8.4 0 0 1 4 11.5 8.4 8.4 0 0 1 12.5 3 8.4 8.4 0 0 1 21 11.5z' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' transform='translate(12 12) scale(0.72) translate(-12 -12)'/%3E%3C/svg%3E">
 <style>
 /* This page is styled from the app's own design system — assets/main.css.
  * The tokens below are copied from it, both themes, so the site and the app
@@ -246,9 +269,28 @@ pre .c { color: var(--code-muted); }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .chrome::before, .bar { background: var(--bg-primary); }
 }
+/* The tint has to be guarded on its own axis, not on the blur's. color-mix
+   is much newer than backdrop-filter — Safari shipped the blur in 9 and the
+   colour function in 16.2 — so iOS 15, iOS 16.0–16.1, Chrome 76–110 and
+   Firefox 103–112 all pass the query above and still cannot compute this
+   value. And it cannot be caught by declaring an opaque background first:
+   the value holds a var(), which makes it valid at parse time, so it wins
+   the cascade and only fails later, at computed-value time, where the
+   fallback is the property's initial value — transparent. That would leave
+   the capsule invisible with the blur still on, i.e. the wordmark sitting on
+   whatever is scrolling underneath it. So: ask about color-mix itself, in a
+   condition with no var() in it for the browser to choke on. */
+@supports not (background: color-mix(in srgb, #ffffff 78%, transparent)) {
+  .chrome::before, .bar { background: var(--bg-primary); }
+}
 
 /* ── hero ───────────────────────────────────────────────────────────── */
-.hero { padding: 24px 0 8px; }
+/* The horizontal value has to be restated. .wrap and .hero are both single
+   class selectors, so this shorthand wins on the one element carrying both,
+   and `24px 0 8px` would zero the gutter — putting the headline and the
+   primary button hard against the screen edge while the capsule above them
+   and every section below stayed inset at --edge. */
+.hero { padding: 24px var(--edge) 8px; }
 .eyebrow {
   display: inline-flex;
   align-items: center;
@@ -475,22 +517,22 @@ footer ul a { display: inline-flex; align-items: center; min-height: 44px; font-
       <div class="shots">
         <figure>
           <img src="images/sessions.png" width="1206" height="2622" loading="lazy" decoding="async"
-               alt="The Chats screen in dark mode: a floating hamburger button, the title Chats, a green connection dot and a refresh button, above two rounded session cards — “Hey” and “Seeded example chat”, each with a message count, a session id and a quote from the last reply — with a New chat button floating at the bottom right.">
+               alt="The Chats screen in dark mode: a floating hamburger button, the title Chats, a green connection dot, then a refresh button and a settings gear, above two rounded session cards — “Hey” and “Seeded example chat”, each with its age, a trash can, a message count, a session id and a quote from the last reply — with a New chat button floating at the bottom right.">
           <figcaption>goose sessions</figcaption>
         </figure>
         <figure>
           <img src="images/chat.png" width="1206" height="2622" loading="lazy" decoding="async"
-               alt="The Code screen in dark mode: one code-agent chat card titled “Fix the flaky test”, tagged idle, on the repo testrepo and the branch agent/testrepo-70a5bf, with a New session button floating at the bottom right.">
+               alt="The Code screen in dark mode: the same floating bar — hamburger, the title Code, a green dot, a refresh button and a settings gear — above one code-agent chat card titled “Fix the flaky test”, tagged idle, on the repo testrepo and the branch agent/testrepo-70a5bf, with a trash can on the row and a New session button floating at the bottom right.">
           <figcaption>Code-agent chats</figcaption>
         </figure>
         <figure>
           <img src="images/permission.png" width="780" height="1690" loading="lazy" decoding="async"
-               alt="A permission request sheet over a running chat: the request reads “Run a tool”, an open Details block shows the JSON command rm -rf /tmp/x with its working directory, and four buttons offer Allow once, Always allow, Reject and Always reject, with “+2 more waiting” underneath.">
+               alt="A sheet headed Permission request over a running chat in dark mode: it names the session, the request reads “Run a tool”, an open Details block shows the JSON command rm -rf /tmp/x with its working directory, and four buttons offer Allow once, Always allow, Reject and Always reject — the two rejects outlined in red — with “+2 more waiting” underneath.">
           <figcaption>Permission, from the phone</figcaption>
         </figure>
         <figure>
           <img src="images/code-chat.png" width="780" height="1690" loading="lazy" decoding="async"
-               alt="A code agent mid-turn in light mode: the user asks to raise the MSRV, a collapsed Thinking row follows, then tool cards for reading rust-toolchain.toml (Done), a running cargo check, a failed fetch showing its error output, and a queued file move; the composer offers Diff and PR chips beside a red Stop button.">
+               alt="A code agent mid-turn in light mode: the floating bar holds a back chevron, the title “Bump the MSRV to 1.85”, a diff icon and a PR button; the user asks to raise the MSRV and fix whatever breaks; a collapsed Thinking row follows, then tool cards for reading rust-toolchain.toml (Done), a running cargo check, a failed fetch showing its error output on a dark slab, and a queued file move; at the foot, a composer holding the message field and a red Stop button, above a tab bar of Home and Code.">
           <figcaption>A code agent working</figcaption>
         </figure>
       </div>
@@ -503,11 +545,22 @@ footer ul a { display: inline-flex; align-items: center; min-height: 44px; font-
            links (here, in "How it is kept honest", and in the footer) at
            style-gallery.html and the live artefact works. -->
       <p class="shot-note">
-        Captures from the running app on an iOS simulator, not mock-ups. The light one
-        is from an earlier build — it still shows the bottom tab bar that a navigation
-        drawer has since replaced. Every screen in its current markup is in the
-        <a href="https://github.com/PhillipChaffee/goose-phone-app/blob/main/docs/style-gallery.html">style gallery</a>,
-        which is generated from the app's own DOM.
+        The running app, not mock-ups: the two lists are simulator captures
+        (<code>scripts/shoot-simulator.sh</code>), the permission sheet and the code-agent
+        transcript renders of the markup the app emitted. All four are behind the current
+        build, and visibly so. Both lists still park a trash can on every row and a
+        settings gear in the bar — delete has since moved behind a swipe, and Settings
+        into the drawer. The other two are older still, from before the drawer: hence the
+        bottom tab bar under the transcript, whose diff and PR controls have since moved
+        down to the composer.
+      </p>
+      <p class="shot-note">
+        For markup that cannot drift there is the
+        <a href="https://github.com/PhillipChaffee/goose-phone-app/blob/main/docs/style-gallery.html">style gallery</a>:
+        seventeen states dumped out of the app's own DOM. Its Chats state keeps the delete
+        button in a swipe tray, where these captures still park one on every row. The
+        permission sheet above is the one screen on this page that has never been captured
+        into it — so it is also the one screen <code>docs/audit.js</code> does not check.
       </p>
     </div>
   </section>
@@ -737,8 +790,10 @@ dx serve --desktop</code></pre>
       <div class="card" style="margin-top:20px">
         <h3>No server? No API key?</h3>
         <p>
-          The workspace ships a protocol-faithful fake goose server, so every screen can be
-          exercised without either.
+          The workspace ships a protocol-faithful fake goose server — <code>/status</code>,
+          <code>/acp</code> and the four permission options the real one routes — so the
+          whole goose side can be exercised without either. The Code screens are the
+          exception: they need the code-agent manager.
         </p>
 <pre style="margin-top:12px"><code>cargo run -p mock-goose-server   <span class="c"># 127.0.0.1:3285, secret "mock-secret"</span></code></pre>
       </div>
@@ -767,8 +822,9 @@ dx serve --desktop</code></pre>
             <a href="https://github.com/PhillipChaffee/goose-phone-app/blob/main/docs/style-gallery.html">The
             style gallery</a> is captured out of the running app's DOM by a script, not written
             by hand: seventeen states, each in a 402×874 frame linking the app's live
-            stylesheet. Open it from a checkout and every screen is there, with no build and
-            no device.
+            stylesheet. Open it from a checkout and all seventeen are there, with no build and
+            no device. A run replaces the set, so a screen that stops existing stops being
+            audited — and one never driven to, like the permission sheet, was never in it.
           </p>
         </div>
         <div class="card">
