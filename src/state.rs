@@ -157,6 +157,12 @@ pub(crate) struct ChatState {
     pub last_at: i64,
     pub running: bool,
     pub loading: bool,
+    /// What the transcript knew about its attachments before a replay
+    /// cleared it, waiting for the replay to bring them back so it can hand
+    /// each one its name and its picture again. See
+    /// `crate::attach::sent_attachments` for why goose needs this and the
+    /// Code tab does not.
+    pub attach_replay: Vec<crate::attach::Attachment>,
 }
 
 /// Context-window usage: (tokens used, context limit).
@@ -463,6 +469,8 @@ async fn reload_chat(ctx: &AppCtx, session_id: String, cwd: String) {
     let mut chat = ctx.chat;
     {
         let mut c = chat.write();
+        let carry = crate::attach::sent_attachments(&c.items);
+        c.attach_replay = carry;
         c.items.clear();
         c.loading = true;
     }
@@ -619,8 +627,11 @@ fn push_chunk(chat: &mut Signal<ChatState>, chunk: MessageChunk, kind: ChunkKind
 /// arrives first, so the bubble is normally already there. When it is not —
 /// a message that is nothing but a photo — the attachment opens one.
 fn push_user_attachment(chat: &mut Signal<ChatState>, block: &goose_acp_client::ContentBlock) {
-    let record = crate::attach::from_content_block(block);
+    let mut record = crate::attach::from_content_block(block);
     let mut c = chat.write();
+    // A replayed image is bytes and a mime type and nothing else, so this is
+    // where a photo this phone sent gets its name and its thumbnail back.
+    crate::attach::adopt_sent(&mut c.attach_replay, &mut record);
     if let Some(ChatItem::User { attachments, .. }) = c.items.last_mut() {
         attachments.push(record);
         return;
@@ -718,6 +729,18 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
     // (the picker has to be able to reach it from the app root), so it has to
     // be told.
     ctx.attachments.clone().set(Vec::new());
+    // Walking out of a chat and back into it replays it from scratch, and the
+    // replay cannot say what a photo was called or what it looked like. Only
+    // from the same session: two conversations' attachments have nothing to
+    // say about each other.
+    let carry = {
+        let current = ctx.chat.peek();
+        if current.session_id.as_deref() == Some(info.session_id.as_str()) {
+            crate::attach::sent_attachments(&current.items)
+        } else {
+            Vec::new()
+        }
+    };
     chat.set(ChatState {
         marks: Vec::new(),
         last_at: 0,
@@ -727,6 +750,7 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
         items: Vec::new(),
         running,
         loading: true,
+        attach_replay: carry,
     });
     usage.set(None);
     screen.set(Screen::Chat);
@@ -790,6 +814,7 @@ pub(crate) fn new_session(ctx: &AppCtx) {
                     items: Vec::new(),
                     running: false,
                     loading: false,
+                    attach_replay: Vec::new(),
                 });
                 usage.set(None);
                 screen.set(Screen::Chat);
@@ -801,7 +826,11 @@ pub(crate) fn new_session(ctx: &AppCtx) {
 
 /// Send the user's message, with whatever they attached to it, and run the
 /// agent turn. Returns false (leaving the caller's draft and attachments
-/// untouched) if the message could not be submitted.
+/// untouched) if the message could not be handed to the transport at all.
+///
+/// True does not mean delivered — the request is answered on a task of its
+/// own — so a send that fails on the wire puts the files back in the tray
+/// itself, which is the only place they can come back to.
 ///
 /// `files` is passed in rather than read off the context so that a message
 /// the *app* composes carries nothing: the caller decides.
@@ -840,6 +869,10 @@ pub(crate) fn send_prompt(
     let mut running_sessions = ctx.running_sessions;
     running_sessions.write().insert(session_id.clone());
 
+    // Held for the length of the request, so a failure has something to give
+    // back. It costs a second copy of the payload while the turn runs, which
+    // is the price of not making a lost connection eat the photo.
+    let carried = files.to_vec();
     let ctx = *ctx;
     spawn_forever(async move {
         let result = client.prompt(&session_id, &blocks).await;
@@ -861,7 +894,18 @@ pub(crate) fn send_prompt(
                 "refusal" => show_toast(&ctx, "The agent declined to continue"),
                 other => show_toast(&ctx, format!("Turn ended: {other}")),
             },
-            Err(e) => show_toast(&ctx, format!("Prompt failed: {e}")),
+            Err(e) => {
+                // The transport can also die mid-turn, in which case the
+                // message did arrive and these chips reappear next to a
+                // bubble that already shows them. That is a thing the reader
+                // can see and undo; a photo that is simply gone is not.
+                let note = crate::attach::return_to_tray(
+                    &ctx,
+                    crate::attach::AttachTarget::Goose,
+                    carried,
+                );
+                show_toast(&ctx, format!("Prompt failed: {e}{note}"));
+            }
         }
     });
     true

@@ -176,6 +176,12 @@ pub struct Part {
     #[serde(rename = "type")]
     pub kind: String,
     pub text: Option<String>,
+    /// The server wrote this part on the reader's behalf: the scaffolding it
+    /// wraps a `text/plain` attachment in, the note it leaves when it
+    /// compacts a session, the line it records when the user ran a tool.
+    /// They are the model's context rather than anything anybody said, and
+    /// `OpenCode`'s own UI does not draw them either.
+    pub synthetic: bool,
     pub tool: Option<String>,
     #[serde(rename = "callID")]
     pub call_id: Option<String>,
@@ -252,6 +258,13 @@ impl PromptPart {
     /// A text file, declared as `text/plain` whatever it is really called, so
     /// the server inlines its contents instead of handing the model a blob it
     /// has no decoder for. `data` is base64.
+    ///
+    /// The inlining is not free and not invisible: the server rewrites this
+    /// one part into three persisted parts — a `Called the Read tool…` line,
+    /// the whole decoded file, and the file part itself — with the first two
+    /// flagged [`Part::synthetic`]. A client that renders every part it is
+    /// given will therefore print the attachment's entire contents back at
+    /// the reader as if they had typed it.
     #[must_use]
     pub fn text_file(filename: &str, data: &str) -> Self {
         Self::file("text/plain", filename, data)
@@ -1175,6 +1188,35 @@ mod tests {
             }
             other => panic!("wrong event: {other:?}"),
         }
+    }
+
+    /// The server expands a `text/plain` attachment into two text parts of
+    /// its own — one of them the whole file — and flags them. A part that
+    /// arrives without the flag is something somebody actually said.
+    #[test]
+    fn a_parts_synthetic_flag_survives_the_wire() {
+        let part = |raw: Value| match dispatch_event(json!({
+            "type": "message.part.updated",
+            "properties": {"part": raw}
+        })) {
+            CodeEvent::PartUpdated { part, .. } => part,
+            other => panic!("wrong event: {other:?}"),
+        };
+        assert!(
+            part(json!({
+                "id": "prt_2", "messageID": "msg_1", "sessionID": "ses_1",
+                "type": "text", "text": "# notes", "synthetic": true
+            }))
+            .synthetic
+        );
+        assert!(
+            !part(json!({
+                "id": "prt_1", "messageID": "msg_1", "sessionID": "ses_1",
+                "type": "text", "text": "look at this"
+            }))
+            .synthetic,
+            "an ordinary part carries no flag at all"
+        );
     }
 
     #[test]

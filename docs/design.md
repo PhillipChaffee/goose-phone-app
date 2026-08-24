@@ -264,8 +264,11 @@ their whole state on every keystroke and the Code tab writes its transcript to
 disk, so a 250 kB base64 photo in a transcript item is paid for on both, over
 and over. The phone makes a ~200px thumbnail at pick time and that is what the
 item holds; a payload replayed from a server is adopted only if it is already
-that small, and otherwise the attachment renders as a named chip. The rule and
-its numbers are in `src/attach.rs`.
+that small, and otherwise the attachment renders as a named chip. A photo this
+phone sent does not fall back to a chip, though: both planes carry their own
+thumbnails across a history reload, because a photo turning into a grey chip a
+second after a reconnect reads as the app having lost it. The rule and its
+numbers are in `src/attach.rs`.
 
 **Everything on the inverted user bubble takes its colour from the bubble.**
 `--text-secondary` and friends are tuned against the page and land the wrong

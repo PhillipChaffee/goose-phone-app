@@ -723,6 +723,15 @@ fn fold_part_into(
     delta: Option<&str>,
     gap: &mut GapSink<'_>,
 ) {
+    // Parts the server wrote on the reader's behalf are the model's context,
+    // not the conversation. Attaching a text file is the case that made this
+    // matter: `OpenCode` expands one `text/plain` part into a fake "Called
+    // the Read tool…" line and the whole decoded file, both persisted on the
+    // user's message, so a 40 kB note came back as two more bubbles under the
+    // one that sent it — and went into the on-device cache that way too.
+    if part.synthetic {
+        return;
+    }
     match part.kind.as_str() {
         "text" | "reasoning" => fold_text_part(items, part_index, roles, part, delta, gap),
         "tool" => {
@@ -899,10 +908,14 @@ fn fold_file_part(
     };
     if let Some(ChatItem::User { attachments, .. }) = items.get_mut(idx) {
         // The optimistic bubble already shows what was just sent, and the
-        // server echoes the same parts back under ids of its own.
+        // server echoes the same parts back under ids of its own. Name and
+        // weight, not mime: a text attachment goes out declared `text/plain`
+        // whatever the picker called it (`crate::attach::code_parts` says
+        // why), so a `.md` echoed back never matched the `text/markdown` the
+        // record kept and every one of them was drawn twice.
         let known = attachments
             .iter()
-            .any(|a| a.name == record.name && a.mime == record.mime);
+            .any(|a| a.name == record.name && a.size == record.size);
         if !known {
             attachments.push(record);
         }
@@ -913,7 +926,13 @@ fn fold_file_part(
 // --------------------------------------------------------------- actions
 
 /// Send a prompt into the open code chat (creating its `OpenCode` session on
-/// first use). Returns false if the message could not be submitted.
+/// first use). Returns false if the message could not be handed to the client
+/// at all.
+///
+/// True does not mean delivered: the POST is answered on a task of its own,
+/// and an unreachable gateway or a container that outruns the 150s wake
+/// surfaces there. Those paths put the files back in the tray themselves,
+/// because the composer has already emptied it by then.
 ///
 /// `files` is the caller's, not the tray's: "Open PR" and a new chat's opening
 /// task are messages the app composes, and neither should pick up a photo the
@@ -950,8 +969,20 @@ pub(crate) fn send_code_prompt(
         });
         c.running = true;
     }
+    // Held for the length of the request, so a failure has something to give
+    // back. It costs a second copy of the payload until the POST is answered,
+    // which is the price of not making a sleeping container eat the photo.
+    let carried = files.to_vec();
     let ctx = *ctx;
     spawn_forever(async move {
+        // Neither of the two ways this can fail is a delivery: the turn never
+        // started, so the tray gets its files back and the toast says so.
+        let failed = |reason: String, files| {
+            ctx.code_chat.clone().write().running = false;
+            let note =
+                crate::attach::return_to_tray(&ctx, crate::attach::AttachTarget::Code, files);
+            show_toast(&ctx, format!("{reason}{note}"));
+        };
         // Bound to a local first: a `peek()` guard used directly as the match
         // scrutinee stays alive across every arm, and the create path below
         // writes to the same signal — which aborted the app on the first
@@ -965,8 +996,7 @@ pub(crate) fn send_code_prompt(
                     s.id
                 }
                 Err(e) => {
-                    ctx.code_chat.clone().write().running = false;
-                    show_toast(&ctx, format!("Session create failed: {e}"));
+                    failed(format!("Session create failed: {e}"), carried);
                     return;
                 }
             },
@@ -983,8 +1013,7 @@ pub(crate) fn send_code_prompt(
             .prompt_async(&chat_id, &sid, &parts, model.as_deref(), effort.as_deref())
             .await
         {
-            ctx.code_chat.clone().write().running = false;
-            show_toast(&ctx, format!("Prompt failed: {e}"));
+            failed(format!("Prompt failed: {e}"), carried);
         }
         write_cache(&ctx);
     });
@@ -1303,6 +1332,37 @@ mod tests {
         }
     }
 
+    /// A text attachment as it comes back: declared `text/plain` whatever the
+    /// picker called it, because that is the only mime the server inlines.
+    fn text_file_part(id: &str, message_id: &str, name: &str) -> Part {
+        Part {
+            mime: Some("text/plain".to_owned()),
+            url: Some("data:text/plain;base64,QUJD".to_owned()),
+            ..file_part(id, message_id, name)
+        }
+    }
+
+    /// A part the server wrote on the reader's behalf.
+    fn synthetic_part(id: &str, message_id: &str, text: &str) -> Part {
+        Part {
+            synthetic: true,
+            ..text_part(id, message_id, text)
+        }
+    }
+
+    /// The bubble a message with one text attachment is sent from.
+    fn optimistic(text: &str, name: &str, mime: &str) -> ChatItem {
+        ChatItem::User {
+            text: text.to_owned(),
+            attachments: vec![crate::attach::Attachment {
+                name: name.to_owned(),
+                mime: mime.to_owned(),
+                size: 3,
+                thumb: String::new(),
+            }],
+        }
+    }
+
     fn fold(
         items: &mut Vec<ChatItem>,
         index: &mut HashMap<String, usize>,
@@ -1401,6 +1461,62 @@ mod tests {
             "THUMB",
             "the phone's own thumbnail is the one that stays"
         );
+    }
+
+    /// Attaching a text file makes the server expand it: it persists a fake
+    /// "Called the Read tool…" line and the entire decoded file as two more
+    /// text parts on the reader's own message. Rendering those puts the whole
+    /// attachment into the transcript — and into the cache on disk — as
+    /// bubbles the reader never wrote.
+    #[test]
+    fn the_server_inlining_a_text_attachment_adds_no_bubbles() {
+        let mut items = vec![optimistic("look at this", "notes.md", "text/markdown")];
+        let mut index = HashMap::new();
+        let roles = roles_of(&[("msg_1", "user")]);
+
+        for part in [
+            text_part("p1", "msg_1", "look at this"),
+            synthetic_part(
+                "p2",
+                "msg_1",
+                r#"Called the Read tool with the following input: {"filePath":"notes.md"}"#,
+            ),
+            synthetic_part("p3", "msg_1", "# notes\n\nthe whole file, decoded"),
+            text_file_part("p4", "msg_1", "notes.md"),
+        ] {
+            fold(&mut items, &mut index, &roles, &part);
+        }
+
+        assert_eq!(items.len(), 1, "one message, one bubble");
+        let ChatItem::User { text, .. } = &items[0] else {
+            unreachable!()
+        };
+        assert_eq!(text, "look at this");
+        assert_eq!(attachments_of(&items[0]).len(), 1);
+    }
+
+    /// The same file goes out declared `text/plain` and comes back that way,
+    /// while the record in the transcript keeps the type the picker reported.
+    /// Deciding they are different files drew every `.md`, `.csv` and `.json`
+    /// attachment twice.
+    #[test]
+    fn the_echo_of_a_text_attachment_is_not_a_second_chip() {
+        let mut items = vec![optimistic("read this", "notes.md", "text/markdown")];
+        let mut index = HashMap::new();
+        let roles = roles_of(&[("msg_1", "user")]);
+
+        fold(
+            &mut items,
+            &mut index,
+            &roles,
+            &text_file_part("p1", "msg_1", "notes.md"),
+        );
+
+        let names: Vec<&str> = attachments_of(&items[0])
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, ["notes.md"]);
     }
 
     /// A file part on an assistant message belongs to whatever the agent was

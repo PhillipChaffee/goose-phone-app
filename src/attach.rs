@@ -135,9 +135,12 @@ impl Attachment {
 
     /// What identifies this file across a history reload — see
     /// [`thumbnail_index`]. Name alone is not enough: every photo taken with
-    /// the camera on iOS arrives called `image.jpg`.
-    fn identity(&self) -> (String, String, u64) {
-        (self.name.clone(), self.mime.clone(), self.size)
+    /// the camera on iOS arrives called `image.jpg`. Mime is deliberately not
+    /// part of it, because it is the one field that does not survive the
+    /// round trip: a text file is sent declared `text/plain` whatever the
+    /// picker called it (see [`code_parts`]).
+    fn identity(&self) -> (String, u64) {
+        (self.name.clone(), self.size)
     }
 }
 
@@ -692,8 +695,9 @@ fn display_name(uri: &str) -> String {
 /// History is authoritative and replaces the transcript wholesale, but it
 /// replaces a thumbnail this phone made with a payload too big to keep — so
 /// the attachment would silently turn from a photo into a chip a second after
-/// the chat opened. This carries them across instead.
-pub(crate) fn thumbnail_index(items: &[ChatItem]) -> HashMap<(String, String, u64), String> {
+/// the chat opened. This carries them across instead. `OpenCode` only: goose
+/// replays too little to key on, which is what [`sent_attachments`] is for.
+pub(crate) fn thumbnail_index(items: &[ChatItem]) -> HashMap<(String, u64), String> {
     let mut out = HashMap::new();
     for item in items {
         if let ChatItem::User { attachments, .. } = item {
@@ -708,10 +712,7 @@ pub(crate) fn thumbnail_index(items: &[ChatItem]) -> HashMap<(String, String, u6
 }
 
 /// Put those thumbnails back onto a freshly folded transcript.
-pub(crate) fn restore_thumbnails(
-    thumbs: &HashMap<(String, String, u64), String>,
-    items: &mut [ChatItem],
-) {
+pub(crate) fn restore_thumbnails(thumbs: &HashMap<(String, u64), String>, items: &mut [ChatItem]) {
     if thumbs.is_empty() {
         return;
     }
@@ -728,6 +729,87 @@ pub(crate) fn restore_thumbnails(
     }
 }
 
+/// What the goose transcript knows about the files it sent, in the order it
+/// shows them, for the replay that is about to overwrite it.
+///
+/// The Code tab can match a replayed attachment to the one it replaces by
+/// name and size, because `OpenCode` echoes a file part back with the
+/// filename it was given. goose cannot: an ACP image block carries its bytes
+/// and its mime type and nothing else — `ContentBlock::image` leaves `uri`
+/// off deliberately, since the agent cannot resolve a path on this phone — so
+/// a replayed photo arrives nameless and at a size this module will not keep.
+/// Without carrying this across, a reconnect turned every photo in the
+/// transcript into a grey chip called "Image".
+///
+/// Only the ones with a picture: a text file or a PDF replays with its `uri`
+/// intact and comes back correctly named on its own.
+pub(crate) fn sent_attachments(items: &[ChatItem]) -> Vec<Attachment> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            ChatItem::User { attachments, .. } => Some(attachments),
+            _ => None,
+        })
+        .flatten()
+        .filter(|a| !a.thumb.is_empty())
+        .cloned()
+        .collect()
+}
+
+/// Give a replayed attachment back the name and the picture it was sent with.
+///
+/// Matched on type and weight, which is all goose replays, and consumed on
+/// use: two photos of the same size in one conversation then keep their own
+/// thumbnails, because the replay walks the transcript in the order this list
+/// was taken from.
+pub(crate) fn adopt_sent(sent: &mut Vec<Attachment>, record: &mut Attachment) {
+    let Some(index) = sent
+        .iter()
+        .position(|a| a.mime == record.mime && a.size == record.size)
+    else {
+        return;
+    };
+    let known = sent.remove(index);
+    record.name = known.name;
+    record.thumb = known.thumb;
+}
+
+// ------------------------------------------------------- a send that failed
+
+/// Put a failed message's attachments back in the composer they were picked
+/// in, and say what became of them.
+///
+/// The transcript is no help here: the bubble keeps the words but only a
+/// thumbnail of the files, and the bytes lived in the tray that was emptied
+/// when the message went out. Anything picked while the request was in flight
+/// stays where it is and keeps its place — it is what the reader is looking
+/// at — so the caps decide how much of the failed message fits back in.
+pub(crate) fn return_to_tray(
+    ctx: &AppCtx,
+    target: AttachTarget,
+    files: Vec<PendingAttachment>,
+) -> String {
+    let wanted = files.len();
+    let refused = {
+        let mut tray = tray_of(ctx, target);
+        let mut held = tray.write();
+        accept(&mut held, files).len()
+    };
+    restored_note(wanted - refused, wanted)
+}
+
+/// The clause a failed send's toast adds about the files it was carrying.
+/// One toast, not two: the second would erase the first, and the reason and
+/// the recovery are both things the reader needs.
+fn restored_note(restored: usize, wanted: usize) -> String {
+    match (restored, wanted) {
+        (_, 0) => String::new(),
+        (0, _) => " — the composer is full, so its attachments were not put back".to_owned(),
+        (n, w) if n == w => " — its attachments are back in the composer".to_owned(),
+        (n, w) => format!(" — {n} of {w} attachments are back in the composer"),
+    }
+}
+
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -735,10 +817,11 @@ pub(crate) fn restore_thumbnails(
 )]
 mod tests {
     use super::{
-        accept, base64_len_to_bytes, code_parts, display_name, format_bytes, from_content_block,
-        from_part, goose_blocks, picker_js, refusal, refusal_summary, restore_thumbnails,
-        thumbnail_index, Attachment, ChatItem, PendingAttachment, Picked, PickedRejection,
-        MAX_ATTACHMENTS, MAX_FILE_BYTES, MAX_TOTAL_BYTES, THUMB_MAX_CHARS,
+        accept, adopt_sent, base64_len_to_bytes, code_parts, display_name, format_bytes,
+        from_content_block, from_part, goose_blocks, picker_js, refusal, refusal_summary,
+        restore_thumbnails, restored_note, sent_attachments, thumbnail_index, Attachment, ChatItem,
+        PendingAttachment, Picked, PickedRejection, MAX_ATTACHMENTS, MAX_FILE_BYTES,
+        MAX_TOTAL_BYTES, THUMB_MAX_CHARS,
     };
     use goose_acp_client::ContentBlock;
     use opencode_client::Part;
@@ -988,5 +1071,76 @@ mod tests {
         };
         assert_eq!(attachments[0].thumb, "SECOND");
         assert_eq!(attachments[1].thumb, "FIRST");
+    }
+
+    /// goose replays an image as bytes and a mime type and nothing else: no
+    /// name, and at the size it was sent, which is far too big to keep. The
+    /// transcript the replay is about to overwrite is the only thing left
+    /// that knows what the photo was called and what it looked like.
+    #[test]
+    fn a_replayed_photo_takes_back_the_name_and_picture_it_was_sent_with() {
+        let photo = |name: &str, thumb: &str| Attachment {
+            name: name.to_owned(),
+            mime: "image/jpeg".to_owned(),
+            // Two photos of exactly the same weight: the hard case, because
+            // the weight is half of all the replay gives us to match on.
+            size: 18_003,
+            thumb: thumb.to_owned(),
+        };
+        let before = vec![ChatItem::User {
+            text: "these two, and the spec".to_owned(),
+            attachments: vec![
+                photo("IMG_0042.jpg", "FIRST"),
+                photo("IMG_0043.jpg", "SECOND"),
+                Attachment {
+                    name: "spec.pdf".to_owned(),
+                    mime: "application/pdf".to_owned(),
+                    size: 18_003,
+                    thumb: String::new(),
+                },
+            ],
+        }];
+        let mut sent = sent_attachments(&before);
+        assert_eq!(
+            sent.len(),
+            2,
+            "a resource replays with its uri, so it needs no help"
+        );
+
+        let block = ContentBlock::image("Q".repeat(THUMB_MAX_CHARS + 4), "image/jpeg");
+        let mut first = from_content_block(&block);
+        assert_eq!(first.name, "Image", "which is all the replay itself knows");
+        assert!(first.thumb.is_empty());
+
+        adopt_sent(&mut sent, &mut first);
+        assert_eq!(first.name, "IMG_0042.jpg");
+        assert_eq!(first.thumb, "FIRST");
+
+        let mut second = from_content_block(&block);
+        adopt_sent(&mut sent, &mut second);
+        assert_eq!(
+            second.thumb, "SECOND",
+            "a match is consumed, so the second photo is not given the first's"
+        );
+    }
+
+    /// A send that fails on the wire has to say two things at once — why, and
+    /// what became of the files it was carrying. Two toasts would be one:
+    /// there is a single slot and the second erases the first.
+    #[test]
+    fn a_failed_send_says_what_became_of_its_attachments() {
+        assert_eq!(restored_note(0, 0), "", "a message with no files says less");
+        assert_eq!(
+            restored_note(2, 2),
+            " — its attachments are back in the composer"
+        );
+        assert_eq!(
+            restored_note(1, 3),
+            " — 1 of 3 attachments are back in the composer"
+        );
+        assert!(
+            restored_note(0, 2).contains("not put back"),
+            "a full tray keeps what the reader picked since, and says so"
+        );
     }
 }

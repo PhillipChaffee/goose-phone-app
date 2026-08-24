@@ -62,9 +62,11 @@ pub fn ChatView() -> Element {
         if text.is_empty() && files.is_empty() {
             return;
         }
-        // Only clear the draft and the tray once the message was actually
-        // accepted, so a failed send (e.g. disconnected) doesn't eat the
-        // typed text or the files that were picked for it.
+        // Cleared only once the message is on its way, so a send that never
+        // starts — disconnected, no session — leaves the typed text and the
+        // picked files where they were. A send that starts and then fails on
+        // the wire is `send_prompt`'s to put right: it answers long after
+        // this returns, and it hands the files back to the tray itself.
         if send_prompt(&ctx, text, &files) {
             draft.set(String::new());
             ctx.attachments.clone().set(Vec::new());

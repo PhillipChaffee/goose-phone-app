@@ -555,6 +555,9 @@ pub fn CodeChatView() -> Element {
         if text.is_empty() && files.is_empty() {
             return;
         }
+        // Emptied once the message is on its way; a request that then fails
+        // is `send_code_prompt`'s to put right, since it is answered long
+        // after this returns (see the goose composer for the same shape).
         if send_code_prompt(&ctx, text, &files) {
             draft.set(String::new());
             ctx.code_attachments.clone().set(Vec::new());
