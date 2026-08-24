@@ -30,6 +30,7 @@ pub fn App() -> Element {
     };
 
     crate::viewport::use_visual_viewport();
+    crate::viewport::use_close_open_row();
     #[cfg(debug_assertions)]
     crate::domdump::use_dom_dump(
         match tab {

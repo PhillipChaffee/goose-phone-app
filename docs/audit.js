@@ -45,10 +45,18 @@ const GEOMETRY = () => {
   // session row is a swipe scroller, and its action tray is laid out past the
   // row's trailing edge on purpose. The scroller itself is still measured —
   // it is in this same loop, and it is the thing that has to fit.
+  // Scoped to scroll-snap carousels specifically, not to anything that
+  // happens to scroll sideways. A vertical scroller gets computed
+  // `overflow-x: auto` for free — `.scroll` sets only overflow-y, and per the
+  // overflow spec a `visible` on one axis becomes `auto` when the other is
+  // not visible — so a looser test would exempt an entire screen the moment
+  // one stray element made it scroll, and hide the very spill this looks for.
   const inSideScroller = (el) => {
     for (let p = el.parentElement; p; p = p.parentElement) {
-      const o = getComputedStyle(p).overflowX;
-      if ((o === 'auto' || o === 'scroll') && p.scrollWidth > p.clientWidth + 1) return true;
+      const cs = getComputedStyle(p);
+      const snaps = cs.scrollSnapType && cs.scrollSnapType.startsWith('x');
+      const scrolls = cs.overflowX === 'auto' || cs.overflowX === 'scroll';
+      if (snaps && scrolls && p.scrollWidth > p.clientWidth + 1) return true;
     }
     return false;
   };
