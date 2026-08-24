@@ -24,7 +24,7 @@ use crate::views::chat::{format_tokens, render_transcript};
 use crate::views::session_settings::{
     choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
 };
-use crate::views::{ConfirmDelete, MenuItem, OverflowMenu, SwipeDelete};
+use crate::views::{ConfirmDelete, MenuItem, OverflowButton, OverflowSheet, SwipeDelete};
 use opencode_client::ModelInfo;
 
 #[component]
@@ -537,6 +537,7 @@ pub fn CodeChatView() -> Element {
     let models_loading = (ctx.code_models_loading)();
     let mut sheet = use_signal(|| false);
     let mut chat_confirm_delete = use_signal(|| false);
+    let mut menu = use_signal(|| false);
     let chip_label = code_chip_label(chat.model.as_deref(), &models);
     // None until the fetch on chat open lands, and None for a session that has
     // changed nothing — the chip says "Diff" alone rather than "+0 −0", which
@@ -588,14 +589,7 @@ pub fn CodeChatView() -> Element {
                     },
                     Icon { name: "plus" }
                 }
-                OverflowMenu {
-                    items: vec![MenuItem {
-                        icon: "trash",
-                        label: "Delete session",
-                        danger: true,
-                    }],
-                    onpick: move |_| chat_confirm_delete.set(true),
-                }
+                OverflowButton { onopen: move |()| menu.set(true) }
             }
         }
 
@@ -707,6 +701,17 @@ pub fn CodeChatView() -> Element {
                     _ => {}
                 },
                 onclose: move |()| sheet.set(false),
+            }
+        }
+
+        if menu() {
+            OverflowSheet {
+                items: vec![MenuItem { icon: "trash", label: "Delete session", danger: true }],
+                onpick: move |_| {
+                    menu.set(false);
+                    chat_confirm_delete.set(true);
+                },
+                onclose: move |()| menu.set(false),
             }
         }
 

@@ -13,7 +13,7 @@ use crate::state::{
 use crate::views::session_settings::{
     choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
 };
-use crate::views::{ConfirmDelete, MenuItem, OverflowMenu};
+use crate::views::{ConfirmDelete, MenuItem, OverflowButton, OverflowSheet};
 
 #[component]
 pub fn ChatView() -> Element {
@@ -50,6 +50,7 @@ pub fn ChatView() -> Element {
     let rows = goose_setting_rows(&config, usage);
     let mut sheet = use_signal(|| false);
     let mut confirm_delete = use_signal(|| false);
+    let mut menu = use_signal(|| false);
 
     let mut submit = move || {
         let text = draft.peek().trim().to_string();
@@ -82,14 +83,7 @@ pub fn ChatView() -> Element {
                     onclick: move |_| new_session(&ctx),
                     Icon { name: "plus" }
                 }
-                OverflowMenu {
-                    items: vec![MenuItem {
-                        icon: "trash",
-                        label: "Delete chat",
-                        danger: true,
-                    }],
-                    onpick: move |_| confirm_delete.set(true),
-                }
+                OverflowButton { onopen: move |()| menu.set(true) }
             }
         }
 
@@ -165,6 +159,17 @@ pub fn ChatView() -> Element {
                     crate::state::set_config_option(&ctx, &config_id, &value);
                 },
                 onclose: move |()| sheet.set(false),
+            }
+        }
+
+        if menu() {
+            OverflowSheet {
+                items: vec![MenuItem { icon: "trash", label: "Delete chat", danger: true }],
+                onpick: move |_| {
+                    menu.set(false);
+                    confirm_delete.set(true);
+                },
+                onclose: move |()| menu.set(false),
             }
         }
 

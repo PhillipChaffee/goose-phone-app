@@ -571,12 +571,29 @@ pre {
 /* The title centres on the screen's centre line. It is out of flow because
  * the leading and trailing control groups are different widths on every
  * screen, and centring "between them" is not centring — it lands half a
- * back-button off, which is what the flex version did. */
+ * back-button off, which is what the flex version did.
+ *
+ * Being centred, it has to clear whichever side is wider — twice over, since
+ * shrinking it takes the same off both ends. So the reserve is not "space for
+ * the controls", it is space for the *widest* group, doubled. It was a flat
+ * 180px while the trailing pill was empty; the moment that pill gained two
+ * buttons, a long title ran four pixels underneath it. Derived from the sizes
+ * that decide it, so the next control to arrive moves this on its own. */
+.topbar {
+  /* One 44px control at the leading edge. */
+  --topbar-reserve: calc(var(--edge) + 44px + 8px);
+}
+
+/* Two, plus the pill's own padding, at the trailing edge. */
+.topbar:has(.topbar-actions) {
+  --topbar-reserve: calc(var(--edge) + 2 * 44px + 6px + 8px);
+}
+
 .topbar > .title {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  max-width: calc(100% - 180px);
+  max-width: calc(100% - 2 * var(--topbar-reserve));
   text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -610,7 +627,7 @@ pre {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  max-width: calc(100% - 180px);
+  max-width: calc(100% - 2 * var(--topbar-reserve));
   display: flex;
   flex-direction: column;
   align-items: center;

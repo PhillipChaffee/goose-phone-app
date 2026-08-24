@@ -153,6 +153,26 @@ const GEOMETRY = () => {
     }
   }
 
+  // The title is centred on the screen and the controls are not, so the only
+  // thing keeping them apart is the width the title is allowed. Nothing
+  // clips, nothing overflows the viewport and nothing reports an error — the
+  // title simply runs underneath a button. Caught here because it is the sort
+  // of thing that only appears when a control group changes width.
+  const bar = document.querySelector('.topbar');
+  if (bar) {
+    const heading = bar.querySelector(':scope > .title, :scope > .titlegroup');
+    if (heading) {
+      const h = heading.getBoundingClientRect();
+      for (const group of bar.querySelectorAll(':scope > .icon-btn, :scope > .topbar-actions')) {
+        const g = group.getBoundingClientRect();
+        const over = Math.min(h.right, g.right) - Math.max(h.left, g.left);
+        if (over > 0.5) {
+          out.push(`TITLE-COLLIDE ${name(heading)} overlaps ${name(group)} by ${over.toFixed(0)}px`);
+        }
+      }
+    }
+  }
+
   // A control never sits at a tighter radius than the container clipping it,
   // and never at a looser one either — that is what pokes through the curve.
   for (const el of document.querySelectorAll('*')) {
