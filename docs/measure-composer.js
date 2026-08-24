@@ -38,6 +38,10 @@ const WIDTH = parseInt(process.argv[2] || '402', 10);
 const TIER_CAP = 40;
 
 const icon = '<svg class="icon" viewBox="0 0 24 24"></svg>';
+// The attach button. Fixed width, and first in the row, so it comes off the
+// budget every other chip is dividing.
+const attach = '<button class="composer-chip action attach" data-attach="code">'
+  + `${icon}</button>`;
 const settings = (label, effort) =>
   '<button class="composer-chip action"><span class="chip-label">'
   + `<span class="chip-model">${label}</span>`
@@ -71,17 +75,40 @@ const mode = (label) =>
 // trade being made deliberately. What must still hold is that nothing
 // overflows and the name keeps the floor the stylesheet gives it.
 const ROWS = {
-  code: { build: (label, effort) => settings(label, effort) + mode('General') },
-  goose: { build: (label, effort) => settings(label, effort) + mode('Manual approval') },
+  code: { build: (label, effort) => attach + settings(label, effort) + mode('General') },
+  goose: { build: (label, effort) => attach + settings(label, effort) + mode('Manual approval') },
   'goose near the limit': {
     crowded: true,
-    build: (label, effort) => settings(label, effort) + mode('Manual approval')
+    build: (label, effort) => attach + settings(label, effort) + mode('Manual approval')
       + '<span class="composer-chip warn">96%</span>',
   },
 };
 
-const page = (row, label, effort) => `<!doctype html><html><head><meta charset="utf-8">
+// A picked file's name is not the app's to choose. The first is what iOS calls
+// a screenshot; the others are things someone actually had lying around.
+const FILES = [
+  'Screenshot 2026-08-24 at 09.41.17 — build failure on the tailnet box.png',
+  'IMG_0042.jpg',
+  'notes.md',
+];
+
+const trayChip = (name) =>
+  '<div class="attach-chip" role="listitem">'
+  + '<span class="attach-icon"></span>'
+  + `<span class="attach-meta"><span class="attach-name">${name}</span>`
+  + '<span class="attach-size">1.2 MB</span></span>'
+  + `<button class="attach-remove">${icon}</button></div>`;
+
+const tray = (names) =>
+  `<div class="attach-tray" role="list">${names.map(trayChip).join('')}</div>`;
+
+// Empty, one file, and the tray at its cap — three chips is where it has to
+// start scrolling rather than stretching the composer.
+const TRAYS = [[], [FILES[0]], FILES];
+
+const page = (row, label, effort, names) => `<!doctype html><html><head><meta charset="utf-8">
 <style>${CSS}</style></head><body><div class="app"><footer class="composer">
+${names && names.length ? tray(names) : ''}
 <textarea class="input" rows="1" placeholder="Message the code agent…"></textarea>
 <div class="composer-row">${ROWS[row].build(label, effort)}
   <button class="send">${icon}</button>
@@ -122,8 +149,9 @@ const EFFORTS = [
     console.log(`\n  ${row} composer @ ${WIDTH}pt`);
     for (const label of LABELS) {
       for (const { tier, capped } of EFFORTS) {
+       for (const names of TRAYS) {
         const file = path.join(os.tmpdir(), `composer-${row}-${WIDTH}.html`);
-        fs.writeFileSync(file, page(row, label, tier));
+        fs.writeFileSync(file, page(row, label, tier, names));
         await p.goto(`file://${file}`, { waitUntil: 'load' });
         const r = await p.evaluate(() => {
           const rowEl = document.querySelector('.composer-row');
@@ -163,6 +191,7 @@ const EFFORTS = [
             nameWidth: model.clientWidth,
             nameCut: model.scrollWidth > model.clientWidth + 0.5,
             sendRight: Math.round(send.getBoundingClientRect().right),
+            composerWidth: Math.round(document.querySelector('.composer').getBoundingClientRect().width),
             vw: document.documentElement.clientWidth,
           };
         });
@@ -171,6 +200,11 @@ const EFFORTS = [
           problems.push(`send is ${r.sendRight - r.vw}px off the right edge`);
         }
         if (r.overflow > 0) problems.push(`the row overflows by ${r.overflow}px`);
+        // An attachment tray full of long file names would stretch the
+        // composer itself if it did not scroll sideways.
+        if (r.composerWidth > r.vw) {
+          problems.push(`the composer is ${r.composerWidth - r.vw}px wider than the screen`);
+        }
         if (r.spill > 0) problems.push(`text spills ${r.spill}px past its pill`);
         if (r.lost) problems.push('the effort tier was clipped away');
         if (r.tierWidth > TIER_CAP) {
@@ -202,6 +236,7 @@ const EFFORTS = [
           + `  send.right=${r.sendRight}/${r.vw}`
           + (problems.length ? `  <- ${problems.join('; ')}` : ''),
         );
+       }
       }
     }
   }

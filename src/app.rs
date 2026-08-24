@@ -35,6 +35,7 @@ pub fn App() -> Element {
     crate::viewport::use_close_open_row();
     crate::viewport::use_pull_to_refresh();
     crate::viewport::use_transcript_bottom();
+    crate::viewport::use_file_picker();
     #[cfg(debug_assertions)]
     crate::domdump::use_dom_dump(
         match tab {

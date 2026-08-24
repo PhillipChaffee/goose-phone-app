@@ -10,6 +10,7 @@ use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use opencode_client::{Checks, FileStatus, PullRequest};
 
+use crate::attach::AttachTarget;
 use crate::code::{
     answer_code_permission, checks_label, delete_code_chat, ensure_code_agents, ensure_code_models,
     expand_diff_gap, is_free_model, load_code_diff, mark_all_diff_seen, merge_block_note,
@@ -22,6 +23,7 @@ use crate::diff::Block;
 use crate::external::open_external;
 use crate::icons::Icon;
 use crate::state::{relative_time_secs, use_app_ctx, AppCtx, ConnState};
+use crate::views::attach::{AttachButton, AttachTray};
 use crate::views::chat::{format_tokens, render_transcript};
 use crate::views::session_settings::{
     chip_effort, choice_label, mode_icon, ChoicePickerSheet, SessionSettingsSheet, SettingChoice,
@@ -572,6 +574,9 @@ pub fn CodeChatView() -> Element {
     let running = chat.running;
     // Cached transcript is read-only until the server is authoritative (A5).
     let can_send = !running && !chat.waking && !chat.loading;
+    // Which conversation the composer's picks belong to — see the goose
+    // composer for why it is passed down rather than read inside the pieces.
+    let conversation = chat.chat_id.clone().unwrap_or_default();
 
     let models = (ctx.code_models)();
     let models_loading = (ctx.code_models_loading)();
@@ -603,14 +608,19 @@ pub fn CodeChatView() -> Element {
 
     let mut submit = move || {
         let text = draft.peek().trim().to_string();
-        if text.is_empty() {
+        let files = ctx.code_attachments.peek().clone();
+        if text.is_empty() && files.is_empty() {
             return;
         }
-        if send_code_prompt(&ctx, text) {
+        // Emptied once the message is on its way; a request that then fails
+        // is `send_code_prompt`'s to put right, since it is answered long
+        // after this returns (see the goose composer for the same shape).
+        if send_code_prompt(&ctx, text, &files) {
             draft.set(String::new());
             // Your own message always takes you back to the bottom, whatever
             // you had scrolled up to read.
             crate::viewport::scroll_to_bottom(SCROLL_ID);
+            ctx.code_attachments.clone().set(Vec::new());
         }
     };
 
@@ -703,6 +713,7 @@ pub fn CodeChatView() -> Element {
         }
 
         footer { class: "composer",
+            AttachTray { target: AttachTarget::Code, conversation: conversation.clone() }
             textarea {
                 class: "input",
                 placeholder: if chat.waking { "Waking…" } else { "Message the code agent…" },
@@ -720,6 +731,7 @@ pub fn CodeChatView() -> Element {
                 },
             }
             div { class: "composer-row",
+                AttachButton { target: AttachTarget::Code, conversation }
                 button {
                     class: "composer-chip action model",
                     title: "Session settings",

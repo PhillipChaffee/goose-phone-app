@@ -114,6 +114,16 @@ impl ConnState {
 pub(crate) enum ChatItem {
     User {
         text: String,
+        /// Files sent with this message. A field rather than an item of its
+        /// own, so an attachment cannot shift the indices `marks` and
+        /// `CodeChatState::part_index` hold into `items` — and because one
+        /// message with three photos is one turn, not four.
+        ///
+        /// `serde(default)` is load-bearing the same way it is on `Settings`:
+        /// a transcript cached by an older build has no such field, and a
+        /// parse failure would take the whole cache down with it.
+        #[serde(default)]
+        attachments: Vec<crate::attach::Attachment>,
     },
     Assistant {
         message_id: Option<String>,
@@ -147,6 +157,12 @@ pub(crate) struct ChatState {
     pub last_at: i64,
     pub running: bool,
     pub loading: bool,
+    /// What the transcript knew about its attachments before a replay
+    /// cleared it, waiting for the replay to bring them back so it can hand
+    /// each one its name and its picture again. See
+    /// `crate::attach::sent_attachments` for why goose needs this and the
+    /// Code tab does not.
+    pub attach_replay: Vec<crate::attach::Attachment>,
 }
 
 /// Context-window usage: (tokens used, context limit).
@@ -175,6 +191,21 @@ pub(crate) struct AppCtx {
     /// and `session/load`, and is refreshed by `config_option_update`.
     pub config_options: Signal<Vec<ConfigOption>>,
     pub toast: Signal<Option<String>>,
+    /// Files picked in the goose composer and not yet sent.
+    ///
+    /// On the context rather than in the view because the picker is one
+    /// document-level listener installed at the app root (`src/attach.rs`
+    /// says why the gesture has to live there), and it has to be able to hand
+    /// what it read to a composer it does not own.
+    pub attachments: Signal<Vec<crate::attach::PendingAttachment>>,
+    /// The picks the browser is still reading. Held so the tray can say so:
+    /// resizing three photos takes seconds, and a composer that just sits
+    /// there is indistinguishable from one that lost the pick.
+    ///
+    /// A list, and each entry naming its own pick and conversation, because
+    /// two reads can overlap and either can outlive the chat it was started
+    /// in — see `crate::attach::Pick`.
+    pub attach_reading: Signal<Vec<crate::attach::Pick>>,
 
     // ---- Code tab (per-chat OpenCode containers on the brain; src/code.rs) ----
     pub tab: Signal<Tab>,
@@ -232,6 +263,10 @@ pub(crate) struct AppCtx {
     /// check what the agent actually changed, come back and send — was the
     /// one that silently lost what you had written.
     pub code_draft: Signal<String>,
+    /// Files picked in the code composer and not yet sent. Separate from
+    /// `attachments` for the same reason `code_draft` is separate from the
+    /// goose draft: they are different conversations.
+    pub code_attachments: Signal<Vec<crate::attach::PendingAttachment>>,
 }
 
 pub(crate) fn use_app_ctx_provider() -> AppCtx {
@@ -254,6 +289,8 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         usage: use_signal(|| None),
         config_options: use_signal(Vec::new),
         toast: use_signal(|| None),
+        attachments: use_signal(Vec::new),
+        attach_reading: use_signal(Vec::new),
         tab: use_signal(|| Tab::Home),
         drawer_open: use_signal(|| false),
         code_screen: use_signal(|| crate::code::CodeScreen::List),
@@ -274,6 +311,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_pulls: use_signal(crate::code::PullsState::default),
         code_diff_wrap: use_signal(|| true),
         code_draft: use_signal(String::new),
+        code_attachments: use_signal(Vec::new),
     };
     use_context_provider(|| ctx);
     ctx
@@ -448,6 +486,8 @@ async fn reload_chat(ctx: &AppCtx, session_id: String, cwd: String) {
     let mut chat = ctx.chat;
     {
         let mut c = chat.write();
+        let carry = crate::attach::sent_attachments(&c.items);
+        c.attach_replay = carry;
         c.items.clear();
         c.loading = true;
     }
@@ -536,6 +576,15 @@ enum ChunkKind {
 }
 
 fn push_chunk(chat: &mut Signal<ChatState>, chunk: MessageChunk, kind: ChunkKind) {
+    // A user chunk that is not text is a file they attached, and it belongs
+    // beside the message rather than inside it as "[image: image/jpeg]",
+    // which is all `text_repr` could ever say about it. Agent chunks keep the
+    // placeholder: an image the agent sends is not an attachment on a turn
+    // the reader made.
+    if matches!(kind, ChunkKind::User) && chunk.content.is_attachment() {
+        push_user_attachment(chat, &chunk.content);
+        return;
+    }
     let text = chunk.content.text_repr();
     if text.is_empty() {
         return;
@@ -565,7 +614,7 @@ fn push_chunk(chat: &mut Signal<ChatState>, chunk: MessageChunk, kind: ChunkKind
             last.push_str(&text);
             return;
         }
-        (ChunkKind::User, Some(ChatItem::User { text: last })) if message_id.is_none() => {
+        (ChunkKind::User, Some(ChatItem::User { text: last, .. })) if message_id.is_none() => {
             last.push_str(&text);
             return;
         }
@@ -580,9 +629,40 @@ fn push_chunk(chat: &mut Signal<ChatState>, chunk: MessageChunk, kind: ChunkKind
     } = &mut *c;
     mark_gap(items.len(), marks, last_at);
     items.push(match kind {
-        ChunkKind::User => ChatItem::User { text },
+        ChunkKind::User => ChatItem::User {
+            text,
+            attachments: Vec::new(),
+        },
         ChunkKind::Assistant => ChatItem::Assistant { message_id, text },
         ChunkKind::Thought => ChatItem::Thought { message_id, text },
+    });
+}
+
+/// Hang a replayed attachment off the user's turn.
+///
+/// goose sends the message's blocks as separate chunks, and the text one
+/// arrives first, so the bubble is normally already there. When it is not —
+/// a message that is nothing but a photo — the attachment opens one.
+fn push_user_attachment(chat: &mut Signal<ChatState>, block: &goose_acp_client::ContentBlock) {
+    let mut record = crate::attach::from_content_block(block);
+    let mut c = chat.write();
+    // A replayed image is bytes and a mime type and nothing else, so this is
+    // where a photo this phone sent gets its name and its thumbnail back.
+    crate::attach::adopt_sent(&mut c.attach_replay, &mut record);
+    if let Some(ChatItem::User { attachments, .. }) = c.items.last_mut() {
+        attachments.push(record);
+        return;
+    }
+    let ChatState {
+        items,
+        marks,
+        last_at,
+        ..
+    } = &mut *c;
+    mark_gap(items.len(), marks, last_at);
+    items.push(ChatItem::User {
+        text: String::new(),
+        attachments: vec![record],
     });
 }
 
@@ -661,6 +741,23 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
     let cwd = info.cwd.clone().unwrap_or_else(|| "/".to_string());
     let running = ctx.running_sessions.peek().contains(&info.session_id);
 
+    // An attachment belongs to the message it was picked for. The draft is
+    // component-local and dies with the screen; the tray lives on the context
+    // (the picker has to be able to reach it from the app root), so it has to
+    // be told.
+    ctx.attachments.clone().set(Vec::new());
+    // Walking out of a chat and back into it replays it from scratch, and the
+    // replay cannot say what a photo was called or what it looked like. Only
+    // from the same session: two conversations' attachments have nothing to
+    // say about each other.
+    let carry = {
+        let current = ctx.chat.peek();
+        if current.session_id.as_deref() == Some(info.session_id.as_str()) {
+            crate::attach::sent_attachments(&current.items)
+        } else {
+            Vec::new()
+        }
+    };
     chat.set(ChatState {
         marks: Vec::new(),
         last_at: 0,
@@ -670,6 +767,7 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
         items: Vec::new(),
         running,
         loading: true,
+        attach_replay: carry,
     });
     usage.set(None);
     screen.set(Screen::Chat);
@@ -723,6 +821,7 @@ pub(crate) fn new_session(ctx: &AppCtx) {
                 let mut screen = ctx.screen;
                 let mut usage = ctx.usage;
                 ctx.config_options.clone().set(resp.config_options);
+                ctx.attachments.clone().set(Vec::new());
                 chat.set(ChatState {
                     marks: Vec::new(),
                     last_at: 0,
@@ -732,6 +831,7 @@ pub(crate) fn new_session(ctx: &AppCtx) {
                     items: Vec::new(),
                     running: false,
                     loading: false,
+                    attach_replay: Vec::new(),
                 });
                 usage.set(None);
                 screen.set(Screen::Chat);
@@ -741,9 +841,21 @@ pub(crate) fn new_session(ctx: &AppCtx) {
     });
 }
 
-/// Send the user's message and run the agent turn. Returns false (leaving the
-/// caller's draft untouched) if the message could not be submitted.
-pub(crate) fn send_prompt(ctx: &AppCtx, text: String) -> bool {
+/// Send the user's message, with whatever they attached to it, and run the
+/// agent turn. Returns false (leaving the caller's draft and attachments
+/// untouched) if the message could not be handed to the transport at all.
+///
+/// True does not mean delivered — the request is answered on a task of its
+/// own — so a send that fails on the wire puts the files back in the tray
+/// itself, which is the only place they can come back to.
+///
+/// `files` is passed in rather than read off the context so that a message
+/// the *app* composes carries nothing: the caller decides.
+pub(crate) fn send_prompt(
+    ctx: &AppCtx,
+    text: String,
+    files: &[crate::attach::PendingAttachment],
+) -> bool {
     let mut chat = ctx.chat;
     let Some(session_id) = chat.peek().session_id.clone() else {
         return false;
@@ -752,6 +864,10 @@ pub(crate) fn send_prompt(ctx: &AppCtx, text: String) -> bool {
         show_toast(ctx, "Not connected — reconnect in Settings");
         return false;
     };
+    let blocks = crate::attach::goose_blocks(&text, files);
+    if blocks.is_empty() {
+        return false;
+    }
     {
         let mut c = chat.write();
         let ChatState {
@@ -761,15 +877,22 @@ pub(crate) fn send_prompt(ctx: &AppCtx, text: String) -> bool {
             ..
         } = &mut *c;
         mark_gap(items.len(), marks, last_at);
-        items.push(ChatItem::User { text: text.clone() });
+        items.push(ChatItem::User {
+            text,
+            attachments: crate::attach::records(files),
+        });
         c.running = true;
     }
     let mut running_sessions = ctx.running_sessions;
     running_sessions.write().insert(session_id.clone());
 
+    // Held for the length of the request, so a failure has something to give
+    // back. It costs a second copy of the payload while the turn runs, which
+    // is the price of not making a lost connection eat the photo.
+    let carried = files.to_vec();
     let ctx = *ctx;
     spawn_forever(async move {
-        let result = client.prompt(&session_id, &text).await;
+        let result = client.prompt(&session_id, &blocks).await;
 
         let mut running_sessions = ctx.running_sessions;
         running_sessions.write().remove(&session_id);
@@ -788,7 +911,24 @@ pub(crate) fn send_prompt(ctx: &AppCtx, text: String) -> bool {
                 "refusal" => show_toast(&ctx, "The agent declined to continue"),
                 other => show_toast(&ctx, format!("Turn ended: {other}")),
             },
-            Err(e) => show_toast(&ctx, format!("Prompt failed: {e}")),
+            Err(e) => {
+                // The transport can also die mid-turn, in which case the
+                // message did arrive and these chips reappear next to a
+                // bubble that already shows them. That is a thing the reader
+                // can see and undo; a photo that is simply gone is not.
+                //
+                // Named with the session it was sent in, for the same reason
+                // `running` is guarded on it three lines up: this answers long
+                // after the send, and the tray it empties into is the one on
+                // screen now.
+                let note = crate::attach::return_to_tray(
+                    &ctx,
+                    crate::attach::AttachTarget::Goose,
+                    &session_id,
+                    carried,
+                );
+                show_toast(&ctx, format!("Prompt failed: {e}{note}"));
+            }
         }
     });
     true

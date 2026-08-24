@@ -28,7 +28,7 @@
 
 use std::time::Duration;
 
-use opencode_client::{ChatMeta, CodeClient, CodeConfig, CodeEvent};
+use opencode_client::{ChatMeta, CodeClient, CodeConfig, CodeEvent, PromptPart};
 use tokio::sync::mpsc::Receiver;
 
 fn env(name: &str) -> String {
@@ -203,7 +203,7 @@ async fn main() {
         .prompt_async(
             &chat.id,
             &session.id,
-            "push the branch and open a pull request",
+            &[PromptPart::text("push the branch and open a pull request")],
             None,
             None,
             None,

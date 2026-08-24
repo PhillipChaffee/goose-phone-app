@@ -339,6 +339,24 @@ const PULL_TO_REFRESH: &str = r#"
 })();
 "#;
 
+/// Wire the composer's attach button to iOS's file sheet.
+///
+/// Installed once at the app root rather than per composer, for the reason
+/// given above `CLOSE_OPEN_ROW`: the gesture has to be owned by JavaScript.
+/// The script itself, and why the reading and resizing happen there too, is
+/// in `crate::attach`.
+pub(crate) fn use_file_picker() {
+    let ctx = crate::state::use_app_ctx();
+    use_effect(move || {
+        let mut eval = document::eval(&crate::attach::picker_js());
+        spawn(async move {
+            while let Ok(payload) = eval.recv::<String>().await {
+                crate::attach::receive(&ctx, &payload);
+            }
+        });
+    });
+}
+
 /// Wire pull-to-refresh, dispatching on whichever list was pulled.
 ///
 /// The scroller names its own refresh in `data-refresh`, so a list that has

@@ -3,12 +3,14 @@ use dioxus::prelude::*;
 
 use goose_acp_client::ConfigOption;
 
+use crate::attach::AttachTarget;
 use crate::icons::Icon;
 use crate::markdown;
 use crate::state::{
     answer_permission, new_session, send_prompt, show_toast, stop_turn, use_app_ctx, ChatItem,
     Screen, Usage,
 };
+use crate::views::attach::{attachment_list, AttachButton, AttachTray};
 use crate::views::session_settings::{
     chip_effort, choice_label, mode_icon, ChoicePickerSheet, SessionSettingsSheet, SettingChoice,
     SettingRow,
@@ -35,6 +37,10 @@ pub fn ChatView() -> Element {
 
     let running = chat.running;
     let can_send = !running && !chat.loading;
+    // Which conversation the composer's picks belong to. Passed down rather
+    // than read off the context inside the two components, so neither of them
+    // subscribes to a signal that changes on every streamed token.
+    let conversation = chat.session_id.clone().unwrap_or_default();
 
     // Whatever the agent says it has, in the order it says it: provider,
     // mode, model and thinking effort today. Reading the list rather than
@@ -69,17 +75,24 @@ pub fn ChatView() -> Element {
 
     let mut submit = move || {
         let text = draft.peek().trim().to_string();
-        if text.is_empty() {
+        // A message can be attachments alone — a photo with nothing to say
+        // about it is still a message.
+        let files = ctx.attachments.peek().clone();
+        if text.is_empty() && files.is_empty() {
             return;
         }
-        // Only clear the draft once the message was actually accepted, so a
-        // failed send (e.g. disconnected) doesn't eat the typed text.
-        if send_prompt(&ctx, text) {
+        // Cleared only once the message is on its way, so a send that never
+        // starts — disconnected, no session — leaves the typed text and the
+        // picked files where they were. A send that starts and then fails on
+        // the wire is `send_prompt`'s to put right: it answers long after
+        // this returns, and it hands the files back to the tray itself.
+        if send_prompt(&ctx, text, &files) {
             draft.set(String::new());
             // Your own message always takes you back to the bottom, whatever
             // you had scrolled up to read. Without this the transcript stays
             // where it was and the message you just sent is off screen.
             crate::viewport::scroll_to_bottom(SCROLL_ID);
+            ctx.attachments.clone().set(Vec::new());
         }
     };
 
@@ -123,6 +136,7 @@ pub fn ChatView() -> Element {
         ScrollToBottom { scroller: SCROLL_ID }
 
         footer { class: "composer",
+            AttachTray { target: AttachTarget::Goose, conversation: conversation.clone() }
             textarea {
                 class: "input",
                 placeholder: "Message goose…",
@@ -139,6 +153,7 @@ pub fn ChatView() -> Element {
                 },
             }
             div { class: "composer-row",
+                AttachButton { target: AttachTarget::Goose, conversation }
                 if !rows.is_empty() {
                     button {
                         class: "composer-chip action model",
@@ -449,11 +464,18 @@ fn tool_kind_phrase(kind: &str, n: usize) -> String {
 /// Shared transcript renderer — the Code tab reuses it (views/code.rs).
 pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
     match item {
-        ChatItem::User { text } => {
+        ChatItem::User { text, attachments } => {
             let html = markdown::escape_text(text);
             rsx! {
                 div { key: "{index}", class: "bubble user",
-                    div { class: "bubble-text", dangerous_inner_html: "{html}" }
+                    if !attachments.is_empty() {
+                        {attachment_list(attachments)}
+                    }
+                    // An empty text node still draws a line box, which is a
+                    // blank strip under a photo sent with nothing to say.
+                    if !text.is_empty() {
+                        div { class: "bubble-text", dangerous_inner_html: "{html}" }
+                    }
                 }
             }
         }

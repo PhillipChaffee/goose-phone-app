@@ -8,7 +8,7 @@
 //!
 //! ```no_run
 //! # async fn demo() -> Result<(), goose_acp_client::AcpError> {
-//! use goose_acp_client::{AcpClient, ConnectConfig};
+//! use goose_acp_client::{AcpClient, ConnectConfig, ContentBlock};
 //!
 //! let cfg = ConnectConfig {
 //!     base_url: "https://goose-box.tailnet.ts.net".into(),
@@ -18,7 +18,9 @@
 //! let (client, mut events, info) = AcpClient::connect(&cfg).await?;
 //! println!("connected to {} {}", info.agent_name, info.agent_version);
 //! let session = client.session_new("/home/me").await?;
-//! let stop = client.prompt(&session.session_id, "Hello goose!").await?;
+//! let stop = client
+//!     .prompt(&session.session_id, &[ContentBlock::text("Hello goose!")])
+//!     .await?;
 //! # let _ = (stop, events.recv().await);
 //! # Ok(())
 //! # }
