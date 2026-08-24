@@ -11,7 +11,7 @@ use crate::state::{
     Screen, Usage,
 };
 use crate::views::session_settings::{
-    choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
+    choice_label, mode_icon, ChoicePickerSheet, SessionSettingsSheet, SettingChoice, SettingRow,
 };
 use crate::views::{ConfirmDelete, MenuItem, OverflowButton, OverflowSheet};
 
@@ -48,7 +48,12 @@ pub fn ChatView() -> Element {
         .and_then(ConfigOption::current_label)
         .map_or_else(|| "Session".to_owned(), str::to_owned);
     let rows = goose_setting_rows(&config, usage);
+    // A goose that stops offering a mode simply has no mode chip: this is
+    // `None` and everything below skips it, rather than the chip appearing
+    // with nothing behind it.
+    let mode = config.iter().find(|o| is_mode_chip(o)).cloned();
     let mut sheet = use_signal(|| false);
+    let mut mode_sheet = use_signal(|| false);
     let mut confirm_delete = use_signal(|| false);
     let mut menu = use_signal(|| false);
 
@@ -120,16 +125,27 @@ pub fn ChatView() -> Element {
             div { class: "composer-row",
                 if !rows.is_empty() {
                     button {
-                        class: "composer-chip action",
+                        class: "composer-chip action model",
                         title: "Session settings",
                         onclick: move |_| sheet.set(true),
                         span { class: "chip-label", "{chip_label}" }
                         Icon { name: "chevron-down" }
                     }
                 }
+                if let Some(mode) = mode.as_ref() {
+                    button {
+                        class: "composer-chip action mode",
+                        title: "Mode",
+                        onclick: move |_| mode_sheet.set(true),
+                        Icon { name: mode_icon(mode.current_value.as_deref().unwrap_or_default()) }
+                        span { class: "chip-label",
+                            {mode.current_label().unwrap_or("Mode")}
+                        }
+                    }
+                }
                 if let Some((used, limit)) = usage {
-                    span { class: "composer-chip",
-                        "{format_tokens(used)}/{format_tokens(limit)}"
+                    span { class: "composer-chip", title: "Context used",
+                        "{context_percent(used, limit)}"
                     }
                 }
                 if running {
@@ -159,6 +175,28 @@ pub fn ChatView() -> Element {
                     crate::state::set_config_option(&ctx, &config_id, &value);
                 },
                 onclose: move |()| sheet.set(false),
+            }
+        }
+
+        if let Some(mode) = mode.filter(|_| mode_sheet()) {
+            ChoicePickerSheet {
+                title: "Select mode",
+                backend: "goose",
+                choices: mode_choices(&mode),
+                current: mode.current_value.clone(),
+                // Unreachable while the chip only renders for an adjustable
+                // option, and stated anyway: an empty picker with nothing in
+                // it and nothing to say is the one outcome a reader cannot
+                // act on.
+                empty: "This agent offers no other mode.",
+                onchoose: {
+                    let config_id = mode.config_id.clone();
+                    move |value: String| {
+                        crate::state::set_config_option(&ctx, &config_id, &value);
+                        mode_sheet.set(false);
+                    }
+                },
+                onclose: move |()| mode_sheet.set(false),
             }
         }
 
@@ -201,17 +239,64 @@ pub fn ChatView() -> Element {
     }
 }
 
-/// The goose tab's rows: every option the agent offers, plus the one fact
-/// about the session that is worth stating and cannot be changed.
+/// The mode selector, when picking between its values would change anything.
+///
+/// This is the one place the goose sheet stops being purely data-driven, and
+/// it is deliberate: mode is a chip in the composer row with a picker of its
+/// own, so it is taken out of the list rather than rendered twice. ACP gives
+/// an agent two ways to say which option that is — the `mode` category, which
+/// the spec defines for exactly this sort of placement decision, and the
+/// `mode` id goose has always used — and either will do, so an agent that
+/// sends only one of them is still understood.
+///
+/// An option with a single value stays in the sheet as a fact. A chip that
+/// opens a one-row picker is a control that does nothing (design rule 11),
+/// and the setting still exists, so it is reported rather than hidden.
+fn is_mode_chip(option: &ConfigOption) -> bool {
+    (option.category.as_deref() == Some("mode") || option.config_id == "mode")
+        && option.is_adjustable()
+}
+
+/// The mode picker's rows, in the order the agent sent them.
+///
+/// Each carries the agent's own description — goose writes one per mode, and
+/// they are what tells "Auto" from "Manual approval" without having to try
+/// both — and an icon derived from the value, because neither ACP nor goose
+/// has a field for one.
+fn mode_choices(option: &ConfigOption) -> Vec<SettingChoice> {
+    option
+        .options
+        .iter()
+        .map(|c| {
+            SettingChoice::new(&c.value, choice_label(&c.name, &c.value))
+                .with_note(c.description.clone())
+                .with_icon(mode_icon(&c.value))
+        })
+        .collect()
+}
+
+/// The goose tab's rows: every option the agent offers apart from mode, plus
+/// the one fact about the session that is worth stating and cannot be
+/// changed.
 ///
 /// Context length is that fact. `session/set_config_option` routes exactly
 /// four ids — provider, mode, model, `thinking_effort` — and rejects anything
 /// else; a context window reaches the client only as read-only information
 /// about a model. The number is already flowing in on every `usage_update`,
-/// so the sheet reports it rather than pretending to a control.
+/// so the sheet reports it rather than pretending to a control — and reports
+/// it as unknown before the first turn has produced one, because a row that
+/// appears partway through a conversation reads as the app having found
+/// something rather than as the agent having said it.
 fn goose_setting_rows(config: &[ConfigOption], usage: Option<Usage>) -> Vec<SettingRow> {
+    // A session whose config has not arrived and that has not run a turn has
+    // nothing to report. Returning no rows is what keeps the chip off the
+    // composer entirely, rather than offering a sheet holding one dash.
+    if config.is_empty() && usage.is_none() {
+        return Vec::new();
+    }
     let mut rows: Vec<SettingRow> = config
         .iter()
+        .filter(|option| !is_mode_chip(option))
         .map(|option| {
             SettingRow::select(
                 &option.config_id,
@@ -220,20 +305,29 @@ fn goose_setting_rows(config: &[ConfigOption], usage: Option<Usage>) -> Vec<Sett
                 option
                     .options
                     .iter()
-                    .map(|c| SettingChoice::new(&c.value, choice_label(&c.name, &c.value)))
+                    .map(|c| {
+                        SettingChoice::new(&c.value, choice_label(&c.name, &c.value))
+                            .with_note(c.description.clone())
+                    })
                     .collect(),
                 option.description.clone(),
             )
         })
         .collect();
-    if let Some((_, limit)) = usage {
-        rows.push(SettingRow::fact(
+    rows.push(match usage {
+        Some((_, limit)) => SettingRow::fact(
             "context_length",
             "Context length",
             format!("{} tokens", format_tokens(limit)),
-            "Fixed by the model. The agent takes no context window on a session.",
-        ));
-    }
+            "Fixed by the model. Nothing a message carries changes it.",
+        ),
+        None => SettingRow::fact(
+            "context_length",
+            "Context length",
+            "—",
+            "The agent reports this with the first turn of the session.",
+        ),
+    });
     rows
 }
 
@@ -427,6 +521,28 @@ fn tool_icon(kind: &str) -> &'static str {
     }
 }
 
+/// How full the context window is, as the chip states it.
+///
+/// It used to read `128.0k/200.0k`, which is 106px of a 306px composer row —
+/// and with a mode chip in that row as well, a phone at 360pt had 48px left
+/// for two chip labels, so even `GPT-5.2` and `Auto` came out ellipsised.
+/// The two numbers were never the question anyway: "how much room is left" is,
+/// and one percentage answers it in a third of the width. The window itself is
+/// still stated in full, as the Context length row of the settings sheet.
+///
+/// A limit of zero is a server that has not said, and there is no fraction of
+/// nothing; a count above it is clamped, because a turn that overran its own
+/// window should read as full rather than as 103%. Widened to `u128` first,
+/// so scaling by 100 cannot wrap and cannot saturate — saturating would turn
+/// a nearly-full window into "1%", which is the opposite of the truth.
+fn context_percent(used: u64, limit: u64) -> String {
+    if limit == 0 {
+        return "—".to_owned();
+    }
+    let percent = u128::from(used) * 100 / u128::from(limit);
+    format!("{}%", percent.min(100))
+}
+
 pub(crate) fn format_tokens(n: u64) -> String {
     // Scoped to this one cast, not to the whole function: anything else added
     // here should have to justify its own arithmetic.
@@ -563,5 +679,140 @@ fn permission_label(name: Option<&str>, option_id: &str) -> String {
         "reject_once" => "Reject".to_string(),
         "reject_always" => "Always reject".to_string(),
         other => other.replace('_', " "),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{context_percent, goose_setting_rows, is_mode_chip, mode_choices, ConfigOption};
+    use goose_acp_client::ConfigChoice;
+
+    /// The chip reports a fraction of a window, so it needs a window; and a
+    /// turn that overran one should read as full rather than as 103%.
+    #[test]
+    fn context_percent_needs_a_window_and_stops_at_full() {
+        assert_eq!(context_percent(128_000, 200_000), "64%");
+        assert_eq!(context_percent(0, 200_000), "0%");
+        assert_eq!(context_percent(206_000, 200_000), "100%");
+        assert_eq!(context_percent(1, 0), "—");
+        // No overflow on a window the size of a whole model's training set.
+        assert_eq!(context_percent(u64::MAX, u64::MAX), "100%");
+    }
+
+    fn choice(value: &str, name: &str, description: Option<&str>) -> ConfigChoice {
+        ConfigChoice {
+            value: value.to_owned(),
+            name: name.to_owned(),
+            description: description.map(str::to_owned),
+        }
+    }
+
+    fn option(config_id: &str, category: Option<&str>, values: &[&str]) -> ConfigOption {
+        ConfigOption {
+            config_id: config_id.to_owned(),
+            name: config_id.to_owned(),
+            description: None,
+            category: category.map(str::to_owned),
+            kind: Some("select".to_owned()),
+            current_value: values.first().map(|v| (*v).to_owned()),
+            options: values.iter().map(|v| choice(v, v, None)).collect(),
+        }
+    }
+
+    fn row_ids(config: &[ConfigOption]) -> Vec<String> {
+        goose_setting_rows(config, None)
+            .into_iter()
+            .map(|r| r.id)
+            .collect()
+    }
+
+    /// Mode has a chip and a picker of its own, so the sheet must not carry
+    /// it as well — and everything else keeps the agent's own order.
+    #[test]
+    fn mode_leaves_the_sheet_it_has_a_chip_in() {
+        let config = [
+            option("provider", None, &["anthropic", "openai"]),
+            option("mode", Some("mode"), &["auto", "approve"]),
+            option("model", Some("model"), &["opus", "sonnet"]),
+            option("thinking_effort", Some("thought_level"), &["off", "high"]),
+        ];
+        assert_eq!(
+            row_ids(&config),
+            ["provider", "model", "thinking_effort", "context_length"]
+        );
+    }
+
+    /// The agent may say which option is the mode with the spec's category
+    /// rather than the id goose happens to use, and either has to be enough.
+    #[test]
+    fn the_mode_is_found_by_category_as_well_as_by_id() {
+        assert!(is_mode_chip(&option(
+            "session_mode",
+            Some("mode"),
+            &["auto", "approve"]
+        )));
+        assert!(is_mode_chip(&option("mode", None, &["auto", "approve"])));
+        assert!(!is_mode_chip(&option("model", Some("model"), &["a", "b"])));
+    }
+
+    /// One value is not a choice, so it earns no chip — and it stays in the
+    /// sheet as a fact rather than leaving the app altogether.
+    #[test]
+    fn a_mode_with_one_value_stays_in_the_sheet() {
+        let config = [option("mode", Some("mode"), &["auto"])];
+        assert!(!is_mode_chip(&config[0]));
+        assert_eq!(row_ids(&config), ["mode", "context_length"]);
+    }
+
+    /// A goose that sends no mode at all has nothing to put on a chip, and
+    /// nothing else about the sheet changes.
+    #[test]
+    fn a_goose_with_no_mode_option_has_nothing_to_pick() {
+        let config = [option("model", Some("model"), &["opus", "sonnet"])];
+        assert!(!config.iter().any(is_mode_chip));
+        assert_eq!(row_ids(&config), ["model", "context_length"]);
+    }
+
+    /// Context length is a row before the first turn as well as after it: one
+    /// that appears partway through a conversation reads as the app having
+    /// found something rather than the agent having said it.
+    #[test]
+    fn context_length_is_stated_before_the_agent_has_reported_one() {
+        let config = [option("model", Some("model"), &["opus", "sonnet"])];
+        let rows = goose_setting_rows(&config, None);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].value, "—");
+        assert_eq!(
+            goose_setting_rows(&config, Some((1_000, 200_000)))[1].value,
+            "200.0k tokens"
+        );
+    }
+
+    /// Nothing to report is nothing to open: with no config and no turn yet,
+    /// the sheet has no rows and the composer has no chip.
+    #[test]
+    fn a_session_with_nothing_to_report_has_no_rows() {
+        assert!(goose_setting_rows(&[], None).is_empty());
+        assert_eq!(goose_setting_rows(&[], Some((1_000, 200_000))).len(), 1);
+    }
+
+    /// The picker's rows carry the agent's own words, and a mark each.
+    #[test]
+    fn mode_choices_keep_the_agents_descriptions() {
+        let mut mode = option("mode", Some("mode"), &["auto", "approve"]);
+        mode.options = vec![
+            choice("auto", "Auto", Some("Run tools without asking.")),
+            choice("approve", "Manual approval", None),
+        ];
+        let choices = mode_choices(&mode);
+        assert_eq!(choices[0].label, "Auto");
+        assert_eq!(
+            choices[0].note.as_deref(),
+            Some("Run tools without asking.")
+        );
+        assert_eq!(choices[0].icon.as_deref(), Some("bolt"));
+        assert_eq!(choices[1].label, "Manual approval");
+        assert_eq!(choices[1].note, None);
+        assert_eq!(choices[1].icon.as_deref(), Some("shield-check"));
     }
 }

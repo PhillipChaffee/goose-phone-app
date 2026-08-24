@@ -75,6 +75,16 @@ pub(crate) struct CodeChatState {
     /// Thinking-effort tier for the next turn (`OpenCode` calls it a
     /// variant). `None` means the model's own default.
     pub effort: Option<String>,
+    /// The agent the next turn runs as — what the composer calls the mode.
+    /// `None` means the server's own default agent.
+    ///
+    /// No `picked` companion, and for the reason `picked` exists rather than
+    /// in spite of it: the session record carries a model but says nothing
+    /// about an agent, so there is no server value that could overrule a
+    /// local one, and here "has a value" and "the reader chose it" really are
+    /// the same question. The day `GET /session` starts reporting the agent,
+    /// this needs its own flag exactly as the model does.
+    pub agent: Option<String>,
     /// The reader picked `model`/`effort` in the settings sheet, as opposed
     /// to them being seeded from the chat record.
     ///
@@ -370,6 +380,44 @@ pub(crate) fn ensure_code_models(ctx: &AppCtx) {
     });
 }
 
+/// Fetch the chat server's agents — the composer's modes — once, on first
+/// need.
+///
+/// Same shape as [`ensure_code_models`] and paid for the same way: on the tap
+/// that opens the picker, not on opening a chat. Unlike the model catalogue
+/// this list is cleared when a chat is opened, because agents can be defined
+/// by the repository (`.opencode/agent/`), so the next chat's are not
+/// necessarily these.
+pub(crate) fn ensure_code_agents(ctx: &AppCtx) {
+    if !ctx.code_agents.peek().is_empty() || *ctx.code_agents_loading.peek() {
+        return;
+    }
+    let Some(chat_id) = ctx.code_chat.peek().chat_id.clone() else {
+        return;
+    };
+    let Some(client) = ctx.code_client.peek().clone() else {
+        return;
+    };
+    let mut loading = ctx.code_agents_loading;
+    loading.set(true);
+    let ctx = *ctx;
+    spawn_forever(async move {
+        match client.agents(&chat_id).await {
+            Ok(agents) => ctx.code_agents.clone().set(agents),
+            Err(e) => show_toast(&ctx, format!("Mode list unavailable: {e}")),
+        }
+        ctx.code_agents_loading.clone().set(false);
+    });
+}
+
+/// Run the open chat's next turn as `agent` (an [`Agent::name`]).
+///
+/// [`Agent::name`]: opencode_client::Agent::name
+pub(crate) fn set_code_agent(ctx: &AppCtx, agent: &str) {
+    let mut chat = ctx.code_chat;
+    chat.write().agent = Some(agent.to_owned());
+}
+
 /// Point the open chat's next turn at `reference` (`provider/model`).
 pub(crate) fn set_code_model(ctx: &AppCtx, reference: &str) {
     let mut chat = ctx.code_chat;
@@ -414,6 +462,11 @@ pub(crate) fn open_code_chat(ctx: &AppCtx, meta: ChatMeta) {
         ctx.code_draft.clone().set(String::new());
     }
 
+    // Agents can come from the repository (`.opencode/agent/`), so the list
+    // is per chat in a way the model catalogue is not. Dropping it here is
+    // what makes the next `ensure_code_agents` ask this chat's server.
+    ctx.code_agents.clone().set(Vec::new());
+
     let cached = ctx.code_cache.peek().chats.get(&meta.id).cloned();
     let waking = !meta.is_running();
     // The review starts empty (the diff is fetched on demand) but not
@@ -445,6 +498,7 @@ pub(crate) fn open_code_chat(ctx: &AppCtx, meta: ChatMeta) {
         waking,
         model: meta.model.clone(),
         effort: None,
+        agent: None,
         picked: false,
     });
     screen.set(CodeScreen::Chat);
@@ -870,16 +924,23 @@ pub(crate) fn send_code_prompt(ctx: &AppCtx, text: String) -> bool {
                 }
             },
         };
-        // Model and effort ride on the turn: OpenCode has no "set the
-        // session's model" call, it copies whatever the turn asked for onto
-        // the session record. That is why the sheet says "from your next
-        // message" and means it.
-        let (model, effort) = {
+        // Model, effort and agent all ride on the turn: OpenCode has no "set
+        // the session's model" call, it copies whatever the turn asked for
+        // onto the session record. That is why the sheet and the mode picker
+        // both say "from your next message" and mean it.
+        let (model, effort, agent) = {
             let c = ctx.code_chat.peek();
-            (c.model.clone(), c.effort.clone())
+            (c.model.clone(), c.effort.clone(), c.agent.clone())
         };
         if let Err(e) = client
-            .prompt_async(&chat_id, &sid, &text, model.as_deref(), effort.as_deref())
+            .prompt_async(
+                &chat_id,
+                &sid,
+                &text,
+                model.as_deref(),
+                effort.as_deref(),
+                agent.as_deref(),
+            )
             .await
         {
             ctx.code_chat.clone().write().running = false;

@@ -1858,6 +1858,32 @@ details[open] > summary::before {
   text-overflow: ellipsis;
 }
 
+/* The mode chip does not give way, and the model chip does.
+ *
+ * Both carry a .chip-label, so the rule above would let both ellipsise — and
+ * flexbox shares a deficit in proportion to content width, which takes the
+ * same *fraction* off each. A model name has fractions to spare; "Auto" does
+ * not, and at 360pt with a long model name beside it the mode chip rendered
+ * as a lone ellipsis. So the pressure goes entirely on the model name, which
+ * is the one the sheet states in full anyway.
+ *
+ * Written after that rule deliberately: equal specificity, so source order is
+ * what decides.
+ *
+ * The cap is what keeps a chip that cannot shrink from eating the row, and 7ch
+ * is not a taste: it is the widest cap at which a 360pt goose composer — model
+ * chip, mode chip, context chip and send — still renders a short model name in
+ * full. Anything larger and `GPT-5.2` came out as `GPT…` on a small phone
+ * whatever the mode was called. It holds every mode OpenCode ships and all of
+ * goose's but `Manual approval`. */
+.composer-chip.mode {
+  flex-shrink: 0;
+}
+
+.composer-chip.mode .chip-label {
+  max-width: 7ch;
+}
+
 .composer-chip > .icon {
   flex-shrink: 0;
 }
@@ -2456,7 +2482,10 @@ details[open] > summary::before {
   align-items: center;
   gap: 12px;
   min-height: 48px;
-  padding: 0 12px;
+  /* Vertical padding as well as the min-height: a mode row carries a
+   * description under its name, and a two-line row taller than 48px would
+   * otherwise have its text against the top and bottom edges. */
+  padding: 8px 12px;
   border: 0;
   border-radius: var(--radius-lg);
   background: transparent;
@@ -2467,6 +2496,17 @@ details[open] > summary::before {
   cursor: pointer;
 }
 
+/* Name over description. A column rather than the settings row's wrapping
+ * line, because these two are not a name and a value competing for one line —
+ * the description is a sentence and always belongs underneath. */
+.choice-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .choice-name {
   flex: 1;
   min-width: 0;
@@ -2475,8 +2515,27 @@ details[open] > summary::before {
   white-space: nowrap;
 }
 
-.choice .icon {
+/* Same treatment as a setting's note, and secondary for the same reason: it
+ * is the line that tells one mode from another, so it has to be as readable
+ * as `.hint`. */
+.choice-note {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* The leading mark says which mode this is; only the trailing check says
+ * which one is in force, so only the check is coloured as a state. Scoped to
+ * a direct child so the wrapped icon in .choice-lead keeps its own colour. */
+.choice > .icon {
+  flex-shrink: 0;
   color: var(--text-success);
+}
+
+.choice-lead {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-secondary);
 }
 
 .choice.selected {

@@ -173,13 +173,31 @@ you want to see it.
 
 ### 11. Only offer controls that do something
 
-The composer's chip row holds what is real on that screen: the token budget on
-the goose tab, diff and PR on the code tab, and one chip per tab that opens the
-session's settings. A control that does nothing is worse than no control.
+The composer's chip row holds what is real on that screen: the model the next
+message runs on, the mode it runs in, and — on the goose tab — how full the
+context window is. A control that does nothing is worse than no control. (Diff
+and PR are not in it; they act on the work rather than on your message, and
+they have their own row above the composer.)
 
-Everything adjustable lives behind that one chip rather than getting a chip of
-its own — four settings would be four chips and a composer that is mostly
-chrome. The sheet has exactly two kinds of row, and which one a setting gets is
+Everything else adjustable lives behind the model chip rather than getting a
+chip of its own — four settings would be four chips and a composer that is
+mostly chrome. **Mode is the one exception**, on both backends. It is the
+setting you change mid-conversation, several times, while the rest are set once
+and forgotten; every reference app puts it beside the model for that reason.
+The picker it opens is the settings sheet's value list with two additions,
+because a mode is a way of working rather than a value: a leading icon, and the
+backend's own one-line description under the name.
+
+Two chips and a send button is what the composer row will hold, and no more.
+That budget is why the goose tab's context readout is a percentage rather than
+`128.0k/200.0k`: the long form is 106px of a 306px row at 360pt, which left
+48px for two chip labels and rendered `Auto` as a bare ellipsis. The window
+itself is still stated in full, as the Context length row of the sheet.
+`docs/measure-composer.js` fails on a label clipped to nothing now, not just on
+a send button pushed off the edge — the row was within its bounds the whole
+time it was useless.
+
+The sheet has exactly two kinds of row, and which one a setting gets is
 decided by whether choosing would change anything:
 
 | row | shape | when |
@@ -208,7 +226,13 @@ left to wonder where the setting went.
 Neither tab is padded out to match the other. They share the chip, the sheet,
 the row grammar and the "applies from your next message" semantics — which is
 literally true on both — and the sheet names the backend, so a shorter list
-reads as "this backend offers less", not as "the app forgot something".
+reads as "this backend offers less", not as "the app forgot something". What
+they do **not** get to differ in is presentation: both sheets are Provider /
+Model / Thinking effort / Context length in that order, with the notes in one
+voice. They were built by unrelated code and read like two products until they
+were made to agree. The code tab has no Provider row and that is not a gap: a
+model there *is* `opencode/claude-sonnet-4-5`, provider included, so the row
+would either duplicate Model or decide nothing.
 
 **What backs each row.**
 
@@ -218,15 +242,22 @@ reads as "this backend offers less", not as "the app forgot something".
   `configOptions` of `session/new` and `session/load`, so no extra call is
   needed. The sheet renders that array in arrival order and names no ids of its
   own: a fifth option upstream shows up without an app change, and one goose
-  stops sending disappears honestly. (Mode *is* backed — an earlier version of
-  this rule said nothing backed it, and that was wrong.) Switching is
-  per-session; `session/prompt` carries no model field, so it applies from your
-  next message.
-- **the code tab.** `model` and `variant` are both parameters of
+  stops sending disappears honestly. Mode is the single id it does name, to
+  take it out of the list and give it to the chip — found by the `mode`
+  *category* the ACP spec defines for exactly this placement decision, or by
+  the id, so an agent that sends either is understood. An agent that sends
+  neither simply has no mode chip. Switching is per-session; `session/prompt`
+  carries no model field, so it applies from your next message.
+- **the code tab.** `model`, `variant` and `agent` are all parameters of
   `POST /session/:id/prompt_async`, and OpenCode copies whatever a turn asked
   for onto the session record. "From your next message" is the mechanism there,
-  not a hedge. The catalogue behind them comes from `/config/providers`, with
-  `/provider` as a fallback because the container tracks a rolling tag.
+  not a hedge. The catalogue behind the first two comes from
+  `/config/providers`, with `/provider` as a fallback because the container
+  tracks a rolling tag; the modes behind the third come from `GET /agent`,
+  filtered to the agents that may hold a session — an OpenCode `subagent`
+  exists to be invoked by another agent, never chosen by a person. That list is
+  re-fetched per chat rather than cached like the catalogue, because a
+  repository can define agents of its own.
 
 **Context length is not settable on either backend, and is reported as a
 fact.** goose's four ids do not include it; every `contextLimit` in its wire
@@ -306,9 +337,10 @@ finding.
 see what it looks for: text spilling out of a chip is an anonymous text node
 with no box, and no chip sets `overflow-x`. It builds the two composer rows
 the app actually assembles, at whatever width you give it, with the longest
-model names any server has offered — and fails if the send button leaves the
-screen. Run it at 360 as well as 402; 402 is the width where the damage is
-smallest.
+model and mode names any server has offered — and fails if the send button
+leaves the screen, if a label spills past its pill, or if a label is clipped
+down to an ellipsis and nothing else. Run it at 360 as well as 402; 402 is the
+width where the damage is smallest.
 
 Both audit `docs/gallery-states.json`, which is **captured out of the running
 app**, not transcribed from it. Drive the app to the states you want and run

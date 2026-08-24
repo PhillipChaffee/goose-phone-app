@@ -289,6 +289,69 @@ impl ModelInfo {
     }
 }
 
+/// What an agent may be used for — `Agent.mode` in `OpenCode`'s SDK types.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AgentMode {
+    /// A main assistant you talk to directly.
+    Primary,
+    /// Invoked by another agent for a sub-task, never by a person.
+    Subagent,
+    /// Either way round. `OpenCode`'s default for a definition that does not
+    /// say which it is.
+    #[default]
+    All,
+}
+
+/// `mode` is required by the wire schema, so a missing or unrecognised value
+/// means a server this client does not fully understand. It reads as `all`
+/// rather than as a subagent: only the explicit word `subagent` is a reason
+/// to withhold an agent, and guessing the other way would make a new mode
+/// name silently empty the picker.
+fn de_agent_mode<'de, D: serde::Deserializer<'de>>(d: D) -> Result<AgentMode, D::Error> {
+    let raw = Option::<String>::deserialize(d)?;
+    Ok(match raw.as_deref() {
+        Some("primary") => AgentMode::Primary,
+        Some("subagent") => AgentMode::Subagent,
+        _ => AgentMode::All,
+    })
+}
+
+/// One agent a chat's server offers (`GET /agent`).
+///
+/// `OpenCode` calls this an agent; the app calls it a mode, because that is
+/// what it is from the composer — Build and Plan are the two it ships, and
+/// they differ in what the turn is allowed to do. It rides a turn exactly the
+/// way the model does (`agent` in the prompt body), so switching costs no
+/// config rewrite and no server restart.
+///
+/// Only what the picker renders is typed. Permissions, tools and options stay
+/// where they are enforced, which is the server.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct Agent {
+    /// The id the prompt body's `agent` field takes, e.g. `build`.
+    pub name: String,
+    /// The agent's own one-line account of when to use it.
+    pub description: Option<String>,
+    #[serde(deserialize_with = "de_agent_mode")]
+    pub mode: AgentMode,
+    /// Shipped with `OpenCode` rather than defined by the repo.
+    #[serde(rename = "builtIn")]
+    pub built_in: bool,
+}
+
+impl Agent {
+    /// Whether a session may run on this agent.
+    ///
+    /// A subagent may not: it exists to be called by another agent for a
+    /// sub-task, and pointing a chat at one would be asking for a turn the
+    /// server has no primary agent to run.
+    #[must_use]
+    pub const fn is_primary(&self) -> bool {
+        matches!(self.mode, AgentMode::Primary | AgentMode::All)
+    }
+}
+
 /// A model's declared limits. Read-only catalogue data: nothing in the
 /// prompt API takes a context window, and the one route that rewrites it
 /// (`PATCH /config`) restarts the chat's server.
@@ -722,6 +785,39 @@ impl CodeClient {
         last.map_or_else(|| Ok(Vec::new()), Err)
     }
 
+    /// The agents a chat's server offers (`GET /agent`) — what the composer
+    /// calls modes.
+    ///
+    /// Every agent is returned, subagents included; which of them may hold a
+    /// session is [`Agent::is_primary`], and that is the caller's filter to
+    /// apply. Decoded entry by entry so one definition this client cannot
+    /// read drops on its own rather than emptying the picker, and an agent
+    /// with no name is discarded because the name *is* what the prompt body
+    /// sends.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or waking a stopped
+    /// chat outruns the client's 150s request timeout, and
+    /// [`CodeError::Status`] on a non-2xx answer (404 for an unknown
+    /// `chat_id`, or for an `OpenCode` build predating the route).
+    pub async fn agents(&self, chat_id: &str) -> Result<Vec<Agent>, CodeError> {
+        let v = Self::json_of(
+            self.req(reqwest::Method::GET, &Self::chat_path(chat_id, "/agent"))
+                .send()
+                .await?,
+        )
+        .await?;
+        let Value::Array(items) = v else {
+            return Ok(Vec::new());
+        };
+        Ok(items
+            .into_iter()
+            .filter_map(|item| serde_json::from_value::<Agent>(item).ok())
+            .filter(|agent| !agent.name.is_empty())
+            .collect())
+    }
+
     /// Create the chat's `OpenCode` session in its workspace.
     ///
     /// # Errors
@@ -775,18 +871,18 @@ impl CodeClient {
     /// Fire-and-forget prompt: the turn runs server-side; progress arrives
     /// over the SSE stream. `model` is `provider/model`; one without a `/`
     /// is dropped and the session's own model is used. `variant` is the
-    /// thinking-effort tier, which is a property of the turn in the same way
-    /// the model is — `OpenCode` copies both onto the session record when
-    /// they differ from what is there.
+    /// thinking-effort tier and `agent` is the [`Agent::name`] to run as.
+    /// All three are properties of the turn in the same way — the server
+    /// applies whatever the body asked for and leaves the rest alone.
     ///
     /// # Errors
     ///
     /// [`CodeError::Http`] if the gateway is unreachable or waking a stopped
     /// chat outruns the client's 150s request timeout, and
     /// [`CodeError::Status`] on a non-2xx answer — 404 for an unknown
-    /// `chat_id` or `session_id`, 400 for a model the server rejects. A turn
-    /// that fails *after* this returns surfaces on the event stream, not
-    /// here.
+    /// `chat_id` or `session_id`, 400 for a model or agent the server
+    /// rejects. A turn that fails *after* this returns surfaces on the event
+    /// stream, not here.
     pub async fn prompt_async(
         &self,
         chat_id: &str,
@@ -794,16 +890,9 @@ impl CodeClient {
         text: &str,
         model: Option<&str>,
         variant: Option<&str>,
+        agent: Option<&str>,
     ) -> Result<(), CodeError> {
-        let mut body = json!({"parts": [{"type": "text", "text": text}]});
-        if let Some(m) = model {
-            if let Some((provider, model_id)) = m.split_once('/') {
-                body["model"] = json!({"providerID": provider, "modelID": model_id});
-            }
-        }
-        if let Some(v) = variant.filter(|v| !v.is_empty()) {
-            body["variant"] = json!(v);
-        }
+        let body = prompt_body(text, model, variant, agent);
         Self::json_of(
             self.req(
                 reqwest::Method::POST,
@@ -986,6 +1075,34 @@ impl CodeClient {
             }
         }
     }
+}
+
+/// The body both prompt routes take: the message, plus the three things that
+/// ride a turn rather than being set on the session beforehand.
+///
+/// A field is sent only when there is something to say. `OpenCode` keeps
+/// whatever the session already has for anything the body omits, so an empty
+/// string here would not mean "leave it" — it would mean "use the model, tier
+/// or agent called nothing", which is a 400.
+fn prompt_body(
+    text: &str,
+    model: Option<&str>,
+    variant: Option<&str>,
+    agent: Option<&str>,
+) -> Value {
+    let mut body = json!({"parts": [{"type": "text", "text": text}]});
+    if let Some(m) = model {
+        if let Some((provider, model_id)) = m.split_once('/') {
+            body["model"] = json!({"providerID": provider, "modelID": model_id});
+        }
+    }
+    if let Some(v) = variant.filter(|v| !v.is_empty()) {
+        body["variant"] = json!(v);
+    }
+    if let Some(a) = agent.filter(|a| !a.is_empty()) {
+        body["agent"] = json!(a);
+    }
+    body
 }
 
 fn find_frame_end(buf: &[u8]) -> Option<usize> {
@@ -1203,5 +1320,95 @@ mod tests {
     #[test]
     fn a_model_with_no_declared_window_reports_none() {
         assert_eq!(ModelLimit::default().context_tokens(), None);
+    }
+
+    /// `GET /agent` as the SDK types describe it, decoded down to the four
+    /// fields the picker needs.
+    #[test]
+    fn an_agent_decodes_with_its_description_and_mode() {
+        let raw = json!({
+            "name": "plan",
+            "description": "Read-only analysis. Cannot edit files.",
+            "mode": "primary",
+            "builtIn": true,
+            "permission": {"edit": "deny", "bash": {"*": "ask"}},
+            "tools": {"write": false},
+            "options": {},
+            "temperature": 0.2
+        });
+        let agent: Agent = serde_json::from_value(raw).unwrap();
+        assert_eq!(agent.name, "plan");
+        assert_eq!(
+            agent.description.as_deref(),
+            Some("Read-only analysis. Cannot edit files.")
+        );
+        assert_eq!(agent.mode, AgentMode::Primary);
+        assert!(agent.built_in);
+        assert!(agent.is_primary());
+    }
+
+    /// A subagent is invoked by another agent, never chosen by a person, so
+    /// it must not be offered as something a chat can run on.
+    #[test]
+    fn a_subagent_is_not_selectable_but_all_is() {
+        let subagent: Agent = serde_json::from_value(json!({
+            "name": "reviewer", "mode": "subagent", "builtIn": false
+        }))
+        .unwrap();
+        assert!(!subagent.is_primary());
+
+        let both: Agent =
+            serde_json::from_value(json!({"name": "general", "mode": "all"})).unwrap();
+        assert!(both.is_primary());
+    }
+
+    /// A mode this client has not heard of, or none at all, still names an
+    /// agent a person can pick — guessing "subagent" would make one word of
+    /// server vocabulary empty the whole picker.
+    #[test]
+    fn an_unknown_mode_is_still_selectable() {
+        for raw in [
+            json!({"name": "build"}),
+            json!({"name": "build", "mode": null}),
+            json!({"name": "build", "mode": "supervisor"}),
+        ] {
+            let agent: Agent = serde_json::from_value(raw).unwrap();
+            assert_eq!(agent.mode, AgentMode::All);
+            assert!(agent.is_primary());
+        }
+    }
+
+    /// The turn carries the agent beside the model and the tier, as a bare
+    /// name at the top level of the body.
+    #[test]
+    fn the_prompt_body_carries_model_tier_and_agent() {
+        let body = prompt_body(
+            "ship it",
+            Some("opencode/claude-sonnet-4-5"),
+            Some("high"),
+            Some("plan"),
+        );
+        assert_eq!(
+            body["model"],
+            json!({"providerID": "opencode", "modelID": "claude-sonnet-4-5"})
+        );
+        assert_eq!(body["variant"], json!("high"));
+        assert_eq!(body["agent"], json!("plan"));
+        assert_eq!(body["parts"][0]["text"], json!("ship it"));
+    }
+
+    /// Nothing chosen means nothing sent: the session keeps what it has.
+    #[test]
+    fn an_unchosen_field_is_left_out_of_the_body() {
+        let body = prompt_body("hello", None, None, None);
+        assert!(body.get("model").is_none());
+        assert!(body.get("variant").is_none());
+        assert!(body.get("agent").is_none());
+
+        // Empty is not a choice either — it would name an agent called "".
+        let blank = prompt_body("hello", Some("no-slash"), Some(""), Some(""));
+        assert!(blank.get("model").is_none());
+        assert!(blank.get("variant").is_none());
+        assert!(blank.get("agent").is_none());
     }
 }

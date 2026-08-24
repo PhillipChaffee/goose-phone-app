@@ -13,7 +13,7 @@
 use dioxus::prelude::*;
 
 /// Stroke path data for `name`, or `None` if there is no such icon.
-fn path_for(name: &str) -> Option<&'static str> {
+pub(crate) fn path_for(name: &str) -> Option<&'static str> {
     Some(match name {
         "gear" => "M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z\
                    M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z",
@@ -49,6 +49,12 @@ fn path_for(name: &str) -> Option<&'static str> {
         // toggle on the review screen.
         "wrap-text" => "M4 6h16M4 12h13a3 3 0 1 1 0 6h-5M14 16l-2 2 2 2M4 18h7",
         "pull-request" => "M6 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 9v12M18 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 15V9a3 3 0 0 0-3-3h-4m0 0 3-3m-3 3 3 3",
+        // The mode chip's own family (views/session_settings.rs `mode_icon`).
+        // A bolt is the generic one — it is what the reference app puts on
+        // "Auto" — and the rest say what that mode does instead of it.
+        "bolt" => "M13 3 4 14h7l-1 7 9-11h-7z",
+        "shield-check" => "M12 21c4.7-2.3 7-5.6 7-9.6V5.6L12 3 5 5.6V11.4c0 4 2.3 7.3 7 9.6zM9.2 11.6l2 2 3.6-3.6",
+        "list" => "M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01",
         _ => return None,
     })
 }

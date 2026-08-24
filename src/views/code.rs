@@ -11,21 +11,22 @@ use dioxus::prelude::*;
 use opencode_client::FileStatus;
 
 use crate::code::{
-    answer_code_permission, delete_code_chat, ensure_code_models, expand_diff_gap, is_free_model,
-    load_code_diff, mark_all_diff_seen, new_code_chat, open_chat_allows_free_models,
-    open_code_chat, refresh_code_chats, request_pr, reveal_removed_lines, send_code_prompt,
-    set_code_effort, set_code_model, start_code_poll, status_label, stop_code_turn,
-    toggle_diff_file, toggle_diff_seen, CodeScreen, DiffFile, DiffState,
+    answer_code_permission, delete_code_chat, ensure_code_agents, ensure_code_models,
+    expand_diff_gap, is_free_model, load_code_diff, mark_all_diff_seen, new_code_chat,
+    open_chat_allows_free_models, open_code_chat, refresh_code_chats, request_pr,
+    reveal_removed_lines, send_code_prompt, set_code_agent, set_code_effort, set_code_model,
+    start_code_poll, status_label, stop_code_turn, toggle_diff_file, toggle_diff_seen, CodeScreen,
+    DiffFile, DiffState,
 };
 use crate::diff::Block;
 use crate::icons::Icon;
 use crate::state::{relative_time_secs, use_app_ctx, AppCtx, ConnState};
 use crate::views::chat::{format_tokens, render_transcript};
 use crate::views::session_settings::{
-    choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
+    choice_label, mode_icon, ChoicePickerSheet, SessionSettingsSheet, SettingChoice, SettingRow,
 };
 use crate::views::{ConfirmDelete, MenuItem, OverflowButton, OverflowSheet, SwipeDelete};
-use opencode_client::ModelInfo;
+use opencode_client::{Agent, ModelInfo};
 
 #[component]
 pub fn CodeSessionsView() -> Element {
@@ -209,7 +210,7 @@ fn code_chip_label(reference: Option<&str>, models: &[ModelInfo]) -> String {
         )
 }
 
-/// The code tab's rows: the two settings `OpenCode` really takes on a turn,
+/// The code tab's rows: two of the three settings `OpenCode` takes on a turn,
 /// and the one number it only ever reports.
 ///
 /// Model and thinking effort are both per-turn parameters of
@@ -219,6 +220,13 @@ fn code_chip_label(reference: Option<&str>, models: &[ModelInfo]) -> String {
 /// anything: it is catalogue metadata, and the one route that rewrites it
 /// (`PATCH /config`) restarts the chat's server, killing the event stream the
 /// app is reading. It is reported, not offered.
+///
+/// The goose sheet opens on a Provider row and this one does not, which is
+/// the one place the two orders differ. There is no provider to choose here:
+/// a model *is* `opencode/claude-sonnet-4-5`, provider and all, so picking
+/// one picks both, and a Provider row would either duplicate the Model row or
+/// offer a choice that decides nothing. Mode is missing from both, and for
+/// the same reason on each — it is a chip in the composer row now.
 fn code_setting_rows(ctx: &AppCtx, models: &[ModelInfo], loading: bool) -> Vec<SettingRow> {
     let (current, effort) = {
         let chat = ctx.code_chat.peek();
@@ -296,11 +304,40 @@ fn code_setting_rows(ctx: &AppCtx, models: &[ModelInfo], loading: bool) -> Vec<S
             "context_length",
             "Context length",
             format!("{} tokens", format_tokens(limit)),
-            "Declared by the model. A turn carries no context window.",
+            "Fixed by the model. Nothing a message carries changes it.",
         ),
         None => SettingRow::fact("context_length", "Context length", "—", unknown()),
     });
     rows
+}
+
+/// The mode chip's face: the agent the next turn will run as.
+///
+/// "Mode" before one has been picked, for the reason the model chip says
+/// "Model": the session record reports no agent, so until the reader chooses
+/// the only honest answer is the name of the thing, not a guess at the
+/// server's default.
+fn code_mode_label(agent: Option<&str>) -> String {
+    agent.map_or_else(|| "Mode".to_owned(), |name| choice_label(name, name))
+}
+
+/// The selectable agents, in the order the server listed them.
+///
+/// Subagents are dropped: they exist to be invoked by another agent for a
+/// sub-task, so pointing a chat at one would put the session on an agent that
+/// cannot hold it. Each row carries the agent's own description — the field
+/// its definition is meant to answer "when would I use this" with — and a row
+/// whose author left it out is simply a name.
+fn agent_choices(agents: &[Agent]) -> Vec<SettingChoice> {
+    agents
+        .iter()
+        .filter(|a| a.is_primary())
+        .map(|a| {
+            SettingChoice::new(&a.name, choice_label(&a.name, &a.name))
+                .with_note(a.description.clone())
+                .with_icon(mode_icon(&a.name))
+        })
+        .collect()
 }
 
 /// Catalogue entries as choices. A name shared by two providers is shown as
@@ -535,10 +572,14 @@ pub fn CodeChatView() -> Element {
 
     let models = (ctx.code_models)();
     let models_loading = (ctx.code_models_loading)();
+    let agents = (ctx.code_agents)();
+    let agents_loading = (ctx.code_agents_loading)();
     let mut sheet = use_signal(|| false);
+    let mut mode_sheet = use_signal(|| false);
     let mut chat_confirm_delete = use_signal(|| false);
     let mut menu = use_signal(|| false);
     let chip_label = code_chip_label(chat.model.as_deref(), &models);
+    let mode_label = code_mode_label(chat.agent.as_deref());
     // None until the fetch on chat open lands, and None for a session that has
     // changed nothing — the chip says "Diff" alone rather than "+0 −0", which
     // would be a claim it cannot back before the diff has been read.
@@ -657,7 +698,7 @@ pub fn CodeChatView() -> Element {
             }
             div { class: "composer-row",
                 button {
-                    class: "composer-chip action",
+                    class: "composer-chip action model",
                     title: "Session settings",
                     onclick: move |_| {
                         ensure_code_models(&ctx);
@@ -665,6 +706,21 @@ pub fn CodeChatView() -> Element {
                     },
                     span { class: "chip-label", "{chip_label}" }
                     Icon { name: "chevron-down" }
+                }
+                // Always offered, unlike goose's, because whether this server
+                // has any agents is not known until the list is asked for —
+                // and asking on every chat open would spend a request on a
+                // chip most opens never touch. An empty answer is reported
+                // inside the picker instead.
+                button {
+                    class: "composer-chip action mode",
+                    title: "Mode",
+                    onclick: move |_| {
+                        ensure_code_agents(&ctx);
+                        mode_sheet.set(true);
+                    },
+                    Icon { name: mode_icon(chat.agent.as_deref().unwrap_or_default()) }
+                    span { class: "chip-label", "{mode_label}" }
                 }
                 if running {
                     button {
@@ -701,6 +757,25 @@ pub fn CodeChatView() -> Element {
                     _ => {}
                 },
                 onclose: move |()| sheet.set(false),
+            }
+        }
+
+        if mode_sheet() {
+            ChoicePickerSheet {
+                title: "Select mode",
+                backend: "code agent",
+                choices: agent_choices(&agents),
+                current: chat.agent.clone(),
+                empty: if agents_loading {
+                    "Asking the chat server which agents it has…"
+                } else {
+                    "This chat server offers no agent you can run a session on."
+                },
+                onchoose: move |value: String| {
+                    set_code_agent(&ctx, &value);
+                    mode_sheet.set(false);
+                },
+                onclose: move |()| mode_sheet.set(false),
             }
         }
 
@@ -1011,7 +1086,44 @@ fn diff_rows(ctx: &AppCtx, state: &DiffState, file: &DiffFile) -> Vec<Element> {
 
 #[cfg(test)]
 mod tests {
-    use super::{code_chip_label, model_choices, ModelInfo};
+    use super::{agent_choices, code_chip_label, code_mode_label, model_choices, Agent, ModelInfo};
+    use opencode_client::AgentMode;
+
+    fn agent(name: &str, mode: AgentMode, description: Option<&str>) -> Agent {
+        Agent {
+            name: name.to_owned(),
+            description: description.map(str::to_owned),
+            mode,
+            built_in: true,
+        }
+    }
+
+    /// A subagent is invoked by another agent, never chosen by a person —
+    /// offering one would put the chat on an agent that cannot hold it.
+    #[test]
+    fn only_agents_a_session_can_run_on_are_offered() {
+        let agents = [
+            agent("build", AgentMode::Primary, Some("Full tool access.")),
+            agent("reviewer", AgentMode::Subagent, Some("Reviews a diff.")),
+            agent("general", AgentMode::All, None),
+        ];
+        let choices = agent_choices(&agents);
+        let values: Vec<&str> = choices.iter().map(|c| c.value.as_str()).collect();
+        assert_eq!(values, ["build", "general"]);
+        assert_eq!(choices[0].label, "Build");
+        assert_eq!(choices[0].note.as_deref(), Some("Full tool access."));
+        assert_eq!(choices[0].icon.as_deref(), Some("wrench"));
+        assert_eq!(choices[1].note, None);
+    }
+
+    /// The chip names the agent once one is picked, and names itself before
+    /// then: nothing reports which agent a session is already on, so a guess
+    /// would be a chip stating something the app does not know.
+    #[test]
+    fn the_mode_chip_says_mode_until_one_is_picked() {
+        assert_eq!(code_mode_label(None), "Mode");
+        assert_eq!(code_mode_label(Some("plan")), "Plan");
+    }
 
     fn model(provider: &str, id: &str, name: &str) -> ModelInfo {
         ModelInfo {

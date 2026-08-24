@@ -206,6 +206,7 @@ async fn main() {
             "push the branch and open a pull request",
             None,
             None,
+            None,
         )
         .await
         .expect("prompt_async");

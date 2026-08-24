@@ -355,6 +355,11 @@ pub struct ConfigChoice {
     pub value: String,
     #[serde(default)]
     pub name: String,
+    /// What choosing this one does, per `SessionConfigSelectOption`. goose
+    /// sends one for each of its modes, which is the option whose values a
+    /// reader is least able to guess at from the name alone.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// One choice offered by a `session/request_permission` request.

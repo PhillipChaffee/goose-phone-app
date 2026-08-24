@@ -192,6 +192,11 @@ pub(crate) struct AppCtx {
     /// settings sheet; nothing else needs it.
     pub code_models: Signal<Vec<opencode_client::ModelInfo>>,
     pub code_models_loading: Signal<bool>,
+    /// The open chat's agents — what the composer's mode chip picks between.
+    /// Fetched on the first tap of that chip, and dropped when another chat
+    /// is opened, because a repository can define agents of its own.
+    pub code_agents: Signal<Vec<opencode_client::Agent>>,
+    pub code_agents_loading: Signal<bool>,
     pub code_chat: Signal<crate::code::CodeChatState>,
     /// Pending permission asks from code chats, tagged by chat id. A separate
     /// queue from `permission` by construction: goose and `OpenCode` ids can
@@ -254,6 +259,8 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_repos: use_signal(Vec::new),
         code_models: use_signal(Vec::new),
         code_models_loading: use_signal(|| false),
+        code_agents: use_signal(Vec::new),
+        code_agents_loading: use_signal(|| false),
         code_chat: use_signal(crate::code::CodeChatState::default),
         code_permissions: use_signal(Vec::new),
         code_cache,
