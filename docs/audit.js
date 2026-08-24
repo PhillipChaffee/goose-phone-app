@@ -135,7 +135,17 @@ const GEOMETRY = () => {
       out.push(`OVERFLOW-X   ${name(el)} left=${r.left.toFixed(0)} right=${r.right.toFixed(0)} vw=${vw}`);
     }
     if (parked) continue;
-    if (el.scrollWidth > el.clientWidth + 1 && cs.overflowX === 'hidden' && cs.textOverflow !== 'ellipsis') {
+    // A flex or grid container that overflows is overflowing BOXES, not text,
+    // and every one of those boxes is visited by this same walk — so it is
+    // checked for its own ellipsis on its own terms. Asking a flex container
+    // for `text-overflow` is asking a question the property does not answer:
+    // it only applies to inline content in a block container. The chip label
+    // holding a model name and an effort tier is exactly this shape.
+    const laysOutBoxes = cs.display.includes('flex') || cs.display.includes('grid');
+    if (!laysOutBoxes
+        && el.scrollWidth > el.clientWidth + 1
+        && cs.overflowX === 'hidden'
+        && cs.textOverflow !== 'ellipsis') {
       out.push(`CLIPPED-X    ${name(el)} scroll=${el.scrollWidth} client=${el.clientWidth}`);
     }
 

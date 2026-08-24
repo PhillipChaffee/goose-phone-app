@@ -2053,12 +2053,6 @@ body.away-from-bottom .scroll-bottom {
   color: var(--text-primary);
 }
 
-.chip-model {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 /* The mode chip does not give way, and the model chip does.
  *
  * Both carry a .chip-label, so the rule above would let both ellipsise — and
