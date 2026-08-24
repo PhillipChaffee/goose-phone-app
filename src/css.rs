@@ -21,6 +21,7 @@ pub(crate) const STYLES: &str = concat!(
     // scheduler — PR 5 replaces this line
 
     // extensions — PR 6 replaces this line
-
-    // session history — PR 7 replaces this line
+    // session history (PR 7): the search box above the chats list, and the
+    // rename sheet's field
+    include_str!("../assets/session-history.css"),
 );

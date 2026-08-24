@@ -301,6 +301,14 @@ pub(crate) struct AppCtx {
     /// different filters — see [`SessionQuery`].
     pub sessions_next: Signal<Option<SessionQuery>>,
     pub sessions_loading: Signal<bool>,
+    /// What is typed in the chats search box. Not component-local: the field
+    /// debounces into it, and the "Load more" button a screen away has to ask
+    /// what is being searched before it asks for another page.
+    pub sessions_query: Signal<String>,
+    /// This goose server does not implement `session/list` at all. Its own
+    /// sentence and no Retry — see [`Remote::unsupported`], which is the same
+    /// distinction for the five lists arriving after this one.
+    pub sessions_unsupported: Signal<bool>,
     pub chat: Signal<ChatState>,
     /// Sessions with a turn currently in flight (client-side view).
     pub running_sessions: Signal<HashSet<String>>,
@@ -383,7 +391,10 @@ pub(crate) struct AppCtx {
 
     // extensions — PR 6 replaces this line
 
-    // session history — PR 7 replaces this line
+    // Session history (PR 7) contributes no struct: its state is the chats
+    // list, which was already here as `sessions*` above. A second home for
+    // the same three signals would be the merge hazard this region exists to
+    // avoid rather than an instance of the pattern.
 }
 
 pub(crate) fn use_app_ctx_provider() -> AppCtx {
@@ -400,6 +411,8 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         sessions: use_signal(Vec::new),
         sessions_next: use_signal(|| None),
         sessions_loading: use_signal(|| false),
+        sessions_query: use_signal(String::new),
+        sessions_unsupported: use_signal(|| false),
         chat: use_signal(ChatState::default),
         running_sessions: use_signal(HashSet::new),
         permission: use_signal(Vec::new),
@@ -779,6 +792,12 @@ fn apply_tool_update(chat: &mut Signal<ChatState>, update: &ToolCallUpdate) {
 }
 
 /// Fetch the first page of sessions (or the next page when `more` is true).
+///
+/// Every kind, not just the ones a person started. The standup recipe ran at
+/// nine and you asked something at ten: that is one timeline, and splitting it
+/// into a second screen would make a filter out of a fact. A scheduled run
+/// says what it is in its own row (`kind_label`) and is otherwise a chat like
+/// any other — it has a transcript, and it can be opened and read.
 pub(crate) async fn refresh_sessions(ctx: &AppCtx, more: bool) {
     let Some(client) = ctx.client.peek().clone() else {
         return;
@@ -786,6 +805,7 @@ pub(crate) async fn refresh_sessions(ctx: &AppCtx, more: bool) {
     let mut sessions = ctx.sessions;
     let mut next = ctx.sessions_next;
     let mut loading = ctx.sessions_loading;
+    let mut unsupported = ctx.sessions_unsupported;
 
     // `more` with no next page is not a re-fetch of page one: the list is
     // already whole, so there is nothing to ask for.
@@ -795,12 +815,13 @@ pub(crate) async fn refresh_sessions(ctx: &AppCtx, more: bool) {
         };
         query
     } else {
-        SessionQuery::new(&[SessionKind::User], None)
+        SessionQuery::new(&SessionKind::ALL, Some(&ctx.sessions_query.peek()))
     };
 
     loading.set(true);
     match client.session_list(&query).await {
         Ok(page) => {
+            unsupported.set(false);
             next.set(query.next_page(&page));
             if more {
                 sessions.write().extend(page.sessions);
@@ -808,9 +829,94 @@ pub(crate) async fn refresh_sessions(ctx: &AppCtx, more: bool) {
                 sessions.set(page.sessions);
             }
         }
+        // A server without `session/list` is not a failed request to toast
+        // away — there is nothing to retry, so the screen says so instead and
+        // keeps saying it.
+        Err(e) if e.is_unsupported() => {
+            unsupported.set(true);
+            sessions.write().clear();
+            next.set(None);
+        }
+        // Anything else leaves whatever is already listed on screen. Offline
+        // with yesterday's chats still readable beats an empty page.
         Err(e) => show_toast(ctx, format!("Failed to list sessions: {e}")),
     }
     loading.set(false);
+}
+
+/// Run a new search over the chats list.
+///
+/// Note what goose actually searches: `message_keyword_clause` matches the
+/// text of the messages, splitting the query on whitespace and OR-ing the
+/// terms. It does not look at titles, so a chat named "Deploy" does not match
+/// "deploy" unless somebody said the word inside it.
+pub(crate) async fn search_sessions(ctx: &AppCtx, query: String) {
+    let mut current = ctx.sessions_query;
+    if !search_changed(&current.peek(), &query) {
+        return;
+    }
+    current.set(query);
+
+    // The stored next page belongs to the *previous* search, and it is not
+    // made harmless by the fetch below replacing it a moment later: until that
+    // response lands, "Load more" is still on screen and still armed, and the
+    // page it would fetch is the next page of a search nobody is running any
+    // more. goose ties a cursor to a hash of the filters it was minted under
+    // and rejects a mismatched pair outright ("session list cursor does not
+    // match filters"), which is why `SessionQuery` will not let the two be
+    // separated — this is the same rule one level up. Dropping the page here
+    // is what makes the button go away the instant the query changes.
+    let mut next = ctx.sessions_next;
+    next.set(None);
+
+    refresh_sessions(ctx, false).await;
+}
+
+/// Whether a search box's new contents describe a different request.
+///
+/// Trimmed on both sides because `SessionQuery::new` trims too, and the server
+/// before it: a half-typed word with a trailing space is the same search as
+/// the word, and re-fetching for the space would throw away the list you are
+/// reading and scroll it back to the top.
+fn search_changed(current: &str, next: &str) -> bool {
+    current.trim() != next.trim()
+}
+
+/// Give a chat the title goose's guess should have been.
+///
+/// goose names a session from its first message, which is a name chosen before
+/// the conversation happened — the row that reads "quick question" is the one
+/// that turned into an afternoon. The list is updated in place rather than
+/// re-fetched: the server has already agreed to the new title, and a refetch
+/// would take the reader's scroll position with it.
+pub(crate) async fn rename_session(ctx: &AppCtx, session_id: &str, title: &str) {
+    let title = title.trim();
+    if title.is_empty() {
+        return;
+    }
+    let Some(client) = ctx.client.peek().clone() else {
+        return;
+    };
+    if let Err(e) = client.session_rename(session_id, title).await {
+        show_toast(ctx, format!("Rename failed: {e}"));
+        return;
+    }
+
+    let mut sessions = ctx.sessions;
+    for info in sessions
+        .write()
+        .iter_mut()
+        .filter(|info| info.session_id == session_id)
+    {
+        info.title = Some(title.to_owned());
+    }
+    // The chat screen holds its own copy of the title for its bar, so a rename
+    // from the list has to reach it as well — and one from the sheet inside it
+    // has to reach the list.
+    let mut chat = ctx.chat;
+    if chat.peek().session_id.as_deref() == Some(session_id) {
+        title.clone_into(&mut chat.write().title);
+    }
 }
 
 /// Open an existing session: switch to the chat screen and replay history.
@@ -1133,7 +1239,7 @@ pub(crate) fn set_config_option(ctx: &AppCtx, config_id: &str, value: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::Remote;
+    use super::{search_changed, Remote};
     use goose_acp_client::{AcpError, Feature};
 
     fn missing() -> AcpError {
@@ -1208,5 +1314,22 @@ mod tests {
         remote.begin();
         assert!(remote.loading);
         assert!(remote.sticky.is_none());
+    }
+
+    /// The predicate that decides whether the stored next page is thrown
+    /// away. Getting it wrong in one direction re-fetches on every space bar;
+    /// in the other, it pages a search that is no longer on screen.
+    #[test]
+    fn only_a_different_search_discards_the_page_after_this_one() {
+        assert!(search_changed("", "deploy"));
+        assert!(search_changed("deploy", ""));
+        assert!(search_changed("deploy", "deployment"));
+
+        // What the server would do with these is identical, so the list must
+        // not flicker between them: `SessionQuery::new` trims and drops a
+        // blank, and this has to agree with it.
+        assert!(!search_changed("deploy", "  deploy "));
+        assert!(!search_changed("", "   "));
+        assert!(!search_changed("deploy", "deploy"));
     }
 }

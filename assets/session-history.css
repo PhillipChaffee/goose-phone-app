@@ -1,0 +1,23 @@
+/* Session history: searching the chats list, and renaming a chat.
+ *
+ * Two rules, both spacing, both for a shape main.css has never had to lay out
+ * before. Everything else this feature draws is the design system as it
+ * stands — the rows are .session-*, the sheet is .modal.sheet, the field is
+ * .field. */
+
+/* A search box directly above a list. The settings form is where .field grew
+ * up, and there every field is followed by another field or by a hint that
+ * carries its own margin; here the next thing is the first card of the list,
+ * and a card touching the box you type in reads as one control. */
+.session-search {
+  margin-bottom: 12px;
+}
+
+/* The rename sheet is the first modal in the app with a text field in it, so
+ * it is the first place .field has ever sat directly above .modal-actions —
+ * which has no top margin, because until now everything above it (.modal-body,
+ * .modal-tool, .setting-list) brought its own bottom one. Matches
+ * .modal-body's 20px, so the sheet's rhythm is the confirm dialog's. */
+.modal.rename .field {
+  margin-bottom: 20px;
+}

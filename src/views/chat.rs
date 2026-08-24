@@ -13,7 +13,7 @@ use crate::state::{
 use crate::views::session_settings::{
     choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
 };
-use crate::views::{ConfirmDelete, MenuItem, OverflowButton, OverflowSheet};
+use crate::views::{ConfirmDelete, MenuItem, OverflowButton, OverflowSheet, RenameSheet};
 
 #[component]
 pub fn ChatView() -> Element {
@@ -49,9 +49,13 @@ pub fn ChatView() -> Element {
         .find(|o| o.config_id == "model")
         .and_then(ConfigOption::current_label)
         .map_or_else(|| "Session".to_owned(), str::to_owned);
-    let rows = goose_setting_rows(&config, usage);
+    // Only a session that exists can be renamed, and a chat that has not been
+    // opened yet has no title worth correcting either.
+    let named = chat.session_id.is_some().then_some(chat.title.as_str());
+    let rows = goose_setting_rows(&config, usage, named);
     let mut sheet = use_signal(|| false);
     let mut confirm_delete = use_signal(|| false);
+    let mut rename = use_signal(|| false);
     let mut menu = use_signal(|| false);
 
     let mut submit = move || {
@@ -160,7 +164,32 @@ pub fn ChatView() -> Element {
                 onchoose: move |(config_id, value): (String, String)| {
                     crate::state::set_config_option(&ctx, &config_id, &value);
                 },
+                onaction: move |_| {
+                    // The only action row this sheet has. It swaps one sheet
+                    // for another rather than nesting them: the rename field
+                    // is a screen's worth of keyboard, and the settings sheet
+                    // underneath it would be a backdrop nobody can reach.
+                    sheet.set(false);
+                    rename.set(true);
+                },
                 onclose: move |()| sheet.set(false),
+            }
+        }
+
+        if rename() {
+            RenameSheet {
+                heading: "Rename chat",
+                value: chat.title.clone(),
+                on_cancel: move |()| rename.set(false),
+                on_save: move |title: String| {
+                    rename.set(false);
+                    let Some(session_id) = ctx.chat.peek().session_id.clone() else {
+                        return;
+                    };
+                    spawn_forever(async move {
+                        crate::state::rename_session(&ctx, &session_id, &title).await;
+                    });
+                },
             }
         }
 
@@ -203,31 +232,41 @@ pub fn ChatView() -> Element {
     }
 }
 
-/// The goose tab's rows: every option the agent offers, plus the one fact
-/// about the session that is worth stating and cannot be changed.
+/// The goose tab's rows: the session's name, every option the agent offers,
+/// and the one fact about it that is worth stating and cannot be changed.
+///
+/// The title leads because it is the only row that is about *this* session
+/// rather than about how the agent will answer in it — and because goose named
+/// it from the first message, which is a guess made before the conversation
+/// happened. The place you notice the guess was wrong is here, reading it.
 ///
 /// Context length is that fact. `session/set_config_option` routes exactly
 /// four ids — provider, mode, model, `thinking_effort` — and rejects anything
 /// else; a context window reaches the client only as read-only information
 /// about a model. The number is already flowing in on every `usage_update`,
 /// so the sheet reports it rather than pretending to a control.
-fn goose_setting_rows(config: &[ConfigOption], usage: Option<Usage>) -> Vec<SettingRow> {
-    let mut rows: Vec<SettingRow> = config
-        .iter()
-        .map(|option| {
-            SettingRow::select(
-                &option.config_id,
-                &option.name,
-                option.current_value.as_deref(),
-                option
-                    .options
-                    .iter()
-                    .map(|c| SettingChoice::new(&c.value, choice_label(&c.name, &c.value)))
-                    .collect(),
-                option.description.clone(),
-            )
-        })
+fn goose_setting_rows(
+    config: &[ConfigOption],
+    usage: Option<Usage>,
+    title: Option<&str>,
+) -> Vec<SettingRow> {
+    let mut rows: Vec<SettingRow> = title
+        .map(|title| SettingRow::action("title", "Title", title))
+        .into_iter()
         .collect();
+    rows.extend(config.iter().map(|option| {
+        SettingRow::select(
+            &option.config_id,
+            &option.name,
+            option.current_value.as_deref(),
+            option
+                .options
+                .iter()
+                .map(|c| SettingChoice::new(&c.value, choice_label(&c.name, &c.value)))
+                .collect(),
+            option.description.clone(),
+        )
+    }));
     if let Some((_, limit)) = usage {
         rows.push(SettingRow::fact(
             "context_length",
