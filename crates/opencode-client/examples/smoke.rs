@@ -192,6 +192,7 @@ async fn main() {
             &session.id,
             "push the branch and open a pull request",
             None,
+            None,
         )
         .await
         .expect("prompt_async");

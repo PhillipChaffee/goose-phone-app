@@ -187,6 +187,11 @@ pub(crate) struct AppCtx {
     pub code_chats: Signal<Vec<opencode_client::ChatMeta>>,
     pub code_chats_loading: Signal<bool>,
     pub code_repos: Signal<Vec<opencode_client::RepoEntry>>,
+    /// The chat servers' model catalogue — names, context windows and
+    /// thinking-effort tiers. Fetched once, on the first open of the session
+    /// settings sheet; nothing else needs it.
+    pub code_models: Signal<Vec<opencode_client::ModelInfo>>,
+    pub code_models_loading: Signal<bool>,
     pub code_chat: Signal<crate::code::CodeChatState>,
     /// Pending permission asks from code chats, tagged by chat id. A separate
     /// queue from `permission` by construction: goose and `OpenCode` ids can
@@ -228,6 +233,8 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_chats: use_signal(Vec::new),
         code_chats_loading: use_signal(|| false),
         code_repos: use_signal(Vec::new),
+        code_models: use_signal(Vec::new),
+        code_models_loading: use_signal(|| false),
         code_chat: use_signal(crate::code::CodeChatState::default),
         code_permissions: use_signal(Vec::new),
         code_cache,
@@ -888,7 +895,11 @@ pub(crate) fn relative_time(epoch: i64) -> String {
     }
 }
 
-/// Set one session config option — the model picker's only job.
+/// Set one session config option, whichever one the sheet was pointed at.
+///
+/// Deliberately id-agnostic: goose routes `provider`, `mode`, `model` and
+/// `thinking_effort` and rejects anything else, so the list of what is
+/// settable is the agent's to state and this app's to relay.
 ///
 /// The agent applies it to the session immediately and answers with the full
 /// option set, which is also pushed as a `config_option_update`; both paths

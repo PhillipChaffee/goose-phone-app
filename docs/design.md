@@ -163,15 +163,66 @@ you want to see it.
 
 ### 11. Only offer controls that do something
 
-The composer's chip row holds facts that are real on that screen: the token
-budget on the goose tab, diff and PR on the code tab. There is deliberately no
-mode chip, because nothing backs it. A control that does nothing is worse than
-no control.
+The composer's chip row holds what is real on that screen: the token budget on
+the goose tab, diff and PR on the code tab, and one chip per tab that opens the
+session's settings. A control that does nothing is worse than no control.
 
-The model chip is real: goose implements `session/set_config_option`, and the
-model list arrives in the `configOptions` of `session/new` and `session/load`
-with no extra call. Switching is per-session — `session/prompt` carries no
-model field — so it applies from your next message.
+Everything adjustable lives behind that one chip rather than getting a chip of
+its own — four settings would be four chips and a composer that is mostly
+chrome. The sheet has exactly two kinds of row, and which one a setting gets is
+decided by whether choosing would change anything:
+
+| row | shape | when |
+|---|---|---|
+| control | name, value, chevron; pressable, pushes the value list | more than one value |
+| fact | name, value, and the reason underneath; no chevron, no press state | one value, or read-only |
+
+That single distinction is the rule made mechanical. Nothing that cannot change
+ever renders as pressable, and nothing real ever disappears — both backends have
+the same edge case, and both degrade to the same fact row. goose ships
+`thinking_effort` as a select whose only value is `off` whenever the session's
+model cannot reason; OpenCode returns no variants at all for the
+minimax/qwen/glm/kimi families, which includes the default small model. In both
+cases the user is told *why* effort is not adjustable here, rather than being
+left to wonder where the setting went.
+
+Neither tab is padded out to match the other. They share the chip, the sheet,
+the row grammar and the "applies from your next message" semantics — which is
+literally true on both — and the sheet names the backend, so a shorter list
+reads as "this backend offers less", not as "the app forgot something".
+
+**What backs each row.**
+
+- **goose.** `session/set_config_option` routes exactly four ids — `provider`,
+  `mode`, `model`, `thinking_effort` — and answers `invalid_params` to anything
+  else. All four arrive with their current values and their choices in the
+  `configOptions` of `session/new` and `session/load`, so no extra call is
+  needed. The sheet renders that array in arrival order and names no ids of its
+  own: a fifth option upstream shows up without an app change, and one goose
+  stops sending disappears honestly. (Mode *is* backed — an earlier version of
+  this rule said nothing backed it, and that was wrong.) Switching is
+  per-session; `session/prompt` carries no model field, so it applies from your
+  next message.
+- **the code tab.** `model` and `variant` are both parameters of
+  `POST /session/:id/prompt_async`, and OpenCode copies whatever a turn asked
+  for onto the session record. "From your next message" is the mechanism there,
+  not a hedge. The catalogue behind them comes from `/config/providers`, with
+  `/provider` as a fallback because the container tracks a rolling tag.
+
+**Context length is not settable on either backend, and is reported as a
+fact.** goose's four ids do not include it; every `contextLimit` in its wire
+types is output only, and the ACP call site passes `None` for the one
+`update_provider` parameter that could carry one. OpenCode takes no context
+window on a turn either — `limit.context` is catalogue metadata, and the one
+route that rewrites it (`PATCH /config`) restarts the chat's server, killing the
+event stream the app is reading. The honest number is already on hand on both
+tabs, so the sheet states it.
+
+**Free models are withheld from the code tab's picker** unless the chat's repo
+is flagged `public_throwaway`, and the sheet says so where they would have been.
+The manager refuses them at chat-create time, but a per-turn model rides through
+its transparent proxy unchecked — so a picker that offered them would be a way
+around privacy hard rule 1.
 
 ## Deviations, and why
 

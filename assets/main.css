@@ -1598,10 +1598,10 @@ details[open] > summary::before {
   padding: 8px 0;
 }
 
-/* Chips carry the facts that belong to this turn — token budget here, the
- * diff and PR state on the Code tab. They are not a model picker: this app
- * does not choose a model at send time, and a control that does nothing is
- * worse than no control. */
+/* Chips carry what is real on this screen — the session's settings and the
+ * token budget here, diff and PR on the Code tab. Only what a backend can
+ * actually change becomes a control; the rest is stated as a fact inside the
+ * sheet the settings chip opens. See docs/design.md rule 11. */
 .composer-chip {
   display: inline-flex;
   align-items: center;
@@ -2080,6 +2080,111 @@ details[open] > summary::before {
  * screen, and it stops at what it holds. */
 .modal.sheet {
   max-height: 70vh;
+}
+
+/* Drilling into one setting swaps the sheet's title for a back control and
+ * the name of what you are choosing. The chevron keeps the full 44px tap
+ * target every icon button gets and is pulled back out of the modal's
+ * padding, so the glyph lines up with the list below it rather than sitting
+ * a button's worth of air to its right. The heading drops the block margin
+ * it carries at the top of a modal so the two sit on one line. */
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 12px -10px;
+}
+
+.sheet-head h2 {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The settings sheet's row grammar. A row is a control (name, value,
+ * chevron, pressable) or a fact (name, value, and the reason it is a fact) —
+ * and nothing that cannot change is ever pressable. docs/design.md rule 11.
+ *
+ * Both shapes are the same box so the list reads as one list; only the
+ * chevron, the press state and the reason line differ. */
+.setting-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 -8px;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.setting-row .icon {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+/* Wraps, so a row that carries a note puts it on its own line instead of
+ * letting it fight the value for the same one — without it, "Medium" was
+ * ellipsised to "M..." to make room for the description beside it. */
+.setting-main {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 12px;
+}
+
+.setting-name {
+  flex-shrink: 0;
+}
+
+.setting-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+/* A fact is not a button: it wraps to hold its reason, and it does not lift
+ * under a thumb, because pressing it would do nothing. */
+.setting-row.fact {
+  flex-wrap: wrap;
+  cursor: default;
+}
+
+/* Secondary, not tertiary: this line is the whole reason a fact row exists —
+ * it says why the setting is stuck — so it has to be as readable as `.hint`,
+ * not as quiet as a divider label. */
+.setting-note {
+  flex-basis: 100%;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+.setting-row:not(.fact):active {
+  background: var(--bg-secondary);
 }
 
 .choice-list {

@@ -57,6 +57,13 @@ pub(crate) struct CodeChatState {
     /// Container is booting; the transcript shown is the on-device cache.
     pub waking: bool,
     pub diff: Option<String>,
+    /// What the next turn will run on, as `provider/model`. Seeded from the
+    /// chat's own record, replaced by the server's session record once the
+    /// container is awake, and by the settings sheet when the user picks.
+    pub model: Option<String>,
+    /// Thinking-effort tier for the next turn (`OpenCode` calls it a
+    /// variant). `None` means the model's own default.
+    pub effort: Option<String>,
 }
 
 /// On-device transcript cache (issue #2, A11): instant open while the
@@ -175,6 +182,79 @@ pub(crate) fn start_code_poll(ctx: &AppCtx) {
     });
 }
 
+// ------------------------------------------------------- session settings
+
+/// Zen's free models train on their input (personal-ai-setup
+/// `docs/privacy.md`, hard rule 1). The manager refuses them when a chat is
+/// *created* against a repo that is not `public_throwaway` — but a per-turn
+/// model rides through its transparent `/chat/<id>/…` proxy with no such
+/// check, so the picker must not offer them either. Same rule the manager
+/// applies, "free" substring net included.
+pub(crate) fn is_free_model(reference: &str) -> bool {
+    let bare = reference
+        .rsplit('/')
+        .next()
+        .unwrap_or(reference)
+        .to_ascii_lowercase();
+    matches!(bare.as_str(), "big-pickle" | "muse-spark-contributor") || bare.contains("free")
+}
+
+/// Whether the open chat's repo is flagged a public throwaway — the one case
+/// where a model that trains on its input is allowed to see the code.
+pub(crate) fn open_chat_allows_free_models(ctx: &AppCtx) -> bool {
+    let repo = ctx.code_chat.peek().repo.clone();
+    ctx.code_repos
+        .peek()
+        .iter()
+        .any(|r| r.name == repo && r.public_throwaway)
+}
+
+/// Fetch the chat server's model catalogue, once, on first need.
+///
+/// Deliberately not part of opening a chat: it is every model of every
+/// provider and nothing outside the settings sheet reads it, so it is paid
+/// for when that sheet is opened and not before.
+pub(crate) fn ensure_code_models(ctx: &AppCtx) {
+    if !ctx.code_models.peek().is_empty() || *ctx.code_models_loading.peek() {
+        return;
+    }
+    let Some(chat_id) = ctx.code_chat.peek().chat_id.clone() else {
+        return;
+    };
+    let Some(client) = ctx.code_client.peek().clone() else {
+        return;
+    };
+    let mut loading = ctx.code_models_loading;
+    loading.set(true);
+    let ctx = *ctx;
+    spawn_forever(async move {
+        match client.models(&chat_id).await {
+            Ok(models) => ctx.code_models.clone().set(models),
+            Err(e) => show_toast(&ctx, format!("Model list unavailable: {e}")),
+        }
+        ctx.code_models_loading.clone().set(false);
+    });
+}
+
+/// Point the open chat's next turn at `reference` (`provider/model`).
+pub(crate) fn set_code_model(ctx: &AppCtx, reference: &str) {
+    let mut chat = ctx.code_chat;
+    let mut c = chat.write();
+    if c.model.as_deref() == Some(reference) {
+        return;
+    }
+    c.model = Some(reference.to_owned());
+    // Effort tiers belong to a model, not to a session: one model's `xhigh`
+    // is a 400 on the next. Carrying the old tier across a switch would send
+    // a value the new model never offered.
+    c.effort = None;
+}
+
+/// Set the open chat's thinking-effort tier; `None` is the model's default.
+pub(crate) fn set_code_effort(ctx: &AppCtx, effort: Option<&str>) {
+    ctx.code_chat.clone().write().effort = effort.map(str::to_owned);
+}
+
 // ------------------------------------------------------------ open / fold
 
 /// Open a chat: cached transcript instantly (read-only, "waking…" when the
@@ -207,6 +287,8 @@ pub(crate) fn open_code_chat(ctx: &AppCtx, meta: ChatMeta) {
         loading: true,
         waking,
         diff: None,
+        model: meta.model.clone(),
+        effort: None,
     });
     screen.set(CodeScreen::Chat);
     let ctx = *ctx;
@@ -228,13 +310,8 @@ async fn attach_chat(ctx: &AppCtx, chat_id: String, epoch: u64) {
     if *ctx.code_epoch.peek() != epoch {
         return;
     }
-    let session_id = match sessions {
-        Ok(list) => {
-            let cached = chat.peek().session_id.clone();
-            cached
-                .filter(|id| list.iter().any(|s| &s.id == id))
-                .or_else(|| list.first().map(|s| s.id.clone()))
-        }
+    let list = match sessions {
+        Ok(list) => list,
         Err(e) => {
             chat.write().loading = false;
             chat.write().waking = false;
@@ -242,6 +319,34 @@ async fn attach_chat(ctx: &AppCtx, chat_id: String, epoch: u64) {
             return;
         }
     };
+    let session_id = {
+        let cached = chat.peek().session_id.clone();
+        cached
+            .filter(|id| list.iter().any(|s| &s.id == id))
+            .or_else(|| list.first().map(|s| s.id.clone()))
+    };
+    // The session record is the server's answer to what the next turn will
+    // use, and it outranks whatever the chat was created with — but only
+    // while the reader has not said otherwise.
+    //
+    // OpenCode writes the model onto the session when a TURN IS SENT, not
+    // when it is picked. This path also runs on an SSE reconnect, so adopting
+    // the server's value unconditionally threw away a pick the user had made
+    // and not yet sent, with no visible cause. A local choice is the more
+    // recent intent and stands until the next turn makes the server agree.
+    if let Some(model) = list
+        .iter()
+        .find(|s| Some(&s.id) == session_id.as_ref())
+        .and_then(|s| s.model.as_ref())
+    {
+        let mut c = chat.write();
+        if c.model.is_none() {
+            if let Some(reference) = model.reference() {
+                c.model = Some(reference);
+            }
+            c.effort = model.effort().map(str::to_owned);
+        }
+    }
     chat.write().session_id.clone_from(&session_id);
     chat.write().waking = false;
 
@@ -585,7 +690,18 @@ pub(crate) fn send_code_prompt(ctx: &AppCtx, text: String) -> bool {
                 }
             },
         };
-        if let Err(e) = client.prompt_async(&chat_id, &sid, &text, None).await {
+        // Model and effort ride on the turn: OpenCode has no "set the
+        // session's model" call, it copies whatever the turn asked for onto
+        // the session record. That is why the sheet says "from your next
+        // message" and means it.
+        let (model, effort) = {
+            let c = ctx.code_chat.peek();
+            (c.model.clone(), c.effort.clone())
+        };
+        if let Err(e) = client
+            .prompt_async(&chat_id, &sid, &text, model.as_deref(), effort.as_deref())
+            .await
+        {
             ctx.code_chat.clone().write().running = false;
             show_toast(&ctx, format!("Prompt failed: {e}"));
         }
