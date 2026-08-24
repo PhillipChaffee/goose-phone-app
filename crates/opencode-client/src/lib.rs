@@ -32,6 +32,28 @@ pub enum CodeError {
     Other(String),
 }
 
+impl CodeError {
+    /// The sentence to put in front of a reader.
+    ///
+    /// The manager answers a refused request with `{"error": "..."}` and that
+    /// sentence is the only part worth showing — `Display` wraps it in the
+    /// status code and the braces it arrived in, which is a stack trace in a
+    /// toast. Falls back to the status when the body is not one of those.
+    #[must_use]
+    pub fn message(&self) -> String {
+        let Self::Status { status, body } = self else {
+            return self.to_string();
+        };
+        serde_json::from_str::<Value>(body)
+            .ok()
+            .as_ref()
+            .and_then(|v| v.get("error"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map_or_else(|| format!("server said {status}"), str::to_owned)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct CodeConfig {
     /// Gateway base, e.g. `https://brain.tailnet.ts.net:4300`.
@@ -135,6 +157,138 @@ impl FileDiff {
     pub fn is_binary(&self) -> bool {
         self.patch.trim().is_empty()
     }
+}
+
+/// Where a pull request stands. `draft` is a flag on an open pull request
+/// rather than a fourth state, because a draft that gets closed is both.
+///
+/// [`PullState::Unknown`] is this client's, not the wire's: a state string it
+/// has not heard of must not read as open, because "open" is half of what
+/// decides whether the app offers to merge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PullState {
+    Open,
+    Merged,
+    Closed,
+    #[default]
+    Unknown,
+}
+
+/// What the head commit's checks add up to.
+///
+/// [`Checks::Unknown`] is a real answer, not a parse failure. The manager's
+/// GitHub credential is a fine-grained PAT with Contents and Pull requests
+/// only (personal-ai-setup `docs/setup/70-code-agents.md`), and check runs
+/// need `Checks: read` while commit statuses need `Commit statuses: read` —
+/// so on a private repo the manager is told 403 and says so rather than
+/// guessing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Checks {
+    Passing,
+    Failing,
+    Pending,
+    /// Nothing runs checks on this repo.
+    None,
+    #[default]
+    Unknown,
+}
+
+/// One pull request from `GET /api/chats/<id>/pulls`.
+///
+/// The manager answers with the pull requests whose head branch is **this
+/// chat's** branch (`agent/<chat-id>`) and no others, which is what makes a
+/// count on a chip meaningful — a repo's other pull requests have nothing to
+/// do with this conversation.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
+pub struct PullRequest {
+    pub number: u64,
+    pub title: String,
+    #[serde(deserialize_with = "de_pull_state")]
+    pub state: PullState,
+    pub draft: bool,
+    /// GitHub computes mergeability asynchronously and answers `null` until it
+    /// has. That is not the same as "cannot be merged", and the two must not
+    /// collapse into one bool: one is a wait, the other is a refusal.
+    pub mergeable: Option<bool>,
+    #[serde(deserialize_with = "de_checks")]
+    pub checks: Checks,
+    /// The `html_url` — where the system browser is sent.
+    pub url: String,
+    /// Head branch, always this chat's `agent/<chat-id>`.
+    pub head: String,
+    /// Base branch the merge would land on.
+    pub base: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+fn de_pull_state<'de, D: serde::Deserializer<'de>>(d: D) -> Result<PullState, D::Error> {
+    let raw = Option::<String>::deserialize(d)?;
+    Ok(match raw.as_deref() {
+        Some("open") => PullState::Open,
+        Some("merged") => PullState::Merged,
+        Some("closed") => PullState::Closed,
+        _ => PullState::Unknown,
+    })
+}
+
+fn de_checks<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Checks, D::Error> {
+    let raw = Option::<String>::deserialize(d)?;
+    Ok(match raw.as_deref() {
+        Some("passing") => Checks::Passing,
+        Some("failing") => Checks::Failing,
+        Some("pending") => Checks::Pending,
+        Some("none") => Checks::None,
+        _ => Checks::Unknown,
+    })
+}
+
+impl PullRequest {
+    /// Whether merging should be offered: GitHub says it can be merged, it is
+    /// open, it is not a draft, and its checks are not failing.
+    ///
+    /// Pending checks are not a refusal — they are checks that have not
+    /// answered — so this says yes and the confirm says they are still
+    /// running. Unknown ones are the credential case above; GitHub's own
+    /// branch protection is the backstop, and it refuses the merge itself.
+    #[must_use]
+    pub const fn is_mergeable(&self) -> bool {
+        matches!(self.state, PullState::Open)
+            && !self.draft
+            && matches!(self.mergeable, Some(true))
+            && !matches!(self.checks, Checks::Failing)
+    }
+}
+
+/// What `POST /api/chats/<id>/pulls/<n>/merge` answers on success.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
+pub struct MergeOutcome {
+    pub merged: bool,
+    /// The merge commit GitHub made.
+    pub sha: String,
+    /// The pull request re-read after the merge. Present in the contract, and
+    /// optional here so that a manager which omits it cannot turn a merge that
+    /// happened into an error — the caller refetches instead.
+    pub pull: Option<PullRequest>,
+}
+
+/// Decode `{"pulls": [...]}`, entry by entry.
+///
+/// An entry this client cannot make sense of is dropped on its own rather
+/// than collapsing the answer to "no pull requests" — and it would be
+/// unrenderable anyway, having neither a number nor a URL.
+fn parse_pulls(body: &Value) -> Vec<PullRequest> {
+    body.get("pulls")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| serde_json::from_value(item.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A pending permission ask from a chat's `OpenCode` server. Answer with
@@ -653,6 +807,64 @@ impl CodeClient {
         )
         .await
         .map(|_| ())
+    }
+
+    /// The pull requests **this chat's branch** has produced
+    /// (`GET /api/chats/<id>/pulls`), newest first.
+    ///
+    /// A manager route, not a proxied one: the manager makes these calls to
+    /// GitHub itself with its own credential, so asking costs nothing on the
+    /// container and — the property the whole feature hangs on — does not wake
+    /// a sleeping chat. That is why a chat can carry a pull-request count the
+    /// moment it is opened, while the diff has to wait for a container.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or the request
+    /// outruns the client timeout, and [`CodeError::Status`] on a non-2xx
+    /// answer — 404 for a `chat_id` the manager does not know, 409 when the
+    /// chat's repo has left the allowlist (there is no clone URL left to ask
+    /// GitHub about), 502 when GitHub is unreachable or refuses the
+    /// credential. An entry that does not decode is dropped on its own rather
+    /// than collapsing the list, the same way [`CodeClient::diff`] does it.
+    pub async fn pulls(&self, chat_id: &str) -> Result<Vec<PullRequest>, CodeError> {
+        let body = Self::json_of(
+            self.req(reqwest::Method::GET, &format!("/api/chats/{chat_id}/pulls"))
+                .send()
+                .await?,
+        )
+        .await?;
+        Ok(parse_pulls(&body))
+    }
+
+    /// Merge one of this chat's pull requests
+    /// (`POST /api/chats/<id>/pulls/<n>/merge`).
+    ///
+    /// The empty body takes the manager's merge method. The manager checks
+    /// that `number` is really on this chat's branch before it does anything,
+    /// so this cannot be used to merge a pull request that has nothing to do
+    /// with the chat whose id is in the path.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] on transport failure or timeout, and
+    /// [`CodeError::Status`] on a non-2xx answer — 404 for an unknown chat or
+    /// a pull request that is not on its branch, 409 when the pull request is
+    /// not in a state that can be merged, 422 when GitHub itself refused
+    /// (branch protection, a required review, a head that moved), 502 when
+    /// GitHub is unreachable. Use [`CodeError::message`] for what to show.
+    pub async fn merge_pull(&self, chat_id: &str, number: u64) -> Result<MergeOutcome, CodeError> {
+        let body = Self::json_of(
+            self.req(
+                reqwest::Method::POST,
+                &format!("/api/chats/{chat_id}/pulls/{number}/merge"),
+            )
+            .json(&json!({}))
+            .send()
+            .await?,
+        )
+        .await?;
+        Ok(serde_json::from_value(body).unwrap_or_default())
     }
 
     // ----------------------------------------------------------- per chat
@@ -1203,5 +1415,158 @@ mod tests {
     #[test]
     fn a_model_with_no_declared_window_reports_none() {
         assert_eq!(ModelLimit::default().context_tokens(), None);
+    }
+
+    // ---------------------------------------------------------- pull requests
+
+    fn pull(extra: &Value) -> PullRequest {
+        let mut raw = json!({
+            "number": 12,
+            "title": "Tighten the README quickstart",
+            "state": "open",
+            "draft": false,
+            "mergeable": true,
+            "checks": "passing",
+            "url": "https://github.com/me/notes/pull/12",
+            "head": "agent/notes-9f2c1a",
+            "base": "main",
+            "created_at": "2026-08-24T09:12:31Z",
+            "updated_at": "2026-08-24T10:02:04Z"
+        });
+        if let (Some(base), Some(extra)) = (raw.as_object_mut(), extra.as_object()) {
+            for (k, v) in extra {
+                base.insert(k.clone(), v.clone());
+            }
+        }
+        serde_json::from_value(raw).unwrap()
+    }
+
+    #[test]
+    fn a_pull_decodes_every_field_of_the_contract() {
+        let list = parse_pulls(&json!({"pulls": [{
+            "number": 12,
+            "title": "Tighten the README quickstart",
+            "state": "merged",
+            "draft": false,
+            "mergeable": null,
+            "checks": "none",
+            "url": "https://github.com/me/notes/pull/12",
+            "head": "agent/notes-9f2c1a",
+            "base": "main",
+            "created_at": "2026-08-24T09:12:31Z",
+            "updated_at": "2026-08-24T10:02:04Z"
+        }]}));
+        let [only] = list.as_slice() else {
+            panic!("expected one pull, got {list:?}")
+        };
+        assert_eq!(only.number, 12);
+        assert_eq!(only.state, PullState::Merged);
+        assert_eq!(only.checks, Checks::None);
+        assert_eq!(only.mergeable, None);
+        assert_eq!(only.head, "agent/notes-9f2c1a");
+        assert_eq!(only.base, "main");
+    }
+
+    /// A state or a check summary this client has not heard of must not read
+    /// as "open" or "passing": between them those two decide whether the app
+    /// offers to merge.
+    #[test]
+    fn words_this_client_does_not_know_read_as_unknown() {
+        let odd = pull(&json!({"state": "locked", "checks": "flaky"}));
+        assert_eq!(odd.state, PullState::Unknown);
+        assert_eq!(odd.checks, Checks::Unknown);
+        assert!(!odd.is_mergeable());
+    }
+
+    /// A garbled entry loses itself, not the rest of the list.
+    #[test]
+    fn one_bad_entry_does_not_take_the_list_with_it() {
+        let list = parse_pulls(&json!({"pulls": [
+            {"number": "twelve"},
+            {"number": 13, "state": "open", "url": "https://example.invalid/13"}
+        ]}));
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].number, 13);
+    }
+
+    #[test]
+    fn a_body_without_a_pulls_array_is_no_pulls() {
+        assert!(parse_pulls(&json!({"error": "unknown chat"})).is_empty());
+        assert!(parse_pulls(&Value::Null).is_empty());
+    }
+
+    /// The merge gate, case by case. Everything here is a state GitHub really
+    /// reports, and each one of them is a reason not to offer the button.
+    #[test]
+    fn merging_is_offered_only_when_github_says_it_can_merge() {
+        assert!(pull(&json!({})).is_mergeable());
+        // Checks that have not answered yet are not a refusal.
+        assert!(pull(&json!({"checks": "pending"})).is_mergeable());
+        assert!(pull(&json!({"checks": "none"})).is_mergeable());
+
+        assert!(!pull(&json!({"checks": "failing"})).is_mergeable());
+        assert!(!pull(&json!({"draft": true})).is_mergeable());
+        assert!(!pull(&json!({"mergeable": false})).is_mergeable());
+        // Still being computed: a wait, not a yes.
+        assert!(!pull(&json!({"mergeable": null})).is_mergeable());
+        assert!(!pull(&json!({"state": "merged"})).is_mergeable());
+        assert!(!pull(&json!({"state": "closed"})).is_mergeable());
+    }
+
+    #[test]
+    fn a_merge_answer_carries_the_refreshed_row() {
+        let outcome: MergeOutcome = serde_json::from_value(json!({
+            "merged": true,
+            "sha": "9f2c1ad",
+            "pull": {"number": 12, "state": "merged", "mergeable": false}
+        }))
+        .unwrap();
+        assert!(outcome.merged);
+        assert_eq!(outcome.sha, "9f2c1ad");
+        assert_eq!(outcome.pull.unwrap().state, PullState::Merged);
+    }
+
+    /// A manager that answers the merge without echoing the row must not make
+    /// a merge that happened look like a failure.
+    #[test]
+    fn a_merge_answer_without_a_row_still_decodes() {
+        let outcome: MergeOutcome =
+            serde_json::from_value(json!({"merged": true, "sha": "9f2c1ad"})).unwrap();
+        assert!(outcome.merged);
+        assert_eq!(outcome.pull, None);
+    }
+
+    /// What the user is shown when the manager refuses. The status code and
+    /// the JSON it arrived in are not part of the sentence.
+    #[test]
+    fn a_refusal_is_shown_as_the_servers_own_sentence() {
+        let refused = CodeError::Status {
+            status: 409,
+            body: r##"{"error": "#12 conflicts with main — it needs a rebase."}"##.to_owned(),
+        };
+        assert_eq!(
+            refused.message(),
+            "#12 conflicts with main — it needs a rebase."
+        );
+
+        let github = CodeError::Status {
+            status: 422,
+            body: r#"{"error": "At least 1 approving review is required."}"#.to_owned(),
+        };
+        assert_eq!(github.message(), "At least 1 approving review is required.");
+    }
+
+    /// A body that is not the manager's error shape — an HTML 502 from the
+    /// gateway, or nothing at all — still has to say something.
+    #[test]
+    fn an_answer_with_no_sentence_falls_back_to_the_status() {
+        for body in ["", "<html>502 Bad Gateway</html>", r#"{"error": "  "}"#] {
+            let e = CodeError::Status {
+                status: 502,
+                body: body.to_owned(),
+            };
+            assert_eq!(e.message(), "server said 502");
+        }
+        assert_eq!(CodeError::Other("no route".into()).message(), "no route");
     }
 }

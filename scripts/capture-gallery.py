@@ -39,6 +39,7 @@ LABELS = {
     "code-new": "New code session",
     "code-chat": "Code agent transcript",
     "code-diff": "Code review",
+    "code-pulls": "Pull requests",
     "settings": "Settings",
 }
 

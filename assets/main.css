@@ -1770,6 +1770,14 @@ details[open] > summary::before {
   color: var(--text-danger);
 }
 
+/* A count is a fact about the label it follows, not a second word in the
+ * label: "Pull requests 4" reads as a broken sentence, and a separator costs
+ * an element the row does not need. */
+.action-chip .stat.count::before {
+  content: "· ";
+  color: var(--text-secondary);
+}
+
 /* ── composer ───────────────────────────────────────────────────────── */
 
 /* A floating outlined card inset from the edges — not a docked bar. */
@@ -1811,9 +1819,10 @@ details[open] > summary::before {
 }
 
 /* Chips carry what is real on this screen — the session's settings and the
- * token budget here, diff and PR on the Code tab. Only what a backend can
- * actually change becomes a control; the rest is stated as a fact inside the
- * sheet the settings chip opens. See docs/design.md rule 11. */
+ * token budget here; what the Code tab's session has produced moved up to
+ * .action-row. Only what a backend can actually change becomes a control; the
+ * rest is stated as a fact inside the sheet the settings chip opens. See
+ * docs/design.md rule 11. */
 .composer-chip {
   display: inline-flex;
   align-items: center;
@@ -2912,6 +2921,32 @@ details[open] > summary::before {
   padding: 8px 12px 8px 18px;
   color: var(--code-muted);
   font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* ── pull requests ──────────────────────────────────────────────────── */
+
+/* The list is the session list — same card, same press, same head-and-meta
+ * grammar — so all this screen adds is the part a session row has no use for:
+ * a control inside the row, and a sentence explaining a control that is not
+ * there. */
+
+/* Merge, on the rows where GitHub says it can happen. Inside the card rather
+ * than behind a swipe like Delete: it is not destructive enough to hide, and
+ * a row that offers it is the exception rather than every row. */
+.pull-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* Why merging is not offered — a draft, a conflict, failing checks. Rule 11
+ * says do not render a control that does nothing; it does not say leave the
+ * reader guessing which of the four reasons applies. */
+.pull-note {
+  margin-top: 6px;
+  color: var(--text-secondary);
   font-size: var(--text-xs);
   line-height: var(--lh-sm);
 }

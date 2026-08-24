@@ -19,7 +19,8 @@ use std::time::Duration;
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use opencode_client::{
-    ChatMeta, CodeClient, CodeConfig, CodeEvent, CodePermission, FileDiff, MessageWithParts, Part,
+    ChatMeta, Checks, CodeClient, CodeConfig, CodeEvent, CodePermission, FileDiff,
+    MessageWithParts, Part, PullRequest, PullState,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -36,6 +37,8 @@ pub(crate) enum CodeScreen {
     /// the transcript: the thing being reviewed is a whole working tree, and
     /// a review has its own navigation, its own chrome and its own state.
     Diff,
+    /// The pull requests this chat's branch has produced.
+    Pulls,
 }
 
 /// Everything the code chat screen renders.
@@ -194,6 +197,26 @@ fn marks_to_view(marks: &HashMap<String, u64>) -> HashMap<String, FileView> {
             )
         })
         .collect()
+}
+
+/// The pull-request screen's state for the open chat.
+///
+/// A signal of its own, for the same reason `DiffState` is one: the chat
+/// screen re-renders on every keystroke and reads its state by cloning it,
+/// and this list belongs to a different plane entirely — the manager's
+/// GitHub calls, not the chat's container.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub(crate) struct PullsState {
+    /// Only the pull requests off this chat's branch; see `CodeClient::pulls`.
+    pub pulls: Vec<PullRequest>,
+    pub loading: bool,
+    /// An answer has landed for this chat. What tells "none" apart from "not
+    /// asked yet" — without it the chip would print a count it cannot back,
+    /// and `0` is a claim like any other.
+    pub loaded: bool,
+    pub error: Option<String>,
+    /// The number whose merge is in flight.
+    pub merging: Option<u64>,
 }
 
 /// On-device transcript cache (issue #2, A11): instant open while the
@@ -448,6 +471,14 @@ pub(crate) fn open_code_chat(ctx: &AppCtx, meta: ChatMeta) {
         picked: false,
     });
     screen.set(CodeScreen::Chat);
+    // Asked for now rather than from `attach_chat`, which is where the diff's
+    // counts are fetched. The diff needs the container awake and a session to
+    // exist; this route is the manager talking to GitHub with its own
+    // credential and touches neither, so waiting for the wake would be paying
+    // a cost the request does not have. The chip carries its number while the
+    // container is still booting.
+    ctx.code_pulls.clone().set(PullsState::default());
+    refresh_pulls(ctx);
     let ctx = *ctx;
     spawn_forever(async move { attach_chat(&ctx, meta.id, new_epoch).await });
 }
@@ -1072,15 +1103,152 @@ pub(crate) fn reveal_removed_lines(ctx: &AppCtx, path: &str) {
         .show_removed = true;
 }
 
-/// The "Open PR" action is an instruction to the agent — git is its job
-/// (push is permission-gated; the ask pops here when it runs).
-pub(crate) fn request_pr(ctx: &AppCtx) {
-    send_code_prompt(
-        ctx,
-        "Push this chat's branch and open a pull request for the work so far. \
-         Summarize the changes in the PR body, then reply with the PR URL."
-            .to_string(),
-    );
+// ---------------------------------------------------------- pull requests
+
+/// Open the pull-request screen and refresh it.
+pub(crate) fn open_code_pulls(ctx: &AppCtx) {
+    ctx.code_screen.clone().set(CodeScreen::Pulls);
+    refresh_pulls(ctx);
+}
+
+/// Ask the manager what this chat's branch has open on GitHub.
+///
+/// Costs the chat nothing: `/api/chats/<id>/pulls` is answered by the manager
+/// from its own GitHub credential and never proxied to the container, so this
+/// neither wakes a sleeping chat nor keeps a waking one busy. That is what
+/// makes it safe to call on every chat open.
+pub(crate) fn refresh_pulls(ctx: &AppCtx) {
+    let Some(chat_id) = ctx.code_chat.peek().chat_id.clone() else {
+        return;
+    };
+    let mut pulls = ctx.code_pulls;
+    let Some(client) = ctx.code_client.peek().clone() else {
+        // Written into the screen's state rather than toasted: nothing is
+        // visible yet on a chat open, and by the time the reader gets here the
+        // toast would be long gone.
+        pulls.write().error = Some("Code plane not connected — check Settings".to_owned());
+        return;
+    };
+    {
+        let mut p = pulls.write();
+        p.loading = true;
+        p.error = None;
+    }
+    let ctx = *ctx;
+    spawn_forever(async move {
+        let result = client.pulls(&chat_id).await;
+        // Another chat may have been opened while GitHub was answering; its
+        // branch has its own pull requests and these are not them.
+        if ctx.code_chat.peek().chat_id.as_deref() != Some(chat_id.as_str()) {
+            return;
+        }
+        let mut pulls = ctx.code_pulls;
+        let mut p = pulls.write();
+        p.loading = false;
+        match result {
+            Ok(list) => {
+                p.pulls = list;
+                p.loaded = true;
+                p.error = None;
+            }
+            Err(e) => p.error = Some(e.message()),
+        }
+    });
+}
+
+/// Merge one of this chat's pull requests. Confirmed before it gets here.
+pub(crate) fn merge_pull(ctx: &AppCtx, number: u64) {
+    let Some(chat_id) = ctx.code_chat.peek().chat_id.clone() else {
+        return;
+    };
+    let Some(client) = ctx.code_client.peek().clone() else {
+        show_toast(ctx, "Code plane not connected — check Settings");
+        return;
+    };
+    ctx.code_pulls.clone().write().merging = Some(number);
+    let ctx = *ctx;
+    spawn_forever(async move {
+        let result = client.merge_pull(&chat_id, number).await;
+        if ctx.code_chat.peek().chat_id.as_deref() != Some(chat_id.as_str()) {
+            return;
+        }
+        // The fresh row the manager sends back, folded in before anything else
+        // runs — the write guard has to be gone before `show_toast` or
+        // `refresh_pulls` touch a signal.
+        let repainted = {
+            let mut pulls = ctx.code_pulls;
+            let mut p = pulls.write();
+            p.merging = None;
+            match result.as_ref().map(|outcome| outcome.pull.clone()) {
+                Ok(Some(fresh)) => {
+                    if let Some(row) = p.pulls.iter_mut().find(|row| row.number == number) {
+                        *row = fresh;
+                    }
+                    true
+                }
+                Ok(None) | Err(_) => false,
+            }
+        };
+        match result {
+            Ok(_) => show_toast(&ctx, format!("Merged #{number}")),
+            // Whatever the manager said: the pull request is already merged,
+            // GitHub wants a review, GitHub is unreachable. All of it is more
+            // useful than "merge failed".
+            Err(e) => show_toast(&ctx, e.message()),
+        }
+        // A refusal means the row was describing a state that had already
+        // moved on, so the list is re-read rather than left saying it again.
+        if !repainted {
+            refresh_pulls(&ctx);
+        }
+    });
+}
+
+/// Dot class and word for where a pull request stands, the way
+/// `status_label` does it for a chat's container.
+pub(crate) const fn pull_state_label(pull: &PullRequest) -> (&'static str, &'static str) {
+    match pull.state {
+        PullState::Merged => ("dot on", "merged"),
+        PullState::Closed => ("dot off", "closed"),
+        // Draft is a flag on an open pull request, and it is the more useful
+        // of the two facts: "open" is what every pull request is until it is
+        // not, "draft" is why nothing can be done with this one yet.
+        PullState::Open if pull.draft => ("dot off", "draft"),
+        PullState::Open => ("dot on", "open"),
+        PullState::Unknown => ("dot err", "state unknown"),
+    }
+}
+
+/// Dot class and words for the head commit's checks.
+pub(crate) const fn checks_label(checks: Checks) -> (&'static str, &'static str) {
+    match checks {
+        Checks::Passing => ("dot on", "checks passing"),
+        Checks::Failing => ("dot err", "checks failing"),
+        Checks::Pending => ("dot busy", "checks running"),
+        Checks::None => ("dot off", "no checks"),
+        // Not a parse failure: the manager's PAT carries Contents and Pull
+        // requests, and reading check runs needs a scope of its own.
+        Checks::Unknown => ("dot off", "checks unknown"),
+    }
+}
+
+/// Why there is no Merge button on an open pull request.
+///
+/// `None` when merging is offered, and when the question does not arise —
+/// nobody wonders why a merged pull request has no Merge button.
+pub(crate) const fn merge_block_note(pull: &PullRequest) -> Option<&'static str> {
+    if !matches!(pull.state, PullState::Open) || pull.is_mergeable() {
+        return None;
+    }
+    Some(if pull.draft {
+        "Still a draft. Mark it ready for review on GitHub and it can be merged from here."
+    } else if matches!(pull.checks, Checks::Failing) {
+        "Checks are failing, so this is not offered — read them on GitHub first."
+    } else if matches!(pull.mergeable, Some(false)) {
+        "Conflicts with the base branch. Ask the agent to rebase, then pull to refresh."
+    } else {
+        "GitHub has not finished working out whether this can merge. Pull to refresh."
+    })
 }
 
 /// Create a new code chat and open it, sending the task as the first prompt.
@@ -1174,8 +1342,92 @@ pub(crate) fn status_label(meta: &ChatMeta, running_turn: bool) -> (&'static str
 
 #[cfg(test)]
 mod tests {
-    use super::{fold_part_into, ChatItem, GapSink, HashMap};
+    use super::{
+        checks_label, fold_part_into, merge_block_note, pull_state_label, ChatItem, Checks,
+        GapSink, HashMap, PullRequest, PullState,
+    };
     use opencode_client::Part;
+
+    fn pull(state: PullState, draft: bool, mergeable: Option<bool>, checks: Checks) -> PullRequest {
+        PullRequest {
+            number: 12,
+            state,
+            draft,
+            mergeable,
+            checks,
+            ..PullRequest::default()
+        }
+    }
+
+    /// Draft is the more useful of the two facts about an open draft, and a
+    /// state this client has not heard of must not read as anything reassuring.
+    #[test]
+    fn a_pulls_state_reads_as_the_thing_that_matters_about_it() {
+        let open = pull(PullState::Open, false, Some(true), Checks::Passing);
+        assert_eq!(pull_state_label(&open), ("dot on", "open"));
+
+        let draft = pull(PullState::Open, true, Some(true), Checks::Passing);
+        assert_eq!(pull_state_label(&draft), ("dot off", "draft"));
+
+        let merged = pull(PullState::Merged, false, None, Checks::Passing);
+        assert_eq!(pull_state_label(&merged), ("dot on", "merged"));
+
+        let unknown = pull(PullState::Unknown, false, Some(true), Checks::Passing);
+        assert_eq!(pull_state_label(&unknown), ("dot err", "state unknown"));
+    }
+
+    /// "No checks" and "we could not read the checks" are different facts, and
+    /// the second one is the normal answer for a private repo — the manager's
+    /// PAT carries Contents and Pull requests, not Checks.
+    #[test]
+    fn absent_checks_and_unreadable_checks_are_told_apart() {
+        assert_eq!(checks_label(Checks::None), ("dot off", "no checks"));
+        assert_eq!(checks_label(Checks::Unknown), ("dot off", "checks unknown"));
+        assert_eq!(
+            checks_label(Checks::Pending),
+            ("dot busy", "checks running")
+        );
+        assert_eq!(checks_label(Checks::Failing), ("dot err", "checks failing"));
+    }
+
+    /// Every open pull request that cannot be merged says which of the four
+    /// reasons it is — and a mergeable one, or one whose merge is behind it,
+    /// says nothing at all.
+    #[test]
+    fn a_pull_that_cannot_be_merged_says_why() {
+        let note = |p: &PullRequest| merge_block_note(p).unwrap_or("");
+
+        assert_eq!(
+            merge_block_note(&pull(PullState::Open, false, Some(true), Checks::Passing)),
+            None,
+            "a row with a Merge button needs no explanation"
+        );
+        assert_eq!(
+            merge_block_note(&pull(PullState::Merged, false, Some(false), Checks::None)),
+            None,
+            "nobody wonders why a merged pull request cannot be merged"
+        );
+
+        assert!(note(&pull(PullState::Open, true, Some(true), Checks::Passing)).contains("draft"));
+        assert!(
+            note(&pull(PullState::Open, false, Some(true), Checks::Failing)).contains("failing")
+        );
+        assert!(
+            note(&pull(PullState::Open, false, Some(false), Checks::Passing)).contains("Conflicts")
+        );
+        assert!(
+            note(&pull(PullState::Open, false, None, Checks::Passing)).contains("not finished"),
+            "mergeability GitHub has not computed is a wait, and says so"
+        );
+    }
+
+    /// Draft outranks the rest: marking it ready is the first move whatever
+    /// else is wrong with it, and only one reason gets shown.
+    #[test]
+    fn a_draft_is_told_it_is_a_draft_before_anything_else() {
+        let messy = pull(PullState::Open, true, Some(false), Checks::Failing);
+        assert!(merge_block_note(&messy).unwrap_or("").contains("draft"));
+    }
 
     fn text_part(id: &str, message_id: &str, text: &str) -> Part {
         Part {

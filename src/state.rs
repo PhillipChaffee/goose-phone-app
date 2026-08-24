@@ -208,6 +208,11 @@ pub(crate) struct AppCtx {
     /// keystroke, and parsed whole-file patches are the largest thing this
     /// tab holds.
     pub code_diff: Signal<crate::code::DiffState>,
+    /// The pull-request screen's state for the open chat: what this chat's
+    /// branch has open on GitHub. Fetched on chat open — the route is the
+    /// manager's own GitHub call and never reaches the container, so unlike
+    /// the diff it costs nothing and does not wait for a wake.
+    pub code_pulls: Signal<crate::code::PullsState>,
     /// Review screen: soft-wrap long code lines (the default) or scroll them
     /// horizontally. One switch for the whole screen rather than one per
     /// file, so flipping it does not leave a handful of independent scroll
@@ -259,6 +264,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_cache,
         code_epoch: use_signal(|| 0),
         code_diff: use_signal(crate::code::DiffState::default),
+        code_pulls: use_signal(crate::code::PullsState::default),
         code_diff_wrap: use_signal(|| true),
         code_draft: use_signal(String::new),
     };

@@ -51,17 +51,22 @@ pub fn SwipeDelete(on_delete: EventHandler<()>) -> Element {
     }
 }
 
-/// The confirmation a swipe earns, as a sheet rather than a row in the card.
+/// Say it plainly, then Cancel and the thing itself.
 ///
-/// Both planes delete for good: goose's `session/delete` is not a soft
-/// delete, and the code plane purges the container and the workspace with the
-/// branch still in it. With no undo to offer, a drag on its own is not
-/// consent. That is Messages' arrangement rather than Mail's — Mail can
-/// afford a one-tap swipe because it has a Trash to fish things back out of.
+/// One component rather than one per action, because the difference between
+/// confirming a delete and confirming a merge is two strings and which colour
+/// the second button takes — and a copy of the modal per action is a copy of
+/// the modal per action to keep in step.
 #[component]
-pub fn ConfirmDelete(
+pub fn Confirm(
     title: String,
     body: String,
+    /// The word on the button that does it. Never "OK": the label is the last
+    /// chance to say what is about to happen.
+    confirm_label: String,
+    /// Destructive, and coloured as such (rule 7 — a control the user presses
+    /// is what earns a saturated fill).
+    danger: bool,
     on_confirm: EventHandler<()>,
     on_cancel: EventHandler<()>,
 ) -> Element {
@@ -77,12 +82,38 @@ pub fn ConfirmDelete(
                         "Cancel"
                     }
                     button {
-                        class: "btn danger",
+                        class: if danger { "btn danger" } else { "btn primary" },
                         onclick: move |_| on_confirm.call(()),
-                        "Delete"
+                        "{confirm_label}"
                     }
                 }
             }
+        }
+    }
+}
+
+/// The confirmation a swipe earns, as a sheet rather than a row in the card.
+///
+/// Both planes delete for good: goose's `session/delete` is not a soft
+/// delete, and the code plane purges the container and the workspace with the
+/// branch still in it. With no undo to offer, a drag on its own is not
+/// consent. That is Messages' arrangement rather than Mail's — Mail can
+/// afford a one-tap swipe because it has a Trash to fish things back out of.
+#[component]
+pub fn ConfirmDelete(
+    title: String,
+    body: String,
+    on_confirm: EventHandler<()>,
+    on_cancel: EventHandler<()>,
+) -> Element {
+    rsx! {
+        Confirm {
+            title,
+            body,
+            confirm_label: "Delete",
+            danger: true,
+            on_confirm,
+            on_cancel,
         }
     }
 }
