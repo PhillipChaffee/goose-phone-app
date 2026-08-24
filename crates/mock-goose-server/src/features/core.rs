@@ -1,10 +1,12 @@
 //! Base ACP: the methods every agent must implement, and the session config
 //! options goose builds on top of them.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
+
 use serde_json::{json, Value};
 
 use crate::rpc::{session_update, Out};
-use crate::state::{Kind, SessionConfig, SessionData, Shared};
+use crate::state::{now_epoch, stamp, Fixtures, Kind, SessionConfig, SessionData, Shared};
 
 use super::Handled;
 
@@ -15,6 +17,7 @@ pub(crate) fn handle(method: &str, params: &Value, state: &Shared, out: &Out) ->
         "session/load" => session_load(params, state, out),
         "session/set_config_option" => set_config_option(params, state, out),
         "session/list" => list_sessions(params, state),
+        "_goose/unstable/session/rename" => rename_session(params, state),
         "session/delete" => {
             let sid = params
                 .get("sessionId")
@@ -51,14 +54,16 @@ fn session_new(params: &Value, state: &Shared) -> Result<Value, (i64, String)> {
         return Err((-32602, format!("cwd must be an absolute path, got `{cwd}`")));
     }
     let sid = {
+        let at = stamp(now_epoch());
         let mut s = state.lock().unwrap();
-        let n = s.next_session;
-        s.next_session += 1;
-        let sid = format!("20260821_{n}");
+        let sid = s.mint_session_id(&at.day);
         s.sessions.insert(
             sid.clone(),
             SessionData {
                 cwd: cwd.to_string(),
+                created_at: at.rfc3339.clone(),
+                updated_at: at.rfc3339.clone(),
+                sort_at: at.rfc3339,
                 ..Default::default()
             },
         );
@@ -123,6 +128,43 @@ fn set_config_option(params: &Value, state: &Shared, out: &Out) -> Result<Value,
     Ok(json!({"configOptions": opts}))
 }
 
+/// Give a session the title a person typed.
+///
+/// goose renames through its session store, so the two things that happen are
+/// the ones a store does: the name changes and `updated_at` moves to now. The
+/// list *order* does not follow, because it sorts on the last message rather
+/// than on `updated_at` — a renamed session stays exactly where it was, and
+/// the app has to be able to see that here.
+fn rename_session(params: &Value, state: &Shared) -> Result<Value, (i64, String)> {
+    let sid = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| (-32602, "sessionId must be a string".to_string()))?;
+    let title = params
+        .get("title")
+        .and_then(Value::as_str)
+        .ok_or_else(|| (-32602, "title must be a string".to_string()))?;
+
+    let updated_at = stamp(now_epoch()).rfc3339;
+    let renamed = {
+        let mut s = state.lock().unwrap();
+        s.sessions.get_mut(sid).map(|data| {
+            data.title = title.to_string();
+            data.user_set_name = true;
+            data.updated_at = updated_at;
+        })
+    };
+    match renamed {
+        Some(()) => Ok(json!({})),
+        // The real rename is a bare UPDATE with no existence check in front
+        // of it, so an id nobody has surfaces as the store's own failure.
+        None => Err((
+            -32603,
+            format!("failed to rename session: no session {sid}"),
+        )),
+    }
+}
+
 /// The fields `session/list` reports, copied out under the lock so the JSON
 /// is built without holding it.
 struct Listed {
@@ -132,6 +174,10 @@ struct Listed {
     message_count: u64,
     snippet: String,
     kind: Kind,
+    user_set_name: bool,
+    created_at: String,
+    updated_at: String,
+    sort_at: String,
 }
 
 /// Whether the model takes an extended-thinking effort at all.
@@ -268,36 +314,70 @@ fn matches_keyword(conversation: &[Value], keyword: &str) -> bool {
         })
 }
 
-/// The mock's stand-in for goose's `session_list_filter_hash`: whatever it
-/// is, a cursor carries it and is refused beside a different filter set. The
-/// value being readable rather than a SHA-256 is the only difference, and it
-/// makes a failure legible in a test.
-fn filter_key(kinds: &[Kind], keyword: Option<&str>) -> String {
-    let mut names: Vec<&str> = kinds.iter().map(|kind| kind.as_wire()).collect();
-    names.sort_unstable();
-    names.dedup();
-    format!("{}|{}", names.join(","), keyword.unwrap_or_default())
+/// Whether the caller asked for a last-message snippet on every row.
+///
+/// goose leaves it off unless `_meta.goose.includeLastMessageSnippet` says
+/// otherwise — it is an extra join — and a mock that handed the snippet out
+/// unasked would let a client that forgot to ask look correct right up until
+/// the rows go quiet against a real server.
+fn wants_snippet(meta: Option<&Value>) -> Result<bool, (i64, String)> {
+    let Some(goose) = meta.and_then(|meta| meta.get("goose")) else {
+        return Ok(false);
+    };
+    if goose.is_null() {
+        return Ok(false);
+    }
+    if !goose.is_object() {
+        return Err((-32602, "goose must be an object".to_string()));
+    }
+    match goose.get("includeLastMessageSnippet") {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(wanted)) => Ok(*wanted),
+        Some(_) => Err((
+            -32602,
+            "goose.includeLastMessageSnippet must be a boolean".to_string(),
+        )),
+    }
 }
 
-/// goose pages 50 at a time. Two is enough to put a second page behind a
-/// handful of seeded sessions, which is the only reason the mock pages at all.
-const SESSION_PAGE_SIZE: usize = 2;
+/// The mock's stand-in for goose's `session_list_filter_hash`.
+///
+/// goose SHA-256s the effective filter set, embeds the digest in every cursor
+/// it hands out, and refuses a cursor whose digest does not match the filters
+/// it arrives beside. Which digest is not the part a client can get wrong —
+/// carrying a cursor across a filter change is — so this uses the standard
+/// library's hasher and spends the fidelity where it counts: same coupling,
+/// same error, same message. A cursor never outlives the process that minted
+/// it, which is exactly as long as `DefaultHasher` promises to agree with
+/// itself.
+fn filter_hash(kinds: &[Kind], keyword: Option<&str>) -> String {
+    let mut names: Vec<&str> = kinds.iter().copied().map(Kind::as_wire).collect();
+    names.sort_unstable();
+    let mut hasher = DefaultHasher::new();
+    (names, keyword).hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// goose pages 50 at a time. Three is enough to put two more pages behind the
+/// seeded sessions, which is the only reason the mock pages at all.
+const SESSION_PAGE_SIZE: usize = 3;
 
 /// The `session/list` payload: sessions that have messages, filtered by kind
-/// and keyword, newest session id first, one page at a time.
+/// and keyword, most recently spoken in first, one page at a time.
 fn list_sessions(params: &Value, state: &Shared) -> Result<Value, (i64, String)> {
     let meta = params.get("_meta");
     let kinds = requested_kinds(meta)?;
     let keyword = requested_keyword(meta);
-    let key = filter_key(&kinds, keyword.as_deref());
+    let snippets = wants_snippet(meta)?;
+    let hash = filter_hash(&kinds, keyword.as_deref());
 
     let after = match params.get("cursor").and_then(Value::as_str) {
         None => None,
         Some(cursor) => {
-            let (id, cursor_key) = cursor
-                .split_once('#')
+            let (id, minted_under) = cursor
+                .rsplit_once('.')
                 .ok_or_else(|| (-32602, "malformed session list cursor".to_string()))?;
-            if cursor_key != key {
+            if minted_under != hash {
                 return Err((
                     -32602,
                     "session list cursor does not match filters".to_string(),
@@ -308,7 +388,17 @@ fn list_sessions(params: &Value, state: &Shared) -> Result<Value, (i64, String)>
     };
 
     let mut listed: Vec<Listed> = {
-        let s = state.lock().unwrap();
+        let mut s = state.lock().unwrap();
+        // One failure, then the truth: a list that answered `-32603` forever
+        // would be a screen the app could never be driven past, and the error
+        // state worth testing is the one a pull-to-refresh clears.
+        if matches!(s.fixtures, Fixtures::Broken) && !s.session_list_failed {
+            s.session_list_failed = true;
+            return Err((
+                -32603,
+                "failed to read the session store: database is locked".to_string(),
+            ));
+        }
         s.sessions
             .iter()
             .filter(|(_, d)| d.message_count > 0 && kinds.contains(&d.kind))
@@ -324,14 +414,22 @@ fn list_sessions(params: &Value, state: &Shared) -> Result<Value, (i64, String)>
                 message_count: d.message_count,
                 snippet: d.snippet.clone(),
                 kind: d.kind,
+                user_set_name: d.user_set_name,
+                created_at: d.created_at.clone(),
+                updated_at: d.updated_at.clone(),
+                sort_at: d.sort_at.clone(),
             })
             .collect()
     };
-    listed.sort_by(|a, b| b.id.cmp(&a.id));
+    // goose's `ORDER BY sort_timestamp DESC, s.id DESC`, where the sort
+    // timestamp is the last message rather than `updated_at`. The id breaks
+    // the tie, and it has to: two sessions written in the same second would
+    // otherwise be ordered differently on either side of a page boundary, and
+    // the cursor would skip one.
+    listed.sort_by(|a, b| (&b.sort_at, &b.id).cmp(&(&a.sort_at, &a.id)));
 
     // The cursor names the last session of the previous page, so the next one
-    // starts after it — the same (sort key, id) walk goose does, minus the
-    // timestamps the mock does not vary.
+    // starts after it.
     if let Some(after) = after {
         let start = listed
             .iter()
@@ -342,27 +440,31 @@ fn list_sessions(params: &Value, state: &Shared) -> Result<Value, (i64, String)>
     let more = listed.len() > SESSION_PAGE_SIZE;
     listed.truncate(SESSION_PAGE_SIZE);
     let next_cursor = match listed.last() {
-        Some(last) if more => Value::String(format!("{}#{key}", last.id)),
+        Some(last) if more => Value::String(format!("{}.{hash}", last.id)),
         _ => Value::Null,
     };
 
     let sessions: Vec<Value> = listed
         .into_iter()
         .map(|d| {
+            let mut meta = json!({
+                "messageCount": d.message_count,
+                "createdAt": d.created_at,
+                "lastMessageAt": d.sort_at,
+                "userSetName": d.user_set_name,
+                "sessionType": d.kind.as_wire(),
+                "hasRecipe": false,
+            });
+            if snippets {
+                meta["lastMessageSnippet"] = Value::String(d.snippet);
+            }
             json!({
                 "sessionId": d.id,
                 "cwd": d.cwd,
                 "additionalDirectories": [],
                 "title": if d.title.is_empty() { Value::Null } else { Value::String(d.title) },
-                "updatedAt": "2026-08-21T12:00:00Z",
-                "_meta": {
-                    "messageCount": d.message_count,
-                    "createdAt": "2026-08-21T09:00:00Z",
-                    "userSetName": false,
-                    "sessionType": d.kind.as_wire(),
-                    "hasRecipe": false,
-                    "lastMessageSnippet": d.snippet,
-                }
+                "updatedAt": d.updated_at,
+                "_meta": meta,
             })
         })
         .collect();
@@ -418,6 +520,18 @@ mod tests {
         state
     }
 
+    /// Ids are minted from the clock, so the fixtures are named by their
+    /// titles here — which is also what a failure has to print to be worth
+    /// reading.
+    fn titles(page: &Value) -> Vec<String> {
+        page["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["title"].as_str().unwrap_or("<untitled>").to_string())
+            .collect()
+    }
+
     fn session_ids(page: &Value) -> Vec<String> {
         page["sessions"]
             .as_array()
@@ -427,24 +541,58 @@ mod tests {
             .collect()
     }
 
-    /// The filter the app spent its life sending, and the two seeded sessions
-    /// it hid.
+    /// Every page of a filter, walked the way a client walks them: the cursor
+    /// from the page before, and the same `_meta` every time.
+    fn walk(state: &Shared, meta: &Value) -> Vec<Value> {
+        let mut params = json!({ "_meta": meta });
+        let mut pages = Vec::new();
+        loop {
+            let page = list_sessions(&params, state).unwrap();
+            let cursor = page["nextCursor"].clone();
+            pages.push(page);
+            let Some(cursor) = cursor.as_str() else {
+                return pages;
+            };
+            params["cursor"] = Value::String(cursor.to_string());
+            assert!(pages.len() < 20, "the cursor never ran out");
+        }
+    }
+
+    fn walked_titles(state: &Shared, meta: &Value) -> Vec<String> {
+        walk(state, meta).iter().flat_map(titles).collect()
+    }
+
+    /// The filter the app spent its life sending, and the sessions it hid.
     #[test]
     fn types_selects_the_kinds_asked_for() {
         let state = seeded();
-        let users = list_sessions(&json!({"_meta": {"types": ["user"]}}), &state).unwrap();
-        assert_eq!(session_ids(&users), ["20260820_1"]);
 
-        let scheduled = list_sessions(&json!({"_meta": {"types": ["scheduled"]}}), &state).unwrap();
-        assert_eq!(session_ids(&scheduled), ["20260819_1"]);
+        let users = walked_titles(&state, &json!({"types": ["user"]}));
+        assert!(
+            users.contains(&"Seeded example chat".to_string()),
+            "{users:?}"
+        );
+        assert!(!users.contains(&"Nightly dependency audit".to_string()));
+
+        let scheduled = walk(&state, &json!({"types": ["scheduled"]}));
         assert_eq!(
-            scheduled["sessions"][0]["_meta"]["sessionType"],
+            titles(&scheduled[0]),
+            ["Nightly dependency audit", "Weekly changelog digest"]
+        );
+        assert_eq!(
+            scheduled[0]["sessions"][0]["_meta"]["sessionType"],
             "scheduled"
         );
 
+        let agents = walked_titles(&state, &json!({"types": ["acp"]}));
+        assert_eq!(agents, ["Sub-agent: summarise the audit"]);
+
         // No filter at all is all three, which is goose's reading of it.
-        let all = list_sessions(&json!({}), &state).unwrap();
-        assert_eq!(session_ids(&all), ["20260820_1", "20260819_1"]);
+        let all = walked_titles(&state, &json!({}));
+        assert_eq!(
+            all.len(),
+            users.len() + scheduled[0]["sessions"].as_array().unwrap().len() + 1
+        );
     }
 
     /// goose refuses a type outside the three rather than ignoring it, and a
@@ -462,14 +610,40 @@ mod tests {
     #[test]
     fn query_searches_message_text() {
         let state = seeded();
-        let audit = list_sessions(&json!({"_meta": {"query": "AUDIT"}}), &state).unwrap();
-        assert_eq!(session_ids(&audit), ["20260819_1", "20260818_1"]);
 
-        let deep = list_sessions(&json!({"_meta": {"query": "cargo.toml"}}), &state).unwrap();
-        assert_eq!(session_ids(&deep), ["20260820_1"]);
+        let audit = walked_titles(&state, &json!({"query": "AUDIT"}));
+        assert_eq!(
+            audit,
+            ["Nightly dependency audit", "Sub-agent: summarise the audit"]
+        );
 
-        let nothing = list_sessions(&json!({"_meta": {"query": "zzz"}}), &state).unwrap();
-        assert!(session_ids(&nothing).is_empty());
+        // In the messages and nowhere near the title, which is the half of
+        // the search a title-matching mock would quietly lose.
+        let deep = walked_titles(&state, &json!({"query": "cargo.toml"}));
+        assert_eq!(deep, ["Seeded example chat"]);
+
+        // Two words are ORed, not ANDed: this is two different sessions, one
+        // per term.
+        let either = walked_titles(&state, &json!({"query": "certificate scrolled"}));
+        assert_eq!(either.len(), 2, "{either:?}");
+
+        let nothing = walked_titles(&state, &json!({"query": "zzz"}));
+        assert!(nothing.is_empty(), "{nothing:?}");
+    }
+
+    /// A title matches nothing on its own: the search reads messages, and the
+    /// long-title fixture's words appear in both, so the *other* direction is
+    /// the one worth pinning.
+    #[test]
+    fn a_title_only_word_finds_nothing() {
+        let state = seeded();
+        // "Weekly changelog digest" says "changelog" in its title and in its
+        // message; "digest" is title-only.
+        assert!(walked_titles(&state, &json!({"query": "digest"})).is_empty());
+        assert_eq!(
+            walked_titles(&state, &json!({"query": "changelog"})),
+            ["Weekly changelog digest"]
+        );
     }
 
     /// The trap this feature is built around: a cursor is minted under a
@@ -481,12 +655,13 @@ mod tests {
         let state = seeded();
         let all = json!({"types": ["user", "scheduled", "acp"]});
         let first = list_sessions(&json!({"_meta": all}), &state).unwrap();
-        assert_eq!(session_ids(&first), ["20260820_1", "20260819_1"]);
         let cursor = first["nextCursor"].as_str().unwrap().to_string();
 
         let second = list_sessions(&json!({"cursor": cursor, "_meta": all}), &state).unwrap();
-        assert_eq!(session_ids(&second), ["20260818_1"]);
-        assert_eq!(second["nextCursor"], Value::Null);
+        assert_eq!(
+            second["sessions"].as_array().unwrap().len(),
+            SESSION_PAGE_SIZE
+        );
 
         let err = list_sessions(
             &json!({"cursor": cursor, "_meta": {"types": ["user"]}}),
@@ -504,5 +679,135 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.0, -32602);
+
+        // And a cursor from nowhere is refused before it is even compared.
+        let err = list_sessions(&json!({"cursor": "nonsense", "_meta": all}), &state).unwrap_err();
+        assert_eq!(err.0, -32602);
+        assert!(err.1.contains("malformed"), "{}", err.1);
+    }
+
+    /// A blank search is no search, so the cursor it mints is the unfiltered
+    /// one — the client trims the query before it hashes, and the two sides
+    /// have to agree about that or every second page 500s.
+    #[test]
+    fn a_blank_query_hashes_as_no_query() {
+        let state = seeded();
+        let first = list_sessions(&json!({"_meta": {"query": "   "}}), &state).unwrap();
+        let cursor = first["nextCursor"].as_str().unwrap().to_string();
+        assert!(list_sessions(&json!({"cursor": cursor, "_meta": {}}), &state).is_ok());
+    }
+
+    /// The pages tile the list: every session once, in order, and the last
+    /// page ends the chain rather than handing out a cursor to nothing.
+    #[test]
+    fn pages_tile_the_list_without_repeating_or_skipping() {
+        let state = seeded();
+        let pages = walk(&state, &json!({}));
+        assert!(pages.len() > 2, "the fixtures should need three pages");
+
+        let mut seen: Vec<String> = Vec::new();
+        for (index, page) in pages.iter().enumerate() {
+            let ids = session_ids(page);
+            let last = index + 1 == pages.len();
+            assert!(
+                if last {
+                    !ids.is_empty()
+                } else {
+                    ids.len() == SESSION_PAGE_SIZE
+                },
+                "page {index} has {} sessions",
+                ids.len()
+            );
+            assert_eq!(last, page["nextCursor"].is_null());
+            seen.extend(ids);
+        }
+
+        let total = state.lock().unwrap().sessions.len();
+        assert_eq!(seen.len(), total);
+        let mut unique = seen.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), seen.len(), "a session was listed twice");
+    }
+
+    /// The snippet is opt-in, exactly as goose has it: asking is what a
+    /// client has to remember to do, so not asking has to be visible.
+    #[test]
+    fn the_snippet_is_only_sent_when_asked_for() {
+        let state = seeded();
+        let quiet = list_sessions(&json!({"_meta": {}}), &state).unwrap();
+        assert!(quiet["sessions"][0]["_meta"]["lastMessageSnippet"].is_null());
+
+        let asked = list_sessions(
+            &json!({"_meta": {"goose": {"includeLastMessageSnippet": true}}}),
+            &state,
+        )
+        .unwrap();
+        assert!(asked["sessions"][0]["_meta"]["lastMessageSnippet"].is_string());
+
+        let err = list_sessions(
+            &json!({"_meta": {"goose": {"includeLastMessageSnippet": "yes"}}}),
+            &state,
+        )
+        .unwrap_err();
+        assert_eq!(err.0, -32602);
+    }
+
+    /// Rename is only real if the list agrees afterwards.
+    #[test]
+    fn a_rename_is_the_title_the_next_list_shows() {
+        let state = seeded();
+        let before = list_sessions(&json!({"_meta": {}}), &state).unwrap();
+        let sid = session_ids(&before)[1].clone();
+        assert_eq!(before["sessions"][1]["_meta"]["userSetName"], false);
+
+        rename_session(
+            &json!({"sessionId": sid, "title": "Cert rotation, again"}),
+            &state,
+        )
+        .unwrap();
+
+        let after = list_sessions(&json!({"_meta": {}}), &state).unwrap();
+        assert_eq!(after["sessions"][1]["title"], "Cert rotation, again");
+        assert_eq!(after["sessions"][1]["_meta"]["userSetName"], true);
+        // Renaming touches `updated_at` but not the last message, and the
+        // list sorts on the latter — so the row keeps its place. A UI that
+        // assumed otherwise would scroll out from under the person typing.
+        assert_eq!(session_ids(&after), session_ids(&before));
+    }
+
+    /// Renaming a session nobody has is the store's failure, not a silent
+    /// success — a client that renamed the wrong id would otherwise never
+    /// find out.
+    #[test]
+    fn renaming_an_unknown_session_fails() {
+        let err = rename_session(
+            &json!({"sessionId": "19700101_1", "title": "Nowhere"}),
+            &seeded(),
+        )
+        .unwrap_err();
+        assert_eq!(err.0, -32603);
+        assert!(err.1.contains("19700101_1"), "{}", err.1);
+
+        let err = rename_session(&json!({"sessionId": "19700101_1"}), &seeded()).unwrap_err();
+        assert_eq!(err.0, -32602);
+    }
+
+    /// `broken` fixtures fail the first list and then behave, which is the
+    /// shape the app's error path needs: something to show, and a refresh
+    /// that clears it.
+    #[test]
+    fn broken_fixtures_fail_the_first_list_only() {
+        let state: Shared = std::sync::Arc::new(std::sync::Mutex::new(State {
+            fixtures: Fixtures::Broken,
+            ..State::default()
+        }));
+        crate::state::seed(&state);
+
+        let err = list_sessions(&json!({"_meta": {}}), &state).unwrap_err();
+        assert_eq!(err.0, -32603);
+        assert!(err.1.contains("session store"), "{}", err.1);
+
+        assert!(!titles(&list_sessions(&json!({"_meta": {}}), &state).unwrap()).is_empty());
     }
 }

@@ -14,7 +14,7 @@ use tokio::sync::{oneshot, Notify};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::rpc::{error_frame, notify, session_update, Out};
-use crate::state::Shared;
+use crate::state::{now_epoch, stamp, Shared};
 
 static SERVER_REQ_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -254,12 +254,19 @@ fn finish(
     user_text: &str,
 ) {
     {
+        let now = stamp(now_epoch()).rfc3339;
         let mut s = state.lock().unwrap();
         if let Some(data) = s.sessions.get_mut(sid) {
             data.conversation.extend(record);
             data.message_count += 2;
             data.snippet = format!("Re: {user_text}");
-            if data.title.is_empty() {
+            // A message moves both clocks, which is what puts the session at
+            // the top of the next `session/list`.
+            data.updated_at = now.clone();
+            data.sort_at = now;
+            // goose auto-titles only where `user_set_name = FALSE`: a name
+            // somebody typed survives the next thing they say.
+            if !data.user_set_name && data.title.is_empty() {
                 data.title = auto_title(user_text);
             }
         }

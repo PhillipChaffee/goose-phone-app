@@ -18,16 +18,24 @@ use std::time::Duration;
 use goose_acp_client::AcpEvent;
 
 /// The whole round trip in one test: the binary starts, prints a port we did
-/// not choose, answers `initialize` to a real client, creates a session with
-/// the id its own seed data implies, and reports the close.
+/// not choose, answers `initialize` to a real client, creates sessions with
+/// ids its own seed data implies, and reports the close.
 #[tokio::test]
 async fn a_session_round_trips_over_a_real_socket() {
     let (mut server, client) = common::spawn_mock().await;
 
-    let session = client.session_new("/home/demo").await.unwrap();
-    // `seed` leaves the counter at 2, so this is the mock's state and not a
-    // default that any stub would have produced.
-    assert_eq!(session.session_id, "20260821_2");
+    // goose numbers session ids within their day, counting from what the
+    // store already holds — so consecutive creations step by one, and neither
+    // lands on a session seeded earlier today. That is the mock's state
+    // answering, not a default any stub would have produced.
+    let first = client.session_new("/home/demo").await.unwrap().session_id;
+    let second = client.session_new("/home/demo").await.unwrap().session_id;
+    let number = |id: &str| id.split_once('_').unwrap().1.parse::<u32>().unwrap();
+    assert_eq!(
+        first.split_once('_').map(|(day, _)| day.to_string()),
+        second.split_once('_').map(|(day, _)| day.to_string())
+    );
+    assert_eq!(number(&second), number(&first) + 1);
 
     client.close();
     let disconnected = tokio::time::timeout(Duration::from_secs(5), server.events.recv())
