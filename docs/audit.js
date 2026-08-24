@@ -52,9 +52,14 @@ const CSS = path.join(__dirname, '..', 'assets', 'main.css');
 // swapped for the longest plausible value — substituting into markup the app
 // really produced, rather than hand-writing a copy of it, which is the same
 // reason the gallery is generated.
+// One unbreakable token, not a long sentence: a permission ask quotes the
+// command the agent wants to run, and a fetch or an install one-liner carries
+// a URL. A word with nowhere to break is the case that pushes a card wider
+// than the phone rather than simply wrapping.
 const LONGEST = {
   '.chip-label': 'Qwen3 Coder 480B A35B Instruct',
   '.session-title': 'Refactor the transcript folding so streamed parts land in order',
+  '.session-ask-title': 'Approve or deny curl -sSL https://raw.githubusercontent.com/example/really-long-org-name/main/scripts/install.sh',
   '.topbar > .title': 'Refactor the transcript folding so streamed parts land in order',
 };
 

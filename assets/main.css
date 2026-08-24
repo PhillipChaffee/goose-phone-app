@@ -950,6 +950,14 @@ pre {
   animation: pulse 1.4s ease-in-out infinite;
 }
 
+/* Blocked on an answer. Same amber as .dot.busy and as the dot on the tile —
+ * it is the same fact, told once for a scroll down the list and once for a
+ * reader who has stopped on the row — but still, because the pulse is what
+ * says a turn is moving and this one is not going anywhere without you. */
+.dot.wait {
+  background: var(--bg-warning);
+}
+
 @keyframes pulse {
   0%,
   100% {
@@ -1192,9 +1200,24 @@ select.field {
 
 /* The card body — what the row itself used to be. Exactly the width of the
  * row, so the tray is out of sight until it is dragged in, and the snap point
- * at its start is what "closed" means. */
+ * at its start is what "closed" means.
+ *
+ * `flex-basis: 100%` does not say that on its own: a flex item's automatic
+ * min-width is its min-content width, so one unbreakable token — a URL in a
+ * `curl` the agent is asking to run, a branch name, a session id — grows the
+ * pane past the row and carries the right-hand half of the card off the
+ * screen with it, taking the ask panel's Approve button with it. The two
+ * declarations below are the rule stated in full: break anywhere rather than
+ * push (`anywhere`, not `break-word`, because only `anywhere` also lowers the
+ * min-content width the flex sizing reads), and never wider than the row
+ * whatever the content. Nothing in here is measured by the audit's overflow
+ * walk — a swiped row is a horizontal scroller on purpose, so the walk
+ * exempts everything inside it — but with a fixed pane an over-long token
+ * becomes a clipped box, which the audit does see. */
 .session-swipe {
   flex: 0 0 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
   scroll-snap-align: start;
   display: flex;
   align-items: flex-start;

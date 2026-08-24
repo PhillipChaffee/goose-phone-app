@@ -13,9 +13,9 @@ use opencode_client::FileStatus;
 use crate::code::{
     answer_code_permission, ask_label, delete_code_chat, ensure_code_models, expand_diff_gap,
     is_free_model, load_code_diff, mark_all_diff_seen, new_code_chat, open_chat_allows_free_models,
-    open_code_chat, refresh_code_chats, request_pr, reveal_removed_lines, send_code_prompt,
-    set_code_effort, set_code_model, start_code_poll, status_label, stop_code_turn,
-    toggle_diff_file, toggle_diff_seen, CodeScreen, DiffFile, DiffState,
+    open_code_chat, refresh_code_chats, refresh_code_permissions, request_pr, reveal_removed_lines,
+    send_code_prompt, set_code_effort, set_code_model, start_code_poll, status_label,
+    stop_code_turn, toggle_diff_file, toggle_diff_seen, CodeScreen, DiffFile, DiffState,
 };
 use crate::diff::Block;
 use crate::icons::Icon;
@@ -179,8 +179,8 @@ fn render_code_row(
     let ctx = *ctx;
     let meta = meta.clone();
     let id = meta.id.clone();
-    let (dot, label) = status_label(&meta, running_turn);
     let waiting = ask.is_some();
+    let (dot, label) = status_label(&meta, running_turn, waiting);
 
     rsx! {
         li {
@@ -645,7 +645,14 @@ pub fn CodeChatView() -> Element {
                 onclick: move |_| {
                     let mut screen = ctx.code_screen;
                     screen.set(CodeScreen::List);
-                    spawn_forever(async move { refresh_code_chats(&ctx).await });
+                    spawn_forever(async move {
+                        refresh_code_chats(&ctx).await;
+                        // The rows and the asks are one statement about the
+                        // list. Refreshing half of it is how a chat that had
+                        // gone quiet came back showing a fresh timestamp and
+                        // no sign that it was blocked.
+                        refresh_code_permissions(&ctx).await;
+                    });
                 },
                 Icon { name: "chevron-left" }
             }

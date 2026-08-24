@@ -214,9 +214,26 @@ pub(crate) struct AppCtx {
     /// On-device transcript cache — instant open while a chat's container
     /// wakes, read-only offline. Server history stays authoritative.
     pub code_cache: Signal<crate::code::CodeCache>,
-    /// Bumped whenever a different code chat is opened; stale SSE pumps and
-    /// poll loops observe the change and exit.
+    /// Bumped whenever a different code chat is opened; stale SSE pumps
+    /// observe the change and exit.
+    ///
+    /// Not the list poll's business, and it used to be: reading this on the
+    /// ten-second tick meant the first tap on any row retired the loop that
+    /// carries the pending-ask aggregate, and nothing ever started another.
+    /// The poll has `code_poll` for that.
     pub code_epoch: Signal<u64>,
+    /// Generation of the chat-list poll loop. A loop retires when a newer one
+    /// takes its place, and for no other reason.
+    pub code_poll: Signal<u64>,
+    /// The chat whose SSE stream is pumping events into the app, if any.
+    ///
+    /// Which is not the same question as "which chat is open": `code_chat`
+    /// keeps its chat id after you back out to the list, and a stream can die
+    /// for good while it does. This says who is genuinely speaking for a
+    /// chat, and so who the manager's aggregate must not overrule — and, the
+    /// moment the stream ends, must take back over
+    /// (`crate::code::merge_permission_report`).
+    pub code_stream: Signal<Option<String>>,
     /// The review screen's state for the open chat. Deliberately not a field
     /// on `CodeChatState`: the chat screen clones its whole state on every
     /// keystroke, and parsed whole-file patches are the largest thing this
@@ -273,6 +290,8 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_answered: use_signal(HashSet::new),
         code_cache,
         code_epoch: use_signal(|| 0),
+        code_poll: use_signal(|| 0),
+        code_stream: use_signal(|| None),
         code_diff: use_signal(crate::code::DiffState::default),
         code_diff_wrap: use_signal(|| true),
         code_draft: use_signal(String::new),

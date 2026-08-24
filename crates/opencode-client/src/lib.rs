@@ -618,19 +618,49 @@ impl CodeClient {
     /// # Errors
     ///
     /// [`CodeError::Http`] if the gateway is unreachable or the request
-    /// outruns the client timeout, and [`CodeError::Status`] on a non-2xx
+    /// outruns the client timeout, [`CodeError::Status`] on a non-2xx
     /// answer — 401 for a wrong `password`, 404 from a manager too old to
-    /// have this route. A single container that fails to answer does **not**
-    /// fail the aggregate: the manager names it in
+    /// have this route — and [`CodeError::Other`] for a 2xx body that is not
+    /// the contracted shape. A single container that fails to answer does
+    /// **not** fail the aggregate: the manager names it in
     /// [`PermissionReport::unreachable`] and still returns 200.
     pub async fn pending_permissions(&self) -> Result<PermissionReport, CodeError> {
-        let v = Self::json_of(
-            self.req(reqwest::Method::GET, "/api/permissions")
-                .send()
-                .await?,
+        Self::decode_permission_report(
+            Self::json_of(
+                self.req(reqwest::Method::GET, "/api/permissions")
+                    .send()
+                    .await?,
+            )
+            .await?,
         )
-        .await?;
-        Ok(serde_json::from_value(v).unwrap_or_default())
+    }
+
+    /// Read the aggregate's body, or say why it could not be read.
+    ///
+    /// The strictest decode in this client, and the only one that has to be.
+    /// Everywhere else a 2xx that does not parse degrades to an empty list
+    /// and the screen shows less than it could; here the report is read as
+    /// authority over what is *not* pending — the merge clears every card the
+    /// report does not list — so `unwrap_or_default()` on a body this client
+    /// cannot read announces "nothing is waiting on you anywhere" in a voice
+    /// indistinguishable from the truthful answer, and wipes the list. An
+    /// error keeps whatever the app already had, which is the safe half of
+    /// the ambiguity. `{"permissions": null}` from a manager that meant "none"
+    /// lands here, and so does the `Value::Null` [`Self::json_of`] hands back
+    /// for a body that stopped mid-read.
+    ///
+    /// A bare array is refused rather than tolerated: serde derives
+    /// struct-from-sequence, so `[]` would otherwise decode as an empty
+    /// report — an unrecognised shape that happens to be empty is precisely
+    /// the false negative above.
+    fn decode_permission_report(body: Value) -> Result<PermissionReport, CodeError> {
+        if !body.is_object() {
+            return Err(CodeError::Other(
+                "bad permission aggregate: expected an object carrying `permissions`".into(),
+            ));
+        }
+        serde_json::from_value(body)
+            .map_err(|e| CodeError::Other(format!("bad permission aggregate: {e}")))
     }
 
     /// Create a chat on `repo` with `task` as its opening instruction.
@@ -1307,6 +1337,50 @@ mod tests {
         let report: PermissionReport = serde_json::from_value(json!({"permissions": []})).unwrap();
         assert!(report.permissions.is_empty());
         assert!(report.unreachable.is_empty());
+    }
+
+    /// The contracted shape survives the strict decode, both halves of it.
+    #[test]
+    fn the_contracted_aggregate_decodes() {
+        let report = CodeClient::decode_permission_report(json!({
+            "permissions": [{
+                "chatId": "chat_a1", "id": "per_1", "sessionID": "ses_1",
+                "type": "bash", "title": "Run git push", "metadata": {}
+            }],
+            "unreachable": ["chat_b2"]
+        }))
+        .unwrap();
+        assert_eq!(report.permissions.len(), 1);
+        assert_eq!(report.unreachable, ["chat_b2"]);
+    }
+
+    /// A 2xx whose shape this client cannot read is not an answer, and above
+    /// all it is not "nothing is waiting on you anywhere" — that reading is
+    /// what clears every card on the list, which is the failure the aggregate
+    /// was built to remove rather than to cause.
+    #[test]
+    fn a_body_the_client_cannot_read_is_an_error_rather_than_an_empty_report() {
+        for body in [
+            // A manager that serialised Python's None for "none pending".
+            json!({"permissions": null}),
+            // What json_of hands back for a body that stopped mid-read, and
+            // for a 204.
+            json!(null),
+            // A map keyed by chat where the flat list was contracted.
+            json!({"permissions": {"chat_a": []}}),
+            // The bare-array shapes: serde would read the empty one as a
+            // struct with every field defaulted.
+            json!([]),
+            json!([{"chatId": "chat_a", "id": "per_1"}]),
+            // An auth or captive-portal page served with a 200 through the
+            // tailnet front door.
+            json!("<html>sign in</html>"),
+        ] {
+            assert!(
+                CodeClient::decode_permission_report(body.clone()).is_err(),
+                "{body} must not read as an empty report"
+            );
+        }
     }
 
     /// A manager that grows a field must not take the aggregate down with it:

@@ -257,11 +257,24 @@ container on any request to it*. Polling the list that way would hold every
 container open and undo the idle spin-down the whole plane is built on. So the
 manager aggregates instead (`GET /api/permissions`), over the containers that
 are already running, and that restriction costs nothing real: a container that
-is down has no live turn, so it has nothing parked on an ask. Chats you have
-not opened come from that aggregate; the chat you *have* open comes from its
-own event stream, which is both faster and ordered. Which is also where the
-modal went: it interrupts you about the conversation you are in, and the cards
-report the ones you are not.
+is down has no live turn, so it has nothing parked on an ask. Every chat comes
+from that aggregate except the one with a **live event stream**, which is both
+faster and ordered and is left to speak for itself. Live is the word that
+matters: a stream ends when the container spins down, when the tailnet roams,
+or when the app was on another tab at the wrong moment, and the chat it was
+speaking for is handed straight back to the aggregate. "The chat you opened
+last" is not the same claim and is not good enough — nothing clears it, so it
+would exempt one chat, permanently, from the only thing that can report it.
+
+Which is also where the modal went: it interrupts you about the conversation
+you are *reading* — the chat screen or its review — and the cards report every
+other one, including the chat you were reading a moment ago and have left.
+A row says so twice, in the two registers rule 8 gives it: a dot on the tile
+for a scroll down the list, and `waiting on you` where the container's status
+would otherwise be. That chip is not decoration. Nothing in the manager's index
+reports a live turn on a chat the app does not have open, so without the ask
+folded back into it the row read `idle` directly above its own panel asking for
+a decision.
 
 **The goose plane cannot be asked, and does not need to be.**
 `session/request_permission` is a JSON-RPC request the *agent* makes of the
