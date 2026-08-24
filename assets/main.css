@@ -123,6 +123,36 @@
   /* Code slabs stay this dark in both themes. */
   --code-bg: #282c34;
   --code-fg: #e6e6e6;
+  /* Everything below is set ON --code-bg, which does not swap with the
+   * theme — so none of these may either, and they are deliberately absent
+   * from the dark blocks.
+   *
+   * The trap that forces them to exist: --bg-danger is the obvious token for
+   * a deletion marker, and its dark value (#ff6b6b) measures 5.04:1 on
+   * --code-bg while its light value (#d93030) measures 2.94:1 and FAILS the
+   * 3:1 a non-text indicator needs. Wiring the marker to it ships a deletion
+   * rule that passes in dark and vanishes in light — exactly the mistake
+   * that only ever shows up in one theme.
+   *
+   * The trap that forces the *values*: each of these paints two things — the
+   * 3px leading rule (an indicator, 3:1) and the +/- glyph in .diff-sign,
+   * which is TEXT sitting on the row tint and therefore wants 4.5:1. The
+   * glyph is the binding constraint and it is much the stricter of the two.
+   * At the more saturated #57a05a / #ef5350 the rules measured a comfortable
+   * 4.39:1 and 4.02:1 on the slab while the glyphs measured 3.38:1 and
+   * 3.27:1 on the tint and failed. Lifted until the glyph passes. */
+  --diff-add: #79c07c; /* 6.43:1 on --code-bg, 4.90:1 on --diff-add-fill */
+  --diff-del: #ff8a80; /* 6.13:1 on --code-bg, 4.80:1 on --diff-del-fill */
+  /* The secondary voice on a code slab. --text-secondary is the reflex and
+   * measures 2.79:1 there in light; this is 6.37:1 in both. */
+  --code-muted: #a7b0b9;
+  /* Row fills: a 14% tint of the two above. ~1.3:1 against the slab, which
+   * is the point — the tint is reinforcement, while the glyph and the
+   * leading rule carry the signal. Not 18%: at 18% the tint lifts far enough
+   * that the deletion glyph on it drops to 4.43:1. --code-fg on these
+   * measures 8.56:1 and 8.78:1. Rule 7: a tint, not a slab. */
+  --diff-add-fill: #33413e;
+  --diff-del-fill: #46393f;
   --code-chip-bg: var(--bg-secondary);
   /* The upstream burnt orange (#ff4f00) is 3.3:1 on this fill at 12px; same
    * hue, darkened until it passes. */
@@ -304,7 +334,7 @@ body {
 .bubble-text,
 .session-snippet,
 .tool-output pre,
-.diff-panel pre,
+.diff-code,
 code,
 pre {
   -webkit-user-select: text;
@@ -2261,7 +2291,7 @@ details[open] > summary::before {
   }
 }
 
-/* ── chips, banners, diff ───────────────────────────────────────────── */
+/* ── chips + banners ────────────────────────────────────────────────── */
 
 /* A step brighter than other secondary text: these carry live state
  * ("working", "crashed"), and secondary-on-secondary fails at phone size. */
@@ -2305,29 +2335,351 @@ details[open] > summary::before {
   background: var(--bg-info);
 }
 
-/* Inset and rounded like every other block, rather than a full-bleed slab
- * wedged between the transcript and the composer. */
-.diff-panel {
-  flex-shrink: 0;
-  max-height: 45%;
-  overflow: hidden auto;
-  margin: 8px var(--edge);
-  background: var(--bg-primary);
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-xl);
+/* ── diff review ────────────────────────────────────────────────────── */
+
+/* This used to be `.diff-panel`: one <pre> of every file's patch concatenated,
+ * wedged between the transcript and the composer. It could not have worked.
+ * OpenCode builds each patch with `context: Number.MAX_SAFE_INTEGER`, so a
+ * three-line edit to a 1200-line file arrives as a 1204-line patch — the
+ * panel was not showing a blob by accident, it was showing the repo. The
+ * re-hunking that makes this readable is in src/diff.rs; what is here is the
+ * surface it lands on. */
+
+/* How far you are through the review, and one control to declare yourself
+ * done with the rest. Hidden below two files, where the answer is on screen
+ * anyway (rule 11: only offer controls that do something). */
+.diff-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin-bottom: 8px;
 }
 
-.diff-panel pre {
-  margin: 0;
-  padding: 12px;
-  border-radius: 0 0 15px 15px;
+.diff-progress-label {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.diff-progress-track {
+  height: 4px;
+  margin-bottom: 16px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+}
+
+/* A non-text indicator, so 3:1 against the track: 3.21:1 light, 6.01:1
+ * dark. */
+.diff-progress-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--bg-success);
+  transition: width 160ms ease;
+}
+
+/* Borrowed wholesale from .tool: a surface one step off the page with a
+ * hairline, in flow so no shadow (rule 5), at the control radius (rule 4). */
+.diff-file {
+  margin-bottom: 12px;
+  background: var(--tool-surface);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+/* Reviewed reads on the card's own edge rather than by fading its text: a
+ * dimmed head is a contrast failure waiting to happen, and the filled check
+ * beside it is already saying it in a second channel. */
+.diff-file.seen {
+  border-color: color-mix(in srgb, var(--bg-success) 55%, transparent);
+}
+
+.diff-file-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px 6px 4px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.diff-file-head::-webkit-details-marker {
+  display: none;
+}
+
+/* Same chevron as a tool card's disclosure, in the same gutter, rotated by
+ * the shared details[open] rule above. */
+.diff-file-head::before {
+  content: "\203a";
+  flex-shrink: 0;
+  width: var(--tool-gutter);
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+
+.diff-file-id {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.diff-path {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* The directory gives way first and the filename never shrinks. The filename
+ * is what you scan a file list for; a path truncated the usual way loses it
+ * and leaves you reading four rows of "crates/opencode-client/src/…". */
+.diff-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.diff-name {
+  flex-shrink: 0;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.diff-stat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.diff-stat .add {
+  color: var(--text-success);
+  font-weight: 600;
+}
+
+.diff-stat .del {
+  color: var(--text-danger);
+  font-weight: 600;
+}
+
+/* .chip's geometry and .chip's reasoning, one surface lighter: a chip's own
+ * fill is --bg-secondary, which in light is the same colour as the card it
+ * would sit on. Primary rather than secondary text for the same reason .chip
+ * is — secondary on this fill measures 4.01:1 light and 4.24:1 dark. Only
+ * present when there is something to say: a plain modified file has no
+ * badge. */
+.diff-badge {
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* GitHub's "Viewed" checkbox, at the HIG's 44px. It lives inside a
+ * <summary>, so its handler stops the click reaching the fold. */
+.diff-seen {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.diff-seen[aria-pressed="true"] {
+  background: var(--bg-success);
+  border-color: transparent;
+  color: var(--text-inverse);
+}
+
+/* The code surface, closing the card, so it takes that card's bottom corners
+ * (11px inside a 12px border) exactly as .tool > .tool-output pre does. */
+.diff-body {
+  border-radius: 0 0 11px 11px;
   background: var(--code-bg);
   color: var(--code-fg);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: var(--lh-sm);
-  white-space: pre;
+}
+
+/* A row, not a surface: full-bleed inside the slab above, which is what
+ * rounds it. Three channels tell a changed line apart and only one of them
+ * is colour — the glyph in .diff-sign, the 3px leading rule, and the tint. */
+.diff-line {
+  display: flex;
+  align-items: flex-start;
+  padding-right: 8px;
+  border-left: 3px solid transparent;
+}
+
+.diff-line.add {
+  background: var(--diff-add-fill);
+  border-left-color: var(--diff-add);
+}
+
+.diff-line.del {
+  background: var(--diff-del-fill);
+  border-left-color: var(--diff-del);
+}
+
+/* Its own flex cell rather than the first character of the text, so one
+ * sign sits against the whole of a wrapped run and "one source line is one
+ * logical row" stays true at four visual rows — which is the thing wrapping
+ * normally breaks. */
+.diff-sign {
+  flex-shrink: 0;
+  width: 15px;
+  text-align: center;
+  color: var(--code-muted);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.diff-line.add .diff-sign {
+  color: var(--diff-add);
+}
+
+.diff-line.del .diff-sign {
+  color: var(--diff-del);
+}
+
+/* Wrapping is the default, and the reason is that horizontal scroll hides
+ * characters — at the 47 columns this width allows, a -/+ pair that differs
+ * past column 47 looks identical, and you cannot know there is something to
+ * scroll to without scrolling to it. Two smaller reasons: a per-hunk scroll
+ * offset does not survive the next card, and a horizontally scrollable child
+ * inside a vertically scrolling list captures near-diagonal swipes, so the
+ * page reads as stuck. `anywhere` because the long tokens in real code are
+ * paths, URLs and base64, which have no break opportunities; the hanging
+ * indent keeps a continuation visibly subordinate to its first row. */
+.diff-code {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-indent: -2ch;
+  padding-left: 2ch;
+}
+
+/* The escape hatch, for the two cases wrapping genuinely loses: a
+ * column-aligned table and ASCII art. Screen-level rather than per-file, so
+ * flipping it does not leave a handful of independent scroll offsets. */
+/* Both axes stated, and `hidden` on a box whose height is auto clips
+ * nothing: it is what says "this scrolls sideways and only sideways". A
+ * scroll region that only sets one axis has the other coerced to `auto` by
+ * the used-value rules, and then nothing downstream — docs/audit.js
+ * included — can tell a deliberate horizontal scrollport from the vertical
+ * one every screen already has. */
+.diff-body.nowrap {
   overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.diff-body.nowrap .diff-code {
+  white-space: pre;
+  text-indent: 0;
+  padding-left: 0;
+}
+
+/* The rows have to be as wide as the widest of them, or the tints and the
+ * leading rules stop at the fold and the scrolled-to region is bare slab. */
+.diff-body.nowrap .diff-line,
+.diff-body.nowrap .diff-skip,
+.diff-body.nowrap .diff-note {
+  width: max-content;
+  min-width: 100%;
+}
+
+/* Scrolled right, the leading rule is off the left edge and the row's only
+ * remaining cue would be a colour it is hard to judge in isolation. The sign
+ * is the channel that has to survive, so it stays pinned; it carries the
+ * row's own fill so the code passes underneath it rather than through it. */
+.diff-body.nowrap .diff-sign {
+  position: sticky;
+  left: 0;
+  background: var(--code-bg);
+}
+
+.diff-body.nowrap .diff-line.add .diff-sign {
+  background: var(--diff-add-fill);
+}
+
+.diff-body.nowrap .diff-line.del .diff-sign {
+  background: var(--diff-del-fill);
+}
+
+/* A collapsed run of unchanged lines. The line number lives here rather than
+ * in a per-row gutter: a gutter costs 4 of 47 columns, and under soft wrap a
+ * number is only correct on the first visual row of a source line, so it
+ * becomes a mostly-blank column. This band is where you actually need the
+ * anchor. */
+.diff-skip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px 6px 18px;
+  border: 0;
+  background: color-mix(in srgb, var(--code-fg) 8%, var(--code-bg));
+  color: var(--code-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.diff-skip:active {
+  background: color-mix(in srgb, var(--code-fg) 16%, var(--code-bg));
+}
+
+.diff-skip-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-skip-at {
+  flex-shrink: 0;
+}
+
+/* Prose about a file rather than a line of it — binary, deleted, truncated,
+ * no trailing newline — so it is set in the interface voice on the slab. */
+.diff-note {
+  padding: 8px 12px 8px 18px;
+  color: var(--code-muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
 }
 
 /* ── scrollbars ─────────────────────────────────────────────────────── */

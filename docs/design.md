@@ -244,6 +244,12 @@ All commented at the point of use in the stylesheet:
   which asks for the preference instead of guessing at it.
 - **`.chip` reads one step brighter** than comparable secondary text, because
   secondary-on-secondary is unreadable at phone size.
+- **`--diff-add` / `--diff-del` / `--code-muted` do not swap with the theme**,
+  because the surface they sit on (`--code-bg`) does not either. Reaching for
+  `--bg-danger` gives a deletion marker measuring 5.0:1 in dark and 2.9:1 in
+  light — a marker that vanishes in one theme. Their values are set by the
+  `+`/`−` glyph rather than by the leading rule: the glyph is text on the row
+  tint and wants 4.5:1, which is much the stricter of the two bars.
 
 ## How to check your work
 

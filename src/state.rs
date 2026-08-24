@@ -203,6 +203,17 @@ pub(crate) struct AppCtx {
     /// Bumped whenever a different code chat is opened; stale SSE pumps and
     /// poll loops observe the change and exit.
     pub code_epoch: Signal<u64>,
+    /// The review screen's state for the open chat. Deliberately not a field
+    /// on `CodeChatState`: the chat screen clones its whole state on every
+    /// keystroke, and parsed whole-file patches are the largest thing this
+    /// tab holds.
+    pub code_diff: Signal<crate::code::DiffState>,
+    /// Review screen: soft-wrap long code lines (the default) or scroll them
+    /// horizontally. One switch for the whole screen rather than one per
+    /// file, so flipping it does not leave a handful of independent scroll
+    /// offsets to chase. Session-scoped on purpose — it is an escape hatch
+    /// for a particular diff, not a setting.
+    pub code_diff_wrap: Signal<bool>,
 }
 
 pub(crate) fn use_app_ctx_provider() -> AppCtx {
@@ -239,6 +250,8 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_permissions: use_signal(Vec::new),
         code_cache,
         code_epoch: use_signal(|| 0),
+        code_diff: use_signal(crate::code::DiffState::default),
+        code_diff_wrap: use_signal(|| true),
     };
     use_context_provider(|| ctx);
     ctx

@@ -83,6 +83,60 @@ impl ChatMeta {
     }
 }
 
+/// What happened to a file in a session's diff.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FileStatus {
+    Added,
+    Deleted,
+    #[default]
+    Modified,
+}
+
+/// One file's entry in `GET /session/:id/diff` — `OpenCode`'s
+/// `SnapshotFileDiff` (`packages/schema/src/file-diff.ts`).
+#[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
+pub struct FileDiff {
+    /// Repo-relative path. Upstream names the field `file`; the mock
+    /// `OpenCode` server in personal-ai-setup names it `path`, hence the
+    /// alias.
+    #[serde(default, alias = "path")]
+    pub file: String,
+    /// Unified patch, as `jsdiff`'s `formatPatch` writes it: a four-line
+    /// `Index:` preamble and then **one** `@@` hunk carrying the *whole*
+    /// file, because `Snapshot.diffFull` asks for
+    /// `context: Number.MAX_SAFE_INTEGER`. So a three-line change in a
+    /// 1200-line file arrives as 1204 lines, and anything rendering this has
+    /// to re-hunk it (`src/diff.rs` in the app). Empty for a binary file.
+    #[serde(default)]
+    pub patch: String,
+    #[serde(default)]
+    pub additions: u32,
+    #[serde(default)]
+    pub deletions: u32,
+    /// Absent or unrecognised reads as [`FileStatus::Modified`] rather than
+    /// failing the whole entry — a status this client has not heard of is
+    /// still a file worth showing.
+    #[serde(default, deserialize_with = "de_file_status")]
+    pub status: FileStatus,
+}
+
+fn de_file_status<'de, D: serde::Deserializer<'de>>(d: D) -> Result<FileStatus, D::Error> {
+    let raw = Option::<String>::deserialize(d)?;
+    Ok(match raw.as_deref() {
+        Some("added") => FileStatus::Added,
+        Some("deleted") => FileStatus::Deleted,
+        _ => FileStatus::Modified,
+    })
+}
+
+impl FileDiff {
+    /// A binary file: the server sends no patch and no counts for one.
+    #[must_use]
+    pub fn is_binary(&self) -> bool {
+        self.patch.trim().is_empty()
+    }
+}
+
 /// A pending permission ask from a chat's `OpenCode` server. Answer with
 /// [`CodeClient::reply_permission`] using `once` / `always` / `reject`.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -771,7 +825,12 @@ impl CodeClient {
         .map(|_| ())
     }
 
-    /// The session's cumulative diff (`FileDiff[]`, kept raw for rendering).
+    /// The session's cumulative diff, one [`FileDiff`] per changed file.
+    ///
+    /// Decoded element by element: an entry this client cannot make sense of
+    /// is dropped on its own rather than collapsing the whole answer to "no
+    /// changes", which is what a whole-array `unwrap_or_default` would do the
+    /// day upstream adds a field shape we do not expect.
     ///
     /// # Errors
     ///
@@ -779,8 +838,8 @@ impl CodeClient {
     /// chat outruns the client's 150s request timeout, and
     /// [`CodeError::Status`] on a non-2xx answer (404 for an unknown
     /// `chat_id` or `session_id`).
-    pub async fn diff(&self, chat_id: &str, session_id: &str) -> Result<Value, CodeError> {
-        Self::json_of(
+    pub async fn diff(&self, chat_id: &str, session_id: &str) -> Result<Vec<FileDiff>, CodeError> {
+        let body = Self::json_of(
             self.req(
                 reqwest::Method::GET,
                 &Self::chat_path(chat_id, &format!("/session/{session_id}/diff")),
@@ -788,7 +847,14 @@ impl CodeClient {
             .send()
             .await?,
         )
-        .await
+        .await?;
+        let Value::Array(items) = body else {
+            return Ok(Vec::new());
+        };
+        Ok(items
+            .into_iter()
+            .filter_map(|item| serde_json::from_value(item).ok())
+            .collect())
     }
 
     /// Pending permission asks (reconnect catch-up).
