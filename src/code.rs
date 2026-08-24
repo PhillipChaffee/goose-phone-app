@@ -516,6 +516,12 @@ async fn attach_chat(ctx: &AppCtx, chat_id: String, epoch: u64) {
     }
     chat.write().loading = false;
 
+    // The Diff chip states what is there before you tap it, which means the
+    // diff has to be fetched by opening the chat rather than by opening the
+    // review screen. Free in practice: the container is already awake by this
+    // point, which is what the request would otherwise have paid for.
+    refresh_diff_counts(ctx);
+
     catch_up_permissions(ctx, &client, &chat_id).await;
     stream_events(ctx, &client, &chat_id, epoch).await;
 }
@@ -935,15 +941,35 @@ pub(crate) fn answer_code_permission(
 /// and can take the better part of a minute, and a chip that does nothing
 /// visible for that long reads as broken.
 pub(crate) fn load_code_diff(ctx: &AppCtx) {
+    if fetch_diff(ctx, true) {
+        ctx.code_screen.clone().set(CodeScreen::Diff);
+    }
+}
+
+/// Fetch the diff without going anywhere, so the Diff chip can carry its
+/// `+N −M` before the review screen has ever been opened.
+///
+/// Quiet: a chat with no session yet is the normal state of a chat you have
+/// not prompted, and saying so on open would be noise rather than news.
+pub(crate) fn refresh_diff_counts(ctx: &AppCtx) {
+    fetch_diff(ctx, false);
+}
+
+/// Returns false when there was nothing to fetch.
+fn fetch_diff(ctx: &AppCtx, loud: bool) -> bool {
     let chat = ctx.code_chat.peek();
     let (Some(chat_id), Some(sid)) = (chat.chat_id.clone(), chat.session_id.clone()) else {
-        show_toast(ctx, "No changes yet — the chat has no session");
-        return;
+        if loud {
+            show_toast(ctx, "No changes yet — the chat has no session");
+        }
+        return false;
     };
     drop(chat);
     let Some(client) = ctx.code_client.peek().clone() else {
-        show_toast(ctx, "Code plane not connected — check Settings");
-        return;
+        if loud {
+            show_toast(ctx, "Code plane not connected — check Settings");
+        }
+        return false;
     };
     {
         let mut diff = ctx.code_diff;
@@ -951,7 +977,6 @@ pub(crate) fn load_code_diff(ctx: &AppCtx) {
         d.loading = true;
         d.error = None;
     }
-    ctx.code_screen.clone().set(CodeScreen::Diff);
     let ctx = *ctx;
     spawn_forever(async move {
         let result = client.diff(&chat_id, &sid).await;
@@ -973,6 +998,7 @@ pub(crate) fn load_code_diff(ctx: &AppCtx) {
             Err(e) => d.error = Some(e.to_string()),
         }
     });
+    true
 }
 
 /// Fold or unfold one file's card. Independent of whether it is marked

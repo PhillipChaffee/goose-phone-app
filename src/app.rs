@@ -17,6 +17,7 @@ pub fn App() -> Element {
 
     crate::viewport::use_visual_viewport();
     crate::viewport::use_close_open_row();
+    crate::viewport::use_pull_to_refresh();
     #[cfg(debug_assertions)]
     crate::domdump::use_dom_dump((dest.key)(&ctx).unwrap_or(dest.id).to_owned());
 

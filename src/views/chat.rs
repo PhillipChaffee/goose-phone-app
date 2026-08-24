@@ -7,11 +7,13 @@ use goose_acp_client::ConfigOption;
 use crate::icons::Icon;
 use crate::markdown;
 use crate::state::{
-    answer_permission, send_prompt, stop_turn, use_app_ctx, ChatItem, Screen, Usage,
+    answer_permission, new_session, send_prompt, show_toast, stop_turn, use_app_ctx, ChatItem,
+    Screen, Usage,
 };
 use crate::views::session_settings::{
     choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
 };
+use crate::views::{ConfirmDelete, MenuItem, OverflowButton, OverflowSheet};
 
 #[component]
 pub fn ChatView() -> Element {
@@ -49,6 +51,8 @@ pub fn ChatView() -> Element {
         .map_or_else(|| "Session".to_owned(), str::to_owned);
     let rows = goose_setting_rows(&config, usage);
     let mut sheet = use_signal(|| false);
+    let mut confirm_delete = use_signal(|| false);
+    let mut menu = use_signal(|| false);
 
     let mut submit = move || {
         let text = draft.peek().trim().to_string();
@@ -74,7 +78,15 @@ pub fn ChatView() -> Element {
                 Icon { name: "chevron-left" }
             }
             h1 { class: "title ellipsis", "{chat.title}" }
-            div { class: "topbar-actions" }
+            div { class: "topbar-actions",
+                button {
+                    class: "icon-btn",
+                    title: "New chat",
+                    onclick: move |_| new_session(&ctx),
+                    Icon { name: "plus" }
+                }
+                OverflowButton { onopen: move |()| menu.set(true) }
+            }
         }
 
         main { class: "scroll chat", id: "chat-scroll",
@@ -149,6 +161,43 @@ pub fn ChatView() -> Element {
                     crate::state::set_config_option(&ctx, &config_id, &value);
                 },
                 onclose: move |()| sheet.set(false),
+            }
+        }
+
+        if menu() {
+            OverflowSheet {
+                items: vec![MenuItem { icon: "trash", label: "Delete chat", danger: true }],
+                onpick: move |_| {
+                    menu.set(false);
+                    confirm_delete.set(true);
+                },
+                onclose: move |()| menu.set(false),
+            }
+        }
+
+        if confirm_delete() {
+            ConfirmDelete {
+                title: "Delete this chat?",
+                body: "The whole conversation goes from the goose server. \
+                       This cannot be undone.",
+                on_cancel: move |()| confirm_delete.set(false),
+                on_confirm: move |()| {
+                    confirm_delete.set(false);
+                    let Some(session_id) = ctx.chat.peek().session_id.clone() else {
+                        return;
+                    };
+                    spawn_forever(async move {
+                        let Some(client) = ctx.client.peek().clone() else { return };
+                        match client.session_delete(&session_id).await {
+                            Ok(()) => {
+                                let mut sessions = ctx.sessions;
+                                sessions.write().retain(|s| s.session_id != session_id);
+                                ctx.screen.clone().set(Screen::Sessions);
+                            }
+                            Err(e) => show_toast(&ctx, format!("Delete failed: {e}")),
+                        }
+                    });
+                },
             }
         }
     }

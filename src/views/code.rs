@@ -24,7 +24,7 @@ use crate::views::chat::{format_tokens, render_transcript};
 use crate::views::session_settings::{
     choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
 };
-use crate::views::{ConfirmDelete, SwipeDelete};
+use crate::views::{ConfirmDelete, MenuItem, OverflowButton, OverflowSheet, SwipeDelete};
 use opencode_client::ModelInfo;
 
 #[component]
@@ -82,18 +82,13 @@ pub fn CodeSessionsView() -> Element {
                     },
                 }
             }
-            div { class: "topbar-actions",
-                button {
-                    class: "icon-btn",
-                    disabled: loading,
-                    onclick: move |_| {
-                        spawn_forever(async move { refresh_code_chats(&ctx).await });
-                    },
-                    if loading { "…" } else { Icon { name: "refresh" } }
-                }
-            }
         }
-        main { class: "scroll has-fab",
+        main {
+            class: "scroll has-fab",
+            // Named, so the pull-to-refresh listener knows this list has
+            // something to fetch and which fetch it is.
+            "data-refresh": "code",
+            "data-refreshing": "{loading}",
             if let ConnState::Failed(error) = &conn {
                 p { class: "error-box", "{error}" }
                 div { class: "btn-row",
@@ -541,7 +536,16 @@ pub fn CodeChatView() -> Element {
     let models = (ctx.code_models)();
     let models_loading = (ctx.code_models_loading)();
     let mut sheet = use_signal(|| false);
+    let mut chat_confirm_delete = use_signal(|| false);
+    let mut menu = use_signal(|| false);
     let chip_label = code_chip_label(chat.model.as_deref(), &models);
+    // None until the fetch on chat open lands, and None for a session that has
+    // changed nothing — the chip says "Diff" alone rather than "+0 −0", which
+    // would be a claim it cannot back before the diff has been read.
+    let diff_totals = {
+        let d = ctx.code_diff.read();
+        (!d.files.is_empty()).then(|| d.totals())
+    };
 
     let mut submit = move || {
         let text = draft.peek().trim().to_string();
@@ -575,7 +579,18 @@ pub fn CodeChatView() -> Element {
                     }
                 }
             }
-            div { class: "topbar-actions" }
+            div { class: "topbar-actions",
+                button {
+                    class: "icon-btn",
+                    title: "New session",
+                    onclick: move |_| {
+                        let mut screen = ctx.code_screen;
+                        screen.set(CodeScreen::New);
+                    },
+                    Icon { name: "plus" }
+                }
+                OverflowButton { onopen: move |()| menu.set(true) }
+            }
         }
 
         main { class: "scroll chat", id: "code-chat-scroll",
@@ -594,6 +609,32 @@ pub fn CodeChatView() -> Element {
                     span { class: "dot-anim" }
                     span { class: "dot-anim" }
                 }
+            }
+        }
+
+        // Above the composer, not inside it. Diff and PR are about the work
+        // the session has produced; the composer is about the next thing you
+        // say to it. Putting them in the chip row also put them in a fixed
+        // budget of horizontal space they had to share with the model name.
+        div { class: "action-row",
+            button {
+                class: "action-chip",
+                title: "Review the session's changes",
+                onclick: move |_| load_code_diff(&ctx),
+                Icon { name: "diff" }
+                "Diff"
+                if let Some((added, removed)) = diff_totals {
+                    span { class: "stat add", "+{added}" }
+                    span { class: "stat del", "−{removed}" }
+                }
+            }
+            button {
+                class: "action-chip",
+                title: "Push branch + open a PR",
+                disabled: !can_send,
+                onclick: move |_| request_pr(&ctx),
+                Icon { name: "pull-request" }
+                "PR"
             }
         }
 
@@ -624,21 +665,6 @@ pub fn CodeChatView() -> Element {
                     },
                     span { class: "chip-label", "{chip_label}" }
                     Icon { name: "chevron-down" }
-                }
-                button {
-                    class: "composer-chip action",
-                    title: "Review the session's changes",
-                    onclick: move |_| load_code_diff(&ctx),
-                    Icon { name: "diff" }
-                    "Diff"
-                }
-                button {
-                    class: "composer-chip action",
-                    title: "Push branch + open a PR",
-                    disabled: !can_send,
-                    onclick: move |_| request_pr(&ctx),
-                    Icon { name: "pull-request" }
-                    "PR"
                 }
                 if running {
                     button {
@@ -675,6 +701,34 @@ pub fn CodeChatView() -> Element {
                     _ => {}
                 },
                 onclose: move |()| sheet.set(false),
+            }
+        }
+
+        if menu() {
+            OverflowSheet {
+                items: vec![MenuItem { icon: "trash", label: "Delete session", danger: true }],
+                onpick: move |_| {
+                    menu.set(false);
+                    chat_confirm_delete.set(true);
+                },
+                onclose: move |()| menu.set(false),
+            }
+        }
+
+        if chat_confirm_delete() {
+            ConfirmDelete {
+                title: "Delete this session?",
+                body: "The chat and its workspace both go — any work on the \
+                       branch that has not been pushed goes with them.",
+                on_cancel: move |()| chat_confirm_delete.set(false),
+                on_confirm: move |()| {
+                    chat_confirm_delete.set(false);
+                    let Some(id) = ctx.code_chat.peek().chat_id.clone() else {
+                        return;
+                    };
+                    ctx.code_screen.clone().set(CodeScreen::List);
+                    delete_code_chat(&ctx, id);
+                },
             }
         }
     }
@@ -739,17 +793,14 @@ pub fn CodeDiffView() -> Element {
                     },
                     Icon { name: "wrap-text" }
                 }
-                button {
-                    class: "icon-btn",
-                    title: "Re-fetch the diff",
-                    disabled: diff.loading,
-                    onclick: move |_| load_code_diff(&ctx),
-                    Icon { name: "refresh" }
-                }
             }
         }
 
-        main { class: "scroll diff", id: "code-diff-scroll",
+        main {
+            class: "scroll diff",
+            id: "code-diff-scroll",
+            "data-refresh": "diff",
+            "data-refreshing": "{diff.loading}",
             if let Some(error) = diff.error.as_ref() {
                 p { class: "error-box", "{error}" }
             }
