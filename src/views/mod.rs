@@ -1,5 +1,6 @@
 pub(crate) mod chat;
 pub(crate) mod code;
+pub(crate) mod session_settings;
 pub(crate) mod sessions;
 pub(crate) mod settings;
 

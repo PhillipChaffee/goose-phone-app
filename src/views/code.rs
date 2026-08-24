@@ -7,14 +7,20 @@ use dioxus::dioxus_core::spawn_forever;
 use dioxus::document;
 use dioxus::prelude::*;
 
+use opencode_client::ModelInfo;
+
 use crate::code::{
-    answer_code_permission, delete_code_chat, load_code_diff, new_code_chat, open_code_chat,
-    refresh_code_chats, request_pr, send_code_prompt, start_code_poll, status_label,
+    answer_code_permission, delete_code_chat, ensure_code_models, is_free_model, load_code_diff,
+    new_code_chat, open_chat_allows_free_models, open_code_chat, refresh_code_chats, request_pr,
+    send_code_prompt, set_code_effort, set_code_model, start_code_poll, status_label,
     stop_code_turn, CodeScreen,
 };
 use crate::icons::Icon;
-use crate::state::{relative_time_secs, use_app_ctx, ConnState};
-use crate::views::chat::render_transcript;
+use crate::state::{relative_time_secs, use_app_ctx, AppCtx, ConnState};
+use crate::views::chat::{format_tokens, render_transcript};
+use crate::views::session_settings::{
+    choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
+};
 
 #[component]
 pub fn CodeSessionsView() -> Element {
@@ -303,6 +309,12 @@ pub fn CodeChatView() -> Element {
     // Cached transcript is read-only until the server is authoritative (A5).
     let can_send = !running && !chat.waking && !chat.loading;
 
+    let models = (ctx.code_models)();
+    let models_loading = (ctx.code_models_loading)();
+    let mut sheet = use_signal(|| false);
+    let chip_label = code_chip_label(chat.model.as_deref(), &models);
+    let rows = code_setting_rows(&ctx, &models, models_loading);
+
     let mut submit = move || {
         let text = draft.peek().trim().to_string();
         if text.is_empty() {
@@ -393,6 +405,16 @@ pub fn CodeChatView() -> Element {
             div { class: "composer-row",
                 button {
                     class: "composer-chip action",
+                    title: "Session settings",
+                    onclick: move |_| {
+                        ensure_code_models(&ctx);
+                        sheet.set(true);
+                    },
+                    "{chip_label}"
+                    Icon { name: "chevron-down" }
+                }
+                button {
+                    class: "composer-chip action",
                     title: "Show diff",
                     onclick: move |_| load_code_diff(&ctx),
                     Icon { name: "diff" }
@@ -424,7 +446,169 @@ pub fn CodeChatView() -> Element {
                 }
             }
         }
+
+        if sheet() {
+            SessionSettingsSheet {
+                backend: "code agent",
+                rows,
+                onchoose: move |(id, value): (String, String)| match id.as_str() {
+                    ROW_MODEL => set_code_model(&ctx, &value),
+                    ROW_EFFORT => set_code_effort(
+                        &ctx,
+                        if value.is_empty() { None } else { Some(value.as_str()) },
+                    ),
+                    _ => {}
+                },
+                onclose: move |()| sheet.set(false),
+            }
+        }
     }
+}
+
+const ROW_MODEL: &str = "model";
+const ROW_EFFORT: &str = "effort";
+
+/// The chip's face: the model the next message will run on, by its catalogue
+/// name once that has loaded and by its bare id before then.
+fn code_chip_label(reference: Option<&str>, models: &[ModelInfo]) -> String {
+    let Some(reference) = reference else {
+        return "Model".to_owned();
+    };
+    models
+        .iter()
+        .find(|m| m.reference() == reference)
+        .map_or_else(
+            || reference.rsplit('/').next().unwrap_or(reference).to_owned(),
+            |m| m.name.clone(),
+        )
+}
+
+/// The code tab's rows: the two settings `OpenCode` really takes on a turn,
+/// and the one number it only ever reports.
+///
+/// Model and thinking effort are both per-turn parameters of
+/// `session/:id/prompt_async` (`model` and `variant`), which the server then
+/// copies onto the session record — so "applies from your next message" is
+/// literally the mechanism, not a hedge. Context length is not a parameter of
+/// anything: it is catalogue metadata, and the one route that rewrites it
+/// (`PATCH /config`) restarts the chat's server, killing the event stream the
+/// app is reading. It is reported, not offered.
+fn code_setting_rows(ctx: &AppCtx, models: &[ModelInfo], loading: bool) -> Vec<SettingRow> {
+    let (current, effort) = {
+        let chat = ctx.code_chat.peek();
+        (chat.model.clone(), chat.effort.clone())
+    };
+    let allow_free = open_chat_allows_free_models(ctx);
+
+    let offered: Vec<&ModelInfo> = models
+        .iter()
+        .filter(|m| allow_free || !is_free_model(&m.reference()))
+        .collect();
+    let withheld = models.len() - offered.len();
+    let selected = current
+        .as_deref()
+        .and_then(|r| models.iter().find(|m| m.reference() == r));
+    let unknown = || unknown_model_note(models, loading, current.is_some()).to_owned();
+
+    let model_note = if withheld > 0 {
+        // Say it plainly rather than letting models silently go missing: the
+        // manager only checks this when a chat is created, and a per-turn
+        // model would sail past that check through its transparent proxy.
+        Some(format!(
+            "{withheld} free models are hidden — they train on their input, and \
+             this repo is not a public throwaway."
+        ))
+    } else if models.is_empty() {
+        Some(unknown())
+    } else {
+        None
+    };
+
+    let mut rows = vec![SettingRow::select(
+        ROW_MODEL,
+        "Model",
+        current.as_deref(),
+        model_choices(&offered),
+        model_note,
+    )];
+
+    // "Default" is a real value here, not a placeholder: OpenCode records the
+    // literal string `default` on a session whose turn asked for no variant.
+    let efforts = selected.map(ModelInfo::efforts).unwrap_or_default();
+    let chosen = effort.as_deref().unwrap_or_default();
+    let effort_value = if chosen.is_empty() {
+        "Default".to_owned()
+    } else {
+        choice_label(chosen, chosen)
+    };
+    rows.push(if efforts.is_empty() {
+        SettingRow::fact(
+            ROW_EFFORT,
+            "Thinking effort",
+            effort_value,
+            selected.map_or_else(unknown, |_| {
+                "This model has no thinking-effort tiers.".to_owned()
+            }),
+        )
+    } else {
+        let mut choices = vec![SettingChoice::new("", "Default")];
+        choices.extend(
+            efforts
+                .iter()
+                .map(|e| SettingChoice::new(*e, choice_label(e, e))),
+        );
+        SettingRow::select(ROW_EFFORT, "Thinking effort", Some(chosen), choices, None)
+    });
+
+    rows.push(match selected.and_then(|m| m.limit.context_tokens()) {
+        Some(limit) => SettingRow::fact(
+            "context_length",
+            "Context length",
+            format!("{} tokens", format_tokens(limit)),
+            "Declared by the model. A turn carries no context window.",
+        ),
+        None => SettingRow::fact("context_length", "Context length", "—", unknown()),
+    });
+    rows
+}
+
+/// Why a fact that comes off the model catalogue is unknown right now.
+///
+/// Shared by the effort row and the context-length row so the two can never
+/// give different reasons for the same missing catalogue.
+const fn unknown_model_note(
+    models: &[ModelInfo],
+    loading: bool,
+    model_chosen: bool,
+) -> &'static str {
+    if models.is_empty() {
+        if loading {
+            "Available once the model list has loaded."
+        } else {
+            "The chat server did not offer a model list."
+        }
+    } else if model_chosen {
+        "This model is not in the chat server's catalogue."
+    } else {
+        "Pick a model above and this follows from it."
+    }
+}
+
+/// Catalogue entries as choices. A name shared by two providers is shown as
+/// `provider/model` instead, so two rows are never indistinguishable.
+fn model_choices(offered: &[&ModelInfo]) -> Vec<SettingChoice> {
+    offered
+        .iter()
+        .map(|m| {
+            let ambiguous = offered.iter().any(|o| o.name == m.name && o.id != m.id);
+            let label = if ambiguous || m.name.is_empty() {
+                m.reference()
+            } else {
+                m.name.clone()
+            };
+            SettingChoice::new(m.reference(), label)
+        })
+        .collect()
 }
 
 /// Modal for the front of the code-permission queue. Backend-tagged by

@@ -22,6 +22,7 @@ fn path_for(name: &str) -> Option<&'static str> {
         "home" => "M3 10.5 12 3l9 7.5M5.5 9.5V20a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V9.5",
         "code" => "m8 6-6 6 6 6M16 6l6 6-6 6",
         "chevron-left" => "m15 5-7 7 7 7",
+        "chevron-right" => "m9 5 7 7-7 7",
         "plus" => "M12 5v14M5 12h14",
         "chevron-down" => "m6 9 6 6 6-6",
         "check" => "m5 13 4 4 10-10",
