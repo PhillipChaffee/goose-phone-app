@@ -11,9 +11,12 @@ screen change prints its `.app` subtree to the console.
     ...drive the app...
     scripts/capture-gallery.py /tmp/applog.txt
 
-Each dump replaces any earlier one with the same key, so re-visiting a screen
-just refreshes it. States already in the gallery that you did not visit are
-kept, so you can build the set up over several runs.
+A run REPLACES the gallery. Keeping states you did not visit is how the old
+hand-written gallery went stale in the first place — a screen captured on
+another branch survives every later run, `docs/audit.js` keeps reporting it
+clean, and nothing ever says the markup no longer exists. Pass --merge if you
+really do want to build the set up over several runs; it names every key it
+carries over so a stale one cannot pass unnoticed.
 """
 
 from __future__ import annotations
@@ -108,20 +111,36 @@ CELL = """  <div class="cell">
 
 
 def main() -> int:
-    log = Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/applog.txt")
+    args = [a for a in sys.argv[1:] if a != "--merge"]
+    merge = "--merge" in sys.argv
+    log = Path(args[0] if args else "/tmp/applog.txt")
     if not log.exists():
         print(f"no console log at {log}", file=sys.stderr)
         return 1
 
-    states: dict[str, str] = {}
+    previous: dict[str, str] = {}
     if STORE.exists():
-        states = json.loads(STORE.read_text())
+        previous = json.loads(STORE.read_text())
 
     text = log.read_text(errors="replace")
-    found = re.findall(r"@@DOM@@(.*?)@@(.*?)@@ENDDOM@@", text, re.S)
+    found = re.findall(r"@@DOM@@(.*?)@@(.*?)@@ENDDOM@@", text, re.DOTALL)
+    states: dict[str, str] = {}
     for key, markup in found:
         if markup.strip():
             states[key] = markup.strip()
+
+    carried = sorted(set(previous) - set(states))
+    if merge:
+        for key in carried:
+            states[key] = previous[key]
+        if carried:
+            print(
+                "carried over from a previous run (NOT captured now, may be "
+                f"stale): {', '.join(carried)}",
+                file=sys.stderr,
+            )
+    elif carried:
+        print(f"dropped (not visited this run): {', '.join(carried)}", file=sys.stderr)
 
     if not states:
         print("no DOM dumps in the log — is this a debug build?", file=sys.stderr)
@@ -145,8 +164,10 @@ def main() -> int:
         for key in ordered
     )
     GALLERY.write_text(PAGE.format(cells=cells))
-    print(f"{GALLERY.relative_to(ROOT)}: {len(ordered)} states "
-          f"({', '.join(ordered)}); {len(found)} dumps read")
+    print(
+        f"{GALLERY.relative_to(ROOT)}: {len(ordered)} states "
+        f"({', '.join(ordered)}); {len(found)} dumps read"
+    )
     return 0
 
 

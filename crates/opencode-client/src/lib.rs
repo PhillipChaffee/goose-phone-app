@@ -356,6 +356,18 @@ impl ProviderCatalog {
                 })
             })
             .collect();
+        // Both keys are read because a build answers on one route or the
+        // other, but a build that fills in both would otherwise hand back
+        // every model twice — and two entries with the same reference are
+        // indistinguishable in a picker, so there is nothing downstream can
+        // do about it.
+        out.sort_by(|a, b| {
+            a.provider_id
+                .cmp(&b.provider_id)
+                .then_with(|| a.id.cmp(&b.id))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        out.dedup_by(|a, b| a.provider_id == b.provider_id && a.id == b.id);
         out.sort_by(|a, b| {
             a.provider_id
                 .cmp(&b.provider_id)
@@ -1014,6 +1026,50 @@ fn parse_sse_frame(frame: &[u8]) -> Option<CodeEvent> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Both routes carry the same providers under different keys, so a build
+    /// that fills in both must not hand back every model twice: two entries
+    /// with the same reference are indistinguishable in a picker.
+    #[test]
+    fn a_model_on_both_keys_is_returned_once() {
+        let raw = json!({
+            "providers": [{"id": "anthropic", "models": {
+                "claude-sonnet-4-5": {"name": "Claude Sonnet 4.5"}
+            }}],
+            "all": [{"id": "anthropic", "models": {
+                "claude-sonnet-4-5": {"name": "Claude Sonnet 4.5"}
+            }}]
+        });
+        let models = serde_json::from_value::<ProviderCatalog>(raw)
+            .unwrap()
+            .models();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].reference(), "anthropic/claude-sonnet-4-5");
+    }
+
+    /// The same model id offered by two providers is two different models —
+    /// one direct, one proxied — and both have to survive the flattening.
+    #[test]
+    fn the_same_id_from_two_providers_is_two_models() {
+        let raw = json!({
+            "providers": [
+                {"id": "anthropic", "models": {
+                    "claude-sonnet-4-5": {"name": "Claude Sonnet 4.5"}
+                }},
+                {"id": "opencode", "models": {
+                    "claude-sonnet-4-5": {"name": "Claude Sonnet 4.5"}
+                }}
+            ]
+        });
+        let models = serde_json::from_value::<ProviderCatalog>(raw)
+            .unwrap()
+            .models();
+        let refs: Vec<String> = models.iter().map(ModelInfo::reference).collect();
+        assert_eq!(
+            refs,
+            ["anthropic/claude-sonnet-4-5", "opencode/claude-sonnet-4-5"]
+        );
+    }
 
     #[test]
     fn dispatches_part_updated_with_delta() {

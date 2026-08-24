@@ -29,6 +29,13 @@ const SYNC: &str = r"
     frame = requestAnimationFrame(() => {
       root.style.setProperty('--vv-top', vv.offsetTop + 'px');
       root.style.setProperty('--vv-height', vv.height + 'px');
+      // The bottom inset exists to clear the home indicator. Once the
+      // keyboard is over it, reserving it again just parks the composer 42px
+      // above the keyboard on a strip of nothing. A shorter visual viewport
+      // than layout viewport is the keyboard; '' drops the override and lets
+      // env(safe-area-inset-bottom) come back.
+      const covered = vv.height < root.clientHeight - 1;
+      root.style.setProperty('--safe-bottom', covered ? '0px' : '');
     });
   };
   vv.addEventListener('resize', sync);

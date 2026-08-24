@@ -214,6 +214,14 @@ pub(crate) struct AppCtx {
     /// offsets to chase. Session-scoped on purpose — it is an escape hatch
     /// for a particular diff, not a setting.
     pub code_diff_wrap: Signal<bool>,
+    /// What is typed in the code composer but not yet sent.
+    ///
+    /// Not component-local, because the review screen is a screen: opening it
+    /// unmounts `CodeChatView` and a `use_signal` draft dies with the scope.
+    /// The one workflow the review screen exists for — type a correction, go
+    /// check what the agent actually changed, come back and send — was the
+    /// one that silently lost what you had written.
+    pub code_draft: Signal<String>,
 }
 
 pub(crate) fn use_app_ctx_provider() -> AppCtx {
@@ -252,6 +260,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_epoch: use_signal(|| 0),
         code_diff: use_signal(crate::code::DiffState::default),
         code_diff_wrap: use_signal(|| true),
+        code_draft: use_signal(String::new),
     };
     use_context_provider(|| ctx);
     ctx

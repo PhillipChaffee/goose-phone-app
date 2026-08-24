@@ -69,6 +69,16 @@ scroll-edge scrim (`.app::before`) covers the whole chrome band — safe area
 plus gap plus bar height — in the same material as the controls, fading out at
 its lower edge so there is no hard line across the page.
 
+**The fade goes below the bar, never across it.** The band runs
+`--scrim-fade` (24px) past the bar's bottom edge and the mask holds full tint
+until then. Expressed as a percentage instead, the fade began at 55% of a
+122px band — 67px down, with the bar occupying 70px to 122px — so the whole
+bar sat in thinning material. Nothing looked wrong until a screen had enough
+content to scroll: the icon buttons were fine either way because each carries
+a glass pill of its own, but the title has none, and a dark code block passing
+underneath stayed legible straight through the serif. `docs/audit.js` checks
+that `scrim - fade` still reaches past the bar.
+
 Do not thin the scrim to make the page feel more open. Without it, a message
 bubble sails through the status bar and collides with the clock.
 
@@ -177,6 +187,15 @@ decided by whether choosing would change anything:
 | control | name, value, chevron; pressable, pushes the value list | more than one value |
 | fact | name, value, and the reason underneath; no chevron, no press state | one value, or read-only |
 
+The chevron is the only visual difference between them — same box, same
+height, same name, same value, same note — so it is painted `--text-secondary`
+and not `--text-tertiary`. Tertiary measures 2.20:1 in light and 2.87:1 in
+dark, under the 3:1 this design asks of any non-text indicator, which would
+leave the entire control/fact distinction below the legibility bar. It is the
+same argument already made for the tool disclosure caret, and `docs/audit.js`
+now checks every icon for it, since an icon carries no text and the contrast
+walk skips it.
+
 That single distinction is the rule made mechanical. Nothing that cannot change
 ever renders as pressable, and nothing real ever disappears — both backends have
 the same edge case, and both degrade to the same fact row. goose ships
@@ -275,26 +294,49 @@ and prints the URL and password.
 mistakes in the stylesheet are contrast mistakes, and they only ever show up
 in one of them.
 
-Two things are easier to measure than to see, and `node docs/audit.js` checks
-both — contrast against the first opaque background behind each element, and
-geometry (overflow, clipped text, square-cornered surfaces, undersized tap
-targets, radius nesting). It exits non-zero on a finding.
+Some things are easier to measure than to see, and `node docs/audit.js both`
+checks them: contrast against the first opaque background behind each element,
+icon contrast against 3:1 (icons carry no text, so the contrast walk skips
+them), geometry (overflow, clipped text, square corners, undersized tap
+targets, radius nesting), the scrim still being opaque where the title sits,
+and rows that render nothing and so measure nothing. It exits non-zero on a
+finding.
 
-It audits `docs/gallery-states.json`, which is **captured out of the running
+`node docs/measure-composer.js [width]` is separate because the audit cannot
+see what it looks for: text spilling out of a chip is an anonymous text node
+with no box, and no chip sets `overflow-x`. It builds the two composer rows
+the app actually assembles, at whatever width you give it, with the longest
+model names any server has offered — and fails if the send button leaves the
+screen. Run it at 360 as well as 402; 402 is the width where the damage is
+smallest.
+
+Both audit `docs/gallery-states.json`, which is **captured out of the running
 app**, not transcribed from it. Drive the app to the states you want and run
-`scripts/capture-gallery.py /tmp/applog.txt`; every screen change prints its
-`.app` subtree to the console (`src/domdump.rs`, debug builds only) and the
-script writes both the JSON and `docs/style-gallery.html` from it.
+`scripts/capture-gallery.py /tmp/applog.txt`; the app prints its `.app`
+subtree to the console whenever the UI settles in a new state
+(`src/domdump.rs`, debug builds only) and the script writes both the JSON and
+`docs/style-gallery.html` from it.
 
-That arrangement is deliberate. The gallery used to be a hand-written copy of
-the views' markup and it drifted — far enough that a whole review pass
-examined states the app no longer produced, while a clean audit said nothing
-was wrong. Do not hand-edit the gallery; re-capture it.
+The state is not just the screen. A drawer, a settings sheet, a choice list, a
+swiped-open row and a confirm dialog each get their own key, so they each get
+audited — keying on the mounted view alone filed them all under the screen
+behind them, the last dump won, and three branches' worth of new UI sat
+outside everything the audit checked while it reported clean.
+
+A capture **replaces** the gallery. Keeping states you did not visit is how
+the old hand-written gallery went stale: a screen captured on another branch
+survives every later run and nothing ever says the markup no longer exists.
+`--merge` is there if you really want to build the set up over several runs,
+and it names every key it carries over. Do not hand-edit the gallery;
+re-capture it.
 
 What the gallery still cannot tell you: safe-area insets are zero in a
-browser, so the floating chrome sits higher than it does on a device, and
-`backdrop-filter` behaves differently. Positions and material are what the
-simulator is for.
+browser, so the floating chrome sits higher than it does on a device, and the
+font stack resolves to whatever is installed locally rather than to iOS's, so
+every text measurement is approximate. Positions and material are what the
+simulator is for. (Headless Chromium *does* composite `backdrop-filter` — a
+controlled test measured a stdev of 7.03 with the blur against 47.11 without,
+so a tint tuned as if the blur were absent comes out flat on a device.)
 
 If you want numbers out of the real DOM rather than pixels, `document::eval`
 reaches into the live WKWebView and can send `getBoundingClientRect` and

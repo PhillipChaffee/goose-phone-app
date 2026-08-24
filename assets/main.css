@@ -178,6 +178,10 @@
    * genuinely absent the answer is the prefers-reduced-transparency rule
    * below, not a permanently thicker pane for everyone. */
   --glass-tint: 78%;
+  /* How far past the bar the scroll-edge scrim runs before it fades out. The
+   * fade has to happen *below* the bar: put it inside the bar's own band and
+   * it thins the material exactly where the title sits. */
+  --scrim-fade: 24px;
 
   /* Anything that floats over content sits above it. */
   --z-scrim: 15;
@@ -429,7 +433,7 @@ pre {
   top: 0;
   left: 0;
   right: 0;
-  height: calc(var(--safe-top) + var(--chrome-gap) + var(--topbar-h));
+  height: calc(var(--safe-top) + var(--chrome-gap) + var(--topbar-h) + var(--scrim-fade));
   z-index: var(--z-scrim);
   pointer-events: none;
   background: var(--bg-primary);
@@ -438,15 +442,17 @@ pre {
 @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
   .app::before {
     /* Same tint as the bars, so the band above the capsule and the capsule
-     * itself read as one material. The fade is short and lives at the very
-     * bottom edge, where the bar's own shadow hides the seam — at 60% the
-     * fade started level with the status bar and a message bubble sailed
-     * through it fully legible. */
+     * itself read as one material. The fade runs from the bar's bottom edge
+     * down, and only there: expressed as a percentage of the band it used to
+     * start at 55%, which on a 122px band put the whole 52px bar inside the
+     * fade. The icon buttons did not care — they carry glass of their own —
+     * but the title does not, so a dark code block scrolling under it stayed
+     * legible straight through the serif. */
     background: color-mix(in srgb, var(--bg-primary) var(--glass-tint), transparent);
     -webkit-backdrop-filter: var(--glass-blur);
     backdrop-filter: var(--glass-blur);
-    -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
-    mask-image: linear-gradient(to bottom, #000 55%, transparent);
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--scrim-fade)), transparent);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - var(--scrim-fade)), transparent);
   }
 }
 
@@ -713,6 +719,18 @@ pre {
   cursor: default;
 }
 
+/* Deleted along with the confirm row it was written for, and wanted again by
+ * the review screen's "Mark all" — which was written on another branch, back
+ * when the stylesheet still had this. Without it that button comes out at the
+ * full 40px with a 14px label: taller than the 32px progress row it sits in,
+ * and louder than the "N of M files reviewed" text it is subordinate to. */
+.btn.small {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
 .btn.grow {
   flex: 1;
 }
@@ -855,7 +873,7 @@ pre {
 .scroll {
   flex: 1;
   overflow-y: auto;
-  padding: calc(var(--safe-top) + var(--chrome-gap) + var(--topbar-h) + 20px) 16px
+  padding: calc(var(--safe-top) + var(--chrome-gap) + var(--topbar-h) + var(--scrim-fade)) 16px
     calc(var(--safe-bottom) + var(--chrome-gap) + 24px);
   -webkit-overflow-scrolling: touch;
 }
@@ -1637,6 +1655,12 @@ details[open] > summary::before {
   align-items: center;
   gap: 6px;
   height: 32px;
+  /* Chips do not shrink by default. A flex item's automatic minimum size is
+   * its content width, so a chip holding server-supplied text would otherwise
+   * hold the row open at whatever the model happens to be called and push the
+   * send button off the right edge — "Qwen3 Coder 480B A35B Instruct"
+   * measures 237px in a 348px row that also carries Diff, PR and Send. */
+  flex-shrink: 0;
   padding: 0 12px;
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-full);
@@ -1645,6 +1669,33 @@ details[open] > summary::before {
   font-size: var(--text-xs);
   line-height: var(--lh-xs);
   white-space: nowrap;
+}
+
+/* Shrinking is granted only to a chip that can actually give way — one whose
+ * text is wrapped in .chip-label and can ellipsise. `min-width: 0` on a chip
+ * without one does not shorten anything; it just lets the pill close in on
+ * text that then renders outside it, which is worse than the overflow it was
+ * meant to fix. The model name is the right thing to lose: the sheet the chip
+ * opens states it in full. */
+.composer-chip:has(.chip-label) {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+/* Only the label gives way; the chevron beside it must stay, or the chip
+ * stops reading as something you can open.
+ *
+ * min-width here as well as on the chip: this is itself a flex item, and
+ * without it the label holds its full content width and spills out of a chip
+ * that has already given way — the pill closes in and the text stays put. */
+.chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer-chip > .icon {
+  flex-shrink: 0;
 }
 
 .composer-chip.action {
@@ -2163,9 +2214,14 @@ details[open] > summary::before {
   cursor: pointer;
 }
 
+/* Secondary, not tertiary. A control row and a fact row are the same box —
+ * same height, same name, same value, same note — so this chevron is the only
+ * thing that says one of them opens. Tertiary measures 2.20:1 in light and
+ * 2.87:1 in dark, under the 3:1 this file demands of a non-text indicator,
+ * and it is the same argument already made for the tool disclosure caret. */
 .setting-row .icon {
   flex-shrink: 0;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 
 /* Wraps, so a row that carries a note puts it on its own line instead of
@@ -2534,6 +2590,13 @@ details[open] > summary::before {
 .diff-line {
   display: flex;
   align-items: flex-start;
+  /* A blank line has an empty code cell and a space for a sign, and neither
+   * generates a line box — so the row measured zero and every blank line in
+   * the file simply vanished, closing up the gaps the author put there. The
+   * blank rows in an *added* file survived only because "+" is a real glyph,
+   * which is what made the loss look like a parser bug rather than a layout
+   * one. One line's worth of height, whatever the row holds. */
+  min-height: var(--lh-sm);
   padding-right: 8px;
   border-left: 3px solid transparent;
 }

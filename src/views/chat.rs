@@ -111,7 +111,7 @@ pub fn ChatView() -> Element {
                         class: "composer-chip action",
                         title: "Session settings",
                         onclick: move |_| sheet.set(true),
-                        "{chip_label}"
+                        span { class: "chip-label", "{chip_label}" }
                         Icon { name: "chevron-down" }
                     }
                 }

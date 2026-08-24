@@ -24,6 +24,7 @@ use crate::views::chat::{format_tokens, render_transcript};
 use crate::views::session_settings::{
     choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
 };
+use crate::views::{ConfirmDelete, SwipeDelete};
 use opencode_client::ModelInfo;
 
 #[component]
@@ -126,64 +127,39 @@ pub fn CodeSessionsView() -> Element {
                             key: "{meta.id}",
                             class: "session-item",
                             onclick: move |_| open_code_chat(&ctx, meta.clone()),
-                            div { class: "session-tile", Icon { name: "code" } }
-                            div {
-                                class: "session-main",
-                                div { class: "session-head",
-                                    div { class: "session-title", "{meta.title}" }
-                                    span { class: "session-age",
-                                        {relative_time_secs(meta.last_active)}
+                            div { class: "session-swipe",
+                                div { class: "session-tile", Icon { name: "code" } }
+                                div {
+                                    class: "session-main",
+                                    div { class: "session-head",
+                                        div { class: "session-title", "{meta.title}" }
+                                        span { class: "session-age",
+                                            {relative_time_secs(meta.last_active)}
+                                        }
                                     }
-                                }
-                                div { class: "session-meta",
-                                    {
-                                        let turn = running_chat.as_deref() == Some(meta.id.as_str())
-                                            && running_turn;
-                                        let (dot, label) = status_label(&meta, turn);
-                                        rsx! {
-                                            span { class: "chip",
-                                                span { class: "{dot}" }
-                                                "{label}"
-                                            }
-                                            span { "{meta.repo}" }
-                                            if !meta.branch.is_empty() {
-                                                span { "{meta.branch}" }
+                                    div { class: "session-meta",
+                                        {
+                                            let turn = running_chat.as_deref() == Some(meta.id.as_str())
+                                                && running_turn;
+                                            let (dot, label) = status_label(&meta, turn);
+                                            rsx! {
+                                                span { class: "chip",
+                                                    span { class: "{dot}" }
+                                                    "{label}"
+                                                }
+                                                span { "{meta.repo}" }
+                                                if !meta.branch.is_empty() {
+                                                    span { "{meta.branch}" }
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
-                            if confirm_delete.read().as_deref() == Some(meta.id.as_str()) {
-                                div { class: "confirm-row", onclick: move |e: Event<MouseData>| e.stop_propagation(),
-                                    span { "Delete chat + workspace?" }
-                                    button {
-                                        class: "btn danger small",
-                                        onclick: {
-                                            let id = meta.id.clone();
-                                            move |_| {
-                                                confirm_delete.set(None);
-                                                delete_code_chat(&ctx, id.clone());
-                                            }
-                                        },
-                                        "Delete"
-                                    }
-                                    button {
-                                        class: "btn secondary small",
-                                        onclick: move |_| confirm_delete.set(None),
-                                        "Cancel"
-                                    }
-                                }
-                            } else {
-                                button {
-                                    class: "icon-btn trash",
-                                    onclick: {
-                                        let id = meta.id.clone();
-                                        move |e: Event<MouseData>| {
-                                            e.stop_propagation();
-                                            confirm_delete.set(Some(id.clone()));
-                                        }
-                                    },
-                                    Icon { name: "trash" }
+                            SwipeDelete {
+                                on_delete: {
+                                    let id = meta.id.clone();
+                                    move |()| confirm_delete.set(Some(id.clone()))
                                 }
                             }
                         }
@@ -201,6 +177,19 @@ pub fn CodeSessionsView() -> Element {
                 },
                 Icon { name: "plus" }
                 "New session"
+            }
+        }
+
+        if let Some(chat_id) = confirm_delete() {
+            ConfirmDelete {
+                title: "Delete this session?",
+                body: "The chat and its workspace both go — any work on the \
+                       branch that has not been pushed goes with them.",
+                on_cancel: move |()| confirm_delete.set(None),
+                on_confirm: move |()| {
+                    confirm_delete.set(None);
+                    delete_code_chat(&ctx, chat_id.clone());
+                },
             }
         }
     }
@@ -256,9 +245,14 @@ fn code_setting_rows(ctx: &AppCtx, models: &[ModelInfo], loading: bool) -> Vec<S
         // Say it plainly rather than letting models silently go missing: the
         // manager only checks this when a chat is created, and a per-turn
         // model would sail past that check through its transparent proxy.
+        let (count, verb) = if withheld == 1 {
+            ("1 free model".to_owned(), "is")
+        } else {
+            (format!("{withheld} free models"), "are")
+        };
         Some(format!(
-            "{withheld} free models are hidden — they train on their input, and \
-             this repo is not a public throwaway."
+            "{count} {verb} hidden — they train on their input, and this repo \
+             is not a public throwaway."
         ))
     } else if models.is_empty() {
         Some(unknown())
@@ -340,7 +334,15 @@ fn model_choices(offered: &[&ModelInfo]) -> Vec<SettingChoice> {
     offered
         .iter()
         .map(|m| {
-            let ambiguous = offered.iter().any(|o| o.name == m.name && o.id != m.id);
+            // Compare the whole reference, not just the id: `anthropic` and
+            // the `opencode` zen proxy both offer `claude-sonnet-4-5` under
+            // the same display name, and `o.id != m.id` is false for that
+            // pair — so the one case this test exists for was the one it
+            // called unambiguous, and the picker drew two identical rows for
+            // two different providers.
+            let ambiguous = offered
+                .iter()
+                .any(|o| o.name == m.name && (o.provider_id != m.provider_id || o.id != m.id));
             let label = if ambiguous || m.name.is_empty() {
                 m.reference()
             } else {
@@ -520,7 +522,7 @@ pub fn CodeNewView() -> Element {
 pub fn CodeChatView() -> Element {
     let ctx = use_app_ctx();
     let chat = (ctx.code_chat)();
-    let mut draft = use_signal(String::new);
+    let mut draft = ctx.code_draft;
 
     use_effect(move || {
         let _ = ctx.code_chat.read().items.len();
@@ -540,7 +542,6 @@ pub fn CodeChatView() -> Element {
     let models_loading = (ctx.code_models_loading)();
     let mut sheet = use_signal(|| false);
     let chip_label = code_chip_label(chat.model.as_deref(), &models);
-    let rows = code_setting_rows(&ctx, &models, models_loading);
 
     let mut submit = move || {
         let text = draft.peek().trim().to_string();
@@ -621,7 +622,7 @@ pub fn CodeChatView() -> Element {
                         ensure_code_models(&ctx);
                         sheet.set(true);
                     },
-                    "{chip_label}"
+                    span { class: "chip-label", "{chip_label}" }
                     Icon { name: "chevron-down" }
                 }
                 button {
@@ -659,9 +660,12 @@ pub fn CodeChatView() -> Element {
         }
 
         if sheet() {
+            // Built here rather than beside `chip_label`: this component
+            // re-renders on every keystroke and every streamed part, and the
+            // row list is n^2 in the catalogue with a String per model.
             SessionSettingsSheet {
                 backend: "code agent",
-                rows,
+                rows: code_setting_rows(&ctx, &models, models_loading),
                 onchoose: move |(id, value): (String, String)| match id.as_str() {
                     ROW_MODEL => set_code_model(&ctx, &value),
                     ROW_EFFORT => set_code_effort(
@@ -952,4 +956,77 @@ fn diff_rows(ctx: &AppCtx, state: &DiffState, file: &DiffFile) -> Vec<Element> {
         });
     }
     rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{code_chip_label, model_choices, ModelInfo};
+
+    fn model(provider: &str, id: &str, name: &str) -> ModelInfo {
+        ModelInfo {
+            id: id.to_owned(),
+            provider_id: provider.to_owned(),
+            name: name.to_owned(),
+            ..ModelInfo::default()
+        }
+    }
+
+    /// The same display name from two providers is the case the label test
+    /// exists for: one is the vendor direct, the other a proxy, and which one
+    /// runs decides who sees the code.
+    #[test]
+    fn two_providers_offering_one_name_get_told_apart() {
+        let a = model("anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5");
+        let b = model("opencode", "claude-sonnet-4-5", "Claude Sonnet 4.5");
+        let choices = model_choices(&[&a, &b]);
+        let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            ["anthropic/claude-sonnet-4-5", "opencode/claude-sonnet-4-5"],
+            "identical names must fall back to the full reference"
+        );
+    }
+
+    /// Two different models that merely share a name are also ambiguous.
+    #[test]
+    fn one_name_on_two_ids_is_ambiguous_too() {
+        let a = model("opencode", "sonnet-4-5", "Claude Sonnet 4.5");
+        let b = model("opencode", "sonnet-4-5-thinking", "Claude Sonnet 4.5");
+        let labels: Vec<String> = model_choices(&[&a, &b])
+            .into_iter()
+            .map(|c| c.label)
+            .collect();
+        assert_eq!(
+            labels,
+            ["opencode/sonnet-4-5", "opencode/sonnet-4-5-thinking"]
+        );
+    }
+
+    /// Distinct names stay readable — the fallback is for collisions only.
+    #[test]
+    fn distinct_names_are_left_alone() {
+        let a = model("anthropic", "claude-opus-4-1", "Claude Opus 4.1");
+        let b = model("opencode", "claude-sonnet-4-5", "Claude Sonnet 4.5");
+        let labels: Vec<String> = model_choices(&[&a, &b])
+            .into_iter()
+            .map(|c| c.label)
+            .collect();
+        assert_eq!(labels, ["Claude Opus 4.1", "Claude Sonnet 4.5"]);
+    }
+
+    /// The chip names the model before the catalogue has loaded, and after a
+    /// model the catalogue does not list.
+    #[test]
+    fn the_chip_falls_back_to_the_bare_id() {
+        assert_eq!(code_chip_label(None, &[]), "Model");
+        assert_eq!(
+            code_chip_label(Some("opencode/deepseek-v4-flash"), &[]),
+            "deepseek-v4-flash"
+        );
+        let known = model("opencode", "deepseek-v4-flash", "DeepSeek V4 Flash");
+        assert_eq!(
+            code_chip_label(Some("opencode/deepseek-v4-flash"), &[known]),
+            "DeepSeek V4 Flash"
+        );
+    }
 }

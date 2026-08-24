@@ -40,6 +40,14 @@ pub(crate) enum CodeScreen {
 
 /// Everything the code chat screen renders.
 #[derive(Clone, PartialEq, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "these four are independent facts about the screen, not a state \
+              machine to collapse into an enum: a chat can be waking AND \
+              loading at once, running is orthogonal to both, and picked is \
+              about where the model came from rather than about the chat's \
+              lifecycle at all"
+)]
 pub(crate) struct CodeChatState {
     pub chat_id: Option<String>,
     pub title: String,
@@ -67,6 +75,16 @@ pub(crate) struct CodeChatState {
     /// Thinking-effort tier for the next turn (`OpenCode` calls it a
     /// variant). `None` means the model's own default.
     pub effort: Option<String>,
+    /// The reader picked `model`/`effort` in the settings sheet, as opposed
+    /// to them being seeded from the chat record.
+    ///
+    /// This cannot be recovered from `Option`: a chat created with a named
+    /// model arrives with `model` already `Some`, so "has a value" and "the
+    /// reader chose it" are different questions. Answering the second with
+    /// the first makes the server's session record permanently unadoptable —
+    /// the sheet then shows the create-time model forever, and the next turn
+    /// writes it back over whatever the reader actually chose.
+    pub picked: bool,
 }
 
 /// The review screen's state for the open chat.
@@ -357,8 +375,12 @@ pub(crate) fn set_code_model(ctx: &AppCtx, reference: &str) {
     let mut chat = ctx.code_chat;
     let mut c = chat.write();
     if c.model.as_deref() == Some(reference) {
+        // Still a choice, even when it names what was already there: it means
+        // the reader looked and kept it, so the server must not overrule it.
+        c.picked = true;
         return;
     }
+    c.picked = true;
     c.model = Some(reference.to_owned());
     // Effort tiers belong to a model, not to a session: one model's `xhigh`
     // is a 400 on the next. Carrying the old tier across a switch would send
@@ -368,7 +390,10 @@ pub(crate) fn set_code_model(ctx: &AppCtx, reference: &str) {
 
 /// Set the open chat's thinking-effort tier; `None` is the model's default.
 pub(crate) fn set_code_effort(ctx: &AppCtx, effort: Option<&str>) {
-    ctx.code_chat.clone().write().effort = effort.map(str::to_owned);
+    let mut chat = ctx.code_chat;
+    let mut c = chat.write();
+    c.picked = true;
+    c.effort = effort.map(str::to_owned);
 }
 
 // ------------------------------------------------------------ open / fold
@@ -381,6 +406,13 @@ pub(crate) fn open_code_chat(ctx: &AppCtx, meta: ChatMeta) {
     let mut epoch = ctx.code_epoch;
     let new_epoch = *epoch.peek() + 1;
     epoch.set(new_epoch);
+
+    // A draft belongs to the chat it was typed in. It survives the review
+    // screen (that is the point of hoisting it out of the view) but must not
+    // follow you into a different conversation.
+    if ctx.code_chat.peek().chat_id.as_deref() != Some(meta.id.as_str()) {
+        ctx.code_draft.clone().set(String::new());
+    }
 
     let cached = ctx.code_cache.peek().chats.get(&meta.id).cloned();
     let waking = !meta.is_running();
@@ -413,6 +445,7 @@ pub(crate) fn open_code_chat(ctx: &AppCtx, meta: ChatMeta) {
         waking,
         model: meta.model.clone(),
         effort: None,
+        picked: false,
     });
     screen.set(CodeScreen::Chat);
     let ctx = *ctx;
@@ -464,7 +497,7 @@ async fn attach_chat(ctx: &AppCtx, chat_id: String, epoch: u64) {
         .and_then(|s| s.model.as_ref())
     {
         let mut c = chat.write();
-        if c.model.is_none() {
+        if !c.picked {
             if let Some(reference) = model.reference() {
                 c.model = Some(reference);
             }
@@ -703,6 +736,23 @@ fn fold_part_into(
             } else {
                 full
             };
+            // The prompt goes into the transcript the moment it is sent, so
+            // the bubble does not wait on a round trip. The server then
+            // streams the same message back as a part of its own, and with
+            // nothing matching the two up every code session opened with the
+            // task written out twice. Adopt the optimistic bubble instead:
+            // it is always the last item, and its text is exactly what was
+            // sent.
+            if role == "user" {
+                if let Some(idx) = items.len().checked_sub(1) {
+                    let same =
+                        matches!(items.get(idx), Some(ChatItem::User { text: t }) if *t == text);
+                    if same && !part_index.values().any(|&i| i == idx) {
+                        part_index.insert(part.id.clone(), idx);
+                        return;
+                    }
+                }
+            }
             let item = match (part.kind.as_str(), role) {
                 ("reasoning", _) => ChatItem::Thought {
                     message_id: Some(part.id.clone()),
@@ -1093,5 +1143,118 @@ pub(crate) fn status_label(meta: &ChatMeta, running_turn: bool) -> (&'static str
         ("running", false) => ("dot on", "idle".to_string()),
         ("stopped" | "absent", _) => ("dot off", "asleep".to_string()),
         (other, _) => ("dot err", other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fold_part_into, ChatItem, GapSink, HashMap};
+    use opencode_client::Part;
+
+    fn text_part(id: &str, message_id: &str, text: &str) -> Part {
+        Part {
+            id: id.to_owned(),
+            message_id: message_id.to_owned(),
+            session_id: "ses_1".to_owned(),
+            kind: "text".to_owned(),
+            text: Some(text.to_owned()),
+            tool: None,
+            call_id: None,
+            state: None,
+        }
+    }
+
+    /// The prompt is shown the instant it is sent, and the server streams the
+    /// same message back a moment later. Both have to end up as one bubble.
+    #[test]
+    fn server_echo_adopts_the_optimistic_prompt() {
+        let mut items = vec![ChatItem::User {
+            text: "refactor the folding".to_owned(),
+        }];
+        let mut part_index = HashMap::new();
+        let mut roles = HashMap::new();
+        roles.insert("msg_1".to_owned(), "user".to_owned());
+        let (mut marks, mut last_at) = (Vec::new(), 0);
+
+        fold_part_into(
+            &mut items,
+            &mut part_index,
+            &roles,
+            &text_part("prt_1", "msg_1", "refactor the folding"),
+            None,
+            &mut GapSink {
+                marks: &mut marks,
+                last_at: &mut last_at,
+            },
+        );
+
+        assert_eq!(items.len(), 1, "the echo should not add a second bubble");
+        assert_eq!(
+            part_index.get("prt_1"),
+            Some(&0),
+            "echo bound to the bubble"
+        );
+    }
+
+    /// Sending the same text twice is two prompts, not one echoed twice: the
+    /// second optimistic bubble is the one the second echo may adopt, and the
+    /// first must be left alone.
+    #[test]
+    fn the_same_prompt_twice_stays_two_bubbles() {
+        let mut items = Vec::new();
+        let mut part_index = HashMap::new();
+        let mut roles = HashMap::new();
+        roles.insert("msg_1".to_owned(), "user".to_owned());
+        roles.insert("msg_2".to_owned(), "user".to_owned());
+        let (mut marks, mut last_at) = (Vec::new(), 0);
+
+        for (n, msg) in [("prt_1", "msg_1"), ("prt_2", "msg_2")] {
+            items.push(ChatItem::User {
+                text: "again".to_owned(),
+            });
+            fold_part_into(
+                &mut items,
+                &mut part_index,
+                &roles,
+                &text_part(n, msg, "again"),
+                None,
+                &mut GapSink {
+                    marks: &mut marks,
+                    last_at: &mut last_at,
+                },
+            );
+        }
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(part_index.get("prt_1"), Some(&0));
+        assert_eq!(part_index.get("prt_2"), Some(&1));
+    }
+
+    /// An assistant reply after the prompt is a new item, not an adoption —
+    /// the guard keys on role, and must not swallow the answer.
+    #[test]
+    fn an_assistant_reply_is_still_its_own_item() {
+        let mut items = vec![ChatItem::User {
+            text: "hello".to_owned(),
+        }];
+        let mut part_index = HashMap::new();
+        let mut roles = HashMap::new();
+        roles.insert("msg_2".to_owned(), "assistant".to_owned());
+        let (mut marks, mut last_at) = (Vec::new(), 0);
+
+        fold_part_into(
+            &mut items,
+            &mut part_index,
+            &roles,
+            &text_part("prt_2", "msg_2", "hello"),
+            None,
+            &mut GapSink {
+                marks: &mut marks,
+                last_at: &mut last_at,
+            },
+        );
+
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[1], ChatItem::Assistant { .. }));
     }
 }

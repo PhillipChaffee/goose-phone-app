@@ -3,22 +3,37 @@
 //   npm i -D playwright        (Chromium only; see PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD)
 //   node docs/audit.js         [light|dark|both]
 //
-// Every screen state in docs/style-gallery.html is rebuilt as a standalone
-// 390x844 document — the gallery's <iframe> gives clean style isolation, but
-// this needs the states as top-level pages — and then walked twice:
+// Every screen state in docs/gallery-states.json is rebuilt as a standalone
+// 402x874 document — the gallery's <iframe> gives clean style isolation, but
+// this needs the states as top-level pages — and then walked for:
 //
 //   geometry  overflow past the viewport, text clipped without an ellipsis,
 //             filled or fully-bordered boxes left at radius 0, buttons under
 //             32px, and any child rounded more than the parent clipping it.
 //   contrast  every element carrying its own text, composited against the
 //             first opaque background behind it, against 4.5:1 (3:1 for large
-//             or bold text).
+//             or bold text) — and every icon, which carries no text of its
+//             own and so is invisible to that walk, against 3:1.
+//   scrim     the chrome band still opaque where the title sits, and the
+//             scroller's padding still clearing it.
+//   collapsed rows that render nothing and therefore measure nothing.
 //
-// Exits non-zero if either finds anything, so it can gate a change.
+// Each state is also repeated with server-supplied text swapped for the
+// longest plausible value, because a captured state only ever shows the one
+// string the app happened to be holding.
 //
-// What it cannot check: the blur. Headless Chromium does not composite
-// backdrop-filter, in an iframe or out of one. That is why --glass-tint is
-// set high enough that a bar stays readable with the blur doing nothing.
+// Exits non-zero if anything is found, so it can gate a change.
+//
+// What it cannot check: anything that needs a real device. Safe-area insets
+// are zero in a browser, so the floating chrome sits higher here than it does
+// on a phone, and the font stack resolves to whatever is installed locally
+// rather than to iOS's. Positions and text metrics are what the simulator is
+// for.
+//
+// What it is structurally blind to, and what covers it instead: text spilling
+// out of a chip is an anonymous text node with no box to measure, and no chip
+// sets overflow-x, so neither the overflow walk nor the clipped-text check can
+// see it — docs/measure-composer.js measures that, at several widths.
 
 const fs = require('fs');
 const os = require('os');
@@ -27,6 +42,32 @@ const { chromium } = require('playwright');
 
 const STATES = path.join(__dirname, 'gallery-states.json');
 const CSS = path.join(__dirname, '..', 'assets', 'main.css');
+
+// ── stress ──────────────────────────────────────────────────────────────
+// A captured state only ever shows the one string the app happened to be
+// holding. Some of those strings come from a server and can be much longer:
+// a model name is whatever the provider called it, and a chip sized to its
+// content pushed the send button 50px off the right edge before this check
+// existed. So each captured state is repeated with the server-supplied text
+// swapped for the longest plausible value — substituting into markup the app
+// really produced, rather than hand-writing a copy of it, which is the same
+// reason the gallery is generated.
+const LONGEST = {
+  '.chip-label': 'Qwen3 Coder 480B A35B Instruct',
+  '.session-title': 'Refactor the transcript folding so streamed parts land in order',
+  '.topbar > .title': 'Refactor the transcript folding so streamed parts land in order',
+};
+
+const stressed = (states) => states.flatMap((state) => {
+  const hits = Object.entries(LONGEST).filter(([sel]) => state.body.includes(sel.split(' > ').pop().slice(1)));
+  if (!hits.length) return [];
+  return [{
+    label: `${state.label} (long text)`,
+    scroll: state.scroll,
+    body: state.body,
+    swap: Object.fromEntries(hits),
+  }];
+});
 
 // ── geometry ────────────────────────────────────────────────────────────
 const GEOMETRY = () => {
@@ -190,6 +231,70 @@ const CONTRAST = () => {
       out.push(`CONTRAST     ${got.toFixed(2)}:1 (need ${need}) ${id} @${size}px  "${el.textContent.trim().slice(0, 34)}"`);
     }
   }
+
+  // The floating chrome is legible because an opaque scrim covers the band it
+  // sits in, and the scroller's top padding keeps content out of that band. If
+  // the two ever disagree, the title lands on whatever scrolled underneath it
+  // and both stay readable — a collision, not a layering. The failure is
+  // invisible at rest, because at rest there is nothing scrolled up yet.
+  const app = document.querySelector('.app');
+  const bar = document.querySelector('.topbar');
+  const scroller = document.querySelector('.scroll');
+  if (app && bar) {
+    const scrim = parseFloat(getComputedStyle(app, '::before').height) || 0;
+    const fade = parseFloat(getComputedStyle(app).getPropertyValue('--scrim-fade')) || 0;
+    const barBottom = bar.getBoundingClientRect().bottom;
+    // The mask fades the scrim out over its last `--scrim-fade` pixels, so
+    // only `scrim - fade` of it is at full tint. That solid part has to reach
+    // past the bar: put the fade inside the bar's own band and the material
+    // thins exactly where the title sits, which leaves a dark code block
+    // scrolling under it legible straight through the serif. The icon buttons
+    // never showed this because they carry glass of their own.
+    if (scrim - fade < barBottom - 0.5) {
+      out.push(`SCRIM        solid to ${(scrim - fade).toFixed(0)}px but the bar ends at ${barBottom.toFixed(0)}px — the fade crosses the title`);
+    }
+    if (scroller) {
+      const pad = scroller.getBoundingClientRect().top + parseFloat(getComputedStyle(scroller).paddingTop);
+      if (scrim - pad > 0.5) {
+        out.push(`SCRIM        content starts ${(scrim - pad).toFixed(1)}px inside the ${scrim}px chrome scrim`);
+      }
+    }
+  }
+
+  // A row that renders nothing renders no line box, so it measures zero and
+  // disappears. That is how every blank line in a diff silently vanished,
+  // closing up the gaps the author put there.
+  for (const el of document.querySelectorAll('.diff-line, .setting-row, .drawer-item')) {
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+    if (el.getBoundingClientRect().height < 1) {
+      const cls = typeof el.className === 'string' ? el.className.trim() : '';
+      out.push(`COLLAPSED    .${cls.split(/\s+/).join('.')} has no height — empty content generates no line box`);
+    }
+  }
+
+  // Icons carry no text of their own, so the walk above skips every one of
+  // them — and an icon is often the only thing distinguishing two otherwise
+  // identical rows. A chevron at 2.20:1 was the entire difference between a
+  // settings row you can open and one you cannot. Non-text indicators want
+  // 3:1 (WCAG 1.4.11), the same bar the stylesheet sets itself.
+  for (const el of document.querySelectorAll('.icon')) {
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+    if (parseFloat(cs.opacity) < 0.99) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) continue;
+    // Painted with `stroke: currentColor`, so `color` is the ink.
+    const bg = backdrop(el);
+    let fg = parse(cs.color);
+    if (fg.a < 1) fg = over(fg, bg);
+    const got = ratio(fg, bg);
+    if (got < 3) {
+      const owner = el.parentElement;
+      const cls = owner && typeof owner.className === 'string' ? owner.className.trim() : '';
+      out.push(`ICON-CONTRAST ${got.toFixed(2)}:1 (need 3) icon in ${cls ? `.${cls.split(/\s+/).join('.')}` : owner?.tagName.toLowerCase()}`);
+    }
+  }
   return out;
 };
 
@@ -211,6 +316,7 @@ const CONTRAST = () => {
     console.error(`${STATES} is empty`);
     process.exit(1);
   }
+  states.push(...stressed(states));
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-audit-'));
   const browser = await chromium.launch();
@@ -227,6 +333,13 @@ const CONTRAST = () => {
         + `<link rel="stylesheet" href="${CSS}">`
         + `</head><body>${state.body}</body></html>`);
       await page.goto(`file://${file}`, { waitUntil: 'load' });
+      if (state.swap) {
+        await page.evaluate((swap) => {
+          for (const [sel, text] of Object.entries(swap)) {
+            document.querySelectorAll(sel).forEach((el) => { el.textContent = text; });
+          }
+        }, state.swap);
+      }
       if (state.scroll) {
         await page.evaluate((want) => {
           const el = document.querySelector('.scroll');
