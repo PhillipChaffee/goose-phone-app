@@ -15,7 +15,6 @@ pub fn SessionsView() -> Element {
     let ctx = use_app_ctx();
     let sessions = (ctx.sessions)();
     let loading = (ctx.sessions_loading)();
-    let unsupported = (ctx.sessions_unsupported)();
     let query = (ctx.sessions_query)();
     let has_more = ctx.sessions_next.read().is_some();
     let mut confirm_delete = use_signal(|| None::<String>);
@@ -35,7 +34,7 @@ pub fn SessionsView() -> Element {
             // something to fetch and which fetch it is.
             "data-refresh": "chats",
             "data-refreshing": "{loading}",
-            if searchable && !unsupported {
+            if searchable {
                 div { class: "session-search",
                     SearchField {
                         // goose searches message text, not titles, so the
@@ -44,6 +43,11 @@ pub fn SessionsView() -> Element {
                         // typed reads as a broken search rather than a
                         // different one.
                         placeholder: "Search messages",
+                        // The filter lives on the context and the box does
+                        // not: opening a chat unmounts this screen, so the
+                        // field has to be told what is already being searched
+                        // or it comes back blank over a filtered list.
+                        value: query.clone(),
                         on_search: move |text: String| {
                             spawn_forever(async move { search_sessions(&ctx, text).await });
                         },
@@ -51,7 +55,7 @@ pub fn SessionsView() -> Element {
                 }
             }
 
-            if let Some(sentence) = empty_state(&sessions, loading, unsupported, &query) {
+            if let Some(sentence) = empty_state(&sessions, loading, &query) {
                 p { class: "empty", "{sentence}" }
             }
 
@@ -189,21 +193,15 @@ fn session_meta(info: &SessionInfo) -> Vec<String> {
 
 /// What an empty list says, or `None` when it is not empty.
 ///
-/// Three different silences. A search with no hits is not an empty account,
-/// and neither is a server that cannot list sessions at all — which offers no
-/// Retry, because `-32601` means the method is not there and asking again
-/// will not put it there.
-fn empty_state(
-    sessions: &[SessionInfo],
-    loading: bool,
-    unsupported: bool,
-    query: &str,
-) -> Option<String> {
-    if unsupported {
-        return Some(
-            "This goose server does not list sessions. Start a new chat instead.".to_owned(),
-        );
-    }
+/// Two different silences: a search with no hits is not an empty account, and
+/// saying "start a new chat" to somebody looking at the word they just typed
+/// is the screen answering a question nobody asked.
+///
+/// There is deliberately no third one for a server that cannot list at all.
+/// `session/list` is base ACP rather than a goose extension, so its absence is
+/// a broken server and not a feature switched off, and the app has no way to
+/// tell the two apart — see the `-32601` note in `refresh_sessions`.
+fn empty_state(sessions: &[SessionInfo], loading: bool, query: &str) -> Option<String> {
     if !sessions.is_empty() || loading {
         return None;
     }
@@ -267,27 +265,18 @@ mod tests {
 
     #[test]
     fn an_empty_search_is_not_an_empty_account() {
-        let no_chats = empty_state(&[], false, false, "").unwrap_or_default();
+        let no_chats = empty_state(&[], false, "").unwrap_or_default();
         assert!(no_chats.contains("start a new chat"), "{no_chats}");
 
-        let no_hits = empty_state(&[], false, false, " deploy ").unwrap_or_default();
+        let no_hits = empty_state(&[], false, " deploy ").unwrap_or_default();
         assert!(no_hits.contains("deploy"), "{no_hits}");
         assert!(!no_hits.contains("start a new chat"), "{no_hits}");
 
-        assert_eq!(empty_state(&[], true, false, ""), None, "still loading");
+        assert_eq!(empty_state(&[], true, ""), None, "still loading");
         assert_eq!(
-            empty_state(&[session(None, 1)], false, false, "deploy"),
+            empty_state(&[session(None, 1)], false, "deploy"),
             None,
             "a list with rows in it says nothing"
         );
-    }
-
-    /// A server that cannot list says so whatever else is true — including
-    /// over a stale list, which is not a list of that server's sessions.
-    #[test]
-    fn an_absent_method_states_itself_and_offers_no_retry() {
-        let sentence = empty_state(&[], false, true, "deploy").unwrap_or_default();
-        assert!(sentence.contains("does not list sessions"), "{sentence}");
-        assert!(!sentence.contains("Retry"), "{sentence}");
     }
 }

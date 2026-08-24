@@ -14,7 +14,7 @@ use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use goose_acp_client::{
     AcpClient, AcpError, AcpEvent, ConfigOption, ConnectConfig, MessageChunk, PermissionRequest,
-    SessionInfo, SessionKind, SessionQuery, SessionUpdate, ToolCallUpdate,
+    SessionInfo, SessionKind, SessionListResponse, SessionQuery, SessionUpdate, ToolCallUpdate,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -305,10 +305,12 @@ pub(crate) struct AppCtx {
     /// debounces into it, and the "Load more" button a screen away has to ask
     /// what is being searched before it asks for another page.
     pub sessions_query: Signal<String>,
-    /// This goose server does not implement `session/list` at all. Its own
-    /// sentence and no Retry — see [`Remote::unsupported`], which is the same
-    /// distinction for the five lists arriving after this one.
-    pub sessions_unsupported: Signal<bool>,
+    /// Which `session/list` fetch owns the list. Two can be in flight at once
+    /// — tap "Load more", then type in the search box — and they answer in
+    /// whatever order the server chooses; a response that is no longer the
+    /// newest writes nothing at all. The Code tab's `code_epoch` below parks a
+    /// stale SSE pump the same way, and this is deliberately the same shape.
+    pub sessions_epoch: Signal<u64>,
     pub chat: Signal<ChatState>,
     /// Sessions with a turn currently in flight (client-side view).
     pub running_sessions: Signal<HashSet<String>>,
@@ -412,7 +414,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         sessions_next: use_signal(|| None),
         sessions_loading: use_signal(|| false),
         sessions_query: use_signal(String::new),
-        sessions_unsupported: use_signal(|| false),
+        sessions_epoch: use_signal(|| 0),
         chat: use_signal(ChatState::default),
         running_sessions: use_signal(HashSet::new),
         permission: use_signal(Vec::new),
@@ -791,6 +793,66 @@ fn apply_tool_update(chat: &mut Signal<ChatState>, update: &ToolCallUpdate) {
     }
 }
 
+/// One `session/list` request, and what its response may still do when it
+/// lands.
+///
+/// The generation is the reason this is a struct rather than three arguments.
+/// Two fetches can be in flight at once — "Load more" is tapped, and 250 ms of
+/// typing later a search starts — and they come back in whatever order the
+/// server answers them. The older one's page belongs to filters nobody is
+/// looking at any more, and worse, so does the cursor riding on it: writing
+/// that cursor back re-arms "Load more" with a page the next tap would ask for
+/// beside *today's* query, which is the `-32602` "session list cursor does not
+/// match filters" that [`SessionQuery`] exists to make unreachable. So a fetch
+/// that is no longer the newest writes nowhere.
+struct Fetch {
+    /// Which fetch this is. Compared against `AppCtx::sessions_epoch` when the
+    /// response arrives; a mismatch means a later one has claimed the list.
+    generation: u64,
+    /// The next page of the list on screen, rather than a new list.
+    more: bool,
+    /// The filters that went out, kept because the cursor in the response is
+    /// only meaningful beside them.
+    query: SessionQuery,
+}
+
+impl Fetch {
+    /// Claim the list for a new request: one generation past `epoch`, which
+    /// the caller writes back before it awaits anything.
+    const fn claim(epoch: u64, more: bool, query: SessionQuery) -> Self {
+        Self {
+            generation: epoch + 1,
+            more,
+            query,
+        }
+    }
+
+    /// Fold `page` into the list, or discard it when `latest` says a newer
+    /// fetch has started since. Returns whether anything was written.
+    ///
+    /// A discarded response must not clear the loading flag either, which is
+    /// what the return value is for: the fetch that superseded this one is
+    /// still running and owns it.
+    fn land(
+        &self,
+        latest: u64,
+        page: SessionListResponse,
+        list: &mut Vec<SessionInfo>,
+        next: &mut Option<SessionQuery>,
+    ) -> bool {
+        if latest != self.generation {
+            return false;
+        }
+        *next = self.query.next_page(&page);
+        if self.more {
+            list.extend(page.sessions);
+        } else {
+            *list = page.sessions;
+        }
+        true
+    }
+}
+
 /// Fetch the first page of sessions (or the next page when `more` is true).
 ///
 /// Every kind, not just the ones a person started. The standup recipe ran at
@@ -805,7 +867,7 @@ pub(crate) async fn refresh_sessions(ctx: &AppCtx, more: bool) {
     let mut sessions = ctx.sessions;
     let mut next = ctx.sessions_next;
     let mut loading = ctx.sessions_loading;
-    let mut unsupported = ctx.sessions_unsupported;
+    let mut epoch = ctx.sessions_epoch;
 
     // `more` with no next page is not a re-fetch of page one: the list is
     // already whole, so there is nothing to ask for.
@@ -818,28 +880,39 @@ pub(crate) async fn refresh_sessions(ctx: &AppCtx, more: bool) {
         SessionQuery::new(&SessionKind::ALL, Some(&ctx.sessions_query.peek()))
     };
 
+    // Claim the list. Whatever was already in flight is a previous fetch from
+    // this moment on, and finds that out where it lands.
+    let fetch = Fetch::claim(*epoch.peek(), more, query);
+    epoch.set(fetch.generation);
+
     loading.set(true);
-    match client.session_list(&query).await {
+    let result = client.session_list(&fetch.query).await;
+    let latest = *epoch.peek();
+    match result {
         Ok(page) => {
-            unsupported.set(false);
-            next.set(query.next_page(&page));
-            if more {
-                sessions.write().extend(page.sessions);
-            } else {
-                sessions.set(page.sessions);
+            let mut list = sessions.write();
+            let mut next_page = next.write();
+            if !fetch.land(latest, page, &mut list, &mut next_page) {
+                return;
             }
         }
-        // A server without `session/list` is not a failed request to toast
-        // away — there is nothing to retry, so the screen says so instead and
-        // keeps saying it.
-        Err(e) if e.is_unsupported() => {
-            unsupported.set(true);
-            sessions.write().clear();
-            next.set(None);
+        // Whatever went wrong, the list already on screen stays: offline with
+        // yesterday's chats still readable beats an empty page.
+        //
+        // A `-32601` is in that "whatever" deliberately. `session/list` is
+        // base ACP, not one of goose's `_goose/unstable/*` extensions, so a
+        // server that does not answer it is a broken server rather than one
+        // with a feature switched off — `Feature::of_method` says exactly that
+        // by classifying every base method as `Other`, and only
+        // `goose_request` ever mints an `AcpError::Unsupported`. A branch here
+        // that told the reader "this goose server does not list sessions"
+        // would be telling them the one thing that cannot have happened.
+        Err(e) => {
+            if latest != fetch.generation {
+                return;
+            }
+            show_toast(ctx, format!("Failed to list sessions: {e}"));
         }
-        // Anything else leaves whatever is already listed on screen. Offline
-        // with yesterday's chats still readable beats an empty page.
-        Err(e) => show_toast(ctx, format!("Failed to list sessions: {e}")),
     }
     loading.set(false);
 }
@@ -866,6 +939,10 @@ pub(crate) async fn search_sessions(ctx: &AppCtx, query: String) {
     // match filters"), which is why `SessionQuery` will not let the two be
     // separated — this is the same rule one level up. Dropping the page here
     // is what makes the button go away the instant the query changes.
+    //
+    // It closes the sequential case only. A "Load more" that is already in
+    // flight would put its cursor back the moment it answers; that one is
+    // [`Fetch`]'s generation, which the refresh below takes out.
     let mut next = ctx.sessions_next;
     next.set(None);
 
@@ -1238,9 +1315,16 @@ pub(crate) fn set_config_option(ctx: &AppCtx, config_id: &str, value: &str) {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test assertions: a failing unwrap is the failing check"
+)]
 mod tests {
-    use super::{search_changed, Remote};
-    use goose_acp_client::{AcpError, Feature};
+    use super::{search_changed, Fetch, Remote};
+    use goose_acp_client::{
+        AcpError, Feature, SessionInfo, SessionKind, SessionListResponse, SessionQuery,
+    };
+    use serde_json::{json, Value};
 
     fn missing() -> AcpError {
         AcpError::Unsupported {
@@ -1331,5 +1415,118 @@ mod tests {
         assert!(!search_changed("deploy", "  deploy "));
         assert!(!search_changed("", "   "));
         assert!(!search_changed("deploy", "deploy"));
+    }
+
+    /// A `session/list` reply, parsed the way a real one is so these tests
+    /// cannot invent a field name the server does not send.
+    fn page(ids: &[&str], next_cursor: Option<&str>) -> SessionListResponse {
+        let sessions: Vec<Value> = ids.iter().map(|id| json!({"sessionId": id})).collect();
+        serde_json::from_value(json!({"sessions": sessions, "nextCursor": next_cursor})).unwrap()
+    }
+
+    fn ids(list: &[SessionInfo]) -> Vec<&str> {
+        list.iter().map(|info| info.session_id.as_str()).collect()
+    }
+
+    /// The concurrent half of the trap `search_sessions` opens with by
+    /// dropping the stored next page: "Load more" is tapped, the search box is
+    /// typed into before that page answers, and the page arrives *after* the
+    /// search has claimed the list.
+    ///
+    /// Allowed to land, it would file the previous search's rows under the new
+    /// search's — and, worse, hand its cursor back to a re-enabled button. The
+    /// next tap would then send that cursor beside today's filters, which is
+    /// the "session list cursor does not match filters" `invalid_params` the
+    /// whole [`SessionQuery`] design exists to make unreachable.
+    #[test]
+    fn a_page_from_a_superseded_fetch_is_written_nowhere() {
+        // The list as it stands: page one of the unfiltered chats, with more
+        // behind it — which is why there is a "Load more" to tap at all.
+        let mut list = page(&["chat_1", "chat_2"], None).sessions;
+        let mut next = None;
+        let mut epoch = 0;
+
+        // Tapped first.
+        let more = Fetch::claim(epoch, true, SessionQuery::new(&SessionKind::ALL, None));
+        epoch = more.generation;
+
+        // A quarter of a second of typing later, the search claims the list.
+        let search = Fetch::claim(
+            epoch,
+            false,
+            SessionQuery::new(&SessionKind::ALL, Some("deploy")),
+        );
+        epoch = search.generation;
+
+        // And the page from before the search is what answers first.
+        let landed = more.land(
+            epoch,
+            page(&["chat_3"], Some("cursor-of-the-unfiltered-list")),
+            &mut list,
+            &mut next,
+        );
+        assert!(!landed, "a superseded fetch wrote to the list");
+        assert_eq!(ids(&list), ["chat_1", "chat_2"], "rows of another search");
+        assert_eq!(next, None, "the pre-search cursor is armed again");
+
+        // The search's own page still lands, and it is the one that decides
+        // whether there is a page after it.
+        assert!(search.land(
+            epoch,
+            page(&["deploy_1"], Some("cursor-of-deploy")),
+            &mut list,
+            &mut next
+        ));
+        assert_eq!(ids(&list), ["deploy_1"]);
+        assert_eq!(next.as_ref().unwrap().query(), Some("deploy"));
+    }
+
+    /// The other ordering of the same two fetches, because a token that
+    /// discarded both would pass the test above and leave the screen blank:
+    /// the search answers first, then the stale page.
+    #[test]
+    fn the_newest_fetch_still_lands_whichever_order_they_answer_in() {
+        let mut list = page(&["chat_1"], None).sessions;
+        let mut next = None;
+        let mut epoch = 0;
+
+        let more = Fetch::claim(epoch, true, SessionQuery::new(&SessionKind::ALL, None));
+        epoch = more.generation;
+        let search = Fetch::claim(
+            epoch,
+            false,
+            SessionQuery::new(&SessionKind::ALL, Some("deploy")),
+        );
+        epoch = search.generation;
+
+        assert!(search.land(epoch, page(&["deploy_1"], None), &mut list, &mut next));
+        assert!(!more.land(
+            epoch,
+            page(&["chat_2"], Some("cursor-of-the-unfiltered-list")),
+            &mut list,
+            &mut next
+        ));
+        assert_eq!(ids(&list), ["deploy_1"], "the old page arrived late");
+        assert_eq!(next, None, "and re-armed the button on its way past");
+    }
+
+    /// Nothing racing: "Load more" adds to the list it was tapped on rather
+    /// than replacing it, and carries the chain forward.
+    #[test]
+    fn an_uncontested_load_more_appends() {
+        let mut list = page(&["chat_1"], None).sessions;
+        let mut next = None;
+        let more = Fetch::claim(0, true, SessionQuery::new(&SessionKind::ALL, None));
+        assert!(more.land(
+            more.generation,
+            page(&["chat_2"], Some("cursor-2")),
+            &mut list,
+            &mut next
+        ));
+        assert_eq!(ids(&list), ["chat_1", "chat_2"]);
+        assert!(
+            next.is_some(),
+            "there is another page and the button says so"
+        );
     }
 }
