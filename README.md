@@ -39,7 +39,7 @@ dumped out of the app's own DOM, which is also what `docs/audit.js` reads.</sub>
 - **Built for a phone on a flaky network** — Stop cancels a running turn, dropped connections reconnect automatically and replay history, and half-open sockets (the classic "connected but nothing happens" after switching networks) are detected and recovered.
 - **Private by default** — reaches your server over your tailnet, authenticated with a shared secret, with optional certificate pinning.
 - **Light and dark** — both follow the system, and `node docs/audit.js both` walks every captured screen in each of them for contrast and geometry.
-- **Chats and Code** — the drawer's destinations are Chats, Code and Settings. Alongside the goose chats (Chats), Code manages code-agent sessions: per-chat OpenCode containers on your server (one container per chat, spun down when idle, woken when you open them). Start a session against an allowlisted repo with any model, watch it stream, approve its permission asks (including `git push`), review the diff in-app — one collapsible card per file, re-hunked on the device, with reviewed marks — and ask it to open a PR. Opened chats are cached on-device, so a sleeping chat's transcript appears instantly while its container boots. Server side: [personal-ai-setup `docs/code-agents.md`](https://github.com/PhillipChaffee/personal-ai-setup); client side: issue #2. The protocol layer is [`crates/opencode-client`](crates/opencode-client) (HTTP + SSE via reqwest).
+- **Chats and Code** — the drawer's destinations are Chats, Code and Settings. Alongside the goose chats (Chats), Code manages code-agent sessions: per-chat OpenCode containers on your server (one container per chat, spun down when idle, woken when you open them). Start a session against an allowlisted repo with any model, watch it stream, approve its permission asks (including `git push`), review the diff in-app — one collapsible card per file, re-hunked on the device, with reviewed marks — and merge the pull requests its branch has open. Opened chats are cached on-device, so a sleeping chat's transcript appears instantly while its container boots. Server side: [personal-ai-setup `docs/code-agents.md`](https://github.com/PhillipChaffee/personal-ai-setup); client side: issue #2. The protocol layer is [`crates/opencode-client`](crates/opencode-client) (HTTP + SSE via reqwest).
 
 ## How it works
 
@@ -163,7 +163,7 @@ the code-agent manager. The goose side works without it, and vice versa.
 | **Code server password** | your `OPENCODE_SERVER_PASSWORD` |
 
 <p align="center">
-  <img src="docs/images/code-chat.png" alt="A code agent mid-turn in light mode: a collapsed Thinking row, then tool cards for a file read, a running cargo check, a failed fetch with its error output, and a queued move" width="45%">
+  <img src="docs/images/code-chat.png" alt="A connected code-agent chat in light mode, titled with the repo and its session branch: a message carrying an attached PNG, the agent's replies, and a row of Diff and Pull requests chips above the composer" width="45%">
 </p>
 
 ## Connection options

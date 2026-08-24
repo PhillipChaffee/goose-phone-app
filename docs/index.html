@@ -516,22 +516,22 @@ footer ul a { display: inline-flex; align-items: center; min-height: 44px; font-
     <div class="wrap">
       <div class="shots">
         <figure>
-          <img src="images/code-list.png" width="1206" height="2622" loading="lazy" decoding="async"
+          <img src="images/code-list.png" width="603" height="1311" loading="lazy" decoding="async"
                alt="The Code screen: two rounded session cards. The first, “Blocked on a push”, carries an amber dot on its tile, a status reading “waiting on you”, and an inset panel — “Approve or deny Run: git push origin HEAD” — with Deny and Approve buttons inside the card. The second, “Attachments”, is idle. A New session button floats at the bottom right.">
           <figcaption>A chat waiting on you, answered from the list</figcaption>
         </figure>
         <figure>
-          <img src="images/pull-requests.png" width="1206" height="2622" loading="lazy" decoding="async"
+          <img src="images/pull-requests.png" width="603" height="1311" loading="lazy" decoding="async"
                alt="The Pull requests screen for one chat’s branch: five cards. #12 is open with checks passing and offers a Merge button; #11 is open with checks failing and says why merging is not offered; #10 is waiting on GitHub to work out whether it can merge; #9 is a draft; #8 is already merged.">
           <figcaption>Every pull request off this chat’s branch</figcaption>
         </figure>
         <figure>
-          <img src="images/diff-review.png" width="1206" height="2622" loading="lazy" decoding="async"
+          <img src="images/diff-review.png" width="603" height="1311" loading="lazy" decoding="async"
                alt="The Review screen: a header reading “5 files · +10 −7”, a progress line “0 of 5 files reviewed” with a Mark all button, then per-file cards. Cargo.toml is expanded, showing a dark code block with red removed lines and green added ones, and a check circle to mark the file read.">
           <figcaption>The session’s changes, one file at a time</figcaption>
         </figure>
         <figure>
-          <img src="images/code-chat.png" width="1206" height="2622" loading="lazy" decoding="async"
+          <img src="images/code-chat.png" width="603" height="1311" loading="lazy" decoding="async"
                alt="A code-agent chat: the title bar carries a new-chat button and an overflow menu, the transcript shows a message with a file attached to it and the agent’s reply, and below it a row of Diff (+10 −7) and Pull requests (5) chips sits above the composer, which holds an attach button, a model chip and a mode chip.">
           <figcaption>A code agent, mid-task</figcaption>
         </figure>
@@ -638,8 +638,9 @@ footer ul a { display: inline-flex; align-items: center; min-height: 44px; font-
           <dd>
             The agent's permission asks queue up and you answer them from the phone: goose
             renders whichever options its server sent, a code agent gets once, always, or
-            reject. A code agent's asks are re-fetched when you reopen the chat, so one raised
-            while you were away is still waiting.
+            reject. A code agent blocked on one says so on the list and can be answered
+            without opening it — the manager aggregates pending asks across running
+            containers, so a sleeping chat is never woken just to be polled.
           </dd>
         </div>
         <div>
@@ -651,19 +652,40 @@ footer ul a { display: inline-flex; align-items: center; min-height: 44px; font-
           </dd>
         </div>
         <div>
-          <dt>Model and effort per session</dt>
+          <dt>Model, effort and mode, per session</dt>
           <dd>
-            One chip on the composer opens a sheet listing what that backend can actually
-            change — model, thinking effort, and on goose also provider and mode. Anything
-            fixed, like the context window, is stated as a fact rather than offered as a
-            control that does nothing.
+            Two chips on the composer. One opens a sheet holding whatever that backend can
+            actually change — provider, model, thinking effort; the other picks the mode a
+            turn runs in, goose's own or an OpenCode agent. What cannot change, like the
+            context window, is stated as a fact rather than offered as a control that does
+            nothing.
+          </dd>
+        </div>
+        <div>
+          <dt>Pull requests</dt>
+          <dd>
+            A code chat's branch gets its own screen: the pull requests open off it, each
+            with its state and check status, and merged from the phone when
+            GitHub says it can be. When it cannot — a draft, failing checks, a conflict —
+            the row says which, instead of showing a button that would fail.
+          </dd>
+        </div>
+        <div>
+          <dt>Attachments</dt>
+          <dd>
+            Send a photo, a screenshot or a file with a message, on either backend. The
+            picker is the system's own — photo library, camera, Files — and images are
+            downscaled on the device, so a 12-megapixel capture does not become a
+            multi-megabyte request over the tailnet. Anything too large, or of a type the
+            agent cannot read, is refused by name rather than dropped.
           </dd>
         </div>
         <div>
           <dt>Sessions</dt>
           <dd>
             Browse, resume and delete server-side sessions. Swipe a row left for its delete
-            tray; the confirm is a sheet. History replays through the same renderer as live
+            tray; the confirm is a sheet. Pull a list down to refresh it — there is no
+            refresh button on any screen. History replays through the same renderer as live
             output, so a resumed chat looks identical.
           </dd>
         </div>
