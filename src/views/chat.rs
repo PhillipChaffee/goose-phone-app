@@ -38,6 +38,10 @@ pub fn ChatView() -> Element {
 
     let running = chat.running;
     let can_send = !running && !chat.loading;
+    // Which conversation the composer's picks belong to. Passed down rather
+    // than read off the context inside the two components, so neither of them
+    // subscribes to a signal that changes on every streamed token.
+    let conversation = chat.session_id.clone().unwrap_or_default();
 
     // Whatever the agent says it has, in the order it says it: provider,
     // mode, model and thinking effort today. Reading the list rather than
@@ -111,7 +115,7 @@ pub fn ChatView() -> Element {
         }
 
         footer { class: "composer",
-            AttachTray { target: AttachTarget::Goose }
+            AttachTray { target: AttachTarget::Goose, conversation: conversation.clone() }
             textarea {
                 class: "input",
                 placeholder: "Message goose…",
@@ -128,7 +132,7 @@ pub fn ChatView() -> Element {
                 },
             }
             div { class: "composer-row",
-                AttachButton { target: AttachTarget::Goose }
+                AttachButton { target: AttachTarget::Goose, conversation }
                 if !rows.is_empty() {
                     button {
                         class: "composer-chip action",

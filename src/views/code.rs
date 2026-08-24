@@ -534,6 +534,9 @@ pub fn CodeChatView() -> Element {
     let running = chat.running;
     // Cached transcript is read-only until the server is authoritative (A5).
     let can_send = !running && !chat.waking && !chat.loading;
+    // Which conversation the composer's picks belong to — see the goose
+    // composer for why it is passed down rather than read inside the pieces.
+    let conversation = chat.chat_id.clone().unwrap_or_default();
 
     let models = (ctx.code_models)();
     let models_loading = (ctx.code_models_loading)();
@@ -646,7 +649,7 @@ pub fn CodeChatView() -> Element {
         }
 
         footer { class: "composer",
-            AttachTray { target: AttachTarget::Code }
+            AttachTray { target: AttachTarget::Code, conversation: conversation.clone() }
             textarea {
                 class: "input",
                 placeholder: if chat.waking { "Waking…" } else { "Message the code agent…" },
@@ -664,7 +667,7 @@ pub fn CodeChatView() -> Element {
                 },
             }
             div { class: "composer-row",
-                AttachButton { target: AttachTarget::Code }
+                AttachButton { target: AttachTarget::Code, conversation }
                 button {
                     class: "composer-chip action",
                     title: "Session settings",

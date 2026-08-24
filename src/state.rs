@@ -198,10 +198,14 @@ pub(crate) struct AppCtx {
     /// says why the gesture has to live there), and it has to be able to hand
     /// what it read to a composer it does not own.
     pub attachments: Signal<Vec<crate::attach::PendingAttachment>>,
-    /// The picker is reading `n` files for a composer. Held so the tray can
-    /// say so: resizing three photos takes seconds, and a composer that just
-    /// sits there is indistinguishable from one that lost the pick.
-    pub attach_reading: Signal<Option<(crate::attach::AttachTarget, usize)>>,
+    /// The picks the browser is still reading. Held so the tray can say so:
+    /// resizing three photos takes seconds, and a composer that just sits
+    /// there is indistinguishable from one that lost the pick.
+    ///
+    /// A list, and each entry naming its own pick and conversation, because
+    /// two reads can overlap and either can outlive the chat it was started
+    /// in — see `crate::attach::Pick`.
+    pub attach_reading: Signal<Vec<crate::attach::Pick>>,
 
     // ---- Code tab (per-chat OpenCode containers on the brain; src/code.rs) ----
     pub tab: Signal<Tab>,
@@ -276,7 +280,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         config_options: use_signal(Vec::new),
         toast: use_signal(|| None),
         attachments: use_signal(Vec::new),
-        attach_reading: use_signal(|| None),
+        attach_reading: use_signal(Vec::new),
         tab: use_signal(|| Tab::Home),
         drawer_open: use_signal(|| false),
         code_screen: use_signal(|| crate::code::CodeScreen::List),
@@ -899,9 +903,15 @@ pub(crate) fn send_prompt(
                 // message did arrive and these chips reappear next to a
                 // bubble that already shows them. That is a thing the reader
                 // can see and undo; a photo that is simply gone is not.
+                //
+                // Named with the session it was sent in, for the same reason
+                // `running` is guarded on it three lines up: this answers long
+                // after the send, and the tray it empties into is the one on
+                // screen now.
                 let note = crate::attach::return_to_tray(
                     &ctx,
                     crate::attach::AttachTarget::Goose,
+                    &session_id,
                     carried,
                 );
                 show_toast(&ctx, format!("Prompt failed: {e}{note}"));

@@ -207,12 +207,22 @@ pub(crate) fn format_bytes(n: u64) -> String {
 ///
 /// The bytes are read, resized and base64'd here for the same reason: one
 /// message back, not one per chunk.
+///
+/// Which is also why *every* cap is substituted in, not just the per-file
+/// one. The tray is still the authority — it is the side that knows what is
+/// already in it — but a selection this side can already see the message will
+/// never carry costs a base64 copy, two JSON encodings and a trip through the
+/// bridge before Rust gets to say no. Bounding it here can only refuse files
+/// [`accept`] would have refused anyway: the tray's headroom is never larger
+/// than an empty tray's.
 const PICK_FILES: &str = r#"
 (() => {
   if (window.__attachWired) return;
   window.__attachWired = true;
 
   const MAX_BYTES = __MAX_FILE_BYTES__;
+  const MAX_FILES = __MAX_ATTACHMENTS__;
+  const MAX_TOTAL = __MAX_TOTAL_BYTES__;
   const EDGE = __IMAGE_EDGE__;
   const RETRY_EDGE = __RETRY_EDGE__;
   const THUMB_EDGE = __THUMB_EDGE__;
@@ -327,11 +337,17 @@ const PICK_FILES: &str = r#"
   document.body.appendChild(input);
 
   let target = 'goose';
+  let conversation = '';
+  let seq = 0;
 
   document.addEventListener('click', (e) => {
     const btn = e.target.closest && e.target.closest('.attach');
     if (!btn) return;
     target = btn.dataset.attach || 'goose';
+    // Which chat, not just which composer: the read finishes seconds later
+    // and the tray it was picked for is emptied the moment you walk out of
+    // the conversation.
+    conversation = btn.dataset.conversation || '';
     // Picking the same file twice in a row is a real thing to do, and without
     // this the second pick changes nothing and fires no event.
     input.value = '';
@@ -342,19 +358,37 @@ const PICK_FILES: &str = r#"
     const chosen = [...input.files];
     if (!chosen.length) return;
     // Pinned for the whole read: this handler awaits, and a tap on the other
-    // composer's button meanwhile would otherwise redirect a pick already in
-    // progress into the wrong conversation.
+    // composer's button — or a walk into another chat — meanwhile would
+    // otherwise redirect a pick already in progress into the wrong
+    // conversation. The id is how two overlapping picks tell themselves
+    // apart, so one finishing does not clear the other's progress row.
     const picked = target;
+    const conv = conversation;
+    const id = ++seq;
     // Reading and resizing several photos takes seconds. Say so, or the
-    // composer simply sits there.
-    dioxus.send(JSON.stringify({ target: picked, reading: chosen.length }));
+    // composer simply sits there — but never promise to read more than one
+    // message can carry.
+    const reading = Math.min(chosen.length, MAX_FILES);
+    dioxus.send(JSON.stringify({ pick: id, target: picked, conversation: conv, reading }));
 
     const files = [];
     const rejected = [];
+    let total = 0;
     for (const file of chosen) {
+      if (files.length >= MAX_FILES) {
+        rejected.push({ name: file.name, reason: 'too-many' });
+        continue;
+      }
       const kind = kindOf(file);
       if (!kind) {
         rejected.push({ name: file.name, reason: 'unsupported', mime: file.type || '' });
+        continue;
+      }
+      // Refused before it is read, where the weight is known up front. A
+      // photo's is not — it weighs whatever the downscale makes it, usually a
+      // twentieth of the file that was picked — so those are weighed after.
+      if (kind !== 'image' && total + file.size > MAX_TOTAL) {
+        rejected.push({ name: file.name, reason: 'too-heavy' });
         continue;
       }
       let result;
@@ -363,10 +397,19 @@ const PICK_FILES: &str = r#"
       } catch (err) {
         result = { rejected: { name: file.name, reason: 'unreadable' } };
       }
-      if (result.rejected) rejected.push(result.rejected);
-      else files.push(result.file);
+      if (result.rejected) {
+        rejected.push(result.rejected);
+        continue;
+      }
+      const weight = bytesOf(result.file.data);
+      if (total + weight > MAX_TOTAL) {
+        rejected.push({ name: file.name, reason: 'too-heavy' });
+        continue;
+      }
+      total += weight;
+      files.push(result.file);
     }
-    dioxus.send(JSON.stringify({ target: picked, files, rejected }));
+    dioxus.send(JSON.stringify({ pick: id, target: picked, conversation: conv, files, rejected }));
   });
 })();
 "#;
@@ -376,6 +419,8 @@ const PICK_FILES: &str = r#"
 pub(crate) fn picker_js() -> String {
     PICK_FILES
         .replace("__MAX_FILE_BYTES__", &MAX_FILE_BYTES.to_string())
+        .replace("__MAX_ATTACHMENTS__", &MAX_ATTACHMENTS.to_string())
+        .replace("__MAX_TOTAL_BYTES__", &MAX_TOTAL_BYTES.to_string())
         .replace("__IMAGE_EDGE__", &IMAGE_EDGE.to_string())
         .replace("__RETRY_EDGE__", &RETRY_EDGE.to_string())
         .replace("__THUMB_EDGE__", &THUMB_EDGE.to_string())
@@ -385,10 +430,84 @@ pub(crate) fn picker_js() -> String {
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct Picked {
+    /// The browser's id for this pick, carried on both messages so a result
+    /// can only ever end the read it belongs to.
+    pick: u64,
     target: String,
+    /// The conversation the button was tapped in — see [`conversation_key`].
+    conversation: String,
     reading: Option<usize>,
     files: Vec<PickedFile>,
     rejected: Vec<PickedRejection>,
+}
+
+/// A pick the browser is still reading.
+///
+/// A list rather than a slot, because two can be in flight at once: the
+/// change handler awaits every file and nothing stops a second tap while it
+/// does. With one slot the first result to arrive cleared the second pick's
+/// progress row, and the composer went quiet for the rest of its read.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct Pick {
+    id: u64,
+    target: AttachTarget,
+    conversation: String,
+    count: usize,
+}
+
+/// Fold one message from the picker into the reads still in flight.
+///
+/// Keyed on the pick's own id, so a result ends its own read and no other.
+fn track(
+    picks: &mut Vec<Pick>,
+    id: u64,
+    target: AttachTarget,
+    conversation: &str,
+    reading: Option<usize>,
+) {
+    match reading {
+        Some(count) if count > 0 => picks.push(Pick {
+            id,
+            target,
+            conversation: conversation.to_owned(),
+            count,
+        }),
+        // A pick of nothing at all never opened a row to close.
+        Some(_) => {}
+        None => picks.retain(|pick| pick.id != id),
+    }
+}
+
+/// How many files a composer should say it is reading.
+///
+/// Summed over the picks made in *this* conversation: two overlapping picks
+/// are one honest count, and one made in a chat you have since left says
+/// nothing here — the tray it is going to land in is not this one.
+pub(crate) fn reading_for(picks: &[Pick], target: AttachTarget, conversation: &str) -> usize {
+    picks
+        .iter()
+        .filter(|pick| pick.target == target && pick.conversation == conversation)
+        .map(|pick| pick.count)
+        .sum()
+}
+
+/// The conversation a composer's picks belong to.
+///
+/// `AttachTarget` says which composer; this says which chat inside it, and
+/// the two are not the same thing. A read takes seconds, `open_session`
+/// empties the tray the moment you walk into another session, and a pick
+/// bound only to "goose" then lands in whichever session is open when it
+/// finishes — carrying a photo picked for one conversation into the next
+/// message sent in another.
+///
+/// The Code tab keys on the chat id and not on `code_epoch`, matching
+/// `open_code_chat`: re-opening the same chat deliberately keeps its tray, so
+/// an epoch would throw away a pick that is still for the chat on screen.
+pub(crate) fn conversation_key(ctx: &AppCtx, target: AttachTarget) -> String {
+    match target {
+        AttachTarget::Goose => ctx.chat.peek().session_id.clone().unwrap_or_default(),
+        AttachTarget::Code => ctx.code_chat.peek().chat_id.clone().unwrap_or_default(),
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -420,13 +539,27 @@ pub(crate) fn receive(ctx: &AppCtx, payload: &str) {
         return;
     };
 
-    if let Some(reading) = msg.reading {
-        ctx.attach_reading
-            .clone()
-            .set((reading > 0).then_some((target, reading)));
+    track(
+        &mut ctx.attach_reading.clone().write(),
+        msg.pick,
+        target,
+        &msg.conversation,
+        msg.reading,
+    );
+    if msg.reading.is_some() {
         return;
     }
-    ctx.attach_reading.clone().set(None);
+
+    // The tray this was picked for is not necessarily the one on screen: the
+    // read takes seconds and walking into another chat empties the tray as it
+    // goes. Landing the files anyway would put a photo picked in one
+    // conversation on the next message sent in another.
+    if conversation_key(ctx, target) != msg.conversation {
+        if !msg.files.is_empty() {
+            show_toast(ctx, "Not attached: the chat they were picked in is closed");
+        }
+        return;
+    }
 
     let mut refused: Vec<String> = msg.rejected.iter().map(refusal).collect();
     let picked: Vec<PendingAttachment> =
@@ -465,19 +598,33 @@ pub(crate) const fn tray_of(ctx: &AppCtx, target: AttachTarget) -> Signal<Vec<Pe
     }
 }
 
+/// Why a file past the count cap was turned away. Shared, because both sides
+/// enforce that cap now — the browser so a selection the message can never
+/// carry is not read and shipped first, the tray because it is the only side
+/// that knows what is already in it — and a reader should not be able to tell
+/// which one refused.
+fn too_many(name: &str) -> String {
+    format!("{name} — one message carries at most {MAX_ATTACHMENTS} attachments")
+}
+
+/// And past the whole-message cap.
+fn too_heavy(name: &str) -> String {
+    format!(
+        "{name} — one message carries at most {} in total",
+        format_bytes(MAX_TOTAL_BYTES)
+    )
+}
+
 /// Take what fits and say, by name, why the rest did not.
 ///
-/// The browser has already refused anything too big to be worth sending over
-/// the wire; these are the limits that depend on what is already in the tray,
-/// which only this side knows.
+/// The last word on every cap: the browser applies the same ones to a single
+/// pick, but only this side knows what the tray already holds.
 fn accept(tray: &mut Vec<PendingAttachment>, picked: Vec<PendingAttachment>) -> Vec<String> {
     let mut refused = Vec::new();
     for file in picked {
         let name = &file.record.name;
         if tray.len() >= MAX_ATTACHMENTS {
-            refused.push(format!(
-                "{name} — one message carries at most {MAX_ATTACHMENTS} attachments"
-            ));
+            refused.push(too_many(name));
             continue;
         }
         if file.record.size > MAX_FILE_BYTES {
@@ -494,10 +641,7 @@ fn accept(tray: &mut Vec<PendingAttachment>, picked: Vec<PendingAttachment>) -> 
             .sum::<u64>()
             .saturating_add(file.record.size);
         if total > MAX_TOTAL_BYTES {
-            refused.push(format!(
-                "{name} — one message carries at most {} in total",
-                format_bytes(MAX_TOTAL_BYTES)
-            ));
+            refused.push(too_heavy(name));
             continue;
         }
         tray.push(file);
@@ -522,6 +666,8 @@ fn refusal(rejection: &PickedRejection) -> String {
             format!("{name} is {what} — only images, text files and PDFs can be attached")
         }
         "unreadable" => format!("{name} could not be read"),
+        "too-many" => too_many(name),
+        "too-heavy" => too_heavy(name),
         other => format!("{name} — {other}"),
     }
 }
@@ -784,12 +930,25 @@ pub(crate) fn adopt_sent(sent: &mut Vec<Attachment>, record: &mut Attachment) {
 /// when the message went out. Anything picked while the request was in flight
 /// stays where it is and keeps its place — it is what the reader is looking
 /// at — so the caps decide how much of the failed message fits back in.
+///
+/// A prompt can take tens of seconds to fail, which is long enough to have
+/// opened something else, so `conversation` is the chat the message went out
+/// in and the files go back only while that is still the one on screen. The
+/// alternative is what [`conversation_key`] exists to prevent: one
+/// conversation's photo riding out on another's next message.
 pub(crate) fn return_to_tray(
     ctx: &AppCtx,
     target: AttachTarget,
+    conversation: &str,
     files: Vec<PendingAttachment>,
 ) -> String {
     let wanted = files.len();
+    if wanted == 0 {
+        return String::new();
+    }
+    if conversation_key(ctx, target) != conversation {
+        return " — that chat is no longer open, so its attachments were not put back".to_owned();
+    }
     let refused = {
         let mut tray = tray_of(ctx, target);
         let mut held = tray.write();
@@ -818,10 +977,10 @@ fn restored_note(restored: usize, wanted: usize) -> String {
 mod tests {
     use super::{
         accept, adopt_sent, base64_len_to_bytes, code_parts, display_name, format_bytes,
-        from_content_block, from_part, goose_blocks, picker_js, refusal, refusal_summary,
-        restore_thumbnails, restored_note, sent_attachments, thumbnail_index, Attachment, ChatItem,
-        PendingAttachment, Picked, PickedRejection, MAX_ATTACHMENTS, MAX_FILE_BYTES,
-        MAX_TOTAL_BYTES, THUMB_MAX_CHARS,
+        from_content_block, from_part, goose_blocks, picker_js, reading_for, refusal,
+        refusal_summary, restore_thumbnails, restored_note, sent_attachments, thumbnail_index,
+        track, AttachTarget, Attachment, ChatItem, PendingAttachment, Picked, PickedRejection,
+        MAX_ATTACHMENTS, MAX_FILE_BYTES, MAX_TOTAL_BYTES, THUMB_MAX_CHARS,
     };
     use goose_acp_client::ContentBlock;
     use opencode_client::Part;
@@ -852,6 +1011,101 @@ mod tests {
         assert!(js.contains(&MAX_FILE_BYTES.to_string()));
     }
 
+    /// Every cap reaches the browser, and every one that reaches it is used.
+    ///
+    /// A pick is read, downscaled, base64'd and JSON-encoded twice before it
+    /// crosses the bridge, so a cap the script does not know is a cap paid for
+    /// in full and then refused on this side: six files at the per-file limit
+    /// is a 24 MB crossing — 56 MB for text, which travels decoded as well —
+    /// to enforce an 8 MB rule.
+    #[test]
+    fn the_picker_script_enforces_every_cap_and_not_just_the_per_file_one() {
+        let js = picker_js();
+        for (name, value) in [
+            ("MAX_FILES", MAX_ATTACHMENTS.to_string()),
+            ("MAX_TOTAL", MAX_TOTAL_BYTES.to_string()),
+        ] {
+            assert!(
+                js.contains(&format!("{name} = {value}")),
+                "{name} never reaches the browser"
+            );
+            // Declared is not enforced: it has to be read somewhere too.
+            assert!(
+                js.matches(name).count() > 1,
+                "{name} is declared and never used"
+            );
+        }
+    }
+
+    /// A cap refused in the browser has to read exactly like the same cap
+    /// refused by the tray. They are one rule enforced twice, and a reason
+    /// name the Rust side does not know falls through to the raw string —
+    /// "notes.md — too-many".
+    #[test]
+    fn a_cap_refused_in_the_browser_reads_like_one_refused_by_the_tray() {
+        let browser = |reason: &str| {
+            refusal(&PickedRejection {
+                name: "notes.md".to_owned(),
+                reason: reason.to_owned(),
+                ..PickedRejection::default()
+            })
+        };
+
+        let mut full: Vec<PendingAttachment> = (0..MAX_ATTACHMENTS)
+            .map(|i| pending(&format!("f{i}.txt"), "text/plain", 10))
+            .collect();
+        let tray = accept(&mut full, vec![pending("notes.md", "text/plain", 10)]);
+        assert_eq!(tray, [browser("too-many")]);
+
+        let mut heavy = vec![pending("big.pdf", "application/pdf", MAX_TOTAL_BYTES - 10)];
+        let tray = accept(&mut heavy, vec![pending("notes.md", "text/plain", 100)]);
+        assert_eq!(tray, [browser("too-heavy")]);
+
+        assert!(
+            !browser("too-many").contains("too-many"),
+            "the reason name leaked into the toast"
+        );
+    }
+
+    /// Two picks can be in flight at once — the change handler awaits every
+    /// file, and nothing stops a second tap while it does — so a result has
+    /// to end its own read and no other.
+    #[test]
+    fn one_pick_finishing_does_not_cancel_another_that_is_still_reading() {
+        let mut picks = Vec::new();
+        track(&mut picks, 1, AttachTarget::Code, "chat-1", Some(5));
+        track(&mut picks, 2, AttachTarget::Goose, "sess-1", Some(1));
+        assert_eq!(reading_for(&picks, AttachTarget::Goose, "sess-1"), 1);
+
+        track(&mut picks, 1, AttachTarget::Code, "chat-1", None);
+        assert_eq!(reading_for(&picks, AttachTarget::Code, "chat-1"), 0);
+        assert_eq!(
+            reading_for(&picks, AttachTarget::Goose, "sess-1"),
+            1,
+            "the other composer went quiet for the rest of its read"
+        );
+    }
+
+    /// And a read belongs to the conversation it was started in, not just to
+    /// the composer: walking into another session empties that tray, and a
+    /// pick still running would land in it.
+    #[test]
+    fn a_read_is_only_announced_in_the_conversation_it_was_started_in() {
+        let mut picks = Vec::new();
+        track(&mut picks, 1, AttachTarget::Goose, "sess-a", Some(3));
+        assert_eq!(reading_for(&picks, AttachTarget::Goose, "sess-b"), 0);
+        assert_eq!(reading_for(&picks, AttachTarget::Code, "sess-a"), 0);
+
+        // Two picks in one composer are one honest count, not the second
+        // hiding the first.
+        track(&mut picks, 2, AttachTarget::Goose, "sess-a", Some(2));
+        assert_eq!(reading_for(&picks, AttachTarget::Goose, "sess-a"), 5);
+
+        // A pick of nothing opens no row, so nothing is left to close.
+        track(&mut picks, 3, AttachTarget::Goose, "sess-a", Some(0));
+        assert_eq!(picks.len(), 2);
+    }
+
     /// The contract with `PICK_FILES`, captured from a real run of it against
     /// a photo, a markdown file, a video and an oversized PDF. Rename a key on
     /// either side and this is what says so.
@@ -859,7 +1113,7 @@ mod tests {
     fn a_picked_payload_decodes_the_way_the_script_writes_it() {
         // Doubled hashes: the markdown heading in the fixture is a literal
         // `"#`, which closes an r#"…"# string.
-        let raw = r##"{"target":"code",
+        let raw = r##"{"pick":7,"target":"code","conversation":"chat-1",
             "files":[
               {"name":"IMG_0042.jpg","mime":"image/jpeg","data":"QUJDRA==","thumb":"QUJD","text":null},
               {"name":"notes.md","mime":"text/markdown","data":"QUJD","thumb":"","text":"# notes"}],
@@ -869,6 +1123,10 @@ mod tests {
         let msg: Picked = serde_json::from_str(raw).unwrap();
         assert_eq!(msg.target, "code");
         assert_eq!(msg.reading, None);
+        // Which pick, and which chat it was made in. Without the second, a
+        // result lands in whatever conversation is open when it arrives.
+        assert_eq!(msg.pick, 7);
+        assert_eq!(msg.conversation, "chat-1");
 
         let picked: Vec<PendingAttachment> =
             msg.files.into_iter().map(PendingAttachment::from).collect();

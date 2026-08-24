@@ -19,12 +19,17 @@ use crate::state::use_app_ctx;
 /// the click is caught by a capture-phase listener in JavaScript, which finds
 /// this button by its class and reads `data-attach` to know which composer
 /// asked. See `crate::attach::PICK_FILES`.
+///
+/// `data-conversation` is the other half of that address: which composer is
+/// not enough, because the read outlives the screen it was started on
+/// (`crate::attach::conversation_key`).
 #[component]
-pub fn AttachButton(target: AttachTarget) -> Element {
+pub fn AttachButton(target: AttachTarget, conversation: String) -> Element {
     rsx! {
         button {
             class: "composer-chip action attach",
             "data-attach": "{target.as_str()}",
+            "data-conversation": "{conversation}",
             title: "Attach an image or a file",
             "aria-label": "Attach an image or a file",
             Icon { name: "plus" }
@@ -42,16 +47,16 @@ pub fn AttachButton(target: AttachTarget) -> Element {
 /// reason the action row does — wrapping would move the composer, and the
 /// composer's position is the one thing on this screen a thumb learns.
 #[component]
-pub fn AttachTray(target: AttachTarget) -> Element {
+pub fn AttachTray(target: AttachTarget, conversation: String) -> Element {
     let ctx = use_app_ctx();
     let mut tray = crate::attach::tray_of(&ctx, target);
     // Read without cloning: this holds the bytes of every picked file, and
     // the composer re-renders on every keystroke.
     let held = tray.read();
-    let reading = match (ctx.attach_reading)() {
-        Some((waiting, count)) if waiting == target => count,
-        _ => 0,
-    };
+    // Only the picks made here. One left reading in a chat you walked out of
+    // is going to land in that chat's tray, not this one, so announcing it
+    // here would be a promise this composer cannot keep.
+    let reading = crate::attach::reading_for(&ctx.attach_reading.read(), target, &conversation);
     if held.is_empty() && reading == 0 {
         return rsx! {};
     }

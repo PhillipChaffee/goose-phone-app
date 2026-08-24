@@ -977,10 +977,17 @@ pub(crate) fn send_code_prompt(
     spawn_forever(async move {
         // Neither of the two ways this can fail is a delivery: the turn never
         // started, so the tray gets its files back and the toast says so.
+        // Named with the chat it was sent in: waking a container can take
+        // most of a minute, which is long enough to have opened another one,
+        // and the tray this empties into is whichever is on screen now.
         let failed = |reason: String, files| {
             ctx.code_chat.clone().write().running = false;
-            let note =
-                crate::attach::return_to_tray(&ctx, crate::attach::AttachTarget::Code, files);
+            let note = crate::attach::return_to_tray(
+                &ctx,
+                crate::attach::AttachTarget::Code,
+                &chat_id,
+                files,
+            );
             show_toast(&ctx, format!("{reason}{note}"));
         };
         // Bound to a local first: a `peek()` guard used directly as the match
