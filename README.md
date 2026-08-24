@@ -18,20 +18,15 @@ with [Dioxus](https://dioxuslabs.com), one codebase builds for **iOS**,
 loop the app is developed in.
 
 <p align="center">
-  <img src="docs/images/sessions.png" alt="The Chats screen in dark mode: two goose sessions as rounded cards with their message count, session id and a line of the last reply" width="32%">
-  <img src="docs/images/chat.png" alt="The Code screen in dark mode: one code-agent chat, marked idle, on repo testrepo and branch agent/testrepo-70a5bf" width="32%">
-  <img src="docs/images/permission.png" alt="A permission request sheet: the tool call and its JSON details, with Allow once, Always allow, Reject and Always reject" width="32%">
+  <img src="docs/images/code-list.png" alt="The Code screen: two session cards. The first is waiting on you, with an inset panel reading Approve or deny Run: git push origin HEAD and Deny and Approve buttons inside the card" width="32%">
+  <img src="docs/images/code-chat.png" alt="A code-agent chat with a file attached to a message, a row of Diff and Pull requests chips above the composer, and attach, model and mode controls inside it" width="32%">
+  <img src="docs/images/pull-requests.png" alt="The Pull requests screen: five cards showing open, draft and merged states with their check status, one of which offers a Merge button" width="32%">
 </p>
 
-<sub>The running app, not mock-ups: the two lists are simulator captures
-(`scripts/shoot-simulator.sh <name>`), the permission sheet is a render of the
-markup the app emitted, as is the code-agent transcript further down. All of
-them are behind the current build — the per-row trash can has since moved
-behind a swipe, the settings gear into the drawer, and the bottom tab bar under
-that transcript has been replaced by the drawer. For markup that cannot drift
-there is [`docs/style-gallery.html`](docs/style-gallery.html): seventeen screen
-states dumped from the app's own DOM rather than written by hand, viewable in
-either theme.</sub>
+<sub>The running app, not mock-ups: captures off an iPhone 17 Pro simulator
+(`scripts/shoot-simulator.sh <name>`). For markup that cannot drift there is
+[`docs/style-gallery.html`](docs/style-gallery.html): twenty-one screen states
+dumped out of the app's own DOM, which is also what `docs/audit.js` reads.</sub>
 
 ## Features
 

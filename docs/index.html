@@ -516,24 +516,24 @@ footer ul a { display: inline-flex; align-items: center; min-height: 44px; font-
     <div class="wrap">
       <div class="shots">
         <figure>
-          <img src="images/sessions.png" width="1206" height="2622" loading="lazy" decoding="async"
-               alt="The Chats screen in dark mode: a floating hamburger button, the title Chats, a green connection dot, then a refresh button and a settings gear, above two rounded session cards — “Hey” and “Seeded example chat”, each with its age, a trash can, a message count, a session id and a quote from the last reply — with a New chat button floating at the bottom right.">
-          <figcaption>goose sessions</figcaption>
+          <img src="images/code-list.png" width="1206" height="2622" loading="lazy" decoding="async"
+               alt="The Code screen: two rounded session cards. The first, “Blocked on a push”, carries an amber dot on its tile, a status reading “waiting on you”, and an inset panel — “Approve or deny Run: git push origin HEAD” — with Deny and Approve buttons inside the card. The second, “Attachments”, is idle. A New session button floats at the bottom right.">
+          <figcaption>A chat waiting on you, answered from the list</figcaption>
         </figure>
         <figure>
-          <img src="images/chat.png" width="1206" height="2622" loading="lazy" decoding="async"
-               alt="The Code screen in dark mode: the same floating bar — hamburger, the title Code, a green dot, a refresh button and a settings gear — above one code-agent chat card titled “Fix the flaky test”, tagged idle, on the repo testrepo and the branch agent/testrepo-70a5bf, with a trash can on the row and a New session button floating at the bottom right.">
-          <figcaption>Code-agent chats</figcaption>
+          <img src="images/pull-requests.png" width="1206" height="2622" loading="lazy" decoding="async"
+               alt="The Pull requests screen for one chat’s branch: five cards. #12 is open with checks passing and offers a Merge button; #11 is open with checks failing and says why merging is not offered; #10 is waiting on GitHub to work out whether it can merge; #9 is a draft; #8 is already merged.">
+          <figcaption>Every pull request off this chat’s branch</figcaption>
         </figure>
         <figure>
-          <img src="images/permission.png" width="780" height="1690" loading="lazy" decoding="async"
-               alt="A sheet headed Permission request over a running chat in dark mode: it names the session, the request reads “Run a tool”, an open Details block shows the JSON command rm -rf /tmp/x with its working directory, and four buttons offer Allow once, Always allow, Reject and Always reject — the two rejects outlined in red — with “+2 more waiting” underneath.">
-          <figcaption>Permission, from the phone</figcaption>
+          <img src="images/diff-review.png" width="1206" height="2622" loading="lazy" decoding="async"
+               alt="The Review screen: a header reading “5 files · +10 −7”, a progress line “0 of 5 files reviewed” with a Mark all button, then per-file cards. Cargo.toml is expanded, showing a dark code block with red removed lines and green added ones, and a check circle to mark the file read.">
+          <figcaption>The session’s changes, one file at a time</figcaption>
         </figure>
         <figure>
-          <img src="images/code-chat.png" width="780" height="1690" loading="lazy" decoding="async"
-               alt="A code agent mid-turn in light mode: the floating bar holds a back chevron, the title “Bump the MSRV to 1.85”, a diff icon and a PR button; the user asks to raise the MSRV and fix whatever breaks; a collapsed Thinking row follows, then tool cards for reading rust-toolchain.toml (Done), a running cargo check, a failed fetch showing its error output on a dark slab, and a queued file move; at the foot, a composer holding the message field and a red Stop button, above a tab bar of Home and Code.">
-          <figcaption>A code agent working</figcaption>
+          <img src="images/code-chat.png" width="1206" height="2622" loading="lazy" decoding="async"
+               alt="A code-agent chat: the title bar carries a new-chat button and an overflow menu, the transcript shows a message with a file attached to it and the agent’s reply, and below it a row of Diff (+10 −7) and Pull requests (5) chips sits above the composer, which holds an attach button, a model chip and a mode chip.">
+          <figcaption>A code agent, mid-task</figcaption>
         </figure>
       </div>
       <!-- The style gallery is linked to its file on GitHub rather than to
@@ -545,22 +545,17 @@ footer ul a { display: inline-flex; align-items: center; min-height: 44px; font-
            links (here, in "How it is kept honest", and in the footer) at
            style-gallery.html and the live artefact works. -->
       <p class="shot-note">
-        The running app, not mock-ups: the two lists are simulator captures
-        (<code>scripts/shoot-simulator.sh</code>), the permission sheet and the code-agent
-        transcript renders of the markup the app emitted. All four are behind the current
-        build, and visibly so. Both lists still park a trash can on every row and a
-        settings gear in the bar — delete has since moved behind a swipe, and Settings
-        into the drawer. The other two are older still, from before the drawer: hence the
-        bottom tab bar under the transcript, whose diff and PR controls have since moved
-        down to the composer.
+        The running app, not mock-ups: all four are captures off an iPhone 17 Pro
+        simulator, taken from the build these pages were written against. They are
+        light mode; the app follows the system and has a dark set of the same tokens.
       </p>
       <p class="shot-note">
         For markup that cannot drift there is the
         <a href="https://github.com/PhillipChaffee/goose-phone-app/blob/main/docs/style-gallery.html">style gallery</a>:
-        seventeen states dumped out of the app's own DOM. Its Chats state keeps the delete
-        button in a swipe tray, where these captures still park one on every row. The
-        permission sheet above is the one screen on this page that has never been captured
-        into it — so it is also the one screen <code>docs/audit.js</code> does not check.
+        twenty-one states dumped out of the app's own DOM, including every one shown
+        here. That is what <code>docs/audit.js</code> reads, so a screen only escapes
+        being checked for contrast, overflow and tap-target size if nobody ever drove
+        the app to it.
       </p>
     </div>
   </section>
