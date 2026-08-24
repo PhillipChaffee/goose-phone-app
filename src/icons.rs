@@ -41,6 +41,10 @@ fn path_for(name: &str) -> Option<&'static str> {
         "arrow-up" => "M12 20V4M5 11l7-7 7 7",
         "wrench" => "M14.7 6.3a4 4 0 0 0 5 5l-9.4 9.4a2.1 2.1 0 0 1-3-3z",
         "diff" => "M12 5v10M7 10h10M7 19h10",
+        // Three dots need three subpaths of zero length; a round cap turns
+        // each into a disc, so this stays one stroked path like the rest.
+        "more" => "M6 12h.01M12 12h.01M18 12h.01",
+        "arrow-down" => "M12 4v16M5 13l7 7 7-7",
         // A line that runs on, turns back and points home: the soft-wrap
         // toggle on the review screen.
         "wrap-text" => "M4 6h16M4 12h13a3 3 0 1 1 0 6h-5M14 16l-2 2 2 2M4 18h7",

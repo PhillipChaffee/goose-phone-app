@@ -86,3 +86,59 @@ pub fn ConfirmDelete(
         }
     }
 }
+
+/// One entry in an overflow menu.
+#[derive(Clone, PartialEq)]
+pub(crate) struct MenuItem {
+    pub icon: &'static str,
+    pub label: &'static str,
+    /// Destructive, and coloured as such.
+    pub danger: bool,
+}
+
+/// The `⋯` in the top bar, and the sheet it opens.
+///
+/// This is where an action goes when it is real but rare — deleting the chat
+/// you are in, say. A chip in the composer is for what you reach for during a
+/// turn; this is for what you reach for once. Rule 11 still applies: the
+/// button does not render at all when there is nothing behind it, rather than
+/// opening onto an empty sheet.
+#[component]
+pub fn OverflowMenu(items: Vec<MenuItem>, onpick: EventHandler<usize>) -> Element {
+    let mut open = use_signal(|| false);
+    if items.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        button {
+            class: "icon-btn",
+            title: "More",
+            onclick: move |_| open.set(true),
+            Icon { name: "more" }
+        }
+        if open() {
+            div { class: "modal-backdrop", onclick: move |_| open.set(false),
+                div {
+                    class: "modal sheet",
+                    onclick: move |e: Event<MouseData>| e.stop_propagation(),
+                    div { class: "setting-list",
+                        for (i, item) in items.iter().enumerate() {
+                            button {
+                                key: "{item.label}",
+                                class: if item.danger { "setting-row danger" } else { "setting-row" },
+                                onclick: move |_| {
+                                    open.set(false);
+                                    onpick.call(i);
+                                },
+                                Icon { name: "{item.icon}" }
+                                span { class: "setting-main",
+                                    span { class: "setting-name", "{item.label}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
