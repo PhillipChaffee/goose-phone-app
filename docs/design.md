@@ -243,6 +243,46 @@ The manager refuses them at chat-create time, but a per-turn model rides through
 its transparent proxy unchecked — so a picker that offered them would be a way
 around privacy hard rule 1.
 
+### 12. A list only reports what its backend can be asked
+
+The Code list marks a chat that is blocked on a permission: a dot on its tile,
+and the ask itself inset in the card with `Approve` and `Deny` in it. The Chats
+list marks nothing. That difference is deliberate, and it is a difference
+between the two protocols rather than between how much care the two lists got.
+
+**The code plane can be asked, but only in one shape.** A pending ask is state
+inside a chat's own container and `GET /permission` reads it — one chat at a
+time, through the manager's transparent proxy, which *wakes a stopped
+container on any request to it*. Polling the list that way would hold every
+container open and undo the idle spin-down the whole plane is built on. So the
+manager aggregates instead (`GET /api/permissions`), over the containers that
+are already running, and that restriction costs nothing real: a container that
+is down has no live turn, so it has nothing parked on an ask. Chats you have
+not opened come from that aggregate; the chat you *have* open comes from its
+own event stream, which is both faster and ordered. Which is also where the
+modal went: it interrupts you about the conversation you are in, and the cards
+report the ones you are not.
+
+**The goose plane cannot be asked, and does not need to be.**
+`session/request_permission` is a JSON-RPC request the *agent* makes of the
+client over the one WebSocket. It is not a resource: no method lists
+outstanding ones, and `session/list` reports titles, counts and a snippet with
+nothing in it about a parked turn. What the connection does deliver is every
+ask the agent raises on it, whichever session it belongs to — the event carries
+a session id, the queue is not filtered by the open chat, and the modal names
+the session when it is not the one on screen. On the goose side an unanswered
+ask is therefore *always already on your screen*, and a dot in the list could
+only ever be drawn behind the modal covering it.
+
+The case the Code list exists for cannot arise there either. An ask lives only
+as an outstanding request on a live socket: drop the connection and the server
+resolves it as a transport error and the turn unwinds with it, which is why the
+app clears that queue on disconnect. A goose session cannot be sitting blocked
+while the app is away. Nothing to poll, and nothing to catch up on.
+
+So the Chats list gets nothing — not a placeholder, not a greyed dot. Anything
+there would be a lie or a duplicate.
+
 ## Deviations, and why
 
 All commented at the point of use in the stylesheet:

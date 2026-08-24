@@ -196,7 +196,21 @@ pub(crate) struct AppCtx {
     /// Pending permission asks from code chats, tagged by chat id. A separate
     /// queue from `permission` by construction: goose and `OpenCode` ids can
     /// never collide or be cross-answered.
+    ///
+    /// The open chat's asks arrive on its event stream; every other chat's
+    /// come from the manager's aggregate over running containers
+    /// (`crate::code::refresh_code_permissions`).
     pub code_permissions: Signal<Vec<(String, opencode_client::CodePermission)>>,
+    /// `(chat id, permission id)` answered on this device, kept until the
+    /// server stops reporting them as pending.
+    ///
+    /// The aggregate is a snapshot: one taken a moment before a reply landed
+    /// still lists the ask, and merging it would put the panel back under the
+    /// thumb that just dismissed it. A tombstone that clears itself when the
+    /// server agrees is the smallest thing that cannot get stuck — and a
+    /// reply that *fails* removes its own, so an ask still blocking the agent
+    /// comes back rather than being hidden by a lie.
+    pub code_answered: Signal<HashSet<(String, String)>>,
     /// On-device transcript cache — instant open while a chat's container
     /// wakes, read-only offline. Server history stays authoritative.
     pub code_cache: Signal<crate::code::CodeCache>,
@@ -256,6 +270,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_models_loading: use_signal(|| false),
         code_chat: use_signal(crate::code::CodeChatState::default),
         code_permissions: use_signal(Vec::new),
+        code_answered: use_signal(HashSet::new),
         code_cache,
         code_epoch: use_signal(|| 0),
         code_diff: use_signal(crate::code::DiffState::default),

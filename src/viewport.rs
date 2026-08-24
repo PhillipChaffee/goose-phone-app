@@ -59,6 +59,12 @@ pub(crate) fn use_visual_viewport() {
 /// the card, so the gesture that ought to dismiss the tray was navigating
 /// away instead.
 ///
+/// What it must not swallow is a button. The rule is about the *card* — the
+/// part of the row whose only job is to open the session — and a control
+/// inside the row is not that. Delete has always been exempt; so is answering
+/// a permission ask, which otherwise looked broken on any row you happened to
+/// have swiped.
+///
 /// Done as one capture-phase listener rather than by tracking scroll offset
 /// in Rust. The row is a scroll-snap scroller, so "open" is just a non-zero
 /// `scrollLeft` — no state to keep, and nothing to keep in sync. It also
@@ -69,8 +75,9 @@ const CLOSE_OPEN_ROW: &str = r"
 document.addEventListener('click', (e) => {
   const row = e.target.closest && e.target.closest('.session-item');
   if (!row || row.scrollLeft <= 4) return;
-  // Not a tap on the tray itself — Delete has to keep working.
-  if (e.target.closest('.session-actions')) return;
+  // Not a tap on a control in the row — Delete, Approve and Deny all have to
+  // keep working while the row is open.
+  if (e.target.closest('.session-actions, .session-ask button')) return;
   e.stopPropagation();
   e.preventDefault();
   row.scrollTo({ left: 0, behavior: 'smooth' });
@@ -206,7 +213,13 @@ pub(crate) fn use_pull_to_refresh() {
                         );
                     }
                     "code" => {
-                        spawn_forever(async move { crate::code::refresh_code_chats(&ctx).await });
+                        spawn_forever(async move {
+                            crate::code::refresh_code_chats(&ctx).await;
+                            // The asks are part of what this list says, so a
+                            // pull refreshes them too rather than leaving the
+                            // cards up to ten seconds behind the rows.
+                            crate::code::refresh_code_permissions(&ctx).await;
+                        });
                     }
                     "diff" => crate::code::load_code_diff(&ctx),
                     _ => {}
