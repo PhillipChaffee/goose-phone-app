@@ -40,6 +40,34 @@ const GEOMETRY = () => {
     const cls = typeof el.className === 'string' ? el.className.trim() : '';
     return el.tagName.toLowerCase() + (cls ? `.${cls.split(/\s+/).join('.')}` : '');
   };
+  // The nearest ancestor that clips, which is the thing whose corners an
+  // element inside it actually takes.
+  const clipper = (el) => {
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      if (getComputedStyle(p).overflow !== 'visible') return p;
+    }
+    return null;
+  };
+  // Inside something that scrolls sideways on purpose. A diff row in the
+  // review screen's no-wrap mode is wider than the phone because that is
+  // what "scroll long lines instead of wrapping" means; it is not spilling
+  // off the page, it is the content of a scrollport.
+  //
+  // "On purpose" is the whole difficulty. Every .scroll on every screen ends
+  // up with a computed overflow-x of `auto` — the used-value rules coerce a
+  // `visible` axis to `auto` when the other axis scrolls — so overflow-x
+  // alone cannot tell the two apart, and taking it at face value would
+  // silence this check everywhere. A region that states overflow-y: hidden
+  // has said which axis it means.
+  const inHorizontalScroller = (el) => {
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      const ps = getComputedStyle(p);
+      if (/auto|scroll/.test(ps.overflowX) && ps.overflowY === 'hidden'
+          && p.scrollWidth > p.clientWidth + 1) return true;
+      if (ps.overflow !== 'visible') return false;
+    }
+    return false;
+  };
 
   for (const el of document.querySelectorAll('*')) {
     const cs = getComputedStyle(el);
@@ -52,7 +80,7 @@ const GEOMETRY = () => {
     // drawer is translated fully off the left edge on purpose. Only something
     // that is partly visible can be said to spill.
     const parked = r.right <= 0.5 || r.left >= vw - 0.5;
-    if (!parked && (r.right > vw + 0.5 || r.left < -0.5)) {
+    if (!parked && (r.right > vw + 0.5 || r.left < -0.5) && !inHorizontalScroller(el)) {
       out.push(`OVERFLOW-X   ${name(el)} left=${r.left.toFixed(0)} right=${r.right.toFixed(0)} vw=${vw}`);
     }
     if (parked) continue;
@@ -68,7 +96,14 @@ const GEOMETRY = () => {
     // panel; square corners are correct for both.
     const fullScreen = (r.width >= vw - 0.5 && r.height >= vh - 0.5)
       || r.height >= vh - 0.5;
-    if ((filled || boxed) && !fullScreen && Math.max(...rad(cs)) === 0
+    // Nor is a row a surface. Something that fills its clipping parent from
+    // edge to edge already has that parent's corners — rounding it as well
+    // is what rule 4 means by concentric, and doing it to each row of a diff
+    // would notch every join between two consecutive rows.
+    const clip = clipper(el);
+    const flush = clip && Math.max(...rad(getComputedStyle(clip))) > 0
+      && r.width + 0.5 >= clip.clientWidth;
+    if ((filled || boxed) && !fullScreen && !flush && Math.max(...rad(cs)) === 0
         && r.width > 24 && r.height > 12 && tag !== 'html' && tag !== 'body') {
       out.push(`SQUARE       ${name(el)} ${r.width.toFixed(0)}x${r.height.toFixed(0)}`);
     }

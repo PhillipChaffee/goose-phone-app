@@ -26,6 +26,7 @@ pub fn App() -> Element {
             CodeScreen::List => rsx! { views::code::CodeSessionsView {} },
             CodeScreen::New => rsx! { views::code::CodeNewView {} },
             CodeScreen::Chat => rsx! { views::code::CodeChatView {} },
+            CodeScreen::Diff => rsx! { views::code::CodeDiffView {} },
         },
     };
 
@@ -42,6 +43,7 @@ pub fn App() -> Element {
                 CodeScreen::List => "code-list",
                 CodeScreen::New => "code-new",
                 CodeScreen::Chat => "code-chat",
+                CodeScreen::Diff => "code-diff",
             },
         }
         .to_owned(),

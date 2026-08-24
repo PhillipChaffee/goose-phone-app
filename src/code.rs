@@ -14,17 +14,17 @@
 //!     `once` / `always` / `reject`
 
 use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::time::Duration;
 
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use opencode_client::{
-    ChatMeta, CodeClient, CodeConfig, CodeEvent, CodePermission, MessageWithParts, Part,
+    ChatMeta, CodeClient, CodeConfig, CodeEvent, CodePermission, FileDiff, MessageWithParts, Part,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::diff::{DiffLine, Gap};
 use crate::state::{show_toast, AppCtx, ChatItem, ConnState};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -32,6 +32,10 @@ pub(crate) enum CodeScreen {
     List,
     New,
     Chat,
+    /// Reviewing the session's changes. Its own screen rather than a panel in
+    /// the transcript: the thing being reviewed is a whole working tree, and
+    /// a review has its own navigation, its own chrome and its own state.
+    Diff,
 }
 
 /// Everything the code chat screen renders.
@@ -56,7 +60,115 @@ pub(crate) struct CodeChatState {
     pub loading: bool,
     /// Container is booting; the transcript shown is the on-device cache.
     pub waking: bool,
-    pub diff: Option<String>,
+}
+
+/// The review screen's state for the open chat.
+///
+/// A signal of its own rather than a field on `CodeChatState`, because the
+/// chat screen re-renders on every keystroke in the composer and reads its
+/// state by cloning it. A whole-file patch parsed into lines is by far the
+/// largest thing this tab holds, and the transcript has no use for it.
+#[derive(Clone, PartialEq, Default)]
+pub(crate) struct DiffState {
+    pub files: Vec<DiffFile>,
+    pub loading: bool,
+    pub error: Option<String>,
+    /// Per-file review state, keyed by path.
+    pub view: HashMap<String, FileView>,
+}
+
+/// One file, parsed once at fetch time rather than on every render — the
+/// patch carries the whole file, so this is the expensive part.
+#[derive(Clone, PartialEq)]
+pub(crate) struct DiffFile {
+    pub info: FileDiff,
+    /// Fingerprint of `info.patch`; what "reviewed" is pinned to.
+    pub fingerprint: u64,
+    pub lines: Vec<DiffLine>,
+    pub gaps: Vec<Gap>,
+}
+
+impl From<FileDiff> for DiffFile {
+    fn from(info: FileDiff) -> Self {
+        let lines = crate::diff::parse(&info.patch);
+        Self {
+            fingerprint: crate::diff::fingerprint(&info.patch),
+            gaps: crate::diff::gaps(&lines),
+            lines,
+            info,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Default)]
+pub(crate) struct FileView {
+    /// Card expanded. `None` means "follow `seen`" — marking a file read
+    /// folds it away, which is what stops a long diff making you scroll past
+    /// work you have finished with, while an explicit value keeps the two
+    /// decoupled so a read file can be reopened without unmarking it.
+    pub open: Option<bool>,
+    /// The patch fingerprint that was marked reviewed, if any.
+    pub seen: Option<u64>,
+    /// Gap `start` -> lines revealed out of it.
+    pub expanded: HashMap<usize, usize>,
+    /// A deleted file's removed lines have been asked for.
+    pub show_removed: bool,
+}
+
+impl DiffState {
+    pub(crate) fn is_seen(&self, file: &DiffFile) -> bool {
+        self.view.get(&file.info.file).and_then(|v| v.seen) == Some(file.fingerprint)
+    }
+
+    pub(crate) fn is_open(&self, file: &DiffFile) -> bool {
+        self.view
+            .get(&file.info.file)
+            .and_then(|v| v.open)
+            .unwrap_or_else(|| !self.is_seen(file))
+    }
+
+    pub(crate) fn reviewed(&self) -> usize {
+        self.files.iter().filter(|f| self.is_seen(f)).count()
+    }
+
+    /// (added, removed) across every file in the diff.
+    pub(crate) fn totals(&self) -> (u32, u32) {
+        self.files.iter().fold((0, 0), |(a, d), f| {
+            (
+                a.saturating_add(f.info.additions),
+                d.saturating_add(f.info.deletions),
+            )
+        })
+    }
+
+    /// path -> the fingerprint marked reviewed, for persistence.
+    fn marks(&self) -> HashMap<String, u64> {
+        self.view
+            .iter()
+            .filter_map(|(path, v)| v.seen.map(|hash| (path.clone(), hash)))
+            .collect()
+    }
+}
+
+/// Rebuild per-file review state from marks alone.
+///
+/// Everything in `FileView` except `seen` is positional — an expanded gap is
+/// an index into the patch that was parsed — so a fresh payload has to start
+/// from the marks and nothing else. `seen` survives because it carries the
+/// fingerprint it was taken against and can check itself.
+fn marks_to_view(marks: &HashMap<String, u64>) -> HashMap<String, FileView> {
+    marks
+        .iter()
+        .map(|(path, hash)| {
+            (
+                path.clone(),
+                FileView {
+                    seen: Some(*hash),
+                    ..FileView::default()
+                },
+            )
+        })
+        .collect()
 }
 
 /// On-device transcript cache (issue #2, A11): instant open while the
@@ -73,6 +185,10 @@ pub(crate) struct CachedChat {
     pub title: String,
     pub session_id: Option<String>,
     pub items: Vec<ChatItem>,
+    /// path -> the patch fingerprint that was marked reviewed. Persisted
+    /// because a review is a task you leave and come back to, and the app
+    /// being backgrounded while a container wakes is the normal case here.
+    pub diff_seen: HashMap<String, u64>,
     /// Unix seconds of the last cache write — the LRU eviction key.
     pub updated: u64,
 }
@@ -188,6 +304,15 @@ pub(crate) fn open_code_chat(ctx: &AppCtx, meta: ChatMeta) {
 
     let cached = ctx.code_cache.peek().chats.get(&meta.id).cloned();
     let waking = !meta.is_running();
+    // The review starts empty (the diff is fetched on demand) but not
+    // forgetful: the marks come back off the cache.
+    ctx.code_diff.clone().set(DiffState {
+        view: cached
+            .as_ref()
+            .map(|c| marks_to_view(&c.diff_seen))
+            .unwrap_or_default(),
+        ..DiffState::default()
+    });
     chat.set(CodeChatState {
         marks: Vec::new(),
         last_at: 0,
@@ -206,7 +331,6 @@ pub(crate) fn open_code_chat(ctx: &AppCtx, meta: ChatMeta) {
         running: false,
         loading: true,
         waking,
-        diff: None,
     });
     screen.set(CodeScreen::Chat);
     let ctx = *ctx;
@@ -639,7 +763,11 @@ pub(crate) fn answer_code_permission(
     });
 }
 
-/// Fetch and render the session's cumulative diff into the chat state.
+/// Open the review screen and fetch the session's cumulative diff into it.
+///
+/// Navigates first and fetches after: the request wakes a stopped container
+/// and can take the better part of a minute, and a chip that does nothing
+/// visible for that long reads as broken.
 pub(crate) fn load_code_diff(ctx: &AppCtx) {
     let chat = ctx.code_chat.peek();
     let (Some(chat_id), Some(sid)) = (chat.chat_id.clone(), chat.session_id.clone()) else {
@@ -648,60 +776,108 @@ pub(crate) fn load_code_diff(ctx: &AppCtx) {
     };
     drop(chat);
     let Some(client) = ctx.code_client.peek().clone() else {
+        show_toast(ctx, "Code plane not connected — check Settings");
         return;
     };
+    {
+        let mut diff = ctx.code_diff;
+        let mut d = diff.write();
+        d.loading = true;
+        d.error = None;
+    }
+    ctx.code_screen.clone().set(CodeScreen::Diff);
     let ctx = *ctx;
     spawn_forever(async move {
-        match client.diff(&chat_id, &sid).await {
-            Ok(v) => {
-                let rendered = render_diff(&v);
-                ctx.code_chat.clone().write().diff = Some(rendered);
+        let result = client.diff(&chat_id, &sid).await;
+        // The user may have walked back to the list and opened another chat
+        // while the container woke; writing this chat's files into that one
+        // would be a silent lie about what changed.
+        if ctx.code_chat.peek().chat_id.as_deref() != Some(chat_id.as_str()) {
+            return;
+        }
+        let mut diff = ctx.code_diff;
+        let mut d = diff.write();
+        d.loading = false;
+        match result {
+            Ok(files) => {
+                d.view = marks_to_view(&d.marks());
+                d.files = files.into_iter().map(DiffFile::from).collect();
+                d.error = None;
             }
-            Err(e) => show_toast(&ctx, format!("Diff failed: {e}")),
+            Err(e) => d.error = Some(e.to_string()),
         }
     });
 }
 
-/// Render the `FileDiff[]` payload from `GET /session/:id/diff` as readable
-/// text. Lenient on shape: common field names first, pretty JSON as the
-/// fallback so a server change degrades visibly instead of blankly.
-fn render_diff(v: &Value) -> String {
-    let Some(files) = v.as_array() else {
-        return serde_json::to_string_pretty(v).unwrap_or_default();
+/// Fold or unfold one file's card. Independent of whether it is marked
+/// reviewed, and independent of every other file.
+pub(crate) fn toggle_diff_file(ctx: &AppCtx, path: &str) {
+    let mut diff = ctx.code_diff;
+    let open = {
+        let d = diff.peek();
+        d.files
+            .iter()
+            .find(|f| f.info.file == path)
+            .map(|f| d.is_open(f))
     };
-    if files.is_empty() {
-        return "No changes yet.".to_string();
-    }
-    let mut out = String::new();
-    for f in files {
-        let path = f
-            .get("path")
-            .or_else(|| f.get("file"))
-            .or_else(|| f.get("filename"))
-            .and_then(Value::as_str)
-            .unwrap_or("(unknown file)");
-        let adds = f.get("additions").and_then(Value::as_u64);
-        let dels = f.get("deletions").and_then(Value::as_u64);
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        let _ = write!(out, "── {path}");
-        if let (Some(a), Some(d)) = (adds, dels) {
-            let _ = write!(out, "  (+{a} −{d})");
-        }
-        out.push('\n');
-        if let Some(patch) = f
-            .get("patch")
-            .or_else(|| f.get("diff"))
-            .and_then(Value::as_str)
-        {
-            out.push_str(patch);
-            if !patch.ends_with('\n') {
-                out.push('\n');
-            }
+    let Some(open) = open else { return };
+    diff.write().view.entry(path.to_owned()).or_default().open = Some(!open);
+}
+
+/// Mark a file reviewed, or clear the mark. Marking also folds the card,
+/// which is the point: a finished file stops occupying the scroll.
+pub(crate) fn toggle_diff_seen(ctx: &AppCtx, path: &str, fingerprint: u64) {
+    let mut diff = ctx.code_diff;
+    {
+        let mut d = diff.write();
+        let entry = d.view.entry(path.to_owned()).or_default();
+        if entry.seen == Some(fingerprint) {
+            entry.seen = None;
+            entry.open = Some(true);
+        } else {
+            entry.seen = Some(fingerprint);
+            entry.open = Some(false);
         }
     }
-    out
+    write_cache(ctx);
+}
+
+pub(crate) fn mark_all_diff_seen(ctx: &AppCtx) {
+    let mut diff = ctx.code_diff;
+    {
+        let mut d = diff.write();
+        let marks: Vec<(String, u64)> = d
+            .files
+            .iter()
+            .map(|f| (f.info.file.clone(), f.fingerprint))
+            .collect();
+        for (path, fingerprint) in marks {
+            let entry = d.view.entry(path).or_default();
+            entry.seen = Some(fingerprint);
+            entry.open = Some(false);
+        }
+    }
+    write_cache(ctx);
+}
+
+/// Give back part of a collapsed band of unchanged lines.
+pub(crate) fn expand_diff_gap(ctx: &AppCtx, path: &str, key: usize, hidden: usize) {
+    let mut diff = ctx.code_diff;
+    let mut d = diff.write();
+    let entry = d.view.entry(path.to_owned()).or_default();
+    let revealed = entry.expanded.entry(key).or_insert(0);
+    *revealed = crate::diff::expand_to(*revealed, hidden);
+}
+
+/// Show the body of a deleted file, which is otherwise a count rather than
+/// several hundred red rows nobody reads line by line.
+pub(crate) fn reveal_removed_lines(ctx: &AppCtx, path: &str) {
+    let mut diff = ctx.code_diff;
+    diff.write()
+        .view
+        .entry(path.to_owned())
+        .or_default()
+        .show_removed = true;
 }
 
 /// The "Open PR" action is an instruction to the agent — git is its job
@@ -773,6 +949,7 @@ pub(crate) fn write_cache(ctx: &AppCtx) {
         title: chat.title.clone(),
         session_id: chat.session_id.clone(),
         items,
+        diff_seen: ctx.code_diff.peek().marks(),
         updated: now_secs(),
     };
     drop(chat);
