@@ -243,6 +243,41 @@ The manager refuses them at chat-create time, but a per-turn model rides through
 its transparent proxy unchecked — so a picker that offered them would be a way
 around privacy hard rule 1.
 
+### 12. An attachment costs something, and the interface says what
+
+The `+` in both composers opens iOS's own photo / camera / Files sheet. Three
+consequences shape how it looks, and all three are constraints rather than
+taste.
+
+**The tray is a row of its own, above the field.** A file name comes from a
+photo library and can be anything; the control row is where the send button has
+to survive whatever the server called the model, and adding a second
+unbounded string to that budget is how it breaks.
+`docs/measure-composer.js` now builds the composer with an empty tray, one
+attachment and a full one, and fails if a name spills its chip or the composer
+grows past the screen. Like `.action-row`, the tray scrolls sideways rather
+than wrapping — a second row would move the composer, and where the composer
+sits is the one thing on this screen a thumb learns.
+
+**The transcript keeps a thumbnail, never the payload.** Both chat views clone
+their whole state on every keystroke and the Code tab writes its transcript to
+disk, so a 250 kB base64 photo in a transcript item is paid for on both, over
+and over. The phone makes a ~200px thumbnail at pick time and that is what the
+item holds; a payload replayed from a server is adopted only if it is already
+that small, and otherwise the attachment renders as a named chip. The rule and
+its numbers are in `src/attach.rs`.
+
+**Everything on the inverted user bubble takes its colour from the bubble.**
+`--text-secondary` and friends are tuned against the page and land the wrong
+way round on a bubble whose fill is `--text-primary`. The one piece of
+secondary text in there — an attachment's size — is a 72% tint of the bubble's
+own ink, which measures 6.0:1 in light and 6.1:1 in dark.
+
+The chip and thumbnail styling itself is **provisional**: it is deliberately
+plain, and confined to the `.attach-*` block in the stylesheet and to
+`src/views/attach.rs`, so replacing it against a reference screenshot is a
+local change.
+
 ## Deviations, and why
 
 All commented at the point of use in the stylesheet:

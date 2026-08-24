@@ -1,3 +1,4 @@
+pub(crate) mod attach;
 pub(crate) mod chat;
 pub(crate) mod code;
 pub(crate) mod session_settings;

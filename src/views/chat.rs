@@ -4,12 +4,14 @@ use dioxus::prelude::*;
 
 use goose_acp_client::ConfigOption;
 
+use crate::attach::AttachTarget;
 use crate::icons::Icon;
 use crate::markdown;
 use crate::state::{
     answer_permission, new_session, send_prompt, show_toast, stop_turn, use_app_ctx, ChatItem,
     Screen, Usage,
 };
+use crate::views::attach::{attachment_list, AttachButton, AttachTray};
 use crate::views::session_settings::{
     choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
 };
@@ -54,13 +56,18 @@ pub fn ChatView() -> Element {
 
     let mut submit = move || {
         let text = draft.peek().trim().to_string();
-        if text.is_empty() {
+        // A message can be attachments alone — a photo with nothing to say
+        // about it is still a message.
+        let files = ctx.attachments.peek().clone();
+        if text.is_empty() && files.is_empty() {
             return;
         }
-        // Only clear the draft once the message was actually accepted, so a
-        // failed send (e.g. disconnected) doesn't eat the typed text.
-        if send_prompt(&ctx, text) {
+        // Only clear the draft and the tray once the message was actually
+        // accepted, so a failed send (e.g. disconnected) doesn't eat the
+        // typed text or the files that were picked for it.
+        if send_prompt(&ctx, text, &files) {
             draft.set(String::new());
+            ctx.attachments.clone().set(Vec::new());
         }
     };
 
@@ -102,6 +109,7 @@ pub fn ChatView() -> Element {
         }
 
         footer { class: "composer",
+            AttachTray { target: AttachTarget::Goose }
             textarea {
                 class: "input",
                 placeholder: "Message goose…",
@@ -118,6 +126,7 @@ pub fn ChatView() -> Element {
                 },
             }
             div { class: "composer-row",
+                AttachButton { target: AttachTarget::Goose }
                 if !rows.is_empty() {
                     button {
                         class: "composer-chip action",
@@ -334,11 +343,18 @@ fn tool_kind_phrase(kind: &str, n: usize) -> String {
 /// Shared transcript renderer — the Code tab reuses it (views/code.rs).
 pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
     match item {
-        ChatItem::User { text } => {
+        ChatItem::User { text, attachments } => {
             let html = markdown::escape_text(text);
             rsx! {
                 div { key: "{index}", class: "bubble user",
-                    div { class: "bubble-text", dangerous_inner_html: "{html}" }
+                    if !attachments.is_empty() {
+                        {attachment_list(attachments)}
+                    }
+                    // An empty text node still draws a line box, which is a
+                    // blank strip under a photo sent with nothing to say.
+                    if !text.is_empty() {
+                        div { class: "bubble-text", dangerous_inner_html: "{html}" }
+                    }
                 }
             }
         }

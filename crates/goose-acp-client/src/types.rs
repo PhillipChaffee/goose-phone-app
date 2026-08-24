@@ -61,7 +61,17 @@ impl ContentBlock {
             Self::Resource { resource, .. } => resource
                 .get("text")
                 .and_then(Value::as_str)
-                .map_or_else(|| "[resource]".to_string(), str::to_string),
+                .map(str::to_string)
+                .or_else(|| {
+                    // A blob has no text to show, but it does have a name.
+                    // "[resource]" for every attached PDF told the reader
+                    // nothing about which one.
+                    Some(format!(
+                        "[{}]",
+                        resource.get("uri").and_then(Value::as_str)?
+                    ))
+                })
+                .unwrap_or_else(|| "[resource]".to_string()),
         }
     }
 
@@ -71,6 +81,61 @@ impl ContentBlock {
             annotations: None,
             meta: None,
         }
+    }
+
+    /// An attached image. `data` is base64 of the file's bytes.
+    ///
+    /// By value, not by reference: the agent runs on another machine and
+    /// cannot open a path on this phone, so `uri` is left off entirely
+    /// rather than carrying a name the agent would be unable to resolve.
+    #[must_use]
+    pub fn image(data: impl Into<String>, mime_type: impl Into<String>) -> Self {
+        Self::Image {
+            data: data.into(),
+            mime_type: mime_type.into(),
+            uri: None,
+            meta: None,
+        }
+    }
+
+    /// An attached text file, as an embedded resource — MCP's
+    /// `TextResourceContents`, which ACP embeds verbatim. `uri` is what the
+    /// agent will call the file, so it carries the name the picker gave it.
+    #[must_use]
+    pub fn resource_text(uri: &str, mime_type: &str, text: &str) -> Self {
+        Self::Resource {
+            resource: serde_json::json!({
+                "uri": uri,
+                "mimeType": mime_type,
+                "text": text,
+            }),
+            extra: serde_json::Map::new(),
+        }
+    }
+
+    /// An attached binary file — MCP's `BlobResourceContents`, whose `blob`
+    /// is base64. Used for anything that is neither an image nor text (a PDF
+    /// today), so the agent at least receives the bytes and the name.
+    #[must_use]
+    pub fn resource_blob(uri: &str, mime_type: &str, blob: &str) -> Self {
+        Self::Resource {
+            resource: serde_json::json!({
+                "uri": uri,
+                "mimeType": mime_type,
+                "blob": blob,
+            }),
+            extra: serde_json::Map::new(),
+        }
+    }
+
+    /// Whether this block is an attachment rather than prose — an image, an
+    /// audio clip, a linked resource or an embedded one.
+    ///
+    /// The transcript renders those as attachments beside the message rather
+    /// than as the `text_repr` placeholder that used to stand in for them.
+    #[must_use]
+    pub const fn is_attachment(&self) -> bool {
+        !matches!(self, Self::Text { .. })
     }
 }
 
@@ -423,6 +488,48 @@ mod tests {
         let block = ContentBlock::text("Hello goose");
         let v = serde_json::to_value(&block).unwrap();
         assert_eq!(v, json!({"type": "text", "text": "Hello goose"}));
+    }
+
+    /// The three shapes an attachment can take on the wire. `data` and `blob`
+    /// are base64; ACP takes MCP's resource contents verbatim, so an embedded
+    /// resource is `{uri, mimeType, text|blob}` and nothing else.
+    #[test]
+    fn attachment_blocks_serialize_to_acp_shapes() {
+        assert_eq!(
+            serde_json::to_value(ContentBlock::image("QUJD", "image/png")).unwrap(),
+            json!({"type": "image", "data": "QUJD", "mimeType": "image/png"})
+        );
+        assert_eq!(
+            serde_json::to_value(ContentBlock::resource_text(
+                "file:///notes.md",
+                "text/markdown",
+                "# hi"
+            ))
+            .unwrap(),
+            json!({"type": "resource", "resource": {
+                "uri": "file:///notes.md", "mimeType": "text/markdown", "text": "# hi"}})
+        );
+        assert_eq!(
+            serde_json::to_value(ContentBlock::resource_blob(
+                "file:///spec.pdf",
+                "application/pdf",
+                "QUJD"
+            ))
+            .unwrap(),
+            json!({"type": "resource", "resource": {
+                "uri": "file:///spec.pdf", "mimeType": "application/pdf", "blob": "QUJD"}})
+        );
+    }
+
+    /// A blob has no text to render, so the transcript falls back to naming
+    /// the file — "[resource]" for every attached PDF said nothing about
+    /// which one.
+    #[test]
+    fn a_blob_resource_renders_as_its_name() {
+        let block = ContentBlock::resource_blob("file:///spec.pdf", "application/pdf", "QUJD");
+        assert_eq!(block.text_repr(), "[file:///spec.pdf]");
+        assert!(block.is_attachment());
+        assert!(!ContentBlock::text("hi").is_attachment());
     }
 
     #[test]

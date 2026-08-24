@@ -10,6 +10,7 @@ use dioxus::document;
 use dioxus::prelude::*;
 use opencode_client::FileStatus;
 
+use crate::attach::AttachTarget;
 use crate::code::{
     answer_code_permission, delete_code_chat, ensure_code_models, expand_diff_gap, is_free_model,
     load_code_diff, mark_all_diff_seen, new_code_chat, open_chat_allows_free_models,
@@ -20,6 +21,7 @@ use crate::code::{
 use crate::diff::Block;
 use crate::icons::Icon;
 use crate::state::{relative_time_secs, use_app_ctx, AppCtx, ConnState};
+use crate::views::attach::{AttachButton, AttachTray};
 use crate::views::chat::{format_tokens, render_transcript};
 use crate::views::session_settings::{
     choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
@@ -549,11 +551,13 @@ pub fn CodeChatView() -> Element {
 
     let mut submit = move || {
         let text = draft.peek().trim().to_string();
-        if text.is_empty() {
+        let files = ctx.code_attachments.peek().clone();
+        if text.is_empty() && files.is_empty() {
             return;
         }
-        if send_code_prompt(&ctx, text) {
+        if send_code_prompt(&ctx, text, &files) {
             draft.set(String::new());
+            ctx.code_attachments.clone().set(Vec::new());
         }
     };
 
@@ -639,6 +643,7 @@ pub fn CodeChatView() -> Element {
         }
 
         footer { class: "composer",
+            AttachTray { target: AttachTarget::Code }
             textarea {
                 class: "input",
                 placeholder: if chat.waking { "Waking…" } else { "Message the code agent…" },
@@ -656,6 +661,7 @@ pub fn CodeChatView() -> Element {
                 },
             }
             div { class: "composer-row",
+                AttachButton { target: AttachTarget::Code }
                 button {
                     class: "composer-chip action",
                     title: "Session settings",

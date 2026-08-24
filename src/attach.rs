@@ -1,0 +1,992 @@
+//! Attaching an image or a file to the message you are about to send.
+//!
+//! Both backends already carry attachments — ACP's prompt is an array of
+//! `ContentBlock`s and `OpenCode`'s is an array of parts — so the work here is
+//! the three things neither protocol does for you: getting the bytes off the
+//! phone, keeping them to a size a tailnet round trip can survive, and
+//! deciding what the transcript remembers afterwards.
+//!
+//! **Picking** happens in JavaScript (see `PICK_FILES`), because a hidden
+//! `<input type="file">` is iOS's photo library, camera and Files sheet for
+//! free, and because the read and the downscale are a single round trip that
+//! way instead of one per chunk of bytes.
+//!
+//! **The size rule** is the reason this module has constants at all. A phone
+//! photo is several megabytes and base64 adds a third on top, and the code
+//! plane's request travels through the session manager's proxy into a
+//! container. So an image is downscaled rather than refused — you have just
+//! taken the photo; being told it is too big is not an answer — and everything
+//! else is capped and refused by name.
+//!
+//! **What the transcript keeps** is a *thumbnail*, never the payload. The chat
+//! views clone their whole state on every keystroke and the Code tab persists
+//! its transcript to disk, so an item holding a 250 kB base64 photo is paid
+//! for on both, over and over. The full bytes live in the composer's tray
+//! until they are sent and then only on the server.
+
+use std::collections::HashMap;
+
+use dioxus::prelude::*;
+use goose_acp_client::ContentBlock;
+use opencode_client::{Part, PromptPart};
+use serde::{Deserialize, Serialize};
+
+use crate::state::{show_toast, AppCtx, ChatItem};
+
+/// How many files one message may carry.
+pub(crate) const MAX_ATTACHMENTS: usize = 6;
+
+/// The most one attachment may weigh, after any downscaling. Decimal
+/// megabytes, because that is what iOS calls a file size and the cap should
+/// read as the same number the phone shows you.
+pub(crate) const MAX_FILE_BYTES: u64 = 4_000_000;
+
+/// And across the whole message. Base64 makes the request body a third bigger
+/// again, so this is really a ~10.7 MB POST through the gateway.
+pub(crate) const MAX_TOTAL_BYTES: u64 = 8_000_000;
+
+/// Longest side an attached image is resized to before it is sent. 1280px
+/// keeps text in a screenshot readable, which is the thing most often
+/// photographed for an agent, while turning a 12-megapixel camera file into
+/// roughly 200 kB.
+const IMAGE_EDGE: u32 = 1280;
+
+/// Second try, for an image that is still over the cap at `IMAGE_EDGE` — a
+/// panorama, or a screenshot of a very tall page.
+const RETRY_EDGE: u32 = 800;
+
+/// Longest side of the thumbnail kept in the transcript.
+const THUMB_EDGE: u32 = 192;
+
+/// The most base64 a transcript item will hold as a thumbnail.
+///
+/// A thumbnail this phone made is 4–8 kB, well inside it. The bound exists
+/// for the *other* source: history replays an attachment at the size it was
+/// sent, and adopting that would put the payload back into the structure this
+/// module exists to keep it out of. Anything larger renders as a named chip.
+const THUMB_MAX_CHARS: usize = 24_000;
+
+/// Which composer a pick belongs to. The two keep separate trays for the same
+/// reason they keep separate drafts: they are different screens, and a photo
+/// picked for a code chat must not ride along on a goose message.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum AttachTarget {
+    Goose,
+    Code,
+}
+
+impl AttachTarget {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Goose => "goose",
+            Self::Code => "code",
+        }
+    }
+
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "goose" => Some(Self::Goose),
+            "code" => Some(Self::Code),
+            _ => None,
+        }
+    }
+}
+
+/// What kind of thing an attachment is, as far as the two protocols care.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum AttachKind {
+    Image,
+    Text,
+    Binary,
+}
+
+/// What the transcript remembers about one attachment.
+///
+/// Serde derives are for the Code tab's on-device cache, and `thumb` is
+/// deliberately included: without it a chat re-opened from the cache would
+/// show chips where it had shown photos a moment earlier. It stays small by
+/// construction — see `THUMB_MAX_CHARS`.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct Attachment {
+    pub name: String,
+    pub mime: String,
+    /// Size of what was sent, in bytes. Zero when it is not known — a
+    /// resource link names a file it does not carry.
+    pub size: u64,
+    /// Base64 JPEG thumbnail, or empty for anything without a picture.
+    pub thumb: String,
+}
+
+impl Attachment {
+    pub(crate) fn kind(&self) -> AttachKind {
+        kind_of(&self.mime)
+    }
+
+    /// The size as a chip would say it, or nothing when there is no honest
+    /// number to give.
+    pub(crate) fn size_label(&self) -> String {
+        if self.size == 0 {
+            String::new()
+        } else {
+            format_bytes(self.size)
+        }
+    }
+
+    /// What identifies this file across a history reload — see
+    /// [`thumbnail_index`]. Name alone is not enough: every photo taken with
+    /// the camera on iOS arrives called `image.jpg`.
+    fn identity(&self) -> (String, String, u64) {
+        (self.name.clone(), self.mime.clone(), self.size)
+    }
+}
+
+/// A file picked in the composer and not yet sent.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct PendingAttachment {
+    pub record: Attachment,
+    /// Base64 of the bytes that will be sent.
+    pub data: String,
+    /// The decoded contents, for a text file. goose takes a text resource as
+    /// text rather than as base64, and the browser has already had to decode
+    /// the file to know it was text at all.
+    pub text: Option<String>,
+}
+
+fn kind_of(mime: &str) -> AttachKind {
+    if mime.starts_with("image/") {
+        AttachKind::Image
+    } else if mime.starts_with("text/") || mime == "application/json" || mime == "application/xml" {
+        AttachKind::Text
+    } else {
+        AttachKind::Binary
+    }
+}
+
+/// Bytes behind a base64 string, without decoding it. Every size this module
+/// reports is derived here, so the number on a chip is the number that
+/// travelled rather than the size of the file that was picked — which, for a
+/// downscaled photo, are nothing like each other.
+pub(crate) fn base64_len_to_bytes(data: &str) -> u64 {
+    let padding = data.bytes().rev().take_while(|b| *b == b'=').count();
+    let len = data.len().saturating_sub(padding) as u64;
+    // Four base64 characters carry three bytes.
+    len * 3 / 4
+}
+
+/// A byte count as a person reads it. Decimal units, matching iOS.
+pub(crate) fn format_bytes(n: u64) -> String {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "attachment sizes are capped in the low megabytes, orders of \
+                  magnitude below where f64 stops representing integers exactly"
+    )]
+    let bytes = n as f64;
+    if n >= 1_000_000 {
+        format!("{:.1} MB", bytes / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{} kB", n / 1_000)
+    } else {
+        format!("{n} B")
+    }
+}
+
+// ------------------------------------------------------------- the picker
+
+/// Open the sheet, read what was picked, downscale it, hand it back once.
+///
+/// The gesture is owned by JavaScript, exactly as the swipe and the pull are
+/// (`src/viewport.rs` says why at length): the native renderer round-trips
+/// every listened-to event through a synchronous XHR, so by the time a Rust
+/// `onclick` handler could call `document::eval` the user gesture is over —
+/// and opening a file input outside one is the thing `WKWebView` refuses.
+/// A capture-phase listener clicks the input inside the real event instead.
+///
+/// The bytes are read, resized and base64'd here for the same reason: one
+/// message back, not one per chunk.
+const PICK_FILES: &str = r#"
+(() => {
+  if (window.__attachWired) return;
+  window.__attachWired = true;
+
+  const MAX_BYTES = __MAX_FILE_BYTES__;
+  const EDGE = __IMAGE_EDGE__;
+  const RETRY_EDGE = __RETRY_EDGE__;
+  const THUMB_EDGE = __THUMB_EDGE__;
+  const QUALITY = 0.72;
+  const RETRY_QUALITY = 0.6;
+
+  // A file the picker hands over with no type at all — common for Files
+  // documents — is still worth taking if its name says what it is.
+  const TEXTY = /\.(txt|text|md|markdown|rst|json|jsonl|ya?ml|toml|ini|cfg|conf|csv|tsv|log|patch|diff|lock|rs|ts|tsx|js|jsx|mjs|py|rb|go|java|kt|swift|c|h|cc|cpp|hpp|cs|php|sh|bash|zsh|sql|html|css|scss|xml)$/i;
+
+  const kindOf = (file) => {
+    const t = (file.type || '').toLowerCase();
+    // SVG is markup, and markup that a canvas will happily rasterise into
+    // something quite unlike the file the agent was asked about.
+    if (t.startsWith('image/') && t !== 'image/svg+xml') return 'image';
+    if (t.startsWith('text/') || t === 'application/json' || t === 'application/xml') return 'text';
+    if (t === 'application/pdf') return 'binary';
+    if (!t && TEXTY.test(file.name)) return 'text';
+    return null;
+  };
+
+  const b64 = (buf) => {
+    // Chunked: String.fromCharCode.apply with a multi-megabyte array
+    // overflows the argument stack and throws.
+    const view = new Uint8Array(buf);
+    let out = '';
+    for (let i = 0; i < view.length; i += 0x8000) {
+      out += String.fromCharCode.apply(null, view.subarray(i, i + 0x8000));
+    }
+    return btoa(out);
+  };
+
+  const bytesOf = (data) => Math.floor(data.replace(/=+$/, '').length * 3 / 4);
+
+  // Decoding is the step that can hang on a file the browser cannot make
+  // sense of, so it is the step with a deadline. Falling out of it as a
+  // failure is what turns a stall into a message.
+  const decode = (file) => new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    const finish = (value) => { clearTimeout(timer); resolve(value ? { img, url } : null); };
+    const timer = setTimeout(() => { URL.revokeObjectURL(url); resolve(null); }, 15000);
+    img.onload = () => finish(true);
+    img.onerror = () => { URL.revokeObjectURL(url); finish(false); };
+    img.src = url;
+  });
+
+  const render = (img, edge, quality) => {
+    try {
+      const scale = Math.min(1, edge / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      return canvas.toDataURL('image/jpeg', quality).split(',')[1] || null;
+    } catch (err) {
+      return null;
+    }
+  };
+
+  const readImage = async (file) => {
+    const decoded = await decode(file);
+    if (!decoded) return { rejected: { name: file.name, reason: 'unreadable' } };
+    try {
+      let data = render(decoded.img, EDGE, QUALITY);
+      if (data && bytesOf(data) > MAX_BYTES) {
+        data = render(decoded.img, RETRY_EDGE, RETRY_QUALITY);
+      }
+      if (!data) return { rejected: { name: file.name, reason: 'unreadable' } };
+      if (bytesOf(data) > MAX_BYTES) {
+        return { rejected: { name: file.name, reason: 'too-big', bytes: bytesOf(data) } };
+      }
+      return {
+        file: {
+          name: file.name,
+          mime: 'image/jpeg',
+          data,
+          thumb: render(decoded.img, THUMB_EDGE, RETRY_QUALITY) || '',
+        },
+      };
+    } finally {
+      URL.revokeObjectURL(decoded.url);
+    }
+  };
+
+  const readBytes = async (file, kind) => {
+    if (file.size > MAX_BYTES) {
+      return { rejected: { name: file.name, reason: 'too-big', bytes: file.size } };
+    }
+    const buf = await file.arrayBuffer();
+    const mime = kind === 'text' ? (file.type || 'text/plain') : file.type;
+    return {
+      file: {
+        name: file.name,
+        mime,
+        data: b64(buf),
+        thumb: '',
+        text: kind === 'text' ? new TextDecoder('utf-8').decode(buf) : null,
+      },
+    };
+  };
+
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.multiple = true;
+  // No accept filter on purpose: with one, iOS narrows its sheet to the photo
+  // routes and the Files route — the whole "or a file" half of this control —
+  // stops being offered.
+  input.style.cssText = 'position:fixed;left:-9999px;width:1px;height:1px;opacity:0';
+  document.body.appendChild(input);
+
+  let target = 'goose';
+
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('.attach');
+    if (!btn) return;
+    target = btn.dataset.attach || 'goose';
+    // Picking the same file twice in a row is a real thing to do, and without
+    // this the second pick changes nothing and fires no event.
+    input.value = '';
+    input.click();
+  }, true);
+
+  input.addEventListener('change', async () => {
+    const chosen = [...input.files];
+    if (!chosen.length) return;
+    // Pinned for the whole read: this handler awaits, and a tap on the other
+    // composer's button meanwhile would otherwise redirect a pick already in
+    // progress into the wrong conversation.
+    const picked = target;
+    // Reading and resizing several photos takes seconds. Say so, or the
+    // composer simply sits there.
+    dioxus.send(JSON.stringify({ target: picked, reading: chosen.length }));
+
+    const files = [];
+    const rejected = [];
+    for (const file of chosen) {
+      const kind = kindOf(file);
+      if (!kind) {
+        rejected.push({ name: file.name, reason: 'unsupported', mime: file.type || '' });
+        continue;
+      }
+      let result;
+      try {
+        result = kind === 'image' ? await readImage(file) : await readBytes(file, kind);
+      } catch (err) {
+        result = { rejected: { name: file.name, reason: 'unreadable' } };
+      }
+      if (result.rejected) rejected.push(result.rejected);
+      else files.push(result.file);
+    }
+    dioxus.send(JSON.stringify({ target: picked, files, rejected }));
+  });
+})();
+"#;
+
+/// The picker script with this module's limits substituted in, so the numbers
+/// the browser enforces and the numbers the messages quote cannot drift.
+pub(crate) fn picker_js() -> String {
+    PICK_FILES
+        .replace("__MAX_FILE_BYTES__", &MAX_FILE_BYTES.to_string())
+        .replace("__IMAGE_EDGE__", &IMAGE_EDGE.to_string())
+        .replace("__RETRY_EDGE__", &RETRY_EDGE.to_string())
+        .replace("__THUMB_EDGE__", &THUMB_EDGE.to_string())
+}
+
+/// One message from the picker: either "I am reading n files", or the result.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct Picked {
+    target: String,
+    reading: Option<usize>,
+    files: Vec<PickedFile>,
+    rejected: Vec<PickedRejection>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct PickedFile {
+    name: String,
+    mime: String,
+    data: String,
+    thumb: String,
+    text: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct PickedRejection {
+    name: String,
+    reason: String,
+    bytes: u64,
+    mime: String,
+}
+
+/// Fold one message from the picker into the composer it came from.
+pub(crate) fn receive(ctx: &AppCtx, payload: &str) {
+    let Ok(msg) = serde_json::from_str::<Picked>(payload) else {
+        show_toast(ctx, "The file picker sent something this app cannot read");
+        return;
+    };
+    let Some(target) = AttachTarget::parse(&msg.target) else {
+        return;
+    };
+
+    if let Some(reading) = msg.reading {
+        ctx.attach_reading
+            .clone()
+            .set((reading > 0).then_some((target, reading)));
+        return;
+    }
+    ctx.attach_reading.clone().set(None);
+
+    let mut refused: Vec<String> = msg.rejected.iter().map(refusal).collect();
+    let picked: Vec<PendingAttachment> =
+        msg.files.into_iter().map(PendingAttachment::from).collect();
+    {
+        let mut tray = tray_of(ctx, target);
+        let mut held = tray.write();
+        refused.extend(accept(&mut held, picked));
+    }
+    if let Some(message) = refusal_summary(&refused) {
+        show_toast(ctx, message);
+    }
+}
+
+impl From<PickedFile> for PendingAttachment {
+    fn from(file: PickedFile) -> Self {
+        let size = base64_len_to_bytes(&file.data);
+        Self {
+            record: Attachment {
+                name: file.name,
+                mime: file.mime,
+                size,
+                thumb: file.thumb,
+            },
+            data: file.data,
+            text: file.text,
+        }
+    }
+}
+
+/// Which tray a pick belongs in.
+pub(crate) const fn tray_of(ctx: &AppCtx, target: AttachTarget) -> Signal<Vec<PendingAttachment>> {
+    match target {
+        AttachTarget::Goose => ctx.attachments,
+        AttachTarget::Code => ctx.code_attachments,
+    }
+}
+
+/// Take what fits and say, by name, why the rest did not.
+///
+/// The browser has already refused anything too big to be worth sending over
+/// the wire; these are the limits that depend on what is already in the tray,
+/// which only this side knows.
+fn accept(tray: &mut Vec<PendingAttachment>, picked: Vec<PendingAttachment>) -> Vec<String> {
+    let mut refused = Vec::new();
+    for file in picked {
+        let name = &file.record.name;
+        if tray.len() >= MAX_ATTACHMENTS {
+            refused.push(format!(
+                "{name} — one message carries at most {MAX_ATTACHMENTS} attachments"
+            ));
+            continue;
+        }
+        if file.record.size > MAX_FILE_BYTES {
+            refused.push(format!(
+                "{name} is {} — the limit is {} a file",
+                format_bytes(file.record.size),
+                format_bytes(MAX_FILE_BYTES)
+            ));
+            continue;
+        }
+        let total = tray
+            .iter()
+            .map(|a| a.record.size)
+            .sum::<u64>()
+            .saturating_add(file.record.size);
+        if total > MAX_TOTAL_BYTES {
+            refused.push(format!(
+                "{name} — one message carries at most {} in total",
+                format_bytes(MAX_TOTAL_BYTES)
+            ));
+            continue;
+        }
+        tray.push(file);
+    }
+    refused
+}
+
+fn refusal(rejection: &PickedRejection) -> String {
+    let name = &rejection.name;
+    match rejection.reason.as_str() {
+        "too-big" => format!(
+            "{name} is {} — the limit is {} a file",
+            format_bytes(rejection.bytes),
+            format_bytes(MAX_FILE_BYTES)
+        ),
+        "unsupported" => {
+            let what = if rejection.mime.is_empty() {
+                "an unrecognised type".to_owned()
+            } else {
+                rejection.mime.clone()
+            };
+            format!("{name} is {what} — only images, text files and PDFs can be attached")
+        }
+        "unreadable" => format!("{name} could not be read"),
+        other => format!("{name} — {other}"),
+    }
+}
+
+/// One toast for a whole pick. Naming the first refusal and counting the rest
+/// keeps the message short without hiding that more than one thing failed.
+fn refusal_summary(refused: &[String]) -> Option<String> {
+    match refused {
+        [] => None,
+        [only] => Some(format!("Not attached: {only}")),
+        [first, rest @ ..] => Some(format!("Not attached: {first} (and {} more)", rest.len())),
+    }
+}
+
+// ------------------------------------------------------- what gets sent
+
+/// The ACP prompt array for a message: the text, then its attachments.
+///
+/// Text first because that is the message and the attachments are what it is
+/// about — and because the transcript, the mock server and `OpenCode`'s own
+/// history all read the first text part as the thing the user said.
+pub(crate) fn goose_blocks(text: &str, files: &[PendingAttachment]) -> Vec<ContentBlock> {
+    let mut blocks = Vec::with_capacity(files.len() + 1);
+    if !text.is_empty() {
+        blocks.push(ContentBlock::text(text));
+    }
+    for file in files {
+        // Not a `file://` URI: the file is on this phone and the agent is not,
+        // so a path-shaped name is an invitation to try opening one and report
+        // that it does not exist.
+        let uri = format!("attachment:{}", file.record.name);
+        blocks.push(match file.record.kind() {
+            AttachKind::Image => ContentBlock::image(&file.data, &file.record.mime),
+            AttachKind::Text => ContentBlock::resource_text(
+                &uri,
+                &file.record.mime,
+                file.text.as_deref().unwrap_or_default(),
+            ),
+            AttachKind::Binary => ContentBlock::resource_blob(&uri, &file.record.mime, &file.data),
+        });
+    }
+    blocks
+}
+
+/// The `OpenCode` prompt parts for a message.
+pub(crate) fn code_parts(text: &str, files: &[PendingAttachment]) -> Vec<PromptPart> {
+    let mut parts = Vec::with_capacity(files.len() + 1);
+    if !text.is_empty() {
+        parts.push(PromptPart::text(text));
+    }
+    for file in files {
+        parts.push(match file.record.kind() {
+            // `text_file` and not `file`: the server inlines a data URL whose
+            // mime is exactly `text/plain` and passes anything else through as
+            // an opaque attachment, so a `.md` sent as `text/markdown` reaches
+            // a model that cannot open it.
+            AttachKind::Text => PromptPart::text_file(&file.record.name, &file.data),
+            _ => PromptPart::file(&file.record.mime, &file.record.name, &file.data),
+        });
+    }
+    parts
+}
+
+/// What the transcript keeps once a message has been sent.
+pub(crate) fn records(files: &[PendingAttachment]) -> Vec<Attachment> {
+    files.iter().map(|f| f.record.clone()).collect()
+}
+
+// -------------------------------------------------- what comes back again
+
+/// An attachment as it arrives back from goose, in a replayed user message.
+///
+/// goose replays the image at the size it was sent, which is exactly what
+/// this module keeps out of the transcript — so the payload is adopted as a
+/// thumbnail only when it is already thumbnail-sized, and otherwise the
+/// attachment renders as a named chip.
+pub(crate) fn from_content_block(block: &ContentBlock) -> Attachment {
+    match block {
+        ContentBlock::Image {
+            data,
+            mime_type,
+            uri,
+            ..
+        } => Attachment {
+            name: uri.clone().unwrap_or_else(|| "Image".to_owned()),
+            mime: mime_type.clone(),
+            size: base64_len_to_bytes(data),
+            thumb: small_thumb(data),
+        },
+        ContentBlock::Audio {
+            mime_type, data, ..
+        } => Attachment {
+            name: "Audio".to_owned(),
+            mime: mime_type.clone(),
+            size: base64_len_to_bytes(data),
+            thumb: String::new(),
+        },
+        ContentBlock::ResourceLink { uri, name, .. } => Attachment {
+            name: name.clone().unwrap_or_else(|| uri.clone()),
+            mime: String::new(),
+            size: 0,
+            thumb: String::new(),
+        },
+        ContentBlock::Resource { resource, .. } => {
+            let field = |key: &str| {
+                resource
+                    .get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            };
+            let blob = field("blob").unwrap_or_default();
+            let size = field("text").map_or_else(
+                || base64_len_to_bytes(&blob),
+                |text| text.len().try_into().unwrap_or(u64::MAX),
+            );
+            Attachment {
+                name: display_name(&field("uri").unwrap_or_default()),
+                mime: field("mimeType").unwrap_or_default(),
+                size,
+                thumb: String::new(),
+            }
+        }
+        ContentBlock::Text { .. } => Attachment::default(),
+    }
+}
+
+/// An attachment as it arrives back from `OpenCode`, as a `file` part.
+pub(crate) fn from_part(part: &Part) -> Attachment {
+    let data = part.data_url_base64().unwrap_or_default();
+    let mime = part.mime.clone().unwrap_or_default();
+    let is_image = mime.starts_with("image/");
+    Attachment {
+        name: part
+            .filename
+            .clone()
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| display_name(part.url.as_deref().unwrap_or_default())),
+        mime,
+        size: base64_len_to_bytes(data),
+        thumb: if is_image {
+            small_thumb(data)
+        } else {
+            String::new()
+        },
+    }
+}
+
+/// The payload, but only if it is small enough to be a thumbnail.
+fn small_thumb(data: &str) -> String {
+    if data.len() <= THUMB_MAX_CHARS {
+        data.to_owned()
+    } else {
+        String::new()
+    }
+}
+
+/// The last path-ish segment of a URI, for something whose only name is where
+/// it came from. A `data:` URL has no name at all, so it gets a word.
+fn display_name(uri: &str) -> String {
+    if uri.is_empty() || uri.starts_with("data:") {
+        return "Attachment".to_owned();
+    }
+    uri.rsplit(['/', ':']).find(|s| !s.is_empty()).map_or_else(
+        || uri.to_owned(),
+        |segment| segment.trim_start_matches("//").to_owned(),
+    )
+}
+
+/// Thumbnails already on screen, keyed by what identifies the file.
+///
+/// History is authoritative and replaces the transcript wholesale, but it
+/// replaces a thumbnail this phone made with a payload too big to keep — so
+/// the attachment would silently turn from a photo into a chip a second after
+/// the chat opened. This carries them across instead.
+pub(crate) fn thumbnail_index(items: &[ChatItem]) -> HashMap<(String, String, u64), String> {
+    let mut out = HashMap::new();
+    for item in items {
+        if let ChatItem::User { attachments, .. } = item {
+            for attachment in attachments {
+                if !attachment.thumb.is_empty() {
+                    out.insert(attachment.identity(), attachment.thumb.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Put those thumbnails back onto a freshly folded transcript.
+pub(crate) fn restore_thumbnails(
+    thumbs: &HashMap<(String, String, u64), String>,
+    items: &mut [ChatItem],
+) {
+    if thumbs.is_empty() {
+        return;
+    }
+    for item in items {
+        if let ChatItem::User { attachments, .. } = item {
+            for attachment in attachments.iter_mut() {
+                if attachment.thumb.is_empty() {
+                    if let Some(thumb) = thumbs.get(&attachment.identity()) {
+                        attachment.thumb.clone_from(thumb);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test assertions: a fixture that does not serialise is the failing check"
+)]
+mod tests {
+    use super::{
+        accept, base64_len_to_bytes, code_parts, display_name, format_bytes, from_content_block,
+        from_part, goose_blocks, picker_js, refusal, refusal_summary, restore_thumbnails,
+        thumbnail_index, Attachment, ChatItem, PendingAttachment, Picked, PickedRejection,
+        MAX_ATTACHMENTS, MAX_FILE_BYTES, MAX_TOTAL_BYTES, THUMB_MAX_CHARS,
+    };
+    use goose_acp_client::ContentBlock;
+    use opencode_client::Part;
+
+    fn pending(name: &str, mime: &str, size: u64) -> PendingAttachment {
+        PendingAttachment {
+            record: Attachment {
+                name: name.to_owned(),
+                mime: mime.to_owned(),
+                size,
+                thumb: "THUMB".to_owned(),
+            },
+            data: "QUJD".to_owned(),
+            text: Some("hello".to_owned()),
+        }
+    }
+
+    /// The limits the browser enforces are the limits the messages quote, and
+    /// they get there by substitution — a token that stops matching would
+    /// otherwise ship as a `ReferenceError` inside a listener nobody watches.
+    #[test]
+    fn the_picker_script_carries_no_unfilled_placeholders() {
+        let js = picker_js();
+        assert!(
+            !js.replace("__attachWired", "").contains("__"),
+            "a __TOKEN__ in PICK_FILES was not substituted"
+        );
+        assert!(js.contains(&MAX_FILE_BYTES.to_string()));
+    }
+
+    /// The contract with `PICK_FILES`, captured from a real run of it against
+    /// a photo, a markdown file, a video and an oversized PDF. Rename a key on
+    /// either side and this is what says so.
+    #[test]
+    fn a_picked_payload_decodes_the_way_the_script_writes_it() {
+        // Doubled hashes: the markdown heading in the fixture is a literal
+        // `"#`, which closes an r#"…"# string.
+        let raw = r##"{"target":"code",
+            "files":[
+              {"name":"IMG_0042.jpg","mime":"image/jpeg","data":"QUJDRA==","thumb":"QUJD","text":null},
+              {"name":"notes.md","mime":"text/markdown","data":"QUJD","thumb":"","text":"# notes"}],
+            "rejected":[
+              {"name":"clip.mov","reason":"unsupported","mime":"video/quicktime"},
+              {"name":"huge.pdf","reason":"too-big","bytes":5000009}]}"##;
+        let msg: Picked = serde_json::from_str(raw).unwrap();
+        assert_eq!(msg.target, "code");
+        assert_eq!(msg.reading, None);
+
+        let picked: Vec<PendingAttachment> =
+            msg.files.into_iter().map(PendingAttachment::from).collect();
+        assert_eq!(picked[0].record.size, 4, "size comes from the payload");
+        assert_eq!(picked[0].record.thumb, "QUJD");
+        assert_eq!(picked[1].text.as_deref(), Some("# notes"));
+
+        let refused: Vec<String> = msg.rejected.iter().map(refusal).collect();
+        assert!(
+            refused[0].contains("video/quicktime"),
+            "got: {}",
+            refused[0]
+        );
+        assert!(refused[1].contains("5.0 MB"), "got: {}", refused[1]);
+    }
+
+    #[test]
+    fn base64_length_gives_the_byte_count_back() {
+        assert_eq!(base64_len_to_bytes("QUJD"), 3); // "ABC"
+        assert_eq!(base64_len_to_bytes("QUJDRA=="), 4); // "ABCD"
+        assert_eq!(base64_len_to_bytes(""), 0);
+    }
+
+    #[test]
+    fn sizes_read_the_way_the_phone_writes_them() {
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(4_096), "4 kB");
+        assert_eq!(format_bytes(4_000_000), "4.0 MB");
+    }
+
+    /// The caps that depend on what is already in the tray are this side's to
+    /// enforce, and every refusal has to name the file it is about.
+    #[test]
+    fn the_tray_fills_up_and_says_what_it_turned_away() {
+        let mut tray = Vec::new();
+        let picked: Vec<PendingAttachment> = (0..MAX_ATTACHMENTS + 2)
+            .map(|i| pending(&format!("f{i}.txt"), "text/plain", 10))
+            .collect();
+        let refused = accept(&mut tray, picked);
+        assert_eq!(tray.len(), MAX_ATTACHMENTS);
+        assert_eq!(refused.len(), 2);
+        assert!(refused[0].starts_with("f6.txt —"), "got: {}", refused[0]);
+    }
+
+    #[test]
+    fn a_message_that_would_be_too_heavy_altogether_is_refused_by_name() {
+        let mut tray = vec![pending("big.pdf", "application/pdf", MAX_TOTAL_BYTES - 10)];
+        let refused = accept(&mut tray, vec![pending("more.pdf", "application/pdf", 100)]);
+        assert_eq!(tray.len(), 1, "the second file must not be taken");
+        assert_eq!(
+            refused,
+            ["more.pdf — one message carries at most 8.0 MB in total"]
+        );
+    }
+
+    #[test]
+    fn every_refusal_reason_becomes_something_a_person_can_act_on() {
+        let reject = |reason: &str, bytes: u64, mime: &str| {
+            refusal(&PickedRejection {
+                name: "clip.mov".to_owned(),
+                reason: reason.to_owned(),
+                bytes,
+                mime: mime.to_owned(),
+            })
+        };
+        assert_eq!(
+            reject("too-big", 9_000_000, ""),
+            "clip.mov is 9.0 MB — the limit is 4.0 MB a file"
+        );
+        assert_eq!(
+            reject("unsupported", 0, "video/quicktime"),
+            "clip.mov is video/quicktime — only images, text files and PDFs can be attached"
+        );
+        assert_eq!(reject("unreadable", 0, ""), "clip.mov could not be read");
+        assert!(reject("unsupported", 0, "").contains("an unrecognised type"));
+    }
+
+    #[test]
+    fn one_toast_names_the_first_failure_and_counts_the_rest() {
+        assert_eq!(refusal_summary(&[]), None);
+        assert_eq!(
+            refusal_summary(&["a is big".to_owned()]).as_deref(),
+            Some("Not attached: a is big")
+        );
+        assert_eq!(
+            refusal_summary(&["a is big".to_owned(), "b too".to_owned(), "c".to_owned()])
+                .as_deref(),
+            Some("Not attached: a is big (and 2 more)")
+        );
+    }
+
+    /// Each backend gets the encoding it can actually read: an image inline,
+    /// a text file as text, and anything else as bytes with a name.
+    #[test]
+    fn each_kind_is_encoded_the_way_its_backend_takes_it() {
+        let files = vec![
+            pending("shot.jpg", "image/jpeg", 100),
+            pending("notes.md", "text/markdown", 20),
+            pending("spec.pdf", "application/pdf", 30),
+        ];
+        let blocks = goose_blocks("look", &files);
+        assert_eq!(
+            serde_json::to_value(&blocks).unwrap(),
+            serde_json::json!([
+                {"type": "text", "text": "look"},
+                {"type": "image", "data": "QUJD", "mimeType": "image/jpeg"},
+                {"type": "resource", "resource": {
+                    "uri": "attachment:notes.md", "mimeType": "text/markdown", "text": "hello"}},
+                {"type": "resource", "resource": {
+                    "uri": "attachment:spec.pdf", "mimeType": "application/pdf", "blob": "QUJD"}},
+            ])
+        );
+
+        assert_eq!(
+            serde_json::to_value(code_parts("look", &files)).unwrap(),
+            serde_json::json!([
+                {"type": "text", "text": "look"},
+                {"type": "file", "mime": "image/jpeg", "filename": "shot.jpg",
+                 "url": "data:image/jpeg;base64,QUJD"},
+                {"type": "file", "mime": "text/plain", "filename": "notes.md",
+                 "url": "data:text/plain;base64,QUJD"},
+                {"type": "file", "mime": "application/pdf", "filename": "spec.pdf",
+                 "url": "data:application/pdf;base64,QUJD"},
+            ])
+        );
+    }
+
+    /// A message can be attachments alone, and an empty text block is not a
+    /// message — ACP would carry a blank turn and `OpenCode` records one.
+    #[test]
+    fn attachments_alone_send_no_empty_text_block() {
+        let files = vec![pending("shot.jpg", "image/jpeg", 100)];
+        assert_eq!(goose_blocks("", &files).len(), 1);
+        assert_eq!(code_parts("", &files).len(), 1);
+    }
+
+    /// Anything replayed at full size is a payload, not a thumbnail: keeping
+    /// it would put the bytes back into the structure the chat clones on
+    /// every keystroke.
+    #[test]
+    fn a_replayed_payload_is_only_kept_when_it_is_thumbnail_sized() {
+        let small = ContentBlock::image("Q".repeat(100), "image/jpeg");
+        assert_eq!(from_content_block(&small).thumb.len(), 100);
+
+        let big = ContentBlock::image("Q".repeat(THUMB_MAX_CHARS + 1), "image/jpeg");
+        let record = from_content_block(&big);
+        assert!(record.thumb.is_empty(), "a full-size image is not a thumb");
+        assert!(record.size > 0, "but it still reports what it weighs");
+    }
+
+    #[test]
+    fn a_replayed_resource_keeps_its_name_and_type() {
+        let block = ContentBlock::resource_text("attachment:notes.md", "text/markdown", "hello");
+        let record = from_content_block(&block);
+        assert_eq!(record.name, "notes.md");
+        assert_eq!(record.mime, "text/markdown");
+        assert_eq!(record.size, 5);
+        assert_eq!(display_name("data:image/png;base64,QQ=="), "Attachment");
+        assert_eq!(display_name("file:///a/b/c.png"), "c.png");
+    }
+
+    #[test]
+    fn an_opencode_file_part_becomes_an_attachment() {
+        let part = Part {
+            kind: "file".to_owned(),
+            mime: Some("image/jpeg".to_owned()),
+            filename: Some("IMG_0042.jpg".to_owned()),
+            url: Some("data:image/jpeg;base64,QUJD".to_owned()),
+            ..Part::default()
+        };
+        let record = from_part(&part);
+        assert_eq!(record.name, "IMG_0042.jpg");
+        assert_eq!(record.size, 3);
+        assert_eq!(record.thumb, "QUJD");
+    }
+
+    /// Two photos taken with the camera are both called `image.jpg`, so the
+    /// name alone cannot decide which thumbnail belongs to which.
+    #[test]
+    fn thumbnails_survive_a_history_reload_without_being_swapped() {
+        let attachment = |size: u64, thumb: &str| Attachment {
+            name: "image.jpg".to_owned(),
+            mime: "image/jpeg".to_owned(),
+            size,
+            thumb: thumb.to_owned(),
+        };
+        let before = vec![ChatItem::User {
+            text: "these two".to_owned(),
+            attachments: vec![attachment(100, "FIRST"), attachment(200, "SECOND")],
+        }];
+        let index = thumbnail_index(&before);
+
+        let mut after = vec![ChatItem::User {
+            text: "these two".to_owned(),
+            attachments: vec![attachment(200, ""), attachment(100, "")],
+        }];
+        restore_thumbnails(&index, &mut after);
+        let ChatItem::User { attachments, .. } = &after[0] else {
+            unreachable!()
+        };
+        assert_eq!(attachments[0].thumb, "SECOND");
+        assert_eq!(attachments[1].thumb, "FIRST");
+    }
+}

@@ -18,7 +18,7 @@
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
@@ -180,6 +180,82 @@ pub struct Part {
     #[serde(rename = "callID")]
     pub call_id: Option<String>,
     pub state: Option<Value>,
+    // `FilePart`: what an attachment looks like coming back out of history.
+    // `url` is whatever the client sent — for this app, a `data:` URI, which
+    // is how a re-opened chat gets its thumbnails back without a second
+    // fetch.
+    pub mime: Option<String>,
+    pub filename: Option<String>,
+    pub url: Option<String>,
+}
+
+impl Part {
+    /// The base64 payload of a `data:` URL, if that is what `url` is.
+    ///
+    /// Deliberately narrow: a `file:` URL names a path inside the chat's
+    /// container, which this device cannot read, and an `http:` one would be
+    /// a fetch the transcript has no business making.
+    #[must_use]
+    pub fn data_url_base64(&self) -> Option<&str> {
+        let url = self.url.as_deref()?;
+        let rest = url.strip_prefix("data:")?;
+        let (meta, payload) = rest.split_once(',')?;
+        meta.ends_with(";base64").then_some(payload)
+    }
+}
+
+/// One entry of the `parts` array a prompt body carries — `OpenCode`'s
+/// `TextPartInput | FilePartInput` (`packages/sdk/js/src/gen/types.gen.ts`).
+///
+/// `FilePartInput` is `{id?, type: "file", mime, filename?, url, source?}`,
+/// and `url` really is a URL rather than a payload field: the server switches
+/// on its protocol. A `data:` URI is the form a phone can use, because
+/// `file:` would name a path on the container rather than on this device.
+/// `source` is for a citation into a file the agent already has and has no
+/// meaning for something uploaded, so it is not modelled here.
+///
+/// One consequence worth knowing about the server side: a `data:` part whose
+/// mime is exactly `text/plain` is decoded and inlined into the conversation
+/// as text, while any other mime is passed through to the model as an
+/// attachment. That is why [`Self::text_file`] exists — a `.md` sent as
+/// `text/markdown` reaches a model that cannot read it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum PromptPart {
+    Text {
+        text: String,
+    },
+    File {
+        mime: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+        url: String,
+    },
+}
+
+impl PromptPart {
+    #[must_use]
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::Text { text: text.into() }
+    }
+
+    /// A file part carrying its bytes inline. `data` is base64.
+    #[must_use]
+    pub fn file(mime: &str, filename: &str, data: &str) -> Self {
+        Self::File {
+            mime: mime.to_owned(),
+            filename: Some(filename.to_owned()),
+            url: format!("data:{mime};base64,{data}"),
+        }
+    }
+
+    /// A text file, declared as `text/plain` whatever it is really called, so
+    /// the server inlines its contents instead of handing the model a blob it
+    /// has no decoder for. `data` is base64.
+    #[must_use]
+    pub fn text_file(filename: &str, data: &str) -> Self {
+        Self::file("text/plain", filename, data)
+    }
 }
 
 /// `{info, parts}` from `GET /session/:id/message`.
@@ -779,8 +855,13 @@ impl CodeClient {
     /// the model is — `OpenCode` copies both onto the session record when
     /// they differ from what is there.
     ///
+    /// `parts` is the whole message: text and any attachments, in the order
+    /// the model should see them. See [`PromptPart`].
+    ///
     /// # Errors
     ///
+    /// [`CodeError::Other`] if `parts` is empty — the server takes that as a
+    /// message with no content and answers 400.
     /// [`CodeError::Http`] if the gateway is unreachable or waking a stopped
     /// chat outruns the client's 150s request timeout, and
     /// [`CodeError::Status`] on a non-2xx answer — 404 for an unknown
@@ -791,11 +872,14 @@ impl CodeClient {
         &self,
         chat_id: &str,
         session_id: &str,
-        text: &str,
+        parts: &[PromptPart],
         model: Option<&str>,
         variant: Option<&str>,
     ) -> Result<(), CodeError> {
-        let mut body = json!({"parts": [{"type": "text", "text": text}]});
+        if parts.is_empty() {
+            return Err(CodeError::Other("prompt has no content".into()));
+        }
+        let mut body = json!({ "parts": parts });
         if let Some(m) = model {
             if let Some((provider, model_id)) = m.split_once('/') {
                 body["model"] = json!({"providerID": provider, "modelID": model_id});
@@ -1203,5 +1287,70 @@ mod tests {
     #[test]
     fn a_model_with_no_declared_window_reports_none() {
         assert_eq!(ModelLimit::default().context_tokens(), None);
+    }
+
+    /// The prompt body is the one place this client writes `OpenCode`'s own
+    /// schema rather than reading it, so the shape is pinned against
+    /// `TextPartInput | FilePartInput` verbatim.
+    #[test]
+    fn prompt_parts_serialize_to_the_sdk_shapes() {
+        let parts = vec![
+            PromptPart::text("what changed here"),
+            PromptPart::file("image/jpeg", "IMG_0042.jpg", "QUJD"),
+            PromptPart::text_file("notes.md", "QUJD"),
+        ];
+        assert_eq!(
+            serde_json::to_value(&parts).unwrap(),
+            json!([
+                {"type": "text", "text": "what changed here"},
+                {"type": "file", "mime": "image/jpeg", "filename": "IMG_0042.jpg",
+                 "url": "data:image/jpeg;base64,QUJD"},
+                // Declared text/plain whatever the file is called: that is the
+                // one mime the server decodes and inlines.
+                {"type": "file", "mime": "text/plain", "filename": "notes.md",
+                 "url": "data:text/plain;base64,QUJD"},
+            ])
+        );
+    }
+
+    /// History gives an attachment back as a file part, and the transcript
+    /// wants its bytes — but only from a `data:` URL. A `file:` URL names a
+    /// path inside the container, which this device cannot read.
+    #[test]
+    fn only_a_data_url_yields_bytes_to_the_transcript() {
+        let part = |url: &str| Part {
+            url: Some(url.to_owned()),
+            ..Part::default()
+        };
+        assert_eq!(
+            part("data:image/png;base64,QUJD").data_url_base64(),
+            Some("QUJD")
+        );
+        assert_eq!(part("file:///chat/workspace/a.png").data_url_base64(), None);
+        assert_eq!(part("data:text/plain,hello").data_url_base64(), None);
+        assert_eq!(Part::default().data_url_base64(), None);
+    }
+
+    /// A file part decodes out of the same `message.part.updated` envelope
+    /// every other part arrives in, so the fold has something to work with.
+    #[test]
+    fn dispatches_a_file_part() {
+        let raw = json!({
+            "type": "message.part.updated",
+            "properties": {"part": {
+                "id": "prt_2", "messageID": "msg_1", "sessionID": "ses_1",
+                "type": "file", "mime": "image/jpeg", "filename": "IMG_0042.jpg",
+                "url": "data:image/jpeg;base64,QUJD"
+            }}
+        });
+        match dispatch_event(raw) {
+            CodeEvent::PartUpdated { part, .. } => {
+                assert_eq!(part.kind, "file");
+                assert_eq!(part.mime.as_deref(), Some("image/jpeg"));
+                assert_eq!(part.filename.as_deref(), Some("IMG_0042.jpg"));
+                assert_eq!(part.data_url_base64(), Some("QUJD"));
+            }
+            other => panic!("wrong event: {other:?}"),
+        }
     }
 }

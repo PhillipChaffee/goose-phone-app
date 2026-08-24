@@ -409,9 +409,11 @@ pub(crate) fn open_code_chat(ctx: &AppCtx, meta: ChatMeta) {
 
     // A draft belongs to the chat it was typed in. It survives the review
     // screen (that is the point of hoisting it out of the view) but must not
-    // follow you into a different conversation.
+    // follow you into a different conversation — and neither must a photo
+    // picked for it.
     if ctx.code_chat.peek().chat_id.as_deref() != Some(meta.id.as_str()) {
         ctx.code_draft.clone().set(String::new());
+        ctx.code_attachments.clone().set(Vec::new());
     }
 
     let cached = ctx.code_cache.peek().chats.get(&meta.id).cloned();
@@ -541,7 +543,14 @@ async fn load_history(
             if *ctx.code_epoch.peek() != epoch {
                 return false;
             }
-            let (items, part_index, roles, running) = fold_history(&msgs);
+            // Taken before the fold, applied after it: the server replays an
+            // attachment at the size it was sent, which is too big to keep in
+            // a transcript this tab clones on every keystroke. Without this
+            // the photos on screen turn into chips a second after the chat
+            // opens (`crate::attach`).
+            let thumbs = crate::attach::thumbnail_index(&ctx.code_chat.peek().items);
+            let (mut items, part_index, roles, running) = fold_history(&msgs);
+            crate::attach::restore_thumbnails(&thumbs, &mut items);
             {
                 let mut chat = ctx.code_chat;
                 let mut c = chat.write();
@@ -715,65 +724,7 @@ fn fold_part_into(
     gap: &mut GapSink<'_>,
 ) {
     match part.kind.as_str() {
-        "text" | "reasoning" => {
-            let role = roles
-                .get(&part.message_id)
-                .map_or("assistant", String::as_str);
-            let full = part.text.clone().unwrap_or_default();
-            if let Some(&idx) = part_index.get(&part.id) {
-                if let Some(
-                    ChatItem::Assistant { text, .. }
-                    | ChatItem::Thought { text, .. }
-                    | ChatItem::User { text },
-                ) = items.get_mut(idx)
-                {
-                    match delta {
-                        Some(d) => text.push_str(d),
-                        None => *text = full,
-                    }
-                }
-                return;
-            }
-            if full.is_empty() && delta.is_none() {
-                return;
-            }
-            let text = if full.is_empty() {
-                delta.unwrap_or_default().to_string()
-            } else {
-                full
-            };
-            // The prompt goes into the transcript the moment it is sent, so
-            // the bubble does not wait on a round trip. The server then
-            // streams the same message back as a part of its own, and with
-            // nothing matching the two up every code session opened with the
-            // task written out twice. Adopt the optimistic bubble instead:
-            // it is always the last item, and its text is exactly what was
-            // sent.
-            if role == "user" {
-                if let Some(idx) = items.len().checked_sub(1) {
-                    let same =
-                        matches!(items.get(idx), Some(ChatItem::User { text: t }) if *t == text);
-                    if same && !part_index.values().any(|&i| i == idx) {
-                        part_index.insert(part.id.clone(), idx);
-                        return;
-                    }
-                }
-            }
-            let item = match (part.kind.as_str(), role) {
-                ("reasoning", _) => ChatItem::Thought {
-                    message_id: Some(part.id.clone()),
-                    text,
-                },
-                (_, "user") => ChatItem::User { text },
-                _ => ChatItem::Assistant {
-                    message_id: Some(part.id.clone()),
-                    text,
-                },
-            };
-            part_index.insert(part.id.clone(), items.len());
-            crate::state::mark_gap(items.len(), gap.marks, gap.last_at);
-            items.push(item);
-        }
+        "text" | "reasoning" => fold_text_part(items, part_index, roles, part, delta, gap),
         "tool" => {
             let state = part.state.clone().unwrap_or(Value::Null);
             let status = state
@@ -819,16 +770,159 @@ fn fold_part_into(
                 output,
             });
         }
-        // step-start / step-finish / file / snapshot etc. — nothing to render.
+        "file" => fold_file_part(items, part_index, roles, part, gap),
+        // step-start / step-finish / snapshot etc. — nothing to render.
         _ => {}
     }
+}
+
+/// Prose — a reply, a thought, or the reader's own message — into the item it
+/// belongs to.
+fn fold_text_part(
+    items: &mut Vec<ChatItem>,
+    part_index: &mut HashMap<String, usize>,
+    roles: &HashMap<String, String>,
+    part: &Part,
+    delta: Option<&str>,
+    gap: &mut GapSink<'_>,
+) {
+    let role = roles
+        .get(&part.message_id)
+        .map_or("assistant", String::as_str);
+    let full = part.text.clone().unwrap_or_default();
+    if let Some(&idx) = part_index.get(&part.id) {
+        if let Some(
+            ChatItem::Assistant { text, .. }
+            | ChatItem::Thought { text, .. }
+            | ChatItem::User { text, .. },
+        ) = items.get_mut(idx)
+        {
+            match delta {
+                Some(d) => text.push_str(d),
+                None => *text = full,
+            }
+        }
+        return;
+    }
+    if full.is_empty() && delta.is_none() {
+        return;
+    }
+    let text = if full.is_empty() {
+        delta.unwrap_or_default().to_string()
+    } else {
+        full
+    };
+    // The prompt goes into the transcript the moment it is sent, so the
+    // bubble does not wait on a round trip. The server then streams the same
+    // message back as a part of its own, and with nothing matching the two up
+    // every code session opened with the task written out twice. Adopt the
+    // optimistic bubble instead: it is always the last item, and its text is
+    // exactly what was sent.
+    if role == "user" {
+        if let Some(idx) = items.len().checked_sub(1) {
+            let bound = part_index.values().any(|&i| i == idx);
+            match items.get_mut(idx) {
+                Some(ChatItem::User { text: t, .. }) if *t == text && !bound => {
+                    part_index.insert(part.id.clone(), idx);
+                    return;
+                }
+                // A bubble that exists only because this message's
+                // attachments were folded before its text: fill it in rather
+                // than opening a second bubble underneath it.
+                Some(ChatItem::User {
+                    text: t,
+                    attachments,
+                }) if t.is_empty() && !attachments.is_empty() => {
+                    *t = text;
+                    part_index.insert(part.id.clone(), idx);
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
+    let item = match (part.kind.as_str(), role) {
+        ("reasoning", _) => ChatItem::Thought {
+            message_id: Some(part.id.clone()),
+            text,
+        },
+        (_, "user") => ChatItem::User {
+            text,
+            attachments: Vec::new(),
+        },
+        _ => ChatItem::Assistant {
+            message_id: Some(part.id.clone()),
+            text,
+        },
+    };
+    part_index.insert(part.id.clone(), items.len());
+    crate::state::mark_gap(items.len(), gap.marks, gap.last_at);
+    items.push(item);
+}
+
+/// An attachment, onto the message it was sent with.
+fn fold_file_part(
+    items: &mut Vec<ChatItem>,
+    part_index: &mut HashMap<String, usize>,
+    roles: &HashMap<String, String>,
+    part: &Part,
+    gap: &mut GapSink<'_>,
+) {
+    // Only what the reader attached. The agent's own messages carry file
+    // parts too — a screenshot a tool took, a resource it read — and those
+    // belong to the tool card that produced them, not to a bubble the reader
+    // never wrote.
+    if roles
+        .get(&part.message_id)
+        .map_or("assistant", String::as_str)
+        != "user"
+    {
+        return;
+    }
+    if part_index.contains_key(&part.id) {
+        return;
+    }
+    let record = crate::attach::from_part(part);
+    // The bubble is either the optimistic one this message was sent from, or
+    // the one its own text part just made. Anything else and this is a
+    // message that is nothing but attachments.
+    let idx = match items.len().checked_sub(1) {
+        Some(idx) if matches!(items.get(idx), Some(ChatItem::User { .. })) => idx,
+        _ => {
+            crate::state::mark_gap(items.len(), gap.marks, gap.last_at);
+            items.push(ChatItem::User {
+                text: String::new(),
+                attachments: Vec::new(),
+            });
+            items.len() - 1
+        }
+    };
+    if let Some(ChatItem::User { attachments, .. }) = items.get_mut(idx) {
+        // The optimistic bubble already shows what was just sent, and the
+        // server echoes the same parts back under ids of its own.
+        let known = attachments
+            .iter()
+            .any(|a| a.name == record.name && a.mime == record.mime);
+        if !known {
+            attachments.push(record);
+        }
+    }
+    part_index.insert(part.id.clone(), idx);
 }
 
 // --------------------------------------------------------------- actions
 
 /// Send a prompt into the open code chat (creating its `OpenCode` session on
 /// first use). Returns false if the message could not be submitted.
-pub(crate) fn send_code_prompt(ctx: &AppCtx, text: String) -> bool {
+///
+/// `files` is the caller's, not the tray's: "Open PR" and a new chat's opening
+/// task are messages the app composes, and neither should pick up a photo the
+/// reader had queued for something else.
+pub(crate) fn send_code_prompt(
+    ctx: &AppCtx,
+    text: String,
+    files: &[crate::attach::PendingAttachment],
+) -> bool {
     let mut chat = ctx.code_chat;
     let Some(chat_id) = chat.peek().chat_id.clone() else {
         return false;
@@ -837,6 +931,10 @@ pub(crate) fn send_code_prompt(ctx: &AppCtx, text: String) -> bool {
         show_toast(ctx, "Code plane not connected — check Settings");
         return false;
     };
+    let parts = crate::attach::code_parts(&text, files);
+    if parts.is_empty() {
+        return false;
+    }
     {
         let mut c = chat.write();
         let CodeChatState {
@@ -846,7 +944,10 @@ pub(crate) fn send_code_prompt(ctx: &AppCtx, text: String) -> bool {
             ..
         } = &mut *c;
         crate::state::mark_gap(items.len(), marks, last_at);
-        items.push(ChatItem::User { text: text.clone() });
+        items.push(ChatItem::User {
+            text,
+            attachments: crate::attach::records(files),
+        });
         c.running = true;
     }
     let ctx = *ctx;
@@ -879,7 +980,7 @@ pub(crate) fn send_code_prompt(ctx: &AppCtx, text: String) -> bool {
             (c.model.clone(), c.effort.clone())
         };
         if let Err(e) = client
-            .prompt_async(&chat_id, &sid, &text, model.as_deref(), effort.as_deref())
+            .prompt_async(&chat_id, &sid, &parts, model.as_deref(), effort.as_deref())
             .await
         {
             ctx.code_chat.clone().write().running = false;
@@ -1080,6 +1181,7 @@ pub(crate) fn request_pr(ctx: &AppCtx) {
         "Push this chat's branch and open a pull request for the work so far. \
          Summarize the changes in the PR body, then reply with the PR URL."
             .to_string(),
+        &[],
     );
 }
 
@@ -1099,7 +1201,7 @@ pub(crate) fn new_code_chat(ctx: &AppCtx, repo: String, task: String, model: Opt
                 if !task.trim().is_empty() {
                     // First prompt after the open flow resolves the session.
                     tokio::time::sleep(Duration::from_secs(1)).await;
-                    send_code_prompt(&ctx, task);
+                    send_code_prompt(&ctx, task, &[]);
                 }
             }
             Err(e) => show_toast(&ctx, format!("Create failed: {e}")),
@@ -1184,10 +1286,139 @@ mod tests {
             session_id: "ses_1".to_owned(),
             kind: "text".to_owned(),
             text: Some(text.to_owned()),
-            tool: None,
-            call_id: None,
-            state: None,
+            ..Part::default()
         }
+    }
+
+    fn file_part(id: &str, message_id: &str, name: &str) -> Part {
+        Part {
+            id: id.to_owned(),
+            message_id: message_id.to_owned(),
+            session_id: "ses_1".to_owned(),
+            kind: "file".to_owned(),
+            mime: Some("image/jpeg".to_owned()),
+            filename: Some(name.to_owned()),
+            url: Some("data:image/jpeg;base64,QUJD".to_owned()),
+            ..Part::default()
+        }
+    }
+
+    fn fold(
+        items: &mut Vec<ChatItem>,
+        index: &mut HashMap<String, usize>,
+        roles: &HashMap<String, String>,
+        part: &Part,
+    ) {
+        let (mut marks, mut last_at) = (Vec::new(), 0);
+        fold_part_into(
+            items,
+            index,
+            roles,
+            part,
+            None,
+            &mut GapSink {
+                marks: &mut marks,
+                last_at: &mut last_at,
+            },
+        );
+    }
+
+    fn roles_of(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(id, role)| ((*id).to_owned(), (*role).to_owned()))
+            .collect()
+    }
+
+    fn attachments_of(item: &ChatItem) -> &[crate::attach::Attachment] {
+        match item {
+            ChatItem::User { attachments, .. } => attachments,
+            _ => &[],
+        }
+    }
+
+    /// A message the reader sent with a photo comes back as a text part and a
+    /// file part. Both belong to the one bubble that is already on screen —
+    /// the file part must not open a second turn under it.
+    #[test]
+    fn a_replayed_file_part_lands_on_the_message_it_belongs_to() {
+        let mut items = Vec::new();
+        let mut index = HashMap::new();
+        let roles = roles_of(&[("msg_1", "user")]);
+
+        fold(
+            &mut items,
+            &mut index,
+            &roles,
+            &text_part("p1", "msg_1", "look at this"),
+        );
+        fold(
+            &mut items,
+            &mut index,
+            &roles,
+            &file_part("p2", "msg_1", "shot.jpg"),
+        );
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(attachments_of(&items[0]).len(), 1);
+        assert_eq!(attachments_of(&items[0])[0].name, "shot.jpg");
+        assert_eq!(index.get("p2"), Some(&0));
+    }
+
+    /// The optimistic bubble already shows what was just sent, and the server
+    /// echoes the same attachment back under an id of its own.
+    #[test]
+    fn the_echo_of_an_attachment_is_not_a_second_copy_of_it() {
+        let mut items = vec![ChatItem::User {
+            text: "look".to_owned(),
+            attachments: vec![crate::attach::Attachment {
+                name: "shot.jpg".to_owned(),
+                mime: "image/jpeg".to_owned(),
+                size: 3,
+                thumb: "THUMB".to_owned(),
+            }],
+        }];
+        let mut index = HashMap::new();
+        let roles = roles_of(&[("msg_1", "user")]);
+
+        fold(
+            &mut items,
+            &mut index,
+            &roles,
+            &text_part("p1", "msg_1", "look"),
+        );
+        fold(
+            &mut items,
+            &mut index,
+            &roles,
+            &file_part("p2", "msg_1", "shot.jpg"),
+        );
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(attachments_of(&items[0]).len(), 1);
+        assert_eq!(
+            attachments_of(&items[0])[0].thumb,
+            "THUMB",
+            "the phone's own thumbnail is the one that stays"
+        );
+    }
+
+    /// A file part on an assistant message belongs to whatever the agent was
+    /// doing, not to a turn the reader never wrote.
+    #[test]
+    fn an_agents_own_file_part_makes_no_user_bubble() {
+        let mut items = Vec::new();
+        let mut index = HashMap::new();
+        let roles = roles_of(&[("msg_1", "assistant")]);
+
+        fold(
+            &mut items,
+            &mut index,
+            &roles,
+            &file_part("p1", "msg_1", "chart.png"),
+        );
+
+        assert!(items.is_empty());
     }
 
     /// The prompt is shown the instant it is sent, and the server streams the
@@ -1196,6 +1427,7 @@ mod tests {
     fn server_echo_adopts_the_optimistic_prompt() {
         let mut items = vec![ChatItem::User {
             text: "refactor the folding".to_owned(),
+            attachments: Vec::new(),
         }];
         let mut part_index = HashMap::new();
         let mut roles = HashMap::new();
@@ -1237,6 +1469,7 @@ mod tests {
         for (n, msg) in [("prt_1", "msg_1"), ("prt_2", "msg_2")] {
             items.push(ChatItem::User {
                 text: "again".to_owned(),
+                attachments: Vec::new(),
             });
             fold_part_into(
                 &mut items,
@@ -1262,6 +1495,7 @@ mod tests {
     fn an_assistant_reply_is_still_its_own_item() {
         let mut items = vec![ChatItem::User {
             text: "hello".to_owned(),
+            attachments: Vec::new(),
         }];
         let mut part_index = HashMap::new();
         let mut roles = HashMap::new();

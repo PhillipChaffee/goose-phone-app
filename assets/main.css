@@ -1798,7 +1798,10 @@ details[open] > summary::before {
 
 /* With no chips to show, the control row holds one button and the two-row
  * shape becomes a tall box with a lone circle floating in it. Fold back to a
- * single row in that case. */
+ * single row in that case. Both chat composers now carry an attach button, so
+ * this is the fallback for a composer that offers nothing at all — kept
+ * because "nothing at all" is a state a new screen can reach, not because
+ * either of today's two does. */
 .composer:has(.composer-row > .send:only-child) {
   flex-direction: row;
   align-items: flex-end;
@@ -1878,6 +1881,170 @@ details[open] > summary::before {
 
 .composer-chip .icon {
   color: var(--text-secondary);
+}
+
+/* ── attachments ────────────────────────────────────────────────────── */
+
+/* The + that opens the photo / camera / Files sheet. Square rather than a
+ * pill because it holds a glyph and nothing else — a label in a fixed circle
+ * wraps and overflows (rule 9) — and 36px so it clears the 32px tap floor
+ * with room, between the 32px chips beside it and the 40px send. */
+.composer-chip.attach {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  justify-content: center;
+}
+
+/* What is attached to the message being written, above the field rather than
+ * beside the send button: a file name is server-length text, and the control
+ * row is where the send button has to survive it. Scrolls sideways for the
+ * same reason .action-row does — wrapping moves the composer, and where the
+ * composer sits is the one thing on this screen a thumb learns. */
+.attach-tray {
+  display: flex;
+  gap: 8px;
+  /* The chips carry a shadowless hairline, but a focus ring would be clipped
+   * flush against a scrollport with no padding. */
+  padding: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.attach-tray::-webkit-scrollbar {
+  display: none;
+}
+
+.attach-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  /* Wide enough for a name worth reading, narrow enough that three of them
+   * are visibly three. */
+  max-width: 200px;
+  height: 44px;
+  padding: 4px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.attach-thumb {
+  flex-shrink: 0;
+  display: block;
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+}
+
+.attach-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  color: var(--text-secondary);
+}
+
+/* The name is the only thing here that can give way, and it has to: the file
+ * came from a picker and can be called anything at all. */
+.attach-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.attach-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attach-size {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.attach-remove {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.attach-remove:active {
+  background: var(--bg-tertiary);
+}
+
+/* Reading and resizing three photos takes seconds, and a composer that sits
+ * there saying nothing is indistinguishable from one that dropped the pick. */
+.attach-chip.reading {
+  padding: 4px 12px;
+  color: var(--text-secondary);
+}
+
+/* Attachments inside the user's turn. The bubble is inverted, so everything
+ * in here takes its colour from the bubble rather than from the page's
+ * semantic text tokens — those are tuned against the page and would be the
+ * wrong way round on it. */
+.attach-list {
+  display: flex;
+  flex-wrap: wrap;
+  /* Not the default stretch: a flex row stretches a replaced element's box to
+   * the tallest item in it, and an <img> stretched on one axis with the
+   * default object-fit: fill is a photo of the wrong shape. */
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.attach-list:not(:last-child) {
+  margin-bottom: 8px;
+}
+
+.attach-image {
+  display: block;
+  max-width: 180px;
+  max-height: 180px;
+  border-radius: var(--radius-lg);
+}
+
+.attach-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, currentcolor 28%, transparent);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.attach-file .attach-icon {
+  width: auto;
+  color: inherit;
+}
+
+/* A tint of the bubble's own ink, not --text-secondary: on the inverted
+ * bubble that token is the wrong way round in both themes. 72% measures
+ * 6.0:1 in light and 6.1:1 in dark against the bubble. */
+.attach-file .attach-size {
+  color: color-mix(in srgb, currentcolor 72%, transparent);
 }
 
 /* Send is a filled circle at the trailing end, always in the same place. */
