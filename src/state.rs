@@ -232,13 +232,44 @@ pub(crate) struct AppCtx {
     /// Pending permission asks from code chats, tagged by chat id. A separate
     /// queue from `permission` by construction: goose and `OpenCode` ids can
     /// never collide or be cross-answered.
+    ///
+    /// The open chat's asks arrive on its event stream; every other chat's
+    /// come from the manager's aggregate over running containers
+    /// (`crate::code::refresh_code_permissions`).
     pub code_permissions: Signal<Vec<(String, opencode_client::CodePermission)>>,
+    /// `(chat id, permission id)` answered on this device, kept until the
+    /// server stops reporting them as pending.
+    ///
+    /// The aggregate is a snapshot: one taken a moment before a reply landed
+    /// still lists the ask, and merging it would put the panel back under the
+    /// thumb that just dismissed it. A tombstone that clears itself when the
+    /// server agrees is the smallest thing that cannot get stuck — and a
+    /// reply that *fails* removes its own, so an ask still blocking the agent
+    /// comes back rather than being hidden by a lie.
+    pub code_answered: Signal<HashSet<(String, String)>>,
     /// On-device transcript cache — instant open while a chat's container
     /// wakes, read-only offline. Server history stays authoritative.
     pub code_cache: Signal<crate::code::CodeCache>,
-    /// Bumped whenever a different code chat is opened; stale SSE pumps and
-    /// poll loops observe the change and exit.
+    /// Bumped whenever a different code chat is opened; stale SSE pumps
+    /// observe the change and exit.
+    ///
+    /// Not the list poll's business, and it used to be: reading this on the
+    /// ten-second tick meant the first tap on any row retired the loop that
+    /// carries the pending-ask aggregate, and nothing ever started another.
+    /// The poll has `code_poll` for that.
     pub code_epoch: Signal<u64>,
+    /// Generation of the chat-list poll loop. A loop retires when a newer one
+    /// takes its place, and for no other reason.
+    pub code_poll: Signal<u64>,
+    /// The chat whose SSE stream is pumping events into the app, if any.
+    ///
+    /// Which is not the same question as "which chat is open": `code_chat`
+    /// keeps its chat id after you back out to the list, and a stream can die
+    /// for good while it does. This says who is genuinely speaking for a
+    /// chat, and so who the manager's aggregate must not overrule — and, the
+    /// moment the stream ends, must take back over
+    /// (`crate::code::merge_permission_report`).
+    pub code_stream: Signal<Option<String>>,
     /// The review screen's state for the open chat. Deliberately not a field
     /// on `CodeChatState`: the chat screen clones its whole state on every
     /// keystroke, and parsed whole-file patches are the largest thing this
@@ -305,8 +336,11 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_agents_loading: use_signal(|| false),
         code_chat: use_signal(crate::code::CodeChatState::default),
         code_permissions: use_signal(Vec::new),
+        code_answered: use_signal(HashSet::new),
         code_cache,
         code_epoch: use_signal(|| 0),
+        code_poll: use_signal(|| 0),
+        code_stream: use_signal(|| None),
         code_diff: use_signal(crate::code::DiffState::default),
         code_pulls: use_signal(crate::code::PullsState::default),
         code_diff_wrap: use_signal(|| true),

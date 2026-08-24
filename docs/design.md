@@ -385,6 +385,58 @@ The chip and thumbnail styling itself is **provisional**: it is deliberately
 plain, and confined to the `.attach-*` block in the stylesheet and to
 `src/views/attach.rs`, so replacing it against a reference screenshot is a
 local change.
+### 12. A list only reports what its backend can be asked
+
+The Code list marks a chat that is blocked on a permission: a dot on its tile,
+and the ask itself inset in the card with `Approve` and `Deny` in it. The Chats
+list marks nothing. That difference is deliberate, and it is a difference
+between the two protocols rather than between how much care the two lists got.
+
+**The code plane can be asked, but only in one shape.** A pending ask is state
+inside a chat's own container and `GET /permission` reads it — one chat at a
+time, through the manager's transparent proxy, which *wakes a stopped
+container on any request to it*. Polling the list that way would hold every
+container open and undo the idle spin-down the whole plane is built on. So the
+manager aggregates instead (`GET /api/permissions`), over the containers that
+are already running, and that restriction costs nothing real: a container that
+is down has no live turn, so it has nothing parked on an ask. Every chat comes
+from that aggregate except the one with a **live event stream**, which is both
+faster and ordered and is left to speak for itself. Live is the word that
+matters: a stream ends when the container spins down, when the tailnet roams,
+or when the app was on another tab at the wrong moment, and the chat it was
+speaking for is handed straight back to the aggregate. "The chat you opened
+last" is not the same claim and is not good enough — nothing clears it, so it
+would exempt one chat, permanently, from the only thing that can report it.
+
+Which is also where the modal went: it interrupts you about the conversation
+you are *reading* — the chat screen or its review — and the cards report every
+other one, including the chat you were reading a moment ago and have left.
+A row says so twice, in the two registers rule 8 gives it: a dot on the tile
+for a scroll down the list, and `waiting on you` where the container's status
+would otherwise be. That chip is not decoration. Nothing in the manager's index
+reports a live turn on a chat the app does not have open, so without the ask
+folded back into it the row read `idle` directly above its own panel asking for
+a decision.
+
+**The goose plane cannot be asked, and does not need to be.**
+`session/request_permission` is a JSON-RPC request the *agent* makes of the
+client over the one WebSocket. It is not a resource: no method lists
+outstanding ones, and `session/list` reports titles, counts and a snippet with
+nothing in it about a parked turn. What the connection does deliver is every
+ask the agent raises on it, whichever session it belongs to — the event carries
+a session id, the queue is not filtered by the open chat, and the modal names
+the session when it is not the one on screen. On the goose side an unanswered
+ask is therefore *always already on your screen*, and a dot in the list could
+only ever be drawn behind the modal covering it.
+
+The case the Code list exists for cannot arise there either. An ask lives only
+as an outstanding request on a live socket: drop the connection and the server
+resolves it as a transport error and the turn unwinds with it, which is why the
+app clears that queue on disconnect. A goose session cannot be sitting blocked
+while the app is away. Nothing to poll, and nothing to catch up on.
+
+So the Chats list gets nothing — not a placeholder, not a greyed dot. Anything
+there would be a lie or a duplicate.
 
 ## Deviations, and why
 

@@ -57,8 +57,15 @@ pub fn App() -> Element {
 
     let toast = (ctx.toast)();
     // Two independent, backend-tagged queues; the goose modal wins ties.
+    //
+    // The code queue now holds asks for chats you are not in — the manager's
+    // aggregate puts them there so the list can show them — and those are
+    // answered on their card, not by a modal thrown over whatever you were
+    // doing. Only the ask belonging to the chat on screen is worth
+    // interrupting for, which includes not interrupting the list with the
+    // chat you were reading a moment ago (`open_chat_has_ask`).
     let goose_permission_open = !ctx.permission.read().is_empty();
-    let code_permission_open = !ctx.code_permissions.read().is_empty();
+    let code_permission_open = crate::code::open_chat_has_ask(&ctx);
 
     rsx! {
         document::Style { {MAIN_CSS} }

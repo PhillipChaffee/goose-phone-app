@@ -317,6 +317,37 @@ impl Default for CodePermission {
     }
 }
 
+/// One entry of the manager's pending-ask aggregate: a [`CodePermission`]
+/// with the chat it belongs to spliced in beside it.
+///
+/// Flattened rather than nested because that is what the manager produces —
+/// a chat's own `/permission` payload with one field added — and because an
+/// entry is useless without the chat: answering needs `/chat/<id>/…`.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
+pub struct PendingAsk {
+    #[serde(rename = "chatId")]
+    pub chat_id: String,
+    #[serde(flatten)]
+    pub permission: CodePermission,
+}
+
+/// The manager's answer to "which chats are blocked waiting on me".
+///
+/// Only chats whose container is **already running** are in it — a stopped
+/// container has no live turn, so it cannot be waiting on anything, and
+/// asking it would wake it (see [`CodeClient::pending_permissions`]).
+#[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
+pub struct PermissionReport {
+    pub permissions: Vec<PendingAsk>,
+    /// Running chats that did not answer in time. The aggregate still
+    /// succeeds without them, and a caller must read their absence from
+    /// `permissions` as "unknown" rather than as "nothing pending" — which is
+    /// the whole reason this list is on the wire instead of being swallowed.
+    pub unreachable: Vec<String>,
+}
+
 /// One message part as `OpenCode`'s API ships it. Kept lenient: only the
 /// fields the transcript fold needs are typed, everything else stays raw.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -877,6 +908,65 @@ impl CodeClient {
     pub async fn chats(&self) -> Result<Vec<ChatMeta>, CodeError> {
         let v = Self::json_of(self.req(reqwest::Method::GET, "/api/chats").send().await?).await?;
         Ok(serde_json::from_value(v.get("chats").cloned().unwrap_or_default()).unwrap_or_default())
+    }
+
+    /// Every pending permission ask across the chats that are **already
+    /// running** (`GET /api/permissions`).
+    ///
+    /// This is a manager-side aggregate, and it has to be: the alternative is
+    /// [`Self::permissions`] once per chat, and every `/chat/<id>/…` request
+    /// goes through the transparent proxy, which wakes a stopped container.
+    /// Polling the list that way would hold every container open and undo the
+    /// idle spin-down the whole code plane is built on. Restricting the
+    /// aggregate to running containers costs nothing real — a container that
+    /// is down has no live turn, so it has nothing parked on an ask.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or the request
+    /// outruns the client timeout, [`CodeError::Status`] on a non-2xx
+    /// answer — 401 for a wrong `password`, 404 from a manager too old to
+    /// have this route — and [`CodeError::Other`] for a 2xx body that is not
+    /// the contracted shape. A single container that fails to answer does
+    /// **not** fail the aggregate: the manager names it in
+    /// [`PermissionReport::unreachable`] and still returns 200.
+    pub async fn pending_permissions(&self) -> Result<PermissionReport, CodeError> {
+        Self::decode_permission_report(
+            Self::json_of(
+                self.req(reqwest::Method::GET, "/api/permissions")
+                    .send()
+                    .await?,
+            )
+            .await?,
+        )
+    }
+
+    /// Read the aggregate's body, or say why it could not be read.
+    ///
+    /// The strictest decode in this client, and the only one that has to be.
+    /// Everywhere else a 2xx that does not parse degrades to an empty list
+    /// and the screen shows less than it could; here the report is read as
+    /// authority over what is *not* pending — the merge clears every card the
+    /// report does not list — so `unwrap_or_default()` on a body this client
+    /// cannot read announces "nothing is waiting on you anywhere" in a voice
+    /// indistinguishable from the truthful answer, and wipes the list. An
+    /// error keeps whatever the app already had, which is the safe half of
+    /// the ambiguity. `{"permissions": null}` from a manager that meant "none"
+    /// lands here, and so does the `Value::Null` [`Self::json_of`] hands back
+    /// for a body that stopped mid-read.
+    ///
+    /// A bare array is refused rather than tolerated: serde derives
+    /// struct-from-sequence, so `[]` would otherwise decode as an empty
+    /// report — an unrecognised shape that happens to be empty is precisely
+    /// the false negative above.
+    fn decode_permission_report(body: Value) -> Result<PermissionReport, CodeError> {
+        if !body.is_object() {
+            return Err(CodeError::Other(
+                "bad permission aggregate: expected an object carrying `permissions`".into(),
+            ));
+        }
+        serde_json::from_value(body)
+            .map_err(|e| CodeError::Other(format!("bad permission aggregate: {e}")))
     }
 
     /// Create a chat on `repo` with `task` as its opening instruction.
@@ -1971,5 +2061,111 @@ mod tests {
             }
             other => panic!("wrong event: {other:?}"),
         }
+    }
+
+    /// The aggregate's contract, verbatim: a chat's own permission payload
+    /// with `chatId` spliced in beside it. Both halves have to survive the
+    /// flatten, because an ask without its chat cannot be answered and a
+    /// chat without its ask is nothing to show.
+    #[test]
+    fn an_aggregate_entry_carries_both_its_chat_and_its_ask() {
+        let raw = json!({
+            "permissions": [{
+                "chatId": "chat_a1",
+                "id": "per_1",
+                "sessionID": "ses_1",
+                "type": "bash",
+                "title": "Run git push",
+                "metadata": {"command": "git push"}
+            }],
+            "unreachable": ["chat_b2"]
+        });
+        let report: PermissionReport = serde_json::from_value(raw).unwrap();
+        assert_eq!(report.permissions.len(), 1);
+        let ask = &report.permissions[0];
+        assert_eq!(ask.chat_id, "chat_a1");
+        assert_eq!(ask.permission.id, "per_1");
+        assert_eq!(ask.permission.session_id, "ses_1");
+        assert_eq!(ask.permission.kind, "bash");
+        assert_eq!(ask.permission.title, "Run git push");
+        assert_eq!(
+            ask.permission
+                .metadata
+                .get("command")
+                .and_then(Value::as_str),
+            Some("git push")
+        );
+        assert_eq!(report.unreachable, ["chat_b2"]);
+    }
+
+    /// "Nothing is waiting on you" is the common answer and must not need the
+    /// optional half of the contract to be spelled out.
+    #[test]
+    fn an_empty_aggregate_needs_no_optional_keys() {
+        let report: PermissionReport = serde_json::from_value(json!({"permissions": []})).unwrap();
+        assert!(report.permissions.is_empty());
+        assert!(report.unreachable.is_empty());
+    }
+
+    /// The contracted shape survives the strict decode, both halves of it.
+    #[test]
+    fn the_contracted_aggregate_decodes() {
+        let report = CodeClient::decode_permission_report(json!({
+            "permissions": [{
+                "chatId": "chat_a1", "id": "per_1", "sessionID": "ses_1",
+                "type": "bash", "title": "Run git push", "metadata": {}
+            }],
+            "unreachable": ["chat_b2"]
+        }))
+        .unwrap();
+        assert_eq!(report.permissions.len(), 1);
+        assert_eq!(report.unreachable, ["chat_b2"]);
+    }
+
+    /// A 2xx whose shape this client cannot read is not an answer, and above
+    /// all it is not "nothing is waiting on you anywhere" — that reading is
+    /// what clears every card on the list, which is the failure the aggregate
+    /// was built to remove rather than to cause.
+    #[test]
+    fn a_body_the_client_cannot_read_is_an_error_rather_than_an_empty_report() {
+        for body in [
+            // A manager that serialised Python's None for "none pending".
+            json!({"permissions": null}),
+            // What json_of hands back for a body that stopped mid-read, and
+            // for a 204.
+            json!(null),
+            // A map keyed by chat where the flat list was contracted.
+            json!({"permissions": {"chat_a": []}}),
+            // The bare-array shapes: serde would read the empty one as a
+            // struct with every field defaulted.
+            json!([]),
+            json!([{"chatId": "chat_a", "id": "per_1"}]),
+            // An auth or captive-portal page served with a 200 through the
+            // tailnet front door.
+            json!("<html>sign in</html>"),
+        ] {
+            assert!(
+                CodeClient::decode_permission_report(body.clone()).is_err(),
+                "{body} must not read as an empty report"
+            );
+        }
+    }
+
+    /// A manager that grows a field must not take the aggregate down with it:
+    /// unknown keys are ignored, at both levels.
+    #[test]
+    fn an_aggregate_tolerates_fields_it_has_not_heard_of() {
+        let raw = json!({
+            "permissions": [{
+                "chatId": "chat_a1", "id": "per_1", "sessionID": "ses_1",
+                "type": "bash", "title": "Run git push", "metadata": {},
+                "askedAt": 1_756_000_000.0
+            }],
+            "unreachable": [],
+            "scannedAt": 1_756_000_001.0
+        });
+        let report: PermissionReport = serde_json::from_value(raw).unwrap();
+        assert_eq!(report.permissions.len(), 1);
+        assert_eq!(report.permissions[0].chat_id, "chat_a1");
     }
 }

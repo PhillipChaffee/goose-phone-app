@@ -12,12 +12,13 @@ use opencode_client::{Checks, FileStatus, PullRequest};
 
 use crate::attach::AttachTarget;
 use crate::code::{
-    answer_code_permission, checks_label, delete_code_chat, ensure_code_agents, ensure_code_models,
-    expand_diff_gap, is_free_model, load_code_diff, mark_all_diff_seen, merge_block_note,
-    merge_pull, new_code_chat, open_chat_allows_free_models, open_code_chat, open_code_pulls,
-    pull_state_label, refresh_code_chats, reveal_removed_lines, send_code_prompt, set_code_agent,
-    set_code_effort, set_code_model, start_code_poll, status_label, stop_code_turn,
-    toggle_diff_file, toggle_diff_seen, CodeScreen, DiffFile, DiffState,
+    answer_code_permission, ask_label, checks_label, delete_code_chat, ensure_code_agents,
+    ensure_code_models, expand_diff_gap, is_free_model, load_code_diff, mark_all_diff_seen,
+    merge_block_note, merge_pull, new_code_chat, open_chat_allows_free_models, open_code_chat,
+    open_code_pulls, pull_state_label, refresh_code_chats, refresh_code_permissions,
+    reveal_removed_lines, send_code_prompt, set_code_agent, set_code_effort, set_code_model,
+    start_code_poll, status_label, stop_code_turn, toggle_diff_file, toggle_diff_seen, CodeScreen,
+    DiffFile, DiffState,
 };
 use crate::diff::Block;
 use crate::external::open_external;
@@ -32,7 +33,7 @@ use crate::views::session_settings::{
 use crate::views::{
     Confirm, ConfirmDelete, MenuItem, OverflowButton, OverflowSheet, ScrollToBottom, SwipeDelete,
 };
-use opencode_client::{Agent, ModelInfo};
+use opencode_client::{Agent, ChatMeta, CodePermission, ModelInfo};
 
 #[component]
 pub fn CodeSessionsView() -> Element {
@@ -57,6 +58,7 @@ pub fn CodeSessionsView() -> Element {
 
     let running_chat = ctx.code_chat.read().chat_id.clone();
     let running_turn = ctx.code_chat.read().running;
+    let asks = (ctx.code_permissions)();
 
     rsx! {
         header { class: "topbar",
@@ -124,47 +126,12 @@ pub fn CodeSessionsView() -> Element {
                 }
 
                 ul { class: "session-list",
-                    for meta in chats {
-                        li {
-                            key: "{meta.id}",
-                            class: "session-item",
-                            onclick: move |_| open_code_chat(&ctx, meta.clone()),
-                            div { class: "session-swipe",
-                                div { class: "session-tile", Icon { name: "code" } }
-                                div {
-                                    class: "session-main",
-                                    div { class: "session-head",
-                                        div { class: "session-title", "{meta.title}" }
-                                        span { class: "session-age",
-                                            {relative_time_secs(meta.last_active)}
-                                        }
-                                    }
-                                    div { class: "session-meta",
-                                        {
-                                            let turn = running_chat.as_deref() == Some(meta.id.as_str())
-                                                && running_turn;
-                                            let (dot, label) = status_label(&meta, turn);
-                                            rsx! {
-                                                span { class: "chip",
-                                                    span { class: "{dot}" }
-                                                    "{label}"
-                                                }
-                                                span { "{meta.repo}" }
-                                                if !meta.branch.is_empty() {
-                                                    span { "{meta.branch}" }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            SwipeDelete {
-                                on_delete: {
-                                    let id = meta.id.clone();
-                                    move |()| confirm_delete.set(Some(id.clone()))
-                                }
-                            }
-                        }
+                    {
+                        chats.iter().map(|meta| {
+                            let turn = running_chat.as_deref() == Some(meta.id.as_str())
+                                && running_turn;
+                            render_code_row(&ctx, meta, turn, chat_ask(&asks, &meta.id), confirm_delete)
+                        })
                     }
                 }
             }
@@ -192,6 +159,112 @@ pub fn CodeSessionsView() -> Element {
                     confirm_delete.set(None);
                     delete_code_chat(&ctx, chat_id.clone());
                 },
+            }
+        }
+    }
+}
+
+/// The ask a chat's card should carry, and how many of its own are behind it.
+///
+/// Front of the queue plus a count, the same shape the permission modal has
+/// always used: a card is not the place to work through a backlog, and the
+/// count is what says there is one.
+fn chat_ask(queue: &[(String, CodePermission)], chat_id: &str) -> Option<(CodePermission, usize)> {
+    let mut mine = queue.iter().filter(|(cid, _)| cid == chat_id);
+    let front = mine.next()?.1.clone();
+    Some((front, mine.count()))
+}
+
+/// One chat's row: what it is, what its container is doing, and — when it is
+/// parked on a permission — the ask itself.
+fn render_code_row(
+    ctx: &AppCtx,
+    meta: &ChatMeta,
+    running_turn: bool,
+    ask: Option<(CodePermission, usize)>,
+    mut confirm_delete: Signal<Option<String>>,
+) -> Element {
+    let ctx = *ctx;
+    let meta = meta.clone();
+    let id = meta.id.clone();
+    let waiting = ask.is_some();
+    let (dot, label) = status_label(&meta, running_turn, waiting);
+
+    rsx! {
+        li {
+            key: "{meta.id}",
+            class: "session-item",
+            onclick: {
+                let meta = meta.clone();
+                move |_| open_code_chat(&ctx, meta.clone())
+            },
+            div { class: "session-swipe",
+                div {
+                    // Rule 8: state is a dot. On the tile rather than in the
+                    // panel below it so a scroll down the list answers "which
+                    // one wants me" without reading a word.
+                    class: if waiting { "session-tile attention" } else { "session-tile" },
+                    Icon { name: "code" }
+                }
+                div { class: "session-main",
+                    div { class: "session-head",
+                        div { class: "session-title", "{meta.title}" }
+                        span { class: "session-age", {relative_time_secs(meta.last_active)} }
+                    }
+                    div { class: "session-meta",
+                        span { class: "chip",
+                            span { class: "{dot}" }
+                            "{label}"
+                        }
+                        span { "{meta.repo}" }
+                        if !meta.branch.is_empty() {
+                            span { "{meta.branch}" }
+                        }
+                    }
+                    if let Some((perm, more)) = ask {
+                        {render_ask_panel(&ctx, &id, &perm, more)}
+                    }
+                }
+            }
+            SwipeDelete {
+                on_delete: move |()| confirm_delete.set(Some(id.clone()))
+            }
+        }
+    }
+}
+
+/// The ask, inset in the card that is blocked on it.
+///
+/// Two answers, not three. "Always allow" changes what the agent may do
+/// unattended from here on, and that is a decision to take with the
+/// conversation in front of you — tapping the panel's text opens the chat,
+/// where the modal offers it along with the ask's details. What is here is
+/// the pair you can answer from a list without reading anything else.
+fn render_ask_panel(ctx: &AppCtx, chat_id: &str, perm: &CodePermission, more: usize) -> Element {
+    let ctx = *ctx;
+    let label = ask_label(perm);
+    // Each answer takes its own copy: the row re-renders on every poll, and a
+    // handler that borrowed the queue's entry would outlive it.
+    let answer = |response: &'static str| {
+        let (chat_id, perm) = (chat_id.to_owned(), perm.clone());
+        move |e: Event<MouseData>| {
+            // The whole row opens the chat (design rule 9), so a control
+            // inside it has to say it was the target — otherwise approving
+            // also navigates.
+            e.stop_propagation();
+            answer_code_permission(&ctx, chat_id.clone(), perm.clone(), response);
+        }
+    };
+
+    rsx! {
+        div { class: "session-ask",
+            p { class: "session-ask-title", "Approve or deny {label}" }
+            div { class: "session-ask-actions",
+                button { class: "btn small danger-outline", onclick: answer("reject"), "Deny" }
+                button { class: "btn small primary", onclick: answer("once"), "Approve" }
+            }
+            if more > 0 {
+                p { class: "session-ask-more", "+{more} more waiting" }
             }
         }
     }
@@ -391,13 +464,27 @@ fn model_choices(offered: &[&ModelInfo]) -> Vec<SettingChoice> {
         .collect()
 }
 
+/// The ask for the chat you have open, over whatever screen you are on.
+///
+/// Scoped to that one chat since the manager's aggregate started filling the
+/// queue for every running container: a modal is an interruption, and being
+/// interrupted about a conversation you are not in — possibly several, in a
+/// row — is what the card in the list exists to avoid. Those are answered
+/// there; this stays what it was.
 #[component]
 pub fn CodePermissionModal() -> Element {
     let ctx = use_app_ctx();
     let queue = (ctx.code_permissions)();
-    let Some((chat_id, perm)) = queue.first().cloned() else {
+    // peek, not read: the modal is remounted when the queue changes, and
+    // subscribing to the open chat would rebuild it on every streamed token.
+    let open = ctx.code_chat.peek().chat_id.clone();
+    let mut mine = queue
+        .iter()
+        .filter(|(cid, _)| Some(cid.as_str()) == open.as_deref());
+    let Some((chat_id, perm)) = mine.next().cloned() else {
         return rsx! {};
     };
+    let pending_more = mine.count();
 
     let detail = if perm.metadata.is_null() {
         String::new()
@@ -411,12 +498,7 @@ pub fn CodePermissionModal() -> Element {
             .find(|c| c.id == chat_id)
             .map_or_else(|| chat_id.clone(), |c| c.title.clone())
     };
-    let pending_more = queue.len().saturating_sub(1);
-    let title = if perm.title.is_empty() {
-        perm.kind.clone()
-    } else {
-        perm.title.clone()
-    };
+    let title = ask_label(&perm);
 
     rsx! {
         div { class: "modal-backdrop",
@@ -631,7 +713,14 @@ pub fn CodeChatView() -> Element {
                 onclick: move |_| {
                     let mut screen = ctx.code_screen;
                     screen.set(CodeScreen::List);
-                    spawn_forever(async move { refresh_code_chats(&ctx).await });
+                    spawn_forever(async move {
+                        refresh_code_chats(&ctx).await;
+                        // The rows and the asks are one statement about the
+                        // list. Refreshing half of it is how a chat that had
+                        // gone quiet came back showing a fresh timestamp and
+                        // no sign that it was blocked.
+                        refresh_code_permissions(&ctx).await;
+                    });
                 },
                 Icon { name: "chevron-left" }
             }
@@ -1319,7 +1408,10 @@ fn merge_confirm_body(pull: &PullRequest) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{agent_choices, code_chip_label, code_mode_label, model_choices, Agent, ModelInfo};
+    use super::{
+        agent_choices, chat_ask, code_chip_label, code_mode_label, model_choices, Agent,
+        CodePermission, ModelInfo,
+    };
     use opencode_client::AgentMode;
 
     fn agent(name: &str, mode: AgentMode, description: Option<&str>) -> Agent {
@@ -1356,6 +1448,41 @@ mod tests {
     fn the_mode_chip_says_mode_until_one_is_picked() {
         assert_eq!(code_mode_label(None), "Mode");
         assert_eq!(code_mode_label(Some("plan")), "Plan");
+    }
+
+    fn queued(entries: &[(&str, &str)]) -> Vec<(String, CodePermission)> {
+        entries
+            .iter()
+            .map(|(chat, id)| {
+                (
+                    (*chat).to_owned(),
+                    CodePermission {
+                        id: (*id).to_owned(),
+                        ..CodePermission::default()
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// A card shows the front of its own queue and counts the rest of its
+    /// own — not the rest of the list's, which is what a global count would
+    /// be now that every running chat's asks share one queue.
+    #[test]
+    fn a_card_counts_only_its_own_backlog() {
+        let queue = queued(&[
+            ("chat_a", "per_1"),
+            ("chat_b", "per_2"),
+            ("chat_a", "per_3"),
+            ("chat_a", "per_4"),
+        ]);
+        assert_eq!(
+            chat_ask(&queue, "chat_a").map(|(front, more)| (front.id, more)),
+            Some(("per_1".to_owned(), 2)),
+            "the front of this chat's queue, in arrival order, and its own count"
+        );
+        assert_eq!(chat_ask(&queue, "chat_b").map(|(_, n)| n), Some(0));
+        assert!(chat_ask(&queue, "chat_c").is_none());
     }
 
     fn model(provider: &str, id: &str, name: &str) -> ModelInfo {

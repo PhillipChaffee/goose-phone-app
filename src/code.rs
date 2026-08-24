@@ -13,20 +13,20 @@
 //!   - permission asks arrive as events and are answered over HTTP with
 //!     `once` / `always` / `reject`
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use opencode_client::{
     ChatMeta, Checks, CodeClient, CodeConfig, CodeEvent, CodePermission, FileDiff,
-    MessageWithParts, Part, PullRequest, PullState,
+    MessageWithParts, Part, PermissionReport, PullRequest, PullState,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::diff::{DiffLine, Gap};
-use crate::state::{show_toast, AppCtx, ChatItem, ConnState};
+use crate::state::{show_toast, AppCtx, ChatItem, ConnState, Tab};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CodeScreen {
@@ -294,6 +294,10 @@ pub(crate) async fn code_connect(ctx: &AppCtx) -> bool {
             conn.set(ConnState::Connected { agent });
             refresh_code_chats(ctx).await;
             refresh_repos(ctx).await;
+            // Before the first poll tick, not ten seconds after it: an ask
+            // raised while the app was closed is the case this whole path
+            // exists for, and it is already waiting when the list first paints.
+            refresh_code_permissions(ctx).await;
             true
         }
         Err(e) => {
@@ -327,26 +331,151 @@ async fn refresh_repos(ctx: &AppCtx) {
     }
 }
 
-/// Keep the chat list fresh while the Code tab is visible. One loop per
-/// epoch; a tab switch away lets it park (cheap no-op ticks).
+/// Fold the manager's aggregate of pending asks into the queue, so a chat you
+/// have not opened can say that it is blocked waiting on you.
+///
+/// One request to the manager, never one per chat: `/chat/<id>/…` goes
+/// through the transparent proxy and wakes a stopped container, so walking
+/// the list would keep every container alive and defeat the idle spin-down.
+/// The manager asks only the containers that are already running, which is
+/// not a compromise — a container that is down has no live turn to park.
+pub(crate) async fn refresh_code_permissions(ctx: &AppCtx) {
+    let Some(client) = ctx.code_client.peek().clone() else {
+        return;
+    };
+    // Silent on failure, deliberately: this runs on a timer, and a manager
+    // too old to have the route would otherwise raise a toast every ten
+    // seconds about a feature the reader cannot act on. The queue keeps
+    // whatever it had — which is also why a body the client cannot parse is
+    // an error rather than an empty report: read as one, it would mean
+    // "nothing is waiting on you anywhere" and clear every card on the list.
+    let Ok(report) = client.pending_permissions().await else {
+        return;
+    };
+    // The chat with a live event stream, which is not the same as the chat
+    // that was opened last — see `stream_events`.
+    let streaming = ctx.code_stream.peek().clone();
+    let mut queue = ctx.code_permissions;
+    let mut answered = ctx.code_answered;
+    merge_permission_report(
+        &mut queue.write(),
+        &mut answered.write(),
+        &report,
+        streaming.as_deref(),
+    );
+}
+
+/// Reconcile a snapshot of what is pending server-side with what is queued.
+///
+/// The snapshot is authoritative for every chat it can speak for, which is
+/// every chat except two. The chat with a **live event stream** is left to
+/// it: that stream is both faster and ordered, and a snapshot taken before an
+/// ask arrived would otherwise blink it out of the modal for a poll interval.
+/// *Live* is the load-bearing word. This used to read "the chat that is
+/// open", taken from `code_chat`, which is never cleared — so the last chat
+/// you visited was excluded for the rest of the session, including after its
+/// stream had died and left nothing else to speak for it. The chat most
+/// likely to be blocked was the one chat the aggregate was forbidden to
+/// report. A chat the manager lists as **unreachable** is one whose container
+/// did not answer, which is not the same as a container with nothing pending
+/// — dropping its ask on that would be inventing an answer.
+fn merge_permission_report(
+    queue: &mut Vec<(String, CodePermission)>,
+    answered: &mut HashSet<(String, String)>,
+    report: &PermissionReport,
+    streaming: Option<&str>,
+) {
+    let speaks_for =
+        |chat: &str| streaming != Some(chat) && !report.unreachable.iter().any(|c| c == chat);
+    let listed = |chat: &str, id: &str| {
+        report
+            .permissions
+            .iter()
+            .any(|a| a.chat_id == chat && a.permission.id == id)
+    };
+
+    queue.retain(|(chat, p)| !speaks_for(chat) || listed(chat, &p.id));
+    // A tombstone outlives its usefulness the moment the server stops
+    // reporting the ask it was hiding; keeping it would be a slow leak, and
+    // an id reused by a rebuilt container would be silently swallowed.
+    answered.retain(|(chat, id)| !speaks_for(chat) || listed(chat, id));
+
+    for ask in &report.permissions {
+        let (chat, perm) = (&ask.chat_id, &ask.permission);
+        // An ask with no chat cannot be answered — replying needs the chat in
+        // the path — and one with no id cannot be told apart from the next.
+        if chat.is_empty() || perm.id.is_empty() || streaming == Some(chat.as_str()) {
+            continue;
+        }
+        if answered.contains(&(chat.clone(), perm.id.clone())) {
+            continue;
+        }
+        if queue.iter().any(|(c, p)| c == chat && p.id == perm.id) {
+            continue;
+        }
+        queue.push((chat.clone(), perm.clone()));
+    }
+}
+
+/// Keep the chat list fresh while the Code tab is visible. One loop at a
+/// time; a tab switch away lets it park (cheap no-op ticks).
+///
+/// The pending-ask aggregate rides the same tick rather than getting a timer
+/// of its own: it is the other half of "what is this list doing right now",
+/// and two loops on the same cadence would only mean two ways for the list to
+/// be internally inconsistent.
 pub(crate) fn start_code_poll(ctx: &AppCtx) {
-    let epoch = *ctx.code_epoch.peek();
+    let mut generation = ctx.code_poll;
+    let mine = generation.peek().wrapping_add(1);
+    generation.set(mine);
     let ctx = *ctx;
     spawn_forever(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;
-            if *ctx.code_epoch.peek() != epoch {
-                return;
-            }
-            if *ctx.tab.peek() != crate::state::Tab::Code {
-                continue;
-            }
-            if ctx.code_client.peek().is_none() {
-                continue;
+            match poll_tick(
+                mine,
+                *ctx.code_poll.peek(),
+                *ctx.tab.peek(),
+                ctx.code_client.peek().is_some(),
+            ) {
+                Tick::Retire => return,
+                Tick::Idle => continue,
+                Tick::Fetch => {}
             }
             refresh_code_chats(&ctx).await;
+            refresh_code_permissions(&ctx).await;
         }
     });
+}
+
+/// What a poll tick does when it wakes up.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tick {
+    /// A newer loop has taken this one's place.
+    Retire,
+    /// Nothing to ask for from here — sleep again.
+    Idle,
+    /// Refresh the rows and the asks.
+    Fetch,
+}
+
+/// A poll loop retires for a newer poll loop, and for nothing else.
+///
+/// Spelled out as a function so the one input it must not have is visibly
+/// absent from the signature. It used to read `code_epoch`, which counts chat
+/// *opens* — so the first tap on any row retired the loop, and neither caller
+/// of `start_code_poll` can fire twice (both are gated on a connection that
+/// is made once). From that tap on, the aggregate was fetched only by a pull
+/// or a restart, and a chat that blocked on a permission afterwards was back
+/// to looking exactly like a chat with nothing to do.
+const fn poll_tick(mine: u64, current: u64, tab: Tab, connected: bool) -> Tick {
+    if current != mine {
+        Tick::Retire
+    } else if !matches!(tab, Tab::Code) || !connected {
+        Tick::Idle
+    } else {
+        Tick::Fetch
+    }
 }
 
 // ------------------------------------------------------- session settings
@@ -670,7 +799,29 @@ async fn catch_up_permissions(ctx: &AppCtx, client: &CodeClient, chat_id: &str) 
 
 /// Fold the live SSE stream into the open chat until it ends, the user opens
 /// another chat, or the container goes away (which schedules a re-attach).
+///
+/// Says on the way in that this chat has a stream speaking for it, and takes
+/// that back however the pump ends. It is what stops the manager's aggregate
+/// second-guessing the stream, and — the half that was missing — what hands
+/// the chat back to the aggregate when the stream is gone. A stream can end
+/// for good: a `Disconnected` raised while the Code tab is not showing
+/// schedules no re-attach, and `attach_chat` gives up outright when the
+/// session fetch fails. Both left a chat with nobody speaking for it and the
+/// aggregate still barred from doing so.
 async fn stream_events(ctx: &AppCtx, client: &CodeClient, chat_id: &str, epoch: u64) {
+    let mut live = ctx.code_stream;
+    live.set(Some(chat_id.to_owned()));
+    pump_events(ctx, client, chat_id, epoch).await;
+    // Not an unconditional clear: a re-attach that has already claimed the
+    // marker owns it now, and this one is the ghost.
+    let still_ours = live.peek().as_deref() == Some(chat_id);
+    if still_ours {
+        live.set(None);
+    }
+}
+
+/// The stream pump itself: every event folded until one of the three exits.
+async fn pump_events(ctx: &AppCtx, client: &CodeClient, chat_id: &str, epoch: u64) {
     let mut events = client.events(chat_id);
     while let Some(event) = events.recv().await {
         if *ctx.code_epoch.peek() != epoch {
@@ -727,7 +878,7 @@ async fn stream_events(ctx: &AppCtx, client: &CodeClient, chat_id: &str, epoch: 
                 ctx.code_chat.clone().write().running = false;
                 write_cache(ctx);
                 tokio::time::sleep(Duration::from_secs(5)).await;
-                if *ctx.code_epoch.peek() == epoch && *ctx.tab.peek() == crate::state::Tab::Code {
+                if *ctx.code_epoch.peek() == epoch && *ctx.tab.peek() == Tab::Code {
                     let ctx = *ctx;
                     let chat_id = chat_id.to_string();
                     spawn_forever(async move { attach_chat(&ctx, chat_id, epoch).await });
@@ -1153,15 +1304,62 @@ pub(crate) fn answer_code_permission(
         .clone()
         .write()
         .retain(|(cid, p)| !(cid == &chat_id && p.id == perm.id));
+    let key = (chat_id.clone(), perm.id.clone());
+    ctx.code_answered.clone().write().insert(key.clone());
     let ctx = *ctx;
     spawn_forever(async move {
         if let Err(e) = client
             .reply_permission(&chat_id, &perm.session_id, &perm.id, &response)
             .await
         {
+            // The ask is still parked server-side, so the tombstone would be
+            // hiding something real. Drop it and let the next aggregate put
+            // the card back; the toast says why it reappeared.
+            ctx.code_answered.clone().write().remove(&key);
             show_toast(&ctx, format!("Permission reply failed: {e}"));
         }
     });
+}
+
+/// What an ask is called: its title, or the tool kind when it has none.
+pub(crate) fn ask_label(perm: &CodePermission) -> String {
+    if perm.title.is_empty() {
+        perm.kind.clone()
+    } else {
+        perm.title.clone()
+    }
+}
+
+/// Whether the chat you are reading has an ask outstanding.
+///
+/// That one belongs to the modal, which is how a permission has always been
+/// answered from inside a conversation. Every other chat's belongs to its
+/// card in the list — a modal thrown over the screen about a chat you are not
+/// in is the aggregate shouting rather than reporting.
+///
+/// "Reading", not "opened last": `code_chat` keeps its chat id when you back
+/// out to the list, and the aggregate now speaks for a chat whose stream has
+/// ended, so asking `code_chat` alone would throw the modal over the very
+/// list whose card is already showing that ask with the same two answers on
+/// it.
+pub(crate) fn open_chat_has_ask(ctx: &AppCtx) -> bool {
+    // peek throughout, read on the queue: this decides whether the root
+    // renders the modal, and subscribing to `code_chat` would re-run the
+    // whole app on every streamed token. The screen and the tab are safe to
+    // peek because the root already reads both to pick what to render.
+    if *ctx.tab.peek() != Tab::Code {
+        return false;
+    }
+    if !matches!(*ctx.code_screen.peek(), CodeScreen::Chat | CodeScreen::Diff) {
+        return false;
+    }
+    let Some(open) = ctx.code_chat.peek().chat_id.clone() else {
+        return false;
+    };
+    ctx.code_permissions
+        .read()
+        .iter()
+        .any(|(cid, _)| *cid == open)
 }
 
 /// Open the review screen and fetch the session's cumulative diff into it.
@@ -1529,7 +1727,22 @@ pub(crate) fn write_cache(ctx: &AppCtx) {
 }
 
 /// Human label for a chat's lifecycle status in the list.
-pub(crate) fn status_label(meta: &ChatMeta, running_turn: bool) -> (&'static str, String) {
+///
+/// An outstanding ask outranks every container status, because it is both the
+/// more specific fact and the more recent one. `running_turn` is only ever
+/// true for the chat the app has open — nothing in the manager's index says
+/// whether a container is mid-turn — so a chat parked on a permission fell to
+/// `("running", false)` and reported itself **idle**, in the line directly
+/// above its own "Approve or deny …" panel. A card cannot hold both those
+/// statements at once, and the aggregate is the one that knows.
+pub(crate) fn status_label(
+    meta: &ChatMeta,
+    running_turn: bool,
+    waiting: bool,
+) -> (&'static str, String) {
+    if waiting {
+        return ("dot wait", "waiting on you".to_string());
+    }
     match (meta.status.as_str(), running_turn) {
         ("running", true) => ("dot busy", "working".to_string()),
         ("running", false) => ("dot on", "idle".to_string()),
@@ -1541,10 +1754,11 @@ pub(crate) fn status_label(meta: &ChatMeta, running_turn: bool) -> (&'static str
 #[cfg(test)]
 mod tests {
     use super::{
-        checks_label, fold_part_into, merge_block_note, pull_state_label, ChatItem, Checks,
-        GapSink, HashMap, PullRequest, PullState,
+        checks_label, fold_part_into, merge_block_note, merge_permission_report, poll_tick,
+        pull_state_label, status_label, ChatItem, ChatMeta, Checks, CodePermission, GapSink,
+        HashMap, HashSet, PermissionReport, PullRequest, PullState, Tab, Tick,
     };
-    use opencode_client::Part;
+    use opencode_client::{Part, PendingAsk};
 
     fn pull(state: PullState, draft: bool, mergeable: Option<bool>, checks: Checks) -> PullRequest {
         PullRequest {
@@ -1951,5 +2165,234 @@ mod tests {
 
         assert_eq!(items.len(), 2);
         assert!(matches!(items[1], ChatItem::Assistant { .. }));
+    }
+
+    // ------------------------------------------------- the pending aggregate
+
+    fn ask(chat: &str, id: &str) -> PendingAsk {
+        PendingAsk {
+            chat_id: chat.to_owned(),
+            permission: CodePermission {
+                id: id.to_owned(),
+                session_id: "ses_1".to_owned(),
+                title: "Run git push".to_owned(),
+                kind: "bash".to_owned(),
+                ..CodePermission::default()
+            },
+        }
+    }
+
+    fn report(permissions: Vec<PendingAsk>, unreachable: &[&str]) -> PermissionReport {
+        PermissionReport {
+            permissions,
+            unreachable: unreachable.iter().map(|s| (*s).to_owned()).collect(),
+        }
+    }
+
+    fn ids(queue: &[(String, CodePermission)]) -> Vec<(&str, &str)> {
+        queue
+            .iter()
+            .map(|(c, p)| (c.as_str(), p.id.as_str()))
+            .collect()
+    }
+
+    /// The point of the whole aggregate: a chat you have never opened, whose
+    /// container is up and parked on an ask, says so without being visited.
+    #[test]
+    fn an_ask_from_a_chat_you_have_not_opened_reaches_the_queue() {
+        let mut queue = Vec::new();
+        let mut answered = HashSet::new();
+        merge_permission_report(
+            &mut queue,
+            &mut answered,
+            &report(vec![ask("chat_a", "per_1")], &[]),
+            None,
+        );
+        assert_eq!(ids(&queue), [("chat_a", "per_1")]);
+    }
+
+    /// An ask the server no longer reports has been answered somewhere else,
+    /// or its turn died with it. Either way the card must not linger.
+    #[test]
+    fn an_ask_the_snapshot_drops_leaves_the_queue() {
+        let mut queue = vec![("chat_a".to_owned(), ask("chat_a", "per_1").permission)];
+        let mut answered = HashSet::new();
+        merge_permission_report(&mut queue, &mut answered, &report(Vec::new(), &[]), None);
+        assert!(queue.is_empty());
+    }
+
+    /// One container that will not answer must not be able to speak for the
+    /// others — nor be spoken for. Its ask stays; the rest reconcile.
+    #[test]
+    fn a_container_that_did_not_answer_keeps_its_ask() {
+        let mut queue = vec![
+            ("chat_a".to_owned(), ask("chat_a", "per_1").permission),
+            ("chat_b".to_owned(), ask("chat_b", "per_2").permission),
+        ];
+        let mut answered = HashSet::new();
+        merge_permission_report(
+            &mut queue,
+            &mut answered,
+            &report(Vec::new(), &["chat_b"]),
+            None,
+        );
+        assert_eq!(ids(&queue), [("chat_b", "per_2")]);
+    }
+
+    /// A snapshot taken a moment before the reply landed still lists the ask.
+    /// Merging that would put the panel back under the thumb that dismissed
+    /// it, and the second tap would 404.
+    #[test]
+    fn an_ask_answered_here_is_not_re_added_by_a_stale_snapshot() {
+        let mut queue = Vec::new();
+        let mut answered = HashSet::from([("chat_a".to_owned(), "per_1".to_owned())]);
+        merge_permission_report(
+            &mut queue,
+            &mut answered,
+            &report(vec![ask("chat_a", "per_1")], &[]),
+            None,
+        );
+        assert!(
+            queue.is_empty(),
+            "the tombstone holds while the server lags"
+        );
+        assert_eq!(answered.len(), 1, "and holds until the server agrees");
+    }
+
+    /// Once the server stops reporting it the tombstone has done its job.
+    /// Keeping it would leak, and would swallow an id a rebuilt container
+    /// happened to reuse.
+    #[test]
+    fn a_tombstone_clears_once_the_server_agrees() {
+        let mut queue = Vec::new();
+        let mut answered = HashSet::from([("chat_a".to_owned(), "per_1".to_owned())]);
+        merge_permission_report(&mut queue, &mut answered, &report(Vec::new(), &[]), None);
+        assert!(answered.is_empty());
+    }
+
+    /// A chat with a live stream is that stream's. A snapshot older than an
+    /// ask that has just streamed in would otherwise blink it out of the
+    /// modal, and a snapshot older than a reply would double it up.
+    #[test]
+    fn the_chat_with_a_live_stream_is_left_to_it() {
+        let mut queue = vec![("chat_a".to_owned(), ask("chat_a", "per_live").permission)];
+        let mut answered = HashSet::new();
+        merge_permission_report(
+            &mut queue,
+            &mut answered,
+            &report(vec![ask("chat_a", "per_old")], &[]),
+            Some("chat_a"),
+        );
+        assert_eq!(
+            ids(&queue),
+            [("chat_a", "per_live")],
+            "neither dropped nor added behind the stream's back"
+        );
+    }
+
+    /// Exactly the streaming chat is exempt, and no other. The chat you last
+    /// visited keeps its id in `code_chat` for the rest of the session, and
+    /// excluding *that* left the chat most likely to be blocked as the one
+    /// chat nothing was allowed to report: its stream can end for good, and
+    /// the aggregate was still standing back for it.
+    #[test]
+    fn a_chat_with_no_stream_of_its_own_is_reported_by_the_aggregate() {
+        let mut queue = Vec::new();
+        let mut answered = HashSet::new();
+        merge_permission_report(
+            &mut queue,
+            &mut answered,
+            &report(vec![ask("chat_a", "per_1"), ask("chat_b", "per_2")], &[]),
+            Some("chat_b"),
+        );
+        assert_eq!(ids(&queue), [("chat_a", "per_1")]);
+    }
+
+    /// Replying needs the chat in the path, so an entry without one is not an
+    /// ask anybody can answer — showing it would be a dead button.
+    #[test]
+    fn an_entry_with_no_chat_is_ignored() {
+        let mut queue = Vec::new();
+        let mut answered = HashSet::new();
+        merge_permission_report(
+            &mut queue,
+            &mut answered,
+            &report(vec![ask("", "per_1"), ask("chat_a", "")], &[]),
+            None,
+        );
+        assert!(queue.is_empty());
+    }
+
+    /// The aggregate runs every ten seconds against a queue the event stream
+    /// is also writing to; a second sighting of the same ask is the normal
+    /// case, not a second ask.
+    #[test]
+    fn a_repeated_snapshot_does_not_duplicate_a_card() {
+        let mut queue = Vec::new();
+        let mut answered = HashSet::new();
+        let snapshot = report(vec![ask("chat_a", "per_1")], &[]);
+        merge_permission_report(&mut queue, &mut answered, &snapshot, None);
+        merge_permission_report(&mut queue, &mut answered, &snapshot, None);
+        assert_eq!(ids(&queue), [("chat_a", "per_1")]);
+    }
+
+    // ------------------------------------------------------ the poll's life
+
+    /// The loop that carries the aggregate retires for a newer loop and for
+    /// nothing else. It used to retire on `code_epoch`, which counts chat
+    /// opens — so the first tap on a row stopped the only thing fetching the
+    /// asks, and neither caller of `start_code_poll` can fire a second time.
+    #[test]
+    fn a_poll_loop_is_retired_only_by_a_newer_poll_loop() {
+        assert_eq!(poll_tick(1, 1, Tab::Code, true), Tick::Fetch);
+        assert_eq!(poll_tick(1, 2, Tab::Code, true), Tick::Retire);
+        assert_eq!(
+            poll_tick(1, 1, Tab::Home, true),
+            Tick::Idle,
+            "another tab is a pause, not an exit — the list is still there"
+        );
+        assert_eq!(
+            poll_tick(1, 1, Tab::Code, false),
+            Tick::Idle,
+            "nothing to ask until there is a client to ask with"
+        );
+    }
+
+    // ------------------------------------------------------ what a row says
+
+    fn chat_meta(status: &str) -> ChatMeta {
+        ChatMeta {
+            id: "chat_a".to_owned(),
+            repo: "testrepo".to_owned(),
+            title: "Wire up the aggregate".to_owned(),
+            branch: "agent/testrepo-9f3403".to_owned(),
+            status: status.to_owned(),
+            model: None,
+            last_active: 0.0,
+        }
+    }
+
+    /// A card cannot say "idle" on one line and "Approve or deny …" on the
+    /// next. Nothing in the manager's index reports a live turn on a chat the
+    /// app does not have open, so an ask is the only evidence there is that
+    /// the container is parked rather than sitting about — and it is enough.
+    #[test]
+    fn a_chat_parked_on_an_ask_does_not_call_itself_idle() {
+        assert_eq!(
+            status_label(&chat_meta("running"), false, true),
+            ("dot wait", "waiting on you".to_owned())
+        );
+        assert_eq!(
+            status_label(&chat_meta("running"), false, false),
+            ("dot on", "idle".to_owned()),
+            "and a chat with nothing pending still reports its container"
+        );
+        // The two facts come from two fetches a tick apart, so the index can
+        // still say "stopped" for a container that has just raised an ask.
+        // The ask is the fresher of the two and the one that wants an answer.
+        assert_eq!(
+            status_label(&chat_meta("stopped"), false, true),
+            ("dot wait", "waiting on you".to_owned())
+        );
     }
 }

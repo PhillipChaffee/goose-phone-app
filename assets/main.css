@@ -953,6 +953,14 @@ pre {
   animation: pulse 1.4s ease-in-out infinite;
 }
 
+/* Blocked on an answer. Same amber as .dot.busy and as the dot on the tile —
+ * it is the same fact, told once for a scroll down the list and once for a
+ * reader who has stopped on the row — but still, because the pulse is what
+ * says a turn is moving and this one is not going anywhere without you. */
+.dot.wait {
+  background: var(--bg-warning);
+}
+
 @keyframes pulse {
   0%,
   100% {
@@ -1195,9 +1203,24 @@ select.field {
 
 /* The card body — what the row itself used to be. Exactly the width of the
  * row, so the tray is out of sight until it is dragged in, and the snap point
- * at its start is what "closed" means. */
+ * at its start is what "closed" means.
+ *
+ * `flex-basis: 100%` does not say that on its own: a flex item's automatic
+ * min-width is its min-content width, so one unbreakable token — a URL in a
+ * `curl` the agent is asking to run, a branch name, a session id — grows the
+ * pane past the row and carries the right-hand half of the card off the
+ * screen with it, taking the ask panel's Approve button with it. The two
+ * declarations below are the rule stated in full: break anywhere rather than
+ * push (`anywhere`, not `break-word`, because only `anywhere` also lowers the
+ * min-content width the flex sizing reads), and never wider than the row
+ * whatever the content. Nothing in here is measured by the audit's overflow
+ * walk — a swiped row is a horizontal scroller on purpose, so the walk
+ * exempts everything inside it — but with a fixed pane an over-long token
+ * becomes a clipped box, which the audit does see. */
 .session-swipe {
   flex: 0 0 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
   scroll-snap-align: start;
   display: flex;
   align-items: flex-start;
@@ -1260,6 +1283,30 @@ select.field {
   background: var(--bg-secondary);
   color: var(--text-secondary);
   font-size: 20px;
+}
+
+/* This chat is blocked waiting for an answer (rule 8: state is a dot). It
+ * rides the tile rather than the panel below so a scroll down the list says
+ * which row wants you without reading a word of it, and it is warning rather
+ * than danger because nothing has gone wrong — something is waiting.
+ *
+ * The ring is the page colour, not a border: a 10px dot half over the tile's
+ * corner and half over the card needs an edge on both, and one hairline
+ * cannot be two colours. */
+.session-tile.attention {
+  position: relative;
+}
+
+.session-tile.attention::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--bg-warning);
+  box-shadow: 0 0 0 2px var(--bg-primary);
 }
 
 .session-main {
@@ -1335,6 +1382,59 @@ select.field {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: 1.5;
+}
+
+/* The permission ask, inset in the card that is blocked on it.
+ *
+ * Same geometry as .session-quote — 12px inside the row's 16px, rule 4 — but
+ * tinted rather than grey. A goose row already carries a grey panel of quoted
+ * text, so grey here would be one more thing to read rather than the one row
+ * in the list that wants a decision. Rule 7's dot for the tint sits on the
+ * tile instead of in here: two amber dots 30px apart is fussing. */
+.session-ask {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--bg-warning) 12%, var(--bg-primary));
+  border: 1px solid color-mix(in srgb, var(--bg-warning) 45%, transparent);
+  border-radius: var(--radius-lg);
+}
+
+/* Clamped, not ellipsised: a tool title is a command, and the front of one
+ * ("Run git push --force-with-lease origin…") is the part that decides the
+ * answer. Two lines of it beats one line and a chevron. */
+.session-ask-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text-warning);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+/* Two equal answers, same grid as .modal-actions and .btn-row: buttons sized
+ * to their own labels leave a ragged row, and neither answer is the
+ * recommended one.
+ *
+ * .btn.small rather than the full 40px: the row itself is the primary target
+ * (rule 9) and these are subordinate to it, the same relationship the review
+ * screen's "Mark all" has to the progress row it sits in. */
+.session-ask-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* The panel's own colour, not --text-secondary: a tint carries coloured text
+ * (rule 7), and grey measured 4.44:1 on this one — under the 4.5 bar by the
+ * width of a rounding error, which is exactly how the other tinted surfaces
+ * in here got their colours. Size is what separates it from the title. */
+.session-ask-more {
+  margin-top: 8px;
+  color: var(--text-warning);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
 }
 
 /* ── chat transcript ────────────────────────────────────────────────── */
