@@ -1,0 +1,53 @@
+{
+  "sources": [
+    {
+      "type": "skill",
+      "name": "code-review",
+      "description": "Review a diff for correctness, then for the things a compiler cannot see.",
+      "content": "---\nname: code-review\ndescription: Review a diff for correctness, then for the things a compiler cannot see.\n---\n\n# Code review\n\nRead the diff twice. The first pass is for what the code does; the second is for what it will do to whoever changes it next.\n",
+      "path": "/Users/me/.agents/skills/code-review",
+      "global": true,
+      "writable": true,
+      "supportingFiles": [],
+      "properties": {}
+    },
+    {
+      "type": "builtinSkill",
+      "name": "goose-doc-guide",
+      "description": "Write documentation the way the goose project writes it.",
+      "content": "---\nname: goose-doc-guide\ndescription: Write documentation the way the goose project writes it.\n---\n\nPrefer a sentence that says why over a paragraph that says what.\n",
+      "path": "builtin://skills/goose-doc-guide",
+      "global": true,
+      "writable": false,
+      "supportingFiles": [],
+      "properties": {}
+    },
+    {
+      "type": "skill",
+      "name": "deploy",
+      "description": "Ship the pilot service, with the rollback to hand before you start.",
+      "content": "---\nname: deploy\ndescription: Ship the pilot service, with the rollback to hand before you start.\n---\n\nRun `runbook.md` top to bottom. If step 4 fails, `rollback.sh` and stop.\n",
+      "path": "/Users/me/work/pilot/.agents/skills/deploy",
+      "global": false,
+      "writable": true,
+      "supportingFiles": [
+        "/Users/me/work/pilot/.agents/skills/deploy/runbook.md",
+        "/Users/me/work/pilot/.agents/skills/deploy/rollback.sh"
+      ],
+      "properties": {
+        "workingDir": "/Users/me/work/pilot"
+      }
+    },
+    {
+      "type": "skill",
+      "name": "quarterly-revenue-reconciliation-and-variance-commentary-for-finance",
+      "description": "Reconcile the quarterly revenue ledger against the billing system, explain every variance above the materiality threshold in plain language, and produce the commentary the finance team pastes into the board pack without editing it first. Assumes read access to both systems and no write access to either.",
+      "content": "---\nname: quarterly-revenue-reconciliation-and-variance-commentary-for-finance\ndescription: Reconcile the quarterly revenue ledger against the billing system.\n---\n\nPull both extracts before comparing anything; a partial extract is worse than none.\n",
+      "path": "/Users/me/.agents/skills/quarterly-revenue-reconciliation-and-variance-commentary-for-finance",
+      "global": true,
+      "writable": false,
+      "supportingFiles": [],
+      "properties": {}
+    }
+  ]
+}

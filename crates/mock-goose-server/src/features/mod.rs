@@ -7,6 +7,8 @@
 
 pub(crate) mod core;
 
+pub(crate) mod skills;
+
 use serde_json::Value;
 
 use crate::rpc::Out;
@@ -17,7 +19,7 @@ pub(crate) type Handled = Option<Result<Value, (i64, String)>>;
 pub(crate) type Handler = fn(&str, &Value, &Shared, &Out) -> Handled;
 
 /// Alphabetical, so five branches appending here merge deterministically.
-const HANDLERS: [Handler; 1] = [core::handle];
+const HANDLERS: [Handler; 2] = [core::handle, skills::handle];
 
 /// Run a request past every handler, in order.
 pub(crate) fn dispatch(

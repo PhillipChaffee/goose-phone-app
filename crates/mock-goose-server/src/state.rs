@@ -64,6 +64,13 @@ pub(crate) struct State {
     /// Which canned data to serve. Read by the startup banner today; the
     /// feature handlers that consume it land with the features themselves.
     pub(crate) fixtures: Fixtures,
+    /// Whether [`Fixtures::Broken`] has spent its one skill-listing failure.
+    ///
+    /// Broken fails the first `sources/list` for filesystem skills and answers
+    /// normally after that, so the screen's recovery — the pull gesture — is a
+    /// path a person can walk. A mock that failed forever would show the error
+    /// state and nothing else, which proves only half of it.
+    pub(crate) skills_broken_spent: bool,
     /// Stand in for a goose started without `--enable-scheduler`, whose
     /// scheduler methods answer `-32601` with the reason in `data`. Same
     /// story: plumbed here so a scheduler branch has somewhere to read it.
@@ -92,6 +99,7 @@ impl Default for State {
                 thinking_effort: "off".to_string(),
             },
             fixtures: Fixtures::Full,
+            skills_broken_spent: false,
             no_scheduler: false,
         }
     }
