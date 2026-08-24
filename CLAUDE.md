@@ -3,7 +3,10 @@
 A Rust mobile client (Dioxus 0.7) for a remote goose AI agent server, targeting
 iOS and Android from one codebase and reaching the server over Tailscale.
 
-- `src/` — the Dioxus app (`state.rs` holds connection lifecycle + transcript folding)
+- `src/` — the Dioxus app (`state.rs` holds connection lifecycle + transcript
+  folding; `connect.rs` holds the extension catalogue and the fail-closed add
+  flow — read its module doc before touching anything to do with tool
+  allowlists or credentials)
 - `crates/goose-acp-client/` — UI-independent ACP protocol library (tokio + tungstenite + rustls)
 - `crates/mock-goose-server/` — protocol-faithful fake server for testing without an API key
 - `scripts/check-server.sh` — verifies a goose server is in the shape the app needs

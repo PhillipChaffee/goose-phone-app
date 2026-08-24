@@ -8,6 +8,7 @@
 
 mod app;
 mod code;
+mod connect;
 mod diff;
 #[cfg(debug_assertions)]
 mod domdump;

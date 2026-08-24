@@ -179,5 +179,860 @@ README.md&lt;/pre&gt;&lt;/details&gt;&lt;/div&gt;&lt;div class=&quot;bubble assi
     </div>
   </div>
 </div>
+</template>
+
+<!-- ---------------------------------------------------------------- 7 -->
+<template
+  data-label="Code · Sessions (connected)"
+  data-note="inlined conn badge · .session-title &gt; .dot + bare span + .chip (note #6: the row dot is invisible today)">
+<div id="main">
+  <div class="app">
+
+    <header class="topbar">
+      <h1 class="title">Code</h1>
+      <span class="conn-badge">
+        <span class="dot on"></span>
+        <span class="conn-label">opencode</span>
+      </span>
+      <button class="icon-btn">⚙</button>
+    </header>
+
+    <main class="scroll">
+      <div class="btn-row list-actions">
+        <button class="btn primary grow">＋ New session</button>
+        <button class="btn secondary">↻</button>
+      </div>
+
+      <ul class="session-list">
+        <li class="session-item">
+          <div class="session-main">
+            <div class="session-title">
+              <span class="dot busy"></span>
+              <span> Fix the flaky test </span>
+              <span class="chip">working</span>
+            </div>
+            <div class="session-meta">
+              <span>owner/repo</span>
+              <span>fix-flaky-test</span>
+            </div>
+          </div>
+          <button class="icon-btn trash">🗑</button>
+        </li>
+
+        <li class="session-item">
+          <div class="session-main">
+            <div class="session-title">
+              <span class="dot on"></span>
+              <span> Bump the MSRV to 1.85 </span>
+              <span class="chip">idle</span>
+            </div>
+            <div class="session-meta">
+              <span>owner/goose-phone-app</span>
+              <span>msrv-185</span>
+            </div>
+          </div>
+          <div class="confirm-row">
+            <span>Delete chat + workspace?</span>
+            <button class="btn danger small">Delete</button>
+            <button class="btn secondary small">Cancel</button>
+          </div>
+        </li>
+
+        <li class="session-item">
+          <div class="session-main">
+            <div class="session-title">
+              <span class="dot off"></span>
+              <span> Document the code-agent gateway </span>
+              <span class="chip">asleep</span>
+            </div>
+            <div class="session-meta">
+              <span>owner/personal-ai-setup</span>
+            </div>
+          </div>
+          <button class="icon-btn trash">🗑</button>
+        </li>
+
+        <li class="session-item">
+          <div class="session-main">
+            <div class="session-title">
+              <span class="dot err"></span>
+              <span> Port the tokenizer split to the brain </span>
+              <span class="chip">crashed</span>
+            </div>
+            <div class="session-meta">
+              <span>owner/brain</span>
+              <span>tokenizer-split</span>
+            </div>
+          </div>
+          <button class="icon-btn trash">🗑</button>
+        </li>
+      </ul>
+    </main>
+
+    <nav class="tabbar">
+      <button class="tab">
+        <span class="tab-icon">⌂</span>
+        <span>Home</span>
+      </button>
+      <button class="tab active">
+        <span class="tab-icon">&lt;/&gt;</span>
+        <span>Code</span>
+      </button>
+    </nav>
+  </div>
+</div>
+</template>
+
+<!-- ---------------------------------------------------------------- 8 -->
+<template
+  data-label="Code · Sessions (not connected)"
+  data-note="ConnState::Failed (.error-box + Retry) and ConnState::Disconnected (p.empty) — never both at runtime, shown together as the inventory sketches them">
+<div id="main">
+  <div class="app">
+
+    <header class="topbar">
+      <h1 class="title">Code</h1>
+      <span class="conn-badge">
+        <span class="dot err"></span>
+        <span class="conn-label">error</span>
+      </span>
+      <button class="icon-btn">⚙</button>
+    </header>
+
+    <main class="scroll">
+      <p class="error-box">handshake failed: 401 unauthorized</p>
+      <div class="btn-row">
+        <button class="btn primary grow">Retry</button>
+      </div>
+
+      <p class="empty">Set the code server URL and password in Settings, then come back.</p>
+    </main>
+
+    <nav class="tabbar">
+      <button class="tab">
+        <span class="tab-icon">⌂</span>
+        <span>Home</span>
+      </button>
+      <button class="tab active">
+        <span class="tab-icon">&lt;/&gt;</span>
+        <span>Code</span>
+      </button>
+    </nav>
+  </div>
+</div>
+</template>
+
+<!-- ---------------------------------------------------------------- 9 -->
+<template
+  data-label="Code · New session form"
+  data-note="main.scroll.settings reused · section.card with NO h2 · select.field / textarea.field / input.field · .hint · disabled primary">
+<div id="main">
+  <div class="app">
+
+    <header class="topbar">
+      <button class="icon-btn back">‹</button>
+      <h1 class="title">New code session</h1>
+    </header>
+
+    <main class="scroll settings">
+      <section class="card">
+        <label class="field-label">Repository</label>
+        <select class="field">
+          <option value="owner/repo">owner/repo</option>
+          <option value="owner/goose-phone-app">owner/goose-phone-app</option>
+          <option value="owner/personal-ai-setup">owner/personal-ai-setup</option>
+        </select>
+        <p class="hint">Repos come from the brain's allowlist (/data/code-agents/repos.json).</p>
+
+        <label class="field-label">Task</label>
+        <textarea class="field" rows="4" placeholder="What should the agent do?"></textarea>
+
+        <label class="field-label">Model (optional)</label>
+        <input class="field" type="text" placeholder="opencode/deepseek-v4-flash (default)" autocapitalize="off" autocomplete="off" spellcheck="false">
+        <p class="hint">Any provider/model from the OpenCode catalog. Free models are refused for private repos (privacy hard rule 1).</p>
+      </section>
+
+      <div class="btn-row">
+        <button class="btn primary grow" disabled>Start session</button>
+      </div>
+    </main>
+
+    <nav class="tabbar">
+      <button class="tab">
+        <span class="tab-icon">⌂</span>
+        <span>Home</span>
+      </button>
+      <button class="tab active">
+        <span class="tab-icon">&lt;/&gt;</span>
+        <span>Code</span>
+      </button>
+    </nav>
+  </div>
+</div>
+</template>
+
+<!-- --------------------------------------------------------------- 10 -->
+<template
+  data-label="Code · Chat (waking + diff)"
+  data-note="4-child topbar (± and ⇪ PR) · .banner · .diff-panel reusing .tool-head outside .tool · composer disabled, placeholder “Waking…”">
+<div id="main">
+  <div class="app">
+
+    <header class="topbar">
+      <button class="icon-btn back">‹</button>
+      <h1 class="title ellipsis">Fix the flaky test</h1>
+      <button class="icon-btn" title="Show diff">±</button>
+      <button class="icon-btn action" title="Push branch + open a PR" disabled>⇪ PR</button>
+    </header>
+
+    <main class="scroll chat" id="code-chat-scroll">
+
+      <div class="banner">Waking the container — showing the cached transcript…</div>
+
+      <div class="bubble user">
+        <div class="bubble-text">The retry test fails about one run in five on CI. Find out why.</div>
+      </div>
+
+      <div class="bubble assistant">
+        <div class="md"><p>The test sleeps 50ms and assumes the reconnect landed. On a loaded runner it hasn't. I replaced the sleep with a channel await.</p></div>
+      </div>
+
+      <div class="tool status-completed">
+        <div class="tool-head">
+          <span class="tool-icon">✏️</span>
+          <span class="tool-title">edit src/lib.rs</span>
+          <span class="tool-status">Done</span>
+        </div>
+      </div>
+
+      <div class="diff-panel">
+        <div class="tool-head">
+          <span class="tool-title">Session diff</span>
+          <button class="icon-btn">✕</button>
+        </div>
+        <pre>diff --git a/src/lib.rs b/src/lib.rs
+index 3f1a2b8..9c4e701 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -211,9 +211,12 @@ mod tests {
+     async fn reconnects_after_drop() {
+         let (tx, mut rx) = mpsc::channel(1);
+         let handle = spawn_client(tx);
+-        tokio::time::sleep(Duration::from_millis(50)).await;
+-        assert!(handle.is_connected());
++        // Wait for the reconnect to actually land instead of guessing.
++        let ev = timeout(Duration::from_secs(5), rx.recv())
++            .await
++            .expect("reconnect timed out");
++        assert!(matches!(ev, Some(Event::Reconnected)));
+     }
+ }</pre>
+      </div>
+    </main>
+
+    <footer class="composer">
+      <textarea class="input" rows="1" placeholder="Waking…" disabled></textarea>
+      <button class="btn primary" disabled>Send</button>
+    </footer>
+
+    <nav class="tabbar">
+      <button class="tab">
+        <span class="tab-icon">⌂</span>
+        <span>Home</span>
+      </button>
+      <button class="tab active">
+        <span class="tab-icon">&lt;/&gt;</span>
+        <span>Code</span>
+      </button>
+    </nav>
+  </div>
+</div>
+</template>
+
+<!-- --------------------------------------------------------------- 11 -->
+<template
+  data-label="Code · Chat (running)"
+  data-note="OpenCode's status set: pending / running / completed / error — running and error have NO rule in main.css today · .typing · Stop">
+<div id="main">
+  <div class="app">
+
+    <header class="topbar">
+      <button class="icon-btn back">‹</button>
+      <h1 class="title ellipsis">Bump the MSRV to 1.85</h1>
+      <button class="icon-btn" title="Show diff">±</button>
+      <button class="icon-btn action" title="Push branch + open a PR" disabled>⇪ PR</button>
+    </header>
+
+    <main class="scroll chat" id="code-chat-scroll">
+
+      <div class="bubble user">
+        <div class="bubble-text">Raise the MSRV and fix whatever breaks.</div>
+      </div>
+
+      <details class="thought">
+        <summary>Thinking</summary>
+        <div class="md"><p>rust-toolchain.toml pins the channel, so both it and the workspace <code>rust-version</code> have to move together or CI installs the old one.</p></div>
+      </details>
+
+      <div class="tool status-completed">
+        <div class="tool-head">
+          <span class="tool-icon">📄</span>
+          <span class="tool-title">read rust-toolchain.toml</span>
+          <span class="tool-status">Done</span>
+        </div>
+        <details class="tool-output">
+          <summary>Output</summary>
+          <pre>[toolchain]
+channel = "1.83.0"</pre>
+        </details>
+      </div>
+
+      <div class="tool status-running">
+        <div class="tool-head">
+          <span class="tool-icon">❯_</span>
+          <span class="tool-title">cargo +1.85.0 check --workspace</span>
+          <span class="tool-status">Running</span>
+        </div>
+      </div>
+
+      <div class="tool status-error">
+        <div class="tool-head">
+          <span class="tool-icon">🌐</span>
+          <span class="tool-title">fetch https://releases.rs/1.85.0</span>
+          <span class="tool-status">Failed</span>
+        </div>
+        <details class="tool-output" open>
+          <summary>Output</summary>
+          <pre>error sending request: dns error: failed to lookup address information</pre>
+        </details>
+      </div>
+
+      <div class="tool status-pending">
+        <div class="tool-head">
+          <span class="tool-icon">📦</span>
+          <span class="tool-title">move docs/msrv.md docs/setup/msrv.md</span>
+          <span class="tool-status">Queued</span>
+        </div>
+      </div>
+
+      <div class="typing">
+        <span class="dot-anim"></span>
+        <span class="dot-anim"></span>
+        <span class="dot-anim"></span>
+      </div>
+    </main>
+
+    <footer class="composer">
+      <textarea class="input" rows="1" placeholder="Message the code agent…"></textarea>
+      <button class="btn danger">Stop</button>
+    </footer>
+
+    <nav class="tabbar">
+      <button class="tab">
+        <span class="tab-icon">⌂</span>
+        <span>Home</span>
+      </button>
+      <button class="tab active">
+        <span class="tab-icon">&lt;/&gt;</span>
+        <span>Code</span>
+      </button>
+    </nav>
+  </div>
+</div>
+</template>
+
+<!-- --------------------------------------------------------------- 12 -->
+<template
+  data-label="Code · Permission modal"
+  data-note="fixed 3-button set · .modal-session always rendered here · tabbar shows Code active behind the backdrop">
+<div id="main">
+  <div class="app">
+
+    <header class="topbar">
+      <button class="icon-btn back">‹</button>
+      <h1 class="title ellipsis">Fix the flaky test</h1>
+      <button class="icon-btn" title="Show diff">±</button>
+      <button class="icon-btn action" title="Push branch + open a PR" disabled>⇪ PR</button>
+    </header>
+
+    <main class="scroll chat" id="code-chat-scroll">
+      <div class="bubble assistant">
+        <div class="md"><p>The fix is committed on <code>fix-flaky-test</code>. Pushing it now.</p></div>
+      </div>
+
+      <div class="tool status-running">
+        <div class="tool-head">
+          <span class="tool-icon">❯_</span>
+          <span class="tool-title">git push -u origin fix-flaky-test</span>
+          <span class="tool-status">Running</span>
+        </div>
+      </div>
+    </main>
+
+    <footer class="composer">
+      <textarea class="input" rows="1" placeholder="Message the code agent…"></textarea>
+      <button class="btn primary" disabled>Send</button>
+    </footer>
+
+    <nav class="tabbar">
+      <button class="tab">
+        <span class="tab-icon">⌂</span>
+        <span>Home</span>
+      </button>
+      <button class="tab active">
+        <span class="tab-icon">&lt;/&gt;</span>
+        <span>Code</span>
+      </button>
+    </nav>
+
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h2>Code agent asks</h2>
+        <p class="modal-session">Session: Fix the flaky test</p>
+        <p class="modal-tool">bash</p>
+        <details class="tool-output" open>
+          <summary>Details</summary>
+          <pre>{
+  "command": "git push -u origin fix-flaky-test",
+  "cwd": "/data/code-agents/workspaces/owner-repo"
+}</pre>
+        </details>
+        <div class="modal-actions">
+          <button class="btn primary">Allow once</button>
+          <button class="btn primary">Always allow</button>
+          <button class="btn danger-outline">Reject</button>
+        </div>
+        <p class="modal-pending">+1 more waiting</p>
+      </div>
+    </div>
+  </div>
+</div>
+</template>
+
+<!-- --------------------------------------------------------------- 13 -->
+<template
+  data-label="Settings (connected, top)"
+  data-note="3-child topbar with “‹ Back” · .settings .card + bare h2 · .field-label / .field / .hint">
+<div id="main">
+  <div class="app">
+
+    <header class="topbar">
+      <button class="icon-btn back">‹</button>
+      <h1 class="title">Goose Mobile</h1>
+      <span class="conn-badge">
+        <span class="dot on"></span>
+        <span class="conn-label">goose</span>
+      </span>
+    </header>
+
+    <main class="scroll settings">
+      <section class="card">
+        <h2>Server</h2>
+        <label class="field-label">Server URL</label>
+        <input class="field" type="url" placeholder="https://goose-box.tailnet-name.ts.net" autocapitalize="off" autocomplete="off" spellcheck="false" value="https://goose-box.otter-cod.ts.net">
+        <p class="hint">Over Tailscale: use your server's MagicDNS name. With `tailscale serve` fronting goose this is an https:// URL; a plain `goose serve` on the tailnet is http://host:3284.</p>
+
+        <label class="field-label">Secret key</label>
+        <input class="field" type="password" placeholder="GOOSE_SERVER__SECRET_KEY value" autocapitalize="off" autocomplete="off" value="hunter2hunter2">
+
+        <label class="field-label">TLS certificate fingerprint (optional)</label>
+        <input class="field" type="text" placeholder="AA:BB:CC:… (only for goose serve --tls self-signed)" autocapitalize="off" autocomplete="off" spellcheck="false">
+        <p class="hint">Paste the GOOSED_CERT_FINGERPRINT line goose prints at startup to pin a self-signed certificate. Leave empty for real certificates (tailscale serve).</p>
+      </section>
+
+      <section class="card">
+        <h2>Agent</h2>
+        <label class="field-label">Working directory on the server</label>
+        <input class="field" type="text" placeholder="/home/you/projects" autocapitalize="off" autocomplete="off" spellcheck="false" value="/home/you/projects">
+        <p class="hint">Absolute path on the goose server; new chats start here.</p>
+      </section>
+
+      <section class="card">
+        <h2>Code agents</h2>
+        <label class="field-label">Code server URL</label>
+        <input class="field" type="url" placeholder="https://brain.tailnet-name.ts.net:4300" autocapitalize="off" autocomplete="off" spellcheck="false">
+        <label class="field-label">Code server password</label>
+        <input class="field" type="password" placeholder="OPENCODE_SERVER_PASSWORD value" autocapitalize="off" autocomplete="off">
+        <p class="hint">The code-agent gateway on the brain (docs/setup/70-code-agents.md). Save, then open the Code tab — it connects with these.</p>
+      </section>
+
+      <div class="btn-row">
+        <button class="btn secondary">Test connection</button>
+        <button class="btn primary">Reconnect</button>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn danger-outline">Disconnect</button>
+      </div>
+
+      <section class="about">
+        <p>Connects to a remote goose AI agent over its ACP WebSocket API.</p>
+        <p>Reach a private server from anywhere with the Tailscale app enabled on this phone.</p>
+      </section>
+    </main>
+
+    <nav class="tabbar">
+      <button class="tab active">
+        <span class="tab-icon">⌂</span>
+        <span>Home</span>
+      </button>
+      <button class="tab">
+        <span class="tab-icon">&lt;/&gt;</span>
+        <span>Code</span>
+      </button>
+    </nav>
+  </div>
+</div>
+</template>
+
+<!-- --------------------------------------------------------------- 14 -->
+<template
+  data-label="Settings (connected, scrolled to bottom)"
+  data-scroll="bottom"
+  data-note="same DOM as the frame to the left, pre-scrolled: Code agents card, .btn-row pair, .btn.danger-outline Disconnect, section.about">
+<div id="main">
+  <div class="app">
+
+    <header class="topbar">
+      <button class="icon-btn back">‹</button>
+      <h1 class="title">Goose Mobile</h1>
+      <span class="conn-badge">
+        <span class="dot on"></span>
+        <span class="conn-label">goose</span>
+      </span>
+    </header>
+
+    <main class="scroll settings">
+      <section class="card">
+        <h2>Server</h2>
+        <label class="field-label">Server URL</label>
+        <input class="field" type="url" placeholder="https://goose-box.tailnet-name.ts.net" autocapitalize="off" autocomplete="off" spellcheck="false" value="https://goose-box.otter-cod.ts.net">
+        <p class="hint">Over Tailscale: use your server's MagicDNS name. With `tailscale serve` fronting goose this is an https:// URL; a plain `goose serve` on the tailnet is http://host:3284.</p>
+
+        <label class="field-label">Secret key</label>
+        <input class="field" type="password" placeholder="GOOSE_SERVER__SECRET_KEY value" autocapitalize="off" autocomplete="off" value="hunter2hunter2">
+
+        <label class="field-label">TLS certificate fingerprint (optional)</label>
+        <input class="field" type="text" placeholder="AA:BB:CC:… (only for goose serve --tls self-signed)" autocapitalize="off" autocomplete="off" spellcheck="false">
+        <p class="hint">Paste the GOOSED_CERT_FINGERPRINT line goose prints at startup to pin a self-signed certificate. Leave empty for real certificates (tailscale serve).</p>
+      </section>
+
+      <section class="card">
+        <h2>Agent</h2>
+        <label class="field-label">Working directory on the server</label>
+        <input class="field" type="text" placeholder="/home/you/projects" autocapitalize="off" autocomplete="off" spellcheck="false" value="/home/you/projects">
+        <p class="hint">Absolute path on the goose server; new chats start here.</p>
+      </section>
+
+      <section class="card">
+        <h2>Code agents</h2>
+        <label class="field-label">Code server URL</label>
+        <input class="field" type="url" placeholder="https://brain.tailnet-name.ts.net:4300" autocapitalize="off" autocomplete="off" spellcheck="false" value="https://brain.otter-cod.ts.net:4300">
+        <label class="field-label">Code server password</label>
+        <input class="field" type="password" placeholder="OPENCODE_SERVER_PASSWORD value" autocapitalize="off" autocomplete="off" value="correcthorse">
+        <p class="hint">The code-agent gateway on the brain (docs/setup/70-code-agents.md). Save, then open the Code tab — it connects with these.</p>
+      </section>
+
+      <div class="btn-row">
+        <button class="btn secondary">Test connection</button>
+        <button class="btn primary">Reconnect</button>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn danger-outline">Disconnect</button>
+      </div>
+
+      <section class="about">
+        <p>Connects to a remote goose AI agent over its ACP WebSocket API.</p>
+        <p>Reach a private server from anywhere with the Tailscale app enabled on this phone.</p>
+      </section>
+    </main>
+
+    <nav class="tabbar">
+      <button class="tab active">
+        <span class="tab-icon">⌂</span>
+        <span>Home</span>
+      </button>
+      <button class="tab">
+        <span class="tab-icon">&lt;/&gt;</span>
+        <span>Code</span>
+      </button>
+    </nav>
+  </div>
+</div>
+</template>
+
+<!-- --------------------------------------------------------------- 15 -->
+<template
+  data-label="Settings (failed, scrolled to bottom)"
+  data-scroll="bottom"
+  data-note="ConnState::Failed: no “‹ Back”, no Disconnect row, .error-box above the buttons, disabled “Testing…” / “Connecting…”">
+<div id="main">
+  <div class="app">
+
+    <header class="topbar">
+      <h1 class="title">Goose Mobile</h1>
+      <span class="conn-badge">
+        <span class="dot err"></span>
+        <span class="conn-label">error</span>
+      </span>
+    </header>
+
+    <main class="scroll settings">
+      <section class="card">
+        <h2>Server</h2>
+        <label class="field-label">Server URL</label>
+        <input class="field" type="url" placeholder="https://goose-box.tailnet-name.ts.net" autocapitalize="off" autocomplete="off" spellcheck="false" value="https://goose-box.otter-cod.ts.net">
+        <p class="hint">Over Tailscale: use your server's MagicDNS name. With `tailscale serve` fronting goose this is an https:// URL; a plain `goose serve` on the tailnet is http://host:3284.</p>
+
+        <label class="field-label">Secret key</label>
+        <input class="field" type="password" placeholder="GOOSE_SERVER__SECRET_KEY value" autocapitalize="off" autocomplete="off">
+
+        <label class="field-label">TLS certificate fingerprint (optional)</label>
+        <input class="field" type="text" placeholder="AA:BB:CC:… (only for goose serve --tls self-signed)" autocapitalize="off" autocomplete="off" spellcheck="false">
+        <p class="hint">Paste the GOOSED_CERT_FINGERPRINT line goose prints at startup to pin a self-signed certificate. Leave empty for real certificates (tailscale serve).</p>
+      </section>
+
+      <section class="card">
+        <h2>Agent</h2>
+        <label class="field-label">Working directory on the server</label>
+        <input class="field" type="text" placeholder="/home/you/projects" autocapitalize="off" autocomplete="off" spellcheck="false">
+        <p class="hint">Absolute path on the goose server; new chats start here.</p>
+      </section>
+
+      <section class="card">
+        <h2>Code agents</h2>
+        <label class="field-label">Code server URL</label>
+        <input class="field" type="url" placeholder="https://brain.tailnet-name.ts.net:4300" autocapitalize="off" autocomplete="off" spellcheck="false">
+        <label class="field-label">Code server password</label>
+        <input class="field" type="password" placeholder="OPENCODE_SERVER_PASSWORD value" autocapitalize="off" autocomplete="off">
+        <p class="hint">The code-agent gateway on the brain (docs/setup/70-code-agents.md). Save, then open the Code tab — it connects with these.</p>
+      </section>
+
+      <p class="error-box">connection refused (os error 111)</p>
+
+      <div class="btn-row">
+        <button class="btn secondary" disabled>Testing…</button>
+        <button class="btn primary" disabled>Connecting…</button>
+      </div>
+
+      <section class="about">
+        <p>Connects to a remote goose AI agent over its ACP WebSocket API.</p>
+        <p>Reach a private server from anywhere with the Tailscale app enabled on this phone.</p>
+      </section>
+    </main>
+
+    <nav class="tabbar">
+      <button class="tab active">
+        <span class="tab-icon">⌂</span>
+        <span>Home</span>
+      </button>
+      <button class="tab">
+        <span class="tab-icon">&lt;/&gt;</span>
+        <span>Code</span>
+      </button>
+    </nav>
+  </div>
+</div>
+</template>
+
+<!-- --------------------------------------------------------------- 16 -->
+<!-- Connect, in the current chrome (floating topbar + drawer + fab). The
+     templates above still carry the old .tabbar; these two do not, because
+     the tab bar is gone from the app. -->
+<template
+  data-label="Connect · services (one unrestricted)"
+  data-note=".ext-item · .ext-state on/off · .ext-tools, and .ext-tools.unrestricted for an extension with an empty allowlist (which means EVERY tool)">
+<div id="main">
+  <div class="app">
+
+    <header class="topbar">
+      <button class="icon-btn menu"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h11M4 17h16"/></svg></button>
+      <h1 class="title">Connect</h1>
+      <span class="conn-badge">
+        <span class="dot on"></span>
+        <span class="conn-label">goose 1.46.0</span>
+      </span>
+      <div class="topbar-actions">
+        <button class="icon-btn"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg></button>
+      </div>
+    </header>
+
+    <main class="scroll has-fab">
+      <ul class="ext-list">
+
+        <li class="ext-item">
+          <div class="session-tile"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9"/></svg></div>
+          <div class="session-main">
+            <div class="session-head">
+              <div class="session-title">mail-imap</div>
+              <span class="ext-state on">on</span>
+            </div>
+            <div class="session-snippet">IMAP/SMTP mail via a provider app password</div>
+            <div class="session-meta">
+              <span>stdio</span>
+              <span>MCP_EMAIL_SERVER_PASSWORD</span>
+            </div>
+            <div class="ext-tools">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0 5 5l-9.4 9.4a2.1 2.1 0 0 1-3-3z"/></svg>
+              list_available_accounts, list_mailboxes, and 4 more
+            </div>
+          </div>
+          <button class="btn secondary small">Disable</button>
+        </li>
+
+        <li class="ext-item">
+          <div class="session-tile"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9"/></svg></div>
+          <div class="session-main">
+            <div class="session-head">
+              <div class="session-title">developer</div>
+              <span class="ext-state">off</span>
+            </div>
+            <div class="session-snippet">Shell, file editing and text tools</div>
+            <div class="session-meta"><span>builtin</span></div>
+            <div class="ext-tools unrestricted">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0 5 5l-9.4 9.4a2.1 2.1 0 0 1-3-3z"/></svg>
+              No tool allowlist — every tool this server publishes is allowed
+            </div>
+          </div>
+          <button class="btn primary small">Enable</button>
+        </li>
+
+      </ul>
+    </main>
+
+    <button class="fab"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>Add service</button>
+  </div>
+</div>
+</template>
+
+<!-- --------------------------------------------------------------- 17 -->
+<template
+  data-label="Connect · add a service (credential + allowlist)"
+  data-note="password field with NO reveal control · .tool-allowlist showing exactly what is about to be permitted · .error-box for an allowlist that did not stick">
+<div id="main">
+  <div class="app">
+
+    <header class="topbar">
+      <button class="icon-btn back"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 5-7 7 7 7"/></svg></button>
+      <h1 class="title">Add service</h1>
+      <div class="topbar-actions">
+        <span class="conn-badge">
+          <span class="dot on"></span>
+          <span class="conn-label">goose 1.46.0</span>
+        </span>
+      </div>
+    </header>
+
+    <main class="scroll settings">
+      <p class="error-box">`mail-imap` came back with NO tool allowlist, which means every tool is allowed. The field is `available_tools` (snake_case) on the ACP wire; a camelCase spelling is accepted and silently dropped.
+
+It has been switched off on the server.</p>
+
+      <section class="card">
+        <h2>Mail (IMAP)</h2>
+        <p class="hint">Any IMAP mailbox, using a provider app password.</p>
+
+        <label class="field-label">MCP_EMAIL_SERVER_PASSWORD</label>
+        <input class="field" type="password" autocapitalize="off" autocomplete="off" spellcheck="false" value="hunter2hunter2">
+        <p class="hint">App password from your mail provider (not your login password)</p>
+
+        <p class="hint">Stored on the goose server, in its secrets file. It is never sent back to this phone and never saved here — if you need it again, get it from the service that issued it.</p>
+      </section>
+
+      <section class="card">
+        <h2>What it will be allowed to do</h2>
+        <p class="hint">Lists and reads mail, marks messages read and saves drafts. It cannot send and it cannot delete: no such tool is allowed.</p>
+        <ul class="tool-allowlist">
+          <li>list_available_accounts</li>
+          <li>list_mailboxes</li>
+          <li>list_emails_metadata</li>
+          <li>get_emails_content</li>
+          <li>mark_emails_as_read</li>
+          <li>save_to_mailbox</li>
+        </ul>
+        <p class="hint">These are the only tools the agent can call on this service. The list is checked against the server after it is saved — if it did not stick, the service is switched back off and you get told.</p>
+      </section>
+
+      <div class="btn-row">
+        <button class="btn primary grow">Connect</button>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn secondary grow">Pick a different service</button>
+      </div>
+    </main>
+  </div>
+</div>
+</template>
+
+<script>
+(function () {
+  // Each frame is its own document, so it inherits nothing from the gallery.
+  // It links the SAME main.css file — never a copy.
+  var HEAD =
+    '<meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">' +
+    '<link rel="stylesheet" href="../assets/main.css">';
+
+  var grid = document.getElementById('gallery-grid');
+  var templates = document.querySelectorAll('template[data-label]');
+  var pending = templates.length;
+
+  function done() {
+    if (--pending > 0) return;
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () { window.__galleryReady = true; });
+    });
+  }
+
+  Array.prototype.forEach.call(templates, function (tpl) {
+    var cell = document.createElement('div');
+    cell.className = 'gallery-cell';
+
+    var label = document.createElement('div');
+    label.className = 'gallery-label';
+    label.textContent = tpl.getAttribute('data-label');
+
+    var note = document.createElement('div');
+    note.className = 'gallery-note';
+    note.textContent = tpl.getAttribute('data-note') || '';
+
+    var shell = document.createElement('div');
+    shell.className = 'gallery-shell';
+
+    var frame = document.createElement('iframe');
+    frame.className = 'gallery-frame';
+    frame.setAttribute('width', '390');
+    frame.setAttribute('height', '844');
+    frame.setAttribute('title', tpl.getAttribute('data-label'));
+    frame.addEventListener('load', function () {
+      var wanted = tpl.getAttribute('data-scroll');
+      if (wanted) {
+        requestAnimationFrame(function () {
+          try {
+            var el = frame.contentDocument.querySelector('.scroll');
+            if (el) {
+              el.scrollTop = wanted === 'bottom' ? el.scrollHeight : (parseInt(wanted, 10) || 0);
+            }
+          } catch (e) { /* ignore */ }
+          done();
+        });
+      } else {
+        done();
+      }
+    });
+    frame.srcdoc =
+      '<!doctype html><html lang="en"><head>' + HEAD + '</head><body>' + tpl.innerHTML + '</body></html>';
+
+    shell.appendChild(frame);
+    cell.appendChild(label);
+    cell.appendChild(note);
+    cell.appendChild(shell);
+    grid.appendChild(cell);
+  });
+})();
+</script>
+
 </body>
 </html>

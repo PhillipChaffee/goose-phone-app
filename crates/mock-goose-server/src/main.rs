@@ -22,7 +22,7 @@
     reason = "test double: stdout is its interface and fixtures are trusted"
 )]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -56,6 +56,13 @@ struct State {
     /// Whatever the client last selected on each option, so a switch actually
     /// sticks and a reload shows it.
     config: SessionConfig,
+    /// `_goose/unstable/config/extensions/list` rows, as
+    /// `{extension, enabled, configKey}`.
+    config_extensions: Vec<Value>,
+    /// Stored secrets, **by name only**. The real server keeps the value in
+    /// `secrets.yaml`; this one deliberately does not keep it at all, so there
+    /// is nothing here for a careless `config/read` to hand back.
+    secret_keys: HashSet<String>,
 }
 
 /// The four options goose routes in `session/set_config_option`. Anything
@@ -79,6 +86,8 @@ impl Default for State {
                 model: "claude-sonnet-5".to_string(),
                 thinking_effort: "off".to_string(),
             },
+            config_extensions: Vec::new(),
+            secret_keys: HashSet::new(),
         }
     }
 }
@@ -476,8 +485,217 @@ fn handle_request(
             Ok(json!({}))
         }
         "session/close" => Ok(json!({})),
+
+        other => extension_request(other, params, state),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Extensions — what the Connect screen talks to.
+
+/// The `_goose/unstable/*` extension and config methods.
+fn extension_request(method: &str, params: &Value, state: &Shared) -> Result<Value, (i64, String)> {
+    match method {
+        "_goose/unstable/extensions/available" => Ok(json!({"extensions": available_extensions()})),
+        "_goose/unstable/config/extensions/list" => {
+            let extensions = state.lock().unwrap().config_extensions.clone();
+            Ok(json!({"extensions": extensions, "warnings": []}))
+        }
+        "_goose/unstable/config/extensions/add" => add_config_extension(params, state),
+        "_goose/unstable/config/extensions/set-enabled" => set_extension_enabled(params, state),
+        "_goose/unstable/config/upsert" => {
+            let key = params.get("key").and_then(Value::as_str).unwrap_or("");
+            if key.is_empty() {
+                return Err((-32602, "key is required".to_string()));
+            }
+            // Real goose logs "Secret value is not a string; skipping" and
+            // starts the extension WITHOUT the credential when the value is,
+            // say, a numeric app password that got parsed as a number. Same
+            // here: the key is only remembered when a string arrives, so a
+            // client with that bug fails the handshake below instead of
+            // appearing to work.
+            if params.get("value").and_then(Value::as_str).is_some() {
+                state.lock().unwrap().secret_keys.insert(key.to_string());
+            }
+            Ok(json!({}))
+        }
+        "_goose/unstable/session/extensions/add" => add_session_extension(params, state),
         other => Err((-32601, format!("method not found: {other}"))),
     }
+}
+
+fn set_extension_enabled(params: &Value, state: &Shared) -> Result<Value, (i64, String)> {
+    let key = params
+        .get("configKey")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let enabled = params
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let found = {
+        let mut s = state.lock().unwrap();
+        s.config_extensions
+            .iter_mut()
+            .find(|e| e["configKey"].as_str() == Some(key))
+            .map(|entry| entry["enabled"] = Value::Bool(enabled))
+            .is_some()
+    };
+    if found {
+        Ok(json!({}))
+    } else {
+        Err((-32602, format!("Extension '{key}' not found")))
+    }
+}
+
+/// Bring an extension up in a live session — the handshake the app uses to
+/// prove a credential without ever reading one back.
+fn add_session_extension(params: &Value, state: &Shared) -> Result<Value, (i64, String)> {
+    let extension = params.get("extension").cloned().unwrap_or(Value::Null);
+
+    // Inline env values are refused at the session level by the real server,
+    // with this wording.
+    let has_inline_env = extension
+        .pointer("/server/env")
+        .and_then(Value::as_array)
+        .is_some_and(|env| !env.is_empty());
+    if has_inline_env {
+        return Err((
+            -32602,
+            "extension env values must be passed via envKeys referencing stored \
+             secrets, not inline env"
+                .to_string(),
+        ));
+    }
+
+    // goose launches the MCP server here, so a declared env key with no stored
+    // secret is a hard startup failure.
+    let declared: Vec<String> = extension
+        .get("envKeys")
+        .and_then(Value::as_array)
+        .map(|keys| {
+            keys.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let missing: Vec<String> = {
+        let s = state.lock().unwrap();
+        declared
+            .into_iter()
+            .filter(|k| !s.secret_keys.contains(k))
+            .collect()
+    };
+    if missing.is_empty() {
+        Ok(json!({}))
+    } else {
+        Err((
+            -32603,
+            format!(
+                "failed to start extension `{}`: missing env {}",
+                extension
+                    .pointer("/server/name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("?"),
+                missing.join(", ")
+            ),
+        ))
+    }
+}
+
+/// goose's own catalogue, which is unrestricted: these come back with no
+/// `available_tools` at all. Reproduced faithfully — a mock that invented
+/// allowlists here would hide the fact that enabling a built-in is a
+/// different decision from adding a scoped connector.
+fn available_extensions() -> Value {
+    json!([
+        {"type": "builtin", "name": "developer", "display_name": "Developer",
+         "description": "Shell, file editing and text tools", "bundled": true},
+        {"type": "builtin", "name": "computercontroller", "display_name": "Computer Controller",
+         "description": "Web scraping, automation and file caching", "bundled": true},
+        {"type": "platform", "name": "memory", "display_name": "Memory",
+         "description": "Remembers facts across sessions", "bundled": true},
+    ])
+}
+
+/// goose's `name_to_key`: lowercase, whitespace dropped, anything outside
+/// `[A-Za-z0-9_-]` folded to `_`.
+fn name_to_key(name: &str) -> String {
+    name.chars()
+        .filter(|c| !c.is_whitespace())
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// Persist an extension, reproducing the one behaviour that makes the client's
+/// read-back necessary: only the `snake_case` `available_tools` key is read.
+///
+/// A camelCase `availableTools` is left in the stored object and ignored,
+/// exactly as goose ignores it — goose sets no `deny_unknown_fields` — so the
+/// extension ends up with an empty allowlist, which means every tool is
+/// allowed. Setting `MOCK_DROP_ALLOWLIST=1` drops the correct spelling too,
+/// simulating a server that has moved the field, so the app's hard error can
+/// be exercised by hand.
+fn add_config_extension(params: &Value, state: &Shared) -> Result<Value, (i64, String)> {
+    let mut extension = params.get("extension").cloned().unwrap_or(Value::Null);
+    let enabled = params
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let Some(obj) = extension.as_object_mut() else {
+        return Err((-32602, "extension must be an object".to_string()));
+    };
+    if std::env::var("MOCK_DROP_ALLOWLIST").is_ok_and(|v| v == "1") {
+        obj.remove("available_tools");
+    }
+    // goose stores the allowlist as `Vec<String>`, so an absent field and an
+    // empty one are the same thing on the way back out: omitted entirely.
+    let tools = obj
+        .get("available_tools")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if tools.is_empty() {
+        obj.remove("available_tools");
+    } else {
+        obj.insert("available_tools".to_string(), Value::Array(tools));
+    }
+
+    let name = extension
+        .pointer("/server/name")
+        .or_else(|| extension.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if name.is_empty() {
+        return Err((-32602, "extension has no name".to_string()));
+    }
+
+    let row = json!({
+        "extension": extension,
+        "enabled": enabled,
+        "configKey": name_to_key(&name),
+    });
+    let mut s = state.lock().unwrap();
+    s.config_extensions.retain(|e| {
+        e["extension"]
+            .pointer("/server/name")
+            .and_then(Value::as_str)
+            != Some(&name)
+            && e["extension"].get("name").and_then(Value::as_str) != Some(&name)
+    });
+    s.config_extensions.push(row);
+    drop(s);
+    Ok(json!({}))
 }
 
 /// The fields `session/list` reports, copied out under the lock so the JSON
@@ -865,6 +1083,7 @@ fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use goose_acp_client::{GooseExtension, McpServer, StdioMcpServer};
 
     fn ids(v: &Value) -> Vec<String> {
         v.as_array()
@@ -902,5 +1121,133 @@ mod tests {
 
         config.model = "claude-opus-5".to_string();
         assert_eq!(effort_values(&config_options(&config)), 5);
+    }
+
+    // ---- the extension surface ---------------------------------------------
+    //
+    // Fed the JSON the real client produces. The point is fidelity in one
+    // specific direction: the mock must reproduce goose's *failure*, not an
+    // idealised version of it. If it silently kept a camelCase allowlist, every
+    // test that ran against it would pass while the app shipped the bug this
+    // whole surface exists to prevent.
+
+    fn mail() -> GooseExtension {
+        GooseExtension::mcp(
+            McpServer::Stdio(StdioMcpServer::new(
+                "mail-imap",
+                "uvx",
+                vec!["stdio".into()],
+            )),
+            vec!["MCP_EMAIL_SERVER_PASSWORD".into()],
+            "IMAP mail",
+            vec!["list_mailboxes".into(), "get_emails_content".into()],
+        )
+    }
+
+    fn add(state: &Shared, extension: &Value) -> Result<Value, (i64, String)> {
+        extension_request(
+            "_goose/unstable/config/extensions/add",
+            &json!({"extension": extension, "enabled": true}),
+            state,
+        )
+    }
+
+    fn listed(state: &Shared) -> Value {
+        extension_request(
+            "_goose/unstable/config/extensions/list",
+            &Value::Null,
+            state,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_snake_case_allowlist_is_kept() {
+        let state: Shared = Arc::default();
+        add(&state, &serde_json::to_value(mail()).unwrap()).unwrap();
+
+        let rows = listed(&state);
+        assert_eq!(rows["extensions"][0]["configKey"], json!("mail-imap"));
+        assert_eq!(rows["extensions"][0]["enabled"], json!(true));
+        assert_eq!(
+            rows["extensions"][0]["extension"]["available_tools"],
+            json!(["list_mailboxes", "get_emails_content"])
+        );
+    }
+
+    #[test]
+    fn a_camel_case_allowlist_is_dropped_exactly_as_goose_drops_it() {
+        let state: Shared = Arc::default();
+        let mut extension = serde_json::to_value(mail()).unwrap();
+        let obj = extension.as_object_mut().unwrap();
+        let tools = obj.remove("available_tools").unwrap();
+        obj.insert("availableTools".to_string(), tools);
+
+        add(&state, &extension).unwrap();
+
+        let rows = listed(&state);
+        let stored = &rows["extensions"][0]["extension"];
+        assert!(
+            stored.get("available_tools").is_none(),
+            "the camelCase spelling must not become an allowlist: {stored}"
+        );
+    }
+
+    /// A credential is proved by starting the extension, never by reading the
+    /// value back — so a missing secret has to be an error here.
+    #[test]
+    fn a_session_add_fails_until_the_secret_is_stored() {
+        let state: Shared = Arc::default();
+        let extension = serde_json::to_value(mail()).unwrap();
+        let params = json!({"sessionId": "20260821_1", "extension": extension});
+
+        let err = extension_request("_goose/unstable/session/extensions/add", &params, &state)
+            .unwrap_err();
+        assert!(
+            err.1.contains("MCP_EMAIL_SERVER_PASSWORD"),
+            "got: {}",
+            err.1
+        );
+
+        extension_request(
+            "_goose/unstable/config/upsert",
+            &json!({"key": "MCP_EMAIL_SERVER_PASSWORD", "value": "pw", "isSecret": true}),
+            &state,
+        )
+        .unwrap();
+        extension_request("_goose/unstable/session/extensions/add", &params, &state).unwrap();
+    }
+
+    /// goose logs "Secret value is not a string; skipping" for a value that
+    /// arrived as a number — an app password of all digits is the realistic
+    /// case — and then starts the extension with no credential at all.
+    #[test]
+    fn a_non_string_secret_is_skipped_and_the_extension_will_not_start() {
+        let state: Shared = Arc::default();
+        extension_request(
+            "_goose/unstable/config/upsert",
+            &json!({"key": "MCP_EMAIL_SERVER_PASSWORD", "value": 12_345_678, "isSecret": true}),
+            &state,
+        )
+        .unwrap();
+
+        let err = extension_request(
+            "_goose/unstable/session/extensions/add",
+            &json!({"sessionId": "s", "extension": serde_json::to_value(mail()).unwrap()}),
+            &state,
+        )
+        .unwrap_err();
+        assert!(err.1.contains("missing env"), "got: {}", err.1);
+    }
+
+    #[test]
+    fn toggling_an_unknown_extension_is_an_error() {
+        let state: Shared = Arc::default();
+        assert!(extension_request(
+            "_goose/unstable/config/extensions/set-enabled",
+            &json!({"configKey": "nope", "enabled": true}),
+            &state,
+        )
+        .is_err());
     }
 }

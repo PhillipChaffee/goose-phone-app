@@ -1240,6 +1240,124 @@ select.field {
   line-height: 1.5;
 }
 
+/* Full width so it drops onto its own line under the row it belongs to. */
+.confirm-row {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+/* ── connect ────────────────────────────────────────────────────────── */
+
+/* Configured services and the catalogue both use the session row's shape —
+ * leading tile, stacked body, trailing control — so the two lists read as one
+ * app. Only what is different gets its own rule. */
+.ext-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ext-item,
+.catalog-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  text-align: left;
+  transition: box-shadow 140ms ease, transform 140ms ease;
+}
+
+/* The catalogue rows are buttons, so they need the button reset the card
+ * rows get for free. */
+.catalog-item {
+  width: 100%;
+  margin-bottom: 8px;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.catalog-item:active {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+/* On/off as a word, not a switch: the state comes from the server and a
+ * switch would imply it flips instantly. */
+.ext-state {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ext-state.on {
+  background: var(--bg-success);
+  color: var(--text-inverse);
+}
+
+/* What this service may call. The unrestricted case is the one that matters,
+ * so it is the one that is loud — an empty allowlist means every tool. */
+.ext-tools {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+.ext-tools > .icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.ext-tools.unrestricted {
+  background: transparent;
+  border: 1px solid var(--border-danger);
+  color: var(--text-danger);
+}
+
+/* The exact tools a service is about to be given, listed before you agree to
+ * it. Monospace because these are identifiers, not prose. */
+.tool-allowlist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 12px;
+  list-style: none;
+}
+
+.tool-allowlist li {
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
 /* ── chat transcript ────────────────────────────────────────────────── */
 
 .chat {

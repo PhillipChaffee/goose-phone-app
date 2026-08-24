@@ -5,7 +5,7 @@
 //! [`AcpEvent`] channel. `session/prompt` stays pending for the whole agent
 //! turn, so requests carry no default timeout — callers opt in per call.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -20,8 +20,8 @@ use tokio_tungstenite::{connect_async_tls_with_config, MaybeTlsStream, WebSocket
 
 use crate::tls;
 use crate::types::{
-    AcpEvent, ContentBlock, InitializeInfo, NewSessionResponse, PermissionRequest,
-    SessionListResponse, SessionUpdate,
+    AcpEvent, ConfigExtensions, ContentBlock, GooseExtension, GooseExtensionEntry, InitializeInfo,
+    NewSessionResponse, PermissionRequest, SessionListResponse, SessionUpdate,
 };
 
 pub const CLIENT_NAME: &str = "goose-mobile";
@@ -44,6 +44,12 @@ pub enum AcpError {
     },
     #[error("invalid configuration: {0}")]
     Config(String),
+    /// An extension's tool allowlist did not survive the round trip, so the
+    /// extension is running unrestricted. Its own variant because it must
+    /// never be handled as "some RPC hiccup" — see
+    /// [`AcpClient::add_extension_verified`].
+    #[error("{0}")]
+    Allowlist(String),
 }
 
 /// How to reach the server.
@@ -131,6 +137,29 @@ enum Cmd {
 #[derive(Clone, Debug)]
 pub struct AcpClient {
     tx: mpsc::UnboundedSender<Cmd>,
+}
+
+/// Timeout for the config-plane calls (listing, adding and toggling
+/// extensions, writing a secret). These touch a file on the server and return;
+/// none of them starts an MCP process, so they are quick or they are broken.
+const CONFIG_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Reply to `_goose/unstable/extensions/available`. Private: callers get the
+/// vector, not the envelope.
+#[derive(Debug, serde::Deserialize)]
+struct AvailableExtensions {
+    #[serde(default)]
+    extensions: Vec<GooseExtension>,
+}
+
+/// `a, b, c`, or `(none)` for an empty list, for an error message a human
+/// reads on a phone.
+fn fmt_list(items: &[&str]) -> String {
+    if items.is_empty() {
+        "(none)".to_string()
+    } else {
+        items.join(", ")
+    }
 }
 
 /// Pull a `configOptions` array out of any response that carries one.
@@ -433,6 +462,252 @@ impl AcpClient {
             "_goose/unstable/session/rename",
             json!({"sessionId": session_id, "title": title}),
             Duration::from_secs(30),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    // ---- extensions (the Connect surface) --------------------------------
+    //
+    // All of these are `_goose/unstable/*` methods, present at goose 1.46.0 —
+    // no protocol version bump is needed for any of them.
+    //
+    // A note on transport, because goose's HTTP ACP mode has a trap that does
+    // NOT apply here: over `POST /acp` the server *assigns* a connection id in
+    // the `acp-connection-id` response header on `initialize`, every later
+    // request has to echo it back, and the replies arrive on a separate SSE
+    // channel. This client speaks ACP over a WebSocket instead — one socket is
+    // the connection, the actor in this module correlates by JSON-RPC id, and
+    // there is no header to carry. These methods are therefore plain
+    // `request` calls like every other, with nothing extra to thread through.
+
+    /// Extensions goose knows how to offer but that are not necessarily
+    /// configured — the built-ins and platform extensions it ships with.
+    ///
+    /// Note that most of these come back with no `available_tools`, i.e.
+    /// unrestricted. That is a fact about goose's catalogue, not a suggestion.
+    ///
+    /// # Errors
+    ///
+    /// [`AcpError::Rpc`] if the server does not implement this unstable
+    /// method, [`AcpError::Timeout`] after 30 s, [`AcpError::Closed`], or
+    /// [`AcpError::Transport`] if the reply does not parse.
+    pub async fn extensions_available(&self) -> Result<Vec<GooseExtension>, AcpError> {
+        let raw = self
+            .request_with_timeout(
+                "_goose/unstable/extensions/available",
+                json!({}),
+                CONFIG_TIMEOUT,
+            )
+            .await?;
+        let listed: AvailableExtensions =
+            serde_json::from_value(raw).map_err(|e| AcpError::Transport(e.to_string()))?;
+        Ok(listed.extensions)
+    }
+
+    /// The extensions persisted in the server's global goose config, each
+    /// with its enabled flag and the `config_key` that addresses it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::extensions_available`].
+    pub async fn config_extensions_list(&self) -> Result<ConfigExtensions, AcpError> {
+        let raw = self
+            .request_with_timeout(
+                "_goose/unstable/config/extensions/list",
+                json!({}),
+                CONFIG_TIMEOUT,
+            )
+            .await?;
+        serde_json::from_value(raw).map_err(|e| AcpError::Transport(e.to_string()))
+    }
+
+    /// Persist an extension to the server's global goose config.
+    ///
+    /// Prefer [`Self::add_extension_verified`]: this one returns as soon as
+    /// the server says OK, and the server saying OK is *not* evidence that
+    /// the tool allowlist was applied.
+    ///
+    /// # Errors
+    ///
+    /// [`AcpError::Rpc`] if goose rejects the extension (an `sse` server, an
+    /// unsupported field combination), plus the usual timeout/closed cases.
+    pub async fn config_extension_add(
+        &self,
+        extension: &GooseExtension,
+        enabled: bool,
+    ) -> Result<(), AcpError> {
+        self.request_with_timeout(
+            "_goose/unstable/config/extensions/add",
+            json!({"extension": extension, "enabled": enabled}),
+            CONFIG_TIMEOUT,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Add an extension and then prove the tool allowlist actually stuck.
+    ///
+    /// This is the only `add` the app calls, and the read-back is not
+    /// belt-and-braces — it is the control itself. Three things can leave an
+    /// extension unrestricted with no error anywhere:
+    ///
+    /// 1. sending `availableTools` instead of `available_tools` (goose has no
+    ///    `deny_unknown_fields`, so the field is dropped in silence);
+    /// 2. sending an empty allowlist, which goose stores and then reads back
+    ///    as "allow everything";
+    /// 3. a server old or new enough to have moved the field.
+    ///
+    /// All three end the same way: `available_tools` comes back empty or
+    /// absent. So an empty allowlist is refused before anything is sent, and
+    /// afterwards the persisted set must match the sent set exactly.
+    /// Anything else is [`AcpError::Allowlist`] — a hard error, never a
+    /// warning, because failing open here is the security bug.
+    ///
+    /// The extension is still persisted when this fails; the caller should
+    /// surface the error and leave it disabled or remove it.
+    ///
+    /// # Errors
+    ///
+    /// [`AcpError::Allowlist`] if the allowlist is empty going out, or is
+    /// missing, empty or different coming back. Otherwise as
+    /// [`Self::config_extension_add`].
+    pub async fn add_extension_verified(
+        &self,
+        extension: &GooseExtension,
+        enabled: bool,
+    ) -> Result<GooseExtensionEntry, AcpError> {
+        let name = extension.name().to_string();
+        let sent: BTreeSet<&str> = extension
+            .available_tools()
+            .iter()
+            .map(String::as_str)
+            .collect();
+        if sent.is_empty() {
+            return Err(AcpError::Allowlist(format!(
+                "refusing to add `{name}` with an empty tool allowlist — goose reads \
+                 an empty allowlist as \"allow every tool this server publishes\""
+            )));
+        }
+
+        self.config_extension_add(extension, enabled).await?;
+
+        let listed = self.config_extensions_list().await?;
+        let Some(entry) = listed
+            .extensions
+            .into_iter()
+            .find(|e| e.extension.name() == name)
+        else {
+            return Err(AcpError::Allowlist(format!(
+                "`{name}` was accepted but is not in config/extensions/list — \
+                 refusing to treat it as configured"
+            )));
+        };
+
+        let got: BTreeSet<&str> = entry
+            .extension
+            .available_tools()
+            .iter()
+            .map(String::as_str)
+            .collect();
+        if got.is_empty() {
+            return Err(AcpError::Allowlist(format!(
+                "`{name}` came back with NO tool allowlist, which means every tool \
+                 is allowed. The field is `available_tools` (snake_case) on the ACP \
+                 wire; a camelCase spelling is accepted and silently dropped."
+            )));
+        }
+        if got != sent {
+            let missing: Vec<&str> = sent.difference(&got).copied().collect();
+            let extra: Vec<&str> = got.difference(&sent).copied().collect();
+            return Err(AcpError::Allowlist(format!(
+                "`{name}` came back with a different tool allowlist — dropped: {}; \
+                 added: {}",
+                fmt_list(&missing),
+                fmt_list(&extra)
+            )));
+        }
+        Ok(entry)
+    }
+
+    /// Switch a configured extension on or off. `config_key` is the value
+    /// [`GooseExtensionEntry::config_key`] carries.
+    ///
+    /// # Errors
+    ///
+    /// [`AcpError::Rpc`] with `invalid_params` if no extension has that key,
+    /// plus the usual timeout/closed cases.
+    pub async fn config_extension_set_enabled(
+        &self,
+        config_key: &str,
+        enabled: bool,
+    ) -> Result<(), AcpError> {
+        self.request_with_timeout(
+            "_goose/unstable/config/extensions/set-enabled",
+            json!({"configKey": config_key, "enabled": enabled}),
+            CONFIG_TIMEOUT,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Bring an extension up in one live session, which is also the only
+    /// honest way to check a credential: goose launches the MCP server here
+    /// and fails if it cannot start. A stdio server whose `envKeys` name a
+    /// secret that is missing dies at startup, and that error comes back
+    /// through this call.
+    ///
+    /// The timeout is generous because a first launch may fetch the server
+    /// package (`uvx`, `npx`) over the network.
+    ///
+    /// # Errors
+    ///
+    /// [`AcpError::Rpc`] if the extension will not start, if the session is
+    /// unknown, or if the extension carries inline `env` values (goose
+    /// rejects those outright at the session level — this crate cannot
+    /// produce one), [`AcpError::Timeout`] after 120 s, or
+    /// [`AcpError::Closed`].
+    pub async fn session_extension_add(
+        &self,
+        session_id: &str,
+        extension: &GooseExtension,
+    ) -> Result<(), AcpError> {
+        self.request_with_timeout(
+            "_goose/unstable/session/extensions/add",
+            json!({"sessionId": session_id, "extension": extension}),
+            Duration::from_secs(120),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Write one credential into goose's secret store, where `envKeys` and
+    /// `${VAR}` header substitution resolve it from.
+    ///
+    /// `isSecret` is hard-coded true and the value is always sent as a JSON
+    /// string, both deliberately:
+    ///
+    /// - a non-secret write lands in plaintext `config.yaml` instead of
+    ///   `secrets.yaml` (mode 0600);
+    /// - a value that is not a JSON *string* — a numeric app password like
+    ///   `12345678` parsed as a number, say — makes goose log "Secret value is
+    ///   not a string; skipping" and start the extension with **no**
+    ///   credential. Sending `String` unconditionally makes that impossible.
+    ///
+    /// There is intentionally no `config/read` wrapper in this crate.
+    /// `config/read` on a secret returns the first `min(len/2, 8)` characters
+    /// in clear plus the exact length, so "just check what we stored" is a
+    /// leak. Verify with [`Self::session_extension_add`] instead.
+    ///
+    /// # Errors
+    ///
+    /// [`AcpError::Rpc`] if goose cannot write its secret store,
+    /// [`AcpError::Timeout`] after 30 s, or [`AcpError::Closed`].
+    pub async fn store_secret(&self, key: &str, value: &str) -> Result<(), AcpError> {
+        self.request_with_timeout(
+            "_goose/unstable/config/upsert",
+            json!({"key": key, "value": value, "isSecret": true}),
+            CONFIG_TIMEOUT,
         )
         .await
         .map(|_| ())

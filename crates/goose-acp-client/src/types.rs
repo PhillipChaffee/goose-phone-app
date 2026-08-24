@@ -379,6 +379,348 @@ pub struct PermissionRequest {
     pub options: Vec<PermissionOption>,
 }
 
+// ---------------------------------------------------------------------------
+// Extensions — the wire types behind the Connect screen.
+//
+// One spelling in here is load bearing, and getting it wrong is a security
+// bug rather than a style slip.
+//
+// goose's own `GooseExtension` carries `#[serde(tag = "type", rename_all =
+// "snake_case")]`. On an enum, serde's `rename_all` renames VARIANTS; the
+// fields inside struct variants need `rename_all_fields`, which goose does
+// not use. So every field keeps its Rust spelling unless it is renamed one at
+// a time — and exactly one of them is, `env_keys` -> `envKeys`.
+//
+// The result is a wire format that mixes cases: `available_tools` and
+// `display_name` are snake_case while `envKeys` (and, from 1.47, `clientId` /
+// `clientSecretKey`) are camelCase. goose sets no `deny_unknown_fields`, so a
+// camelCase `availableTools` is accepted, ignored and silently dropped — and
+// a dropped allowlist deserializes as `None`, which goose turns into `vec![]`,
+// which means *every tool is allowed*.
+//
+// Verified against goose 1.46.0 by adding two extensions over ACP, one with
+// each spelling, and reading `config.yaml` back: the camelCase one had no
+// `available_tools` key at all; the snake_case one persisted. A read-only mail
+// connector written with the natural camelCase spelling would ship with its
+// send tool live. `serializes_the_exact_wire_spellings` below asserts the
+// literal JSON keys, and `AcpClient::add_extension_verified` refuses to
+// believe an add worked until the server hands the allowlist back.
+
+/// An HTTP header sent to a remote MCP server (ACP `HttpHeader`).
+///
+/// `${VAR}` in a value is expanded by goose from its secret store when the
+/// extension starts, which is how a bearer token reaches a remote MCP server
+/// without ever crossing the ACP frame. Note the failure mode: an *unknown*
+/// `${VAR}` is left LITERAL rather than erroring, so the extension starts and
+/// the server answers 401 — a header credential fails open, unlike a stdio
+/// env key, which fails closed at startup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HttpHeader {
+    pub name: String,
+    pub value: String,
+}
+
+impl HttpHeader {
+    #[must_use]
+    pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value: value.into(),
+        }
+    }
+}
+
+/// An environment variable ACP can set on a stdio MCP child (`EnvVariable`).
+///
+/// Present because the schema has it, not because this client sends one — see
+/// [`StdioMcpServer`], which owns the only `env` field here and keeps it
+/// private and empty.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnvVariable {
+    pub name: String,
+    pub value: String,
+}
+
+/// The `type: "http"` discriminator, as its own type so it cannot be spelled
+/// wrong or left off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpTransport {
+    Http,
+}
+
+/// A remote MCP server reached over streamable HTTP.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HttpMcpServer {
+    /// Always `http`. Private so the only way to build one is [`Self::new`].
+    #[serde(rename = "type")]
+    kind: HttpTransport,
+    pub name: String,
+    pub url: String,
+    pub headers: Vec<HttpHeader>,
+}
+
+impl HttpMcpServer {
+    #[must_use]
+    pub fn new(name: impl Into<String>, url: impl Into<String>, headers: Vec<HttpHeader>) -> Self {
+        Self {
+            kind: HttpTransport::Http,
+            name: name.into(),
+            url: url.into(),
+            headers,
+        }
+    }
+}
+
+/// A local MCP server the agent host launches as a child process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StdioMcpServer {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    /// ACP requires this key on a stdio server, and this client always sends
+    /// it empty — which is why it is private with no setter.
+    ///
+    /// Inline `env` values *do* cross the ACP frame in plaintext, and goose
+    /// promotes them into its secret store on arrival, so populating it would
+    /// put a credential on the wire for no benefit. Worse, the session-level
+    /// `session/extensions/add` rejects the whole request when it sees one
+    /// ("extension env values must be passed via envKeys referencing stored
+    /// secrets"). Credentials travel as `envKeys` — names of secrets already
+    /// stored server-side — and nothing else.
+    env: Vec<EnvVariable>,
+}
+
+impl StdioMcpServer {
+    #[must_use]
+    pub fn new(name: impl Into<String>, command: impl Into<String>, args: Vec<String>) -> Self {
+        Self {
+            name: name.into(),
+            command: command.into(),
+            args,
+            env: Vec::new(),
+        }
+    }
+}
+
+/// Which transport an `mcp` extension speaks.
+///
+/// ACP tags these inconsistently and this mirrors that rather than tidying it
+/// up: `McpServerHttp` carries a `type: "http"` discriminator, while
+/// `McpServerStdio` carries no `type` at all — stdio is the transport every
+/// agent must support, and it kept the original untagged shape. An internally
+/// tagged enum would therefore fail to *parse* goose's own
+/// `config/extensions/list` reply, which spells stdio servers with no tag. So
+/// this is `untagged`, discriminating on `url` versus `command`.
+///
+/// (Connector manifests in the brain repo do write `server.type: stdio`. That
+/// is a manifest-level convenience their validator allows as an extra key; it
+/// is not part of the ACP schema, and it is not sent from here.)
+///
+/// `sse` is deliberately absent. goose's ACP layer refuses it outright — "SSE
+/// is unsupported, migrate to `streamable_http`" — and a live `initialize`
+/// reports `mcpCapabilities: { http: true, sse: false }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum McpServer {
+    Http(HttpMcpServer),
+    Stdio(StdioMcpServer),
+}
+
+impl McpServer {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Http(s) => &s.name,
+            Self::Stdio(s) => &s.name,
+        }
+    }
+
+    /// `"http"` or `"stdio"`, for a one-line summary in the UI.
+    #[must_use]
+    pub const fn transport(&self) -> &'static str {
+        match self {
+            Self::Http(_) => "http",
+            Self::Stdio(_) => "stdio",
+        }
+    }
+}
+
+/// One extension, in the shape `_goose/unstable/config/extensions/*` and
+/// `_goose/unstable/extensions/available` speak.
+///
+/// Modelled against goose 1.46.0, the pinned version. `clientId`,
+/// `clientSecretKey` and `scopes` exist on the `mcp` variant from 1.47.0 and
+/// are absent here on purpose: they are OAuth machinery, `scopes` without
+/// `clientId` is a hard config error, and OAuth cannot be completed from a
+/// phone anyway (goose binds the redirect URI on the agent host, never puts
+/// the authorization URL in an ACP message, and refuses URL-mode elicitation
+/// at the ACP bridge). Extra fields a newer server sends are ignored, not
+/// rejected, so this parses a 1.47 reply fine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum GooseExtension {
+    Builtin {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// `snake_case` on the wire. Not a typo — see the note above this type.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bundled: Option<bool>,
+        /// `snake_case` on the wire, and `None` means EVERY TOOL IS ALLOWED.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        available_tools: Option<Vec<String>>,
+    },
+    Platform {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bundled: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        available_tools: Option<Vec<String>>,
+    },
+    Mcp {
+        server: Box<McpServer>,
+        /// `camelCase` on the wire — the one field goose renames explicitly.
+        /// Names of secrets already in goose's store; never values.
+        #[serde(default, rename = "envKeys", skip_serializing_if = "Vec::is_empty")]
+        env_keys: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        socket: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bundled: Option<bool>,
+        /// `snake_case` on the wire, and `None` means EVERY TOOL IS ALLOWED.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        available_tools: Option<Vec<String>>,
+    },
+}
+
+impl GooseExtension {
+    /// Build an `mcp` extension with a tool allowlist.
+    ///
+    /// `available_tools` is taken by value and stored as-is: an empty vector
+    /// would serialize as an empty allowlist, which goose reads as "allow
+    /// everything". [`AcpClient::add_extension_verified`] refuses to send
+    /// one, so the mistake cannot leave this crate.
+    ///
+    /// [`AcpClient::add_extension_verified`]: crate::AcpClient::add_extension_verified
+    #[must_use]
+    pub fn mcp(
+        server: McpServer,
+        env_keys: Vec<String>,
+        description: impl Into<String>,
+        available_tools: Vec<String>,
+    ) -> Self {
+        Self::Mcp {
+            server: Box::new(server),
+            env_keys,
+            description: Some(description.into()),
+            // 300s matches the connector manifests: `uvx`/`npx` may fetch the
+            // server package on first launch, which the default timeout does
+            // not survive on a cold cache.
+            timeout: Some(300),
+            socket: None,
+            bundled: None,
+            available_tools: Some(available_tools),
+        }
+    }
+
+    /// The extension's name — for `mcp`, the server's name, which is where
+    /// goose reads it from too.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Builtin { name, .. } | Self::Platform { name, .. } => name,
+            Self::Mcp { server, .. } => server.name(),
+        }
+    }
+
+    #[must_use]
+    pub fn description(&self) -> Option<&str> {
+        match self {
+            Self::Builtin { description, .. }
+            | Self::Platform { description, .. }
+            | Self::Mcp { description, .. } => description.as_deref(),
+        }
+    }
+
+    /// The tool allowlist. **An empty slice means every tool is allowed** —
+    /// it is not the safe default it reads like, and the UI says so out loud.
+    #[must_use]
+    pub fn available_tools(&self) -> &[String] {
+        match self {
+            Self::Builtin {
+                available_tools, ..
+            }
+            | Self::Platform {
+                available_tools, ..
+            }
+            | Self::Mcp {
+                available_tools, ..
+            } => available_tools.as_deref().unwrap_or(&[]),
+        }
+    }
+
+    /// Names of the secrets this extension needs from goose's secret store.
+    #[must_use]
+    pub fn env_keys(&self) -> &[String] {
+        match self {
+            Self::Mcp { env_keys, .. } => env_keys,
+            Self::Builtin { .. } | Self::Platform { .. } => &[],
+        }
+    }
+
+    /// `"builtin"`, `"platform"`, `"stdio"` or `"http"`.
+    #[must_use]
+    pub fn transport(&self) -> &'static str {
+        match self {
+            Self::Builtin { .. } => "builtin",
+            Self::Platform { .. } => "platform",
+            Self::Mcp { server, .. } => server.transport(),
+        }
+    }
+}
+
+/// One row of `_goose/unstable/config/extensions/list`.
+///
+/// An extension plus whether it is switched on, and the key `set-enabled` and
+/// `remove` address it by. goose derives `config_key` from the name
+/// (lowercased, with anything outside `[A-Za-z0-9_-]` folded to `_`), but it
+/// is echoed here so the client never has to reimplement that.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GooseExtensionEntry {
+    pub extension: GooseExtension,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub config_key: Option<String>,
+}
+
+/// Reply to `_goose/unstable/config/extensions/list`.
+///
+/// `warnings` carries config-file problems goose noticed while loading —
+/// worth showing, because an extension that failed to parse is simply missing
+/// from `extensions` otherwise.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ConfigExtensions {
+    #[serde(default)]
+    pub extensions: Vec<GooseExtensionEntry>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
 /// Result of `initialize`.
 #[derive(Debug, Clone)]
 pub struct InitializeInfo {
@@ -493,6 +835,184 @@ mod tests {
             }
             other => panic!("wrong variant: {other:?}"),
         }
+    }
+
+    /// The test this whole module exists for.
+    ///
+    /// `available_tools` must serialize `snake_case` and `envKeys` `camelCase`,
+    /// in the same object. If a future refactor adds a blanket
+    /// `rename_all_fields = "camelCase"` — the obvious tidy-up — this fails,
+    /// which is the point: goose would accept the camelCase allowlist,
+    /// silently drop it, and allow every tool the MCP server publishes.
+    #[test]
+    fn serializes_the_exact_wire_spellings() {
+        let ext = GooseExtension::mcp(
+            McpServer::Stdio(StdioMcpServer::new(
+                "mail-imap",
+                "uvx",
+                vec!["mcp-email-server@1.4.2".into(), "stdio".into()],
+            )),
+            vec!["MCP_EMAIL_SERVER_PASSWORD".into()],
+            "IMAP mail",
+            vec!["list_mailboxes".into(), "get_emails_content".into()],
+        );
+        let v = serde_json::to_value(&ext).unwrap();
+        let obj = v.as_object().unwrap();
+
+        assert!(
+            obj.contains_key("available_tools"),
+            "the allowlist MUST be snake_case; camelCase is silently dropped \
+             by goose and an absent allowlist allows every tool: {v}"
+        );
+        assert!(
+            !obj.contains_key("availableTools"),
+            "camelCase availableTools would be dropped on the floor: {v}"
+        );
+        assert!(
+            obj.contains_key("envKeys"),
+            "envKeys MUST be camelCase — it is the one field goose renames: {v}"
+        );
+        assert!(
+            !obj.contains_key("env_keys"),
+            "snake_case env_keys is the config.yaml spelling, not the wire one: {v}"
+        );
+
+        // And the whole frame, so an accidental extra field is visible too.
+        assert_eq!(
+            v,
+            json!({
+                "type": "mcp",
+                "server": {
+                    "name": "mail-imap",
+                    "command": "uvx",
+                    "args": ["mcp-email-server@1.4.2", "stdio"],
+                    // Always present, always empty: an inline value would put
+                    // the credential in the ACP frame in plaintext.
+                    "env": [],
+                },
+                "envKeys": ["MCP_EMAIL_SERVER_PASSWORD"],
+                "description": "IMAP mail",
+                "timeout": 300,
+                "available_tools": ["list_mailboxes", "get_emails_content"],
+            })
+        );
+    }
+
+    /// `display_name` is `snake_case` too, for exactly the same reason: the
+    /// `rename_all = "snake_case"` on goose's enum renames variants, not
+    /// fields, and nothing renames this one.
+    #[test]
+    fn builtin_display_name_is_snake_case_on_the_wire() {
+        let ext = GooseExtension::Builtin {
+            name: "developer".into(),
+            description: None,
+            display_name: Some("Developer".into()),
+            timeout: None,
+            bundled: Some(true),
+            available_tools: Some(vec!["shell".into()]),
+        };
+        let v = serde_json::to_value(&ext).unwrap();
+        assert_eq!(
+            v,
+            json!({
+                "type": "builtin",
+                "name": "developer",
+                "display_name": "Developer",
+                "bundled": true,
+                "available_tools": ["shell"],
+            })
+        );
+    }
+
+    /// An http server carries `type: "http"` and its headers are an ARRAY of
+    /// `{name, value}` — not the mapping the connector manifests use.
+    #[test]
+    fn http_server_is_tagged_and_headers_are_a_list() {
+        let ext = GooseExtension::mcp(
+            McpServer::Http(HttpMcpServer::new(
+                "todoist",
+                "https://ai.todoist.net/mcp",
+                vec![HttpHeader::new(
+                    "Authorization",
+                    "Bearer ${TODOIST_API_KEY}",
+                )],
+            )),
+            vec!["TODOIST_API_KEY".into()],
+            "Todoist tasks",
+            vec!["find-tasks".into()],
+        );
+        let v = serde_json::to_value(&ext).unwrap();
+        assert_eq!(
+            v.pointer("/server/type").and_then(Value::as_str),
+            Some("http")
+        );
+        assert_eq!(
+            v.pointer("/server/headers"),
+            Some(&json!([{"name": "Authorization", "value": "Bearer ${TODOIST_API_KEY}"}]))
+        );
+        // No `url`-less variant confusion: the field is `url`, not `uri`.
+        // `uri` is what goose writes into config.yaml, one layer down.
+        assert_eq!(
+            v.pointer("/server/url").and_then(Value::as_str),
+            Some("https://ai.todoist.net/mcp")
+        );
+    }
+
+    /// goose spells stdio servers with no `type` at all (stdio is ACP's
+    /// untagged fallback transport), so a list reply must still parse.
+    #[test]
+    fn parses_a_stdio_server_with_no_type_tag() {
+        let raw = json!({
+            "extension": {
+                "type": "mcp",
+                "server": {"name": "mail-imap", "command": "uvx", "args": ["x"], "env": []},
+                "envKeys": ["MCP_EMAIL_SERVER_PASSWORD"],
+                "timeout": 300,
+                "available_tools": ["list_mailboxes"]
+            },
+            "enabled": true,
+            "configKey": "mail-imap"
+        });
+        let entry: GooseExtensionEntry = serde_json::from_value(raw).unwrap();
+        assert!(entry.enabled);
+        assert_eq!(entry.config_key.as_deref(), Some("mail-imap"));
+        assert_eq!(entry.extension.name(), "mail-imap");
+        assert_eq!(entry.extension.transport(), "stdio");
+        assert_eq!(entry.extension.available_tools(), ["list_mailboxes"]);
+        assert_eq!(entry.extension.env_keys(), ["MCP_EMAIL_SERVER_PASSWORD"]);
+    }
+
+    /// The failure this codebase is built around: goose omits
+    /// `available_tools` entirely when the stored allowlist is empty, and an
+    /// omitted allowlist means every tool is allowed. Parsing must surface
+    /// that as an empty slice so callers can reject it — not as something
+    /// that reads like a safe default.
+    #[test]
+    fn a_missing_allowlist_reads_as_empty_meaning_everything() {
+        let raw = json!({
+            "type": "mcp",
+            "server": {"name": "probe_camel", "command": "uvx", "args": [], "env": []},
+        });
+        let ext: GooseExtension = serde_json::from_value(raw).unwrap();
+        assert!(ext.available_tools().is_empty());
+    }
+
+    /// A 1.47 server sends OAuth fields this client does not model. They must
+    /// be ignored, not rejected — there is no `deny_unknown_fields` here for
+    /// the same reason goose has none.
+    #[test]
+    fn newer_server_fields_are_ignored_not_fatal() {
+        let raw = json!({
+            "type": "mcp",
+            "server": {"type": "http", "name": "x", "url": "https://x/mcp", "headers": []},
+            "clientId": "abc",
+            "clientSecretKey": "X_SECRET",
+            "scopes": ["read"],
+            "available_tools": ["a"]
+        });
+        let ext: GooseExtension = serde_json::from_value(raw).unwrap();
+        assert_eq!(ext.transport(), "http");
+        assert_eq!(ext.available_tools(), ["a"]);
     }
 
     #[test]

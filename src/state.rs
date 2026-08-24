@@ -27,13 +27,15 @@ pub(crate) enum Screen {
     Chat,
 }
 
-/// Top-level tab — the Claude-app-style Home/Code toggle. Each tab keeps its
-/// own navigation state (`AppCtx::screen` for Home, `AppCtx::code_screen`
-/// for Code), so switching tabs never resets where you were.
+/// Top-level destination. Each one keeps its own navigation state
+/// (`AppCtx::screen` for Home, `AppCtx::code_screen` for Code,
+/// `AppCtx::connect_screen` for Connect), so switching never resets where you
+/// were on the others.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
     Home,
     Code,
+    Connect,
 }
 
 /// `serde(default)` is load-bearing: settings persisted by older builds lack
@@ -222,6 +224,23 @@ pub(crate) struct AppCtx {
     /// check what the agent actually changed, come back and send — was the
     /// one that silently lost what you had written.
     pub code_draft: Signal<String>,
+
+    // ---- Connect tab (goose extensions / MCP servers; src/connect.rs) ----
+    pub connect_screen: Signal<crate::connect::ConnectScreen>,
+    /// Extensions configured on the server, as `config/extensions/list`
+    /// reports them. Never assembled locally from what we sent: the server's
+    /// copy is the only one that says what the agent may actually call.
+    pub extensions: Signal<Vec<goose_acp_client::GooseExtensionEntry>>,
+    /// Problems goose hit loading its own config. Surfaced because an
+    /// extension that failed to parse is simply absent from the list.
+    pub extension_warnings: Signal<Vec<String>>,
+    pub extensions_loading: Signal<bool>,
+    /// A connect attempt is in flight (writing secrets, adding, verifying).
+    pub connect_busy: Signal<bool>,
+    /// The last connect failure, kept on screen rather than shown as a toast:
+    /// an allowlist that did not stick is not a message you want to miss
+    /// because you were looking at the keyboard.
+    pub connect_error: Signal<Option<String>>,
 }
 
 pub(crate) fn use_app_ctx_provider() -> AppCtx {
@@ -261,6 +280,12 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_diff: use_signal(crate::code::DiffState::default),
         code_diff_wrap: use_signal(|| true),
         code_draft: use_signal(String::new),
+        connect_screen: use_signal(|| crate::connect::ConnectScreen::List),
+        extensions: use_signal(Vec::new),
+        extension_warnings: use_signal(Vec::new),
+        extensions_loading: use_signal(|| false),
+        connect_busy: use_signal(|| false),
+        connect_error: use_signal(|| None),
     };
     use_context_provider(|| ctx);
     ctx

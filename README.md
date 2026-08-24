@@ -30,6 +30,7 @@ the app's own DOM rather than written by hand.</sub>
 - **Sessions** — browse, resume, and delete your server-side sessions; history replays through the same rendering path as live output, so a resumed chat looks identical.
 - **Built for a phone on a flaky network** — Stop cancels a running turn, dropped connections reconnect automatically and replay history, and half-open sockets (the classic "connected but nothing happens" after switching networks) are detected and recovered.
 - **Private by default** — reaches your server over your tailnet, authenticated with a shared secret, with optional certificate pinning.
+- **Connect** — see every MCP server your agent can reach, with the exact tool allowlist each one is held to, and add another from the phone with nothing but a token or an app password. The allowlist is the point: goose spells `available_tools` in snake_case among camelCase neighbours and has no `deny_unknown_fields`, so the natural camelCase spelling is *silently dropped* — and a dropped allowlist means every tool the server publishes is callable. So every add is followed by a read-back that asserts the allowlist came back non-empty and identical, and an extension that fails that check is switched off on the server before you are told. Credentials go one way: written with `config/upsert` + `isSecret`, never read back (goose returns a clear prefix for a secret), never stored on the phone, and with no reveal control anywhere. Verification is a handshake — the extension is started in the live session — not a read.
 - **Home / Code tabs** — alongside the goose chats (Home), a Code tab manages code-agent sessions: per-chat OpenCode containers on your server (one container per chat, spun down when idle, woken when you open them). Start a session against an allowlisted repo with any model, watch it stream, approve its permission asks (including `git push`), review the diff in-app, and have it open a PR. Opened chats are cached on-device, so a sleeping chat's transcript appears instantly while its container boots. Server side: [personal-ai-setup `docs/code-agents.md`](https://github.com/PhillipChaffee/personal-ai-setup); client side: issue #2. The protocol layer is [`crates/opencode-client`](crates/opencode-client) (HTTP + SSE via reqwest).
 
 ## How it works
@@ -181,7 +182,8 @@ it enforces, and why they are the rules, are in
 ```
 ├── src/                     # Dioxus app
 │   ├── state.rs             #   connection lifecycle, chat transcript folding
-│   └── views/               #   Settings / Sessions / Chat + permission modal
+│   ├── connect.rs           #   extension catalogue + the fail-closed add flow
+│   └── views/               #   Settings / Sessions / Chat / Connect + modals
 ├── crates/goose-acp-client/ # ACP protocol library (reusable, UI-independent)
 ├── crates/mock-goose-server/# fake goose server for testing
 ├── scripts/check-server.sh  # verify a server is app-ready

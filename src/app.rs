@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::code::CodeScreen;
+use crate::connect::ConnectScreen;
 use crate::icons::Icon;
 use crate::state::{use_app_ctx_provider, Screen, Tab};
 use crate::views;
@@ -28,6 +29,10 @@ pub fn App() -> Element {
             CodeScreen::Chat => rsx! { views::code::CodeChatView {} },
             CodeScreen::Diff => rsx! { views::code::CodeDiffView {} },
         },
+        Tab::Connect => match (ctx.connect_screen)() {
+            ConnectScreen::List => rsx! { views::connect::ConnectView {} },
+            ConnectScreen::Add => rsx! { views::connect::ConnectAddView {} },
+        },
     };
 
     crate::viewport::use_visual_viewport();
@@ -45,6 +50,10 @@ pub fn App() -> Element {
                 CodeScreen::New => "code-new",
                 CodeScreen::Chat => "code-chat",
                 CodeScreen::Diff => "code-diff",
+            },
+            Tab::Connect => match (ctx.connect_screen)() {
+                ConnectScreen::List => "connect-list",
+                ConnectScreen::Add => "connect-add",
             },
         }
         .to_owned(),
@@ -84,9 +93,10 @@ pub fn App() -> Element {
 /// The navigation drawer.
 ///
 /// It replaced a bottom tab bar, which spent 100px of every screen on two
-/// destinations and left no room for a third. Destinations live here; the
-/// screen underneath keeps its own back stack, so opening the drawer and
-/// coming back leaves you where you were.
+/// destinations and left no room for a third. Connect is that third: it went
+/// in here without costing any screen a pixel, which is what the drawer was
+/// for. Destinations live here; the screen underneath keeps its own back
+/// stack, so opening the drawer and coming back leaves you where you were.
 #[component]
 fn Drawer() -> Element {
     let ctx = crate::state::use_app_ctx();
@@ -98,6 +108,7 @@ fn Drawer() -> Element {
     // chat, Chats is somewhere to go back to, not where you are.
     let chats_here = tab == Tab::Home && (ctx.screen)() == Screen::Sessions;
     let code_here = tab == Tab::Code;
+    let connect_here = tab == Tab::Connect && (ctx.connect_screen)() == ConnectScreen::List;
 
     rsx! {
         div {
@@ -120,6 +131,12 @@ fn Drawer() -> Element {
                     "Code"
                 }
                 button {
+                    class: if connect_here { "drawer-item active" } else { "drawer-item" },
+                    onclick: move |_| navigate(&ctx, Destination::Connect),
+                    Icon { name: "package" }
+                    "Connect"
+                }
+                button {
                     class: if on_settings { "drawer-item active" } else { "drawer-item" },
                     onclick: move |_| navigate(&ctx, Destination::Settings),
                     Icon { name: "gear" }
@@ -139,6 +156,7 @@ fn navigate(ctx: &crate::state::AppCtx, to: Destination) {
             screen.set(Screen::Sessions);
         }
         Destination::Code => tab.set(Tab::Code),
+        Destination::Connect => tab.set(Tab::Connect),
         Destination::Settings => {
             tab.set(Tab::Home);
             screen.set(Screen::Settings);
@@ -151,5 +169,6 @@ fn navigate(ctx: &crate::state::AppCtx, to: Destination) {
 enum Destination {
     Chats,
     Code,
+    Connect,
     Settings,
 }
