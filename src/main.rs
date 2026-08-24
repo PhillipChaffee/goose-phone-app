@@ -6,15 +6,31 @@
 // CryptoProvider::get_default() in goose-acp-client, was found).
 #![allow(unused_qualifications, reason = "Dioxus macro expansion")]
 
+// One blank line between every declaration, so five branches each adding a
+// module of their own land in five separate hunks instead of one contested
+// list.
+
 mod app;
+
 mod code;
+
+mod css;
+
 mod diff;
+
 #[cfg(debug_assertions)]
 mod domdump;
+
 mod icons;
+
 mod markdown;
+
+mod nav;
+
 mod state;
+
 mod viewport;
+
 mod views;
 
 fn main() {

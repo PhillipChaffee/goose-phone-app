@@ -12,10 +12,15 @@
 )]
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use goose_acp_client::{probe, AcpClient, AcpEvent, ConnectConfig, ProbeOutcome, SessionUpdate};
+use goose_acp_client::{
+    probe, AcpClient, AcpError, AcpEvent, ConnectConfig, Feature, ProbeOutcome, SessionKind,
+    SessionUpdate,
+};
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -86,20 +91,33 @@ enum PromptBehavior {
     AskPermission,
     /// Drop the connection mid-turn.
     Disconnect,
+    /// Refuse `_goose/unstable/session/rename` the way a goose server that
+    /// has the feature switched off does: `-32601` with the explanation in
+    /// `data`, not in `message`.
+    RenameUnsupported,
 }
 
 async fn spawn_ws_stub(behavior: PromptBehavior) -> SocketAddr {
+    spawn_counting_ws_stub(behavior).await.0
+}
+
+/// [`spawn_ws_stub`] plus the count of `session/rename` frames that actually
+/// reached the socket, which is how a test proves a call was short-circuited
+/// rather than merely answered the same way twice.
+async fn spawn_counting_ws_stub(behavior: PromptBehavior) -> (SocketAddr, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let renames = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&renames);
     tokio::spawn(async move {
         loop {
             let Ok((sock, _)) = listener.accept().await else {
                 continue;
             };
-            tokio::spawn(handle_ws(sock, behavior));
+            tokio::spawn(handle_ws(sock, behavior, Arc::clone(&counter)));
         }
     });
-    addr
+    (addr, renames)
 }
 
 type WsStream = tokio_tungstenite::WebSocketStream<TcpStream>;
@@ -142,7 +160,7 @@ async fn notify(tx: &mut WsTx, session_id: &str, update: Value) {
     .await;
 }
 
-async fn handle_ws(sock: TcpStream, behavior: PromptBehavior) {
+async fn handle_ws(sock: TcpStream, behavior: PromptBehavior, renames: Arc<AtomicUsize>) {
     let Ok(ws) = tokio_tungstenite::accept_hdr_async(sock, check_secret).await else {
         return;
     };
@@ -185,6 +203,21 @@ async fn handle_ws(sock: TcpStream, behavior: PromptBehavior) {
                 send(&mut tx, out).await;
             }
             "session/list" => {
+                // The stub holds one session and it is a `user` one, so the
+                // filter the client sent decides whether it comes back — the
+                // same way the real server's `_meta.types` does.
+                let wants_user = frame
+                    .pointer("/params/_meta/types")
+                    .and_then(Value::as_array)
+                    .is_some_and(|types| types.iter().any(|t| t == "user"));
+                if !wants_user {
+                    send(
+                        &mut tx,
+                        json!({"jsonrpc":"2.0","id":id,"result":{"sessions":[],"nextCursor":null}}),
+                    )
+                    .await;
+                    continue;
+                }
                 send(
                     &mut tx,
                     json!({
@@ -207,6 +240,19 @@ async fn handle_ws(sock: TcpStream, behavior: PromptBehavior) {
             }
             "session/delete" => {
                 send(&mut tx, json!({"jsonrpc":"2.0","id":id,"result":{}})).await;
+            }
+            "_goose/unstable/session/rename" => {
+                renames.fetch_add(1, Ordering::SeqCst);
+                let out = if behavior == PromptBehavior::RenameUnsupported {
+                    // goose puts the sentence in `data`; `message` is the
+                    // canned JSON-RPC text.
+                    json!({"jsonrpc":"2.0","id":id,
+                           "error":{"code":-32601,"message":"Method not found",
+                                    "data":"Session renaming is not enabled"}})
+                } else {
+                    json!({"jsonrpc":"2.0","id":id,"result":{}})
+                };
+                send(&mut tx, out).await;
             }
             "unknown/method" => {
                 send(
@@ -406,12 +452,81 @@ async fn session_new_and_list_round_trip() {
     let session = client.session_new("/home/demo").await.unwrap();
     assert_eq!(session.session_id, "20260821_1");
 
-    let page = client.session_list(None).await.unwrap();
+    let page = client
+        .session_list(&[SessionKind::User], None)
+        .await
+        .unwrap();
     assert_eq!(page.sessions.len(), 1);
     let s = &page.sessions[0];
     assert_eq!(s.display_title(), "Earlier chat");
     assert_eq!(s.message_count(), Some(4));
     assert_eq!(s.last_message_snippet().as_deref(), Some("all done"));
+
+    // The kind filter reaches the wire: the stub's one session is a user
+    // session, so asking for scheduled ones only comes back empty.
+    let scheduled = client
+        .session_list(&[SessionKind::Scheduled], None)
+        .await
+        .unwrap();
+    assert!(scheduled.sessions.is_empty());
+
+    client.close();
+}
+
+// ---------------------------------------------------------------------------
+// Feature detection
+
+/// `-32601` is goose's signal that a feature is absent or switched off, and
+/// the sentence explaining which is in `data`. Once a method has been refused
+/// there is nothing to gain from asking again on the same connection.
+#[tokio::test]
+async fn an_unsupported_goose_method_is_reported_once_and_then_cached() {
+    let (addr, renames) = spawn_counting_ws_stub(PromptBehavior::RenameUnsupported).await;
+    let (client, _events, _) = AcpClient::connect(&config(addr, SECRET)).await.unwrap();
+
+    match client.session_rename("20260821_1", "New title").await {
+        Err(AcpError::Unsupported {
+            feature,
+            method,
+            reason,
+        }) => {
+            assert_eq!(feature, Feature::SessionHistory);
+            assert_eq!(method, "_goose/unstable/session/rename");
+            assert_eq!(reason.as_deref(), Some("Session renaming is not enabled"));
+        }
+        other => panic!("expected Unsupported, got {other:?}"),
+    }
+    assert_eq!(renames.load(Ordering::SeqCst), 1);
+
+    let err = client
+        .session_rename("20260821_1", "Another title")
+        .await
+        .unwrap_err();
+    assert!(err.is_unsupported(), "second call: {err}");
+    assert_eq!(
+        renames.load(Ordering::SeqCst),
+        1,
+        "the second call should not have reached the socket"
+    );
+
+    client.close();
+}
+
+/// The same method on a server that does implement it must still work — the
+/// cache is populated by a refusal, never by a successful call.
+#[tokio::test]
+async fn a_supported_goose_method_is_not_cached_as_missing() {
+    let addr = spawn_ws_stub(PromptBehavior::Stream).await;
+    let (client, _events, _) = AcpClient::connect(&config(addr, SECRET)).await.unwrap();
+
+    client
+        .session_rename("20260821_1", "New title")
+        .await
+        .unwrap();
+    client
+        .session_rename("20260821_1", "Newer title")
+        .await
+        .unwrap();
 
     client.close();
 }

@@ -39,6 +39,35 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
+  # The audit reads docs/gallery-states.json — markup the app really produced,
+  # captured by scripts/capture-gallery.py — and measures what is easier to
+  # measure than to see: overflow, clipped text, square corners, sub-32px
+  # buttons, and every piece of text and every icon against its contrast bar.
+  # The repo has had it, and its node_modules, since before this job existed;
+  # what it did not have was anything running it, so the gate the styling work
+  # leans on was a gate somebody had to remember.
+  ui-audit:
+    name: UI audit (gallery)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Chromium only: the audit lays the states out in one, and the other two
+      # engines are a download apiece for nothing this measures.
+      # `npm install`, not `npm ci`: there is no lockfile in the repo, and the
+      # one dependency is a browser driver pinned by a caret range.
+      - name: Install Playwright and Chromium
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Audit both themes
+        run: node docs/audit.js both
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest

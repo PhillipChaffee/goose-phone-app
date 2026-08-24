@@ -18,7 +18,9 @@ pub fn ChatView() -> Element {
     let ctx = use_app_ctx();
     let chat = (ctx.chat)();
     let usage = (ctx.usage)();
-    let mut draft = use_signal(String::new);
+    // Not a `use_signal`: the draft outlives this screen (see
+    // `AppCtx::chat_draft`).
+    let mut draft = ctx.chat_draft;
 
     // Keep the transcript pinned to the bottom as content streams in. The
     // chat signal is read INSIDE the effect so it re-runs on every change.

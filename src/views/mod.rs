@@ -1,7 +1,24 @@
 pub(crate) mod chat;
+
+pub(crate) mod chrome;
+
 pub(crate) mod code;
+
+// recipes — PR 3 replaces this line
+
+// skills — PR 4 replaces this line
+
+// scheduler — PR 5 replaces this line
+
+// extensions — PR 6 replaces this line
+
+// Session history (PR 7) adds no module: it is `sessions` growing kinds,
+// rename and search.
+
 pub(crate) mod session_settings;
+
 pub(crate) mod sessions;
+
 pub(crate) mod settings;
 
 use dioxus::prelude::*;
@@ -62,6 +79,12 @@ pub fn SwipeDelete(on_delete: EventHandler<()>) -> Element {
 pub fn ConfirmDelete(
     title: String,
     body: String,
+    /// The word on the button that does it. "Delete" is right for a list row
+    /// and wrong for the things that are not deletions — killing a running
+    /// job stops it, it does not remove it — and a confirmation whose button
+    /// does not name the act is a confirmation of nothing in particular.
+    #[props(default = "Delete".to_owned())]
+    confirm_label: String,
     on_confirm: EventHandler<()>,
     on_cancel: EventHandler<()>,
 ) -> Element {
@@ -79,7 +102,7 @@ pub fn ConfirmDelete(
                     button {
                         class: "btn danger",
                         onclick: move |_| on_confirm.call(()),
-                        "Delete"
+                        "{confirm_label}"
                     }
                 }
             }

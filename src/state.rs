@@ -13,8 +13,8 @@ use std::time::Duration;
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use goose_acp_client::{
-    AcpClient, AcpEvent, ConfigOption, ConnectConfig, MessageChunk, PermissionRequest, SessionInfo,
-    SessionUpdate, ToolCallUpdate,
+    AcpClient, AcpError, AcpEvent, ConfigOption, ConnectConfig, MessageChunk, PermissionRequest,
+    SessionInfo, SessionKind, SessionUpdate, ToolCallUpdate,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -27,13 +27,26 @@ pub(crate) enum Screen {
     Chat,
 }
 
-/// Top-level tab — the Claude-app-style Home/Code toggle. Each tab keeps its
-/// own navigation state (`AppCtx::screen` for Home, `AppCtx::code_screen`
-/// for Code), so switching tabs never resets where you were.
+/// Which destination's stack is on screen. Each tab keeps its own navigation
+/// state (`AppCtx::screen` for Home, `AppCtx::code_screen` for Code), so
+/// switching tabs never resets where you were.
+///
+/// The routing that reads this is `src/nav.rs`; a feature adds a variant here
+/// and a row there, and nothing else in the shell changes.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
     Home,
     Code,
+    // recipes — PR 3 replaces this line
+
+    // skills — PR 4 replaces this line
+
+    // scheduler — PR 5 replaces this line
+
+    // extensions — PR 6 replaces this line
+
+    // Session history (PR 7) gets no variant: it is the Chats list growing
+    // kinds, rename and search, not a destination of its own.
 }
 
 /// `serde(default)` is load-bearing: settings persisted by older builds lack
@@ -152,6 +165,128 @@ pub(crate) struct ChatState {
 /// Context-window usage: (tokens used, context limit).
 pub(crate) type Usage = (u64, u64);
 
+/// A list the server owns, and everything a screen needs to say about it.
+///
+/// `unsupported` is not an error, and that is the whole reason it is a field
+/// of its own. goose gates whole feature areas at startup — the scheduler
+/// wants `--enable-scheduler`, older builds simply lack the newer namespaces
+/// — so `-32601` here is a *fact about the server*, not a failure of this
+/// request. It is a different sentence to the user ("Scheduler is not
+/// available on this goose server", not "Couldn't load schedules") and, more
+/// importantly, a different offer: there is no Retry, because retrying is not
+/// a thing that could work.
+///
+/// `sticky` is the other half of the same idea. A toast is right for a
+/// failure you can shrug at and wrong for one that leaves the screen empty:
+/// it fades, and what is left says nothing at all. So a failure with nothing
+/// on screen behind it stays on screen, and a failure over a list you can
+/// still read is a toast.
+#[derive(Debug, Clone, PartialEq, Eq)]
+// `cfg_attr(not(test))` because the tests below do use it: an expectation
+// that holds in one cfg and not the other is an error in whichever cfg it
+// does not hold in.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the shell has no list of its own; the first screen to hold \
+                  one arrives in PR 3, and this expectation fails then"
+    )
+)]
+pub(crate) struct Remote<T> {
+    pub items: Vec<T>,
+    pub loading: bool,
+    /// The server does not offer this feature at all. No Retry.
+    pub unsupported: bool,
+    /// A failure to keep on screen rather than toast away.
+    pub sticky: Option<String>,
+}
+
+// Derived `Default` would demand `T: Default`, which no list element owes
+// anyone: an empty Vec is an empty Vec whatever is not in it.
+impl<T> Default for Remote<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg_attr(not(test), expect(dead_code, reason = "as `Remote` above"))]
+impl<T> Remote<T> {
+    pub(crate) const fn new() -> Self {
+        Self {
+            items: Vec::new(),
+            loading: false,
+            unsupported: false,
+            sticky: None,
+        }
+    }
+
+    /// A fetch has started. The previous failure goes now rather than when
+    /// the new one lands, so a retry does not read as still-broken while it
+    /// is in flight.
+    pub(crate) fn begin(&mut self) {
+        self.loading = true;
+        self.sticky = None;
+    }
+
+    /// The fetch came back. Everything the last attempt concluded is dropped,
+    /// including `unsupported`: a server that grew the feature (or a phone
+    /// that reconnected to a different one) must be able to say so.
+    pub(crate) fn settle(&mut self, items: Vec<T>) {
+        self.items = items;
+        self.loading = false;
+        self.unsupported = false;
+        self.sticky = None;
+    }
+
+    /// The fetch failed. Returns the sentence to toast, or `None` when the
+    /// failure has been kept on screen instead — either as `unsupported`, or
+    /// as `sticky` because there was nothing else to look at.
+    pub(crate) fn fail(&mut self, error: &AcpError) -> Option<String> {
+        self.loading = false;
+        if error.is_unsupported() {
+            // Not a failure to report: the screen hides itself and says why.
+            self.items.clear();
+            self.sticky = None;
+            self.unsupported = true;
+            return None;
+        }
+        let message = error.to_string();
+        if self.items.is_empty() {
+            self.sticky = Some(message);
+            return None;
+        }
+        Some(message)
+    }
+}
+
+/// Fetch into a [`Remote`], keeping the loading flag, the unsupported flag
+/// and the failure in step with each other.
+///
+/// Every one of the five features does this, and each of them getting it
+/// slightly wrong is five screens that disagree about what a missing feature
+/// looks like.
+#[expect(dead_code, reason = "as `Remote` above")]
+pub(crate) async fn load_remote<T: 'static>(
+    ctx: &AppCtx,
+    mut slot: Signal<Remote<T>>,
+    fetch: impl std::future::Future<Output = Result<Vec<T>, AcpError>>,
+) {
+    slot.write().begin();
+    match fetch.await {
+        Ok(items) => slot.write().settle(items),
+        Err(e) => {
+            // The guard is dropped before the toast: `show_toast` reads the
+            // context, and holding a write borrow across an unrelated signal
+            // is how a re-entrant read turns into a panic.
+            let toast = slot.write().fail(&e);
+            if let Some(message) = toast {
+                show_toast(ctx, message);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct AppCtx {
     pub screen: Signal<Screen>,
@@ -174,6 +309,14 @@ pub(crate) struct AppCtx {
     /// effort — with the model list already in it. Arrives with session/new
     /// and `session/load`, and is refreshed by `config_option_update`.
     pub config_options: Signal<Vec<ConfigOption>>,
+    /// What is typed in the goose composer but not yet sent.
+    ///
+    /// Not component-local, for the same reason `code_draft` below is not:
+    /// navigating away unmounts the view and a `use_signal` draft dies with
+    /// the scope. Two of the screens arriving after this one fill it in from
+    /// elsewhere — a recipe's prompt, a scheduled run's instructions — which
+    /// only works if the draft outlives the screen that shows it.
+    pub chat_draft: Signal<String>,
     pub toast: Signal<Option<String>>,
 
     // ---- Code tab (per-chat OpenCode containers on the brain; src/code.rs) ----
@@ -222,6 +365,21 @@ pub(crate) struct AppCtx {
     /// check what the agent actually changed, come back and send — was the
     /// one that silently lost what you had written.
     pub code_draft: Signal<String>,
+    // ---- one field per feature, each a Copy struct from its own module ----
+    //
+    // A feature's state is a struct it defines and this holds, rather than a
+    // handful of loose signals: five branches adding five fields to one
+    // struct merge, five branches adding thirty do not.
+
+    // recipes — PR 3 replaces this line
+
+    // skills — PR 4 replaces this line
+
+    // scheduler — PR 5 replaces this line
+
+    // extensions — PR 6 replaces this line
+
+    // session history — PR 7 replaces this line
 }
 
 pub(crate) fn use_app_ctx_provider() -> AppCtx {
@@ -243,6 +401,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         permission: use_signal(Vec::new),
         usage: use_signal(|| None),
         config_options: use_signal(Vec::new),
+        chat_draft: use_signal(String::new),
         toast: use_signal(|| None),
         tab: use_signal(|| Tab::Home),
         drawer_open: use_signal(|| false),
@@ -626,7 +785,7 @@ pub(crate) async fn refresh_sessions(ctx: &AppCtx, more: bool) {
 
     let page_cursor = if more { cursor.peek().clone() } else { None };
     loading.set(true);
-    match client.session_list(page_cursor).await {
+    match client.session_list(&[SessionKind::User], page_cursor).await {
         Ok(page) => {
             cursor.set(page.next_cursor.clone());
             if more {
@@ -690,6 +849,16 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
 
 /// Create a fresh session in the configured working directory and open it.
 pub(crate) fn new_session(ctx: &AppCtx) {
+    new_session_with(ctx, Value::Null);
+}
+
+/// Create a session that exists for a reason, and say what the reason is.
+///
+/// `_meta` is how goose is told *why* a session was started — launching a
+/// recipe means `_meta.recipeId` — and it is the server that acts on it, so
+/// the app cannot fake it after the fact by prompting the session into
+/// character. `Value::Null` means "no reason", which is [`new_session`].
+pub(crate) fn new_session_with(ctx: &AppCtx, meta: Value) {
     let working_dir = ctx.settings.peek().working_dir.trim().to_string();
     if working_dir.is_empty() || !working_dir.starts_with('/') {
         show_toast(
@@ -704,7 +873,8 @@ pub(crate) fn new_session(ctx: &AppCtx) {
             show_toast(&ctx, "Not connected — reconnect in Settings");
             return;
         };
-        match client.session_new(&working_dir).await {
+        let meta = (!meta.is_null()).then_some(&meta);
+        match client.session_new_with(&working_dir, meta).await {
             Ok(resp) => {
                 let mut chat = ctx.chat;
                 let mut screen = ctx.screen;
@@ -945,4 +1115,84 @@ pub(crate) fn set_config_option(ctx: &AppCtx, config_id: &str, value: &str) {
             Err(e) => show_toast(&ctx, format!("Could not switch: {e}")),
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Remote;
+    use goose_acp_client::{AcpError, Feature};
+
+    fn missing() -> AcpError {
+        AcpError::Unsupported {
+            feature: Feature::Scheduler,
+            method: "_goose/unstable/schedules/list".to_owned(),
+            reason: None,
+        }
+    }
+
+    /// The load that finds nothing there leaves a screen that says so, not
+    /// one that says it failed — and offers no Retry, because there is
+    /// nothing on the other end to retry against.
+    #[test]
+    fn an_unsupported_feature_is_stated_rather_than_reported() {
+        let mut remote = Remote::<u8>::new();
+        remote.begin();
+        assert_eq!(remote.fail(&missing()), None, "nothing to toast");
+        assert!(remote.unsupported);
+        assert!(remote.sticky.is_none());
+        assert!(!remote.loading);
+    }
+
+    /// A first load that fails leaves an empty screen behind it, so the
+    /// failure has to stay on it: a toast fades and takes the only
+    /// explanation with it.
+    #[test]
+    fn a_failure_with_an_empty_list_sticks() {
+        let mut remote = Remote::<u8>::new();
+        remote.begin();
+        assert_eq!(remote.fail(&AcpError::Timeout), None, "kept on screen");
+        assert_eq!(remote.sticky.as_deref(), Some("timed out"));
+        assert!(!remote.unsupported);
+    }
+
+    /// A refresh that fails over a list you can still read is a toast: the
+    /// list is the screen, and a banner would push it around to say something
+    /// about a call that changed nothing.
+    #[test]
+    fn a_failure_over_a_loaded_list_is_a_toast() {
+        let mut remote = Remote::new();
+        remote.settle(vec![1, 2, 3]);
+        remote.begin();
+        assert_eq!(
+            remote.fail(&AcpError::Timeout).as_deref(),
+            Some("timed out")
+        );
+        assert!(remote.sticky.is_none());
+        assert_eq!(remote.items, vec![1, 2, 3], "the list is still readable");
+    }
+
+    /// Reconnecting to a server that does have the feature has to be able to
+    /// take the word back — otherwise the screen stays hidden until the app
+    /// is restarted.
+    #[test]
+    fn a_later_success_clears_both_the_verdict_and_the_failure() {
+        let mut remote = Remote::new();
+        remote.fail(&missing());
+        remote.begin();
+        remote.settle(vec![7]);
+        assert!(!remote.unsupported);
+        assert!(remote.sticky.is_none());
+        assert_eq!(remote.items, vec![7]);
+    }
+
+    /// The previous failure goes when the retry starts, not when it lands:
+    /// a spinner under a stale error message reads as still-broken.
+    #[test]
+    fn starting_a_load_clears_the_last_failure() {
+        let mut remote = Remote::<u8>::new();
+        remote.fail(&AcpError::Timeout);
+        remote.begin();
+        assert!(remote.loading);
+        assert!(remote.sticky.is_none());
+    }
 }

@@ -1,8 +1,19 @@
-//! Wire types for the Agent Client Protocol (ACP) as served by `goose serve`.
+//! Wire types for the base Agent Client Protocol (ACP) as served by
+//! `goose serve`.
 //!
 //! Field names on the wire are camelCase; enum discriminants are `snake_case`.
 //! Discriminated unions are internally tagged: `ContentBlock` by `type`,
-//! session updates by `sessionUpdate`.
+//! session updates by `sessionUpdate`. Base ACP is uniformly camelCase by
+//! specification, so the blanket `#[serde(rename_all = "camelCase")]` on the
+//! types here is a statement of that spec — unlike goose's own namespace,
+//! where casing varies per type and the rule is the opposite (see
+//! [`crate::goose`]).
+
+mod config;
+mod session;
+
+pub use config::*;
+pub use session::*;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -157,16 +168,6 @@ impl ToolCallUpdate {
     }
 }
 
-/// Update to session metadata (`session_info_update`), e.g. auto-generated titles.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct SessionInfoUpdate {
-    pub title: Option<String>,
-    pub updated_at: Option<String>,
-    #[serde(rename = "_meta")]
-    pub meta: Option<Value>,
-}
-
 /// One `session/update` notification payload, dispatched on its
 /// `sessionUpdate` tag. Unknown variants are preserved rather than dropped.
 #[derive(Debug, Clone)]
@@ -232,129 +233,6 @@ impl SessionUpdate {
             _ => Self::Unknown { tag, raw },
         }
     }
-}
-
-/// One entry from `session/list`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionInfo {
-    pub session_id: String,
-    #[serde(default)]
-    pub cwd: Option<String>,
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub updated_at: Option<String>,
-    #[serde(rename = "_meta", default)]
-    pub meta: Option<Value>,
-}
-
-impl SessionInfo {
-    fn meta_field(&self, key: &str) -> Option<&Value> {
-        self.meta.as_ref()?.get(key)
-    }
-
-    #[must_use]
-    pub fn display_title(&self) -> String {
-        self.title
-            .clone()
-            .filter(|t| !t.trim().is_empty())
-            .unwrap_or_else(|| self.session_id.clone())
-    }
-
-    #[must_use]
-    pub fn message_count(&self) -> Option<u64> {
-        self.meta_field("messageCount")?.as_u64()
-    }
-
-    #[must_use]
-    pub fn last_message_snippet(&self) -> Option<String> {
-        Some(self.meta_field("lastMessageSnippet")?.as_str()?.to_string())
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionListResponse {
-    #[serde(default)]
-    pub sessions: Vec<SessionInfo>,
-    #[serde(default)]
-    pub next_cursor: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NewSessionResponse {
-    pub session_id: String,
-    /// Session configuration the agent offers — provider, model, mode and
-    /// thinking effort. This is where the list of available models arrives:
-    /// no separate call is needed, and it was previously parsed away.
-    #[serde(default)]
-    pub config_options: Vec<ConfigOption>,
-    #[serde(rename = "_meta", default)]
-    pub meta: Option<Value>,
-}
-
-/// One configurable knob on a session.
-///
-/// Wire shape per ACP schema 1.5 (`SessionConfigOption`): `configId`, `name`,
-/// an optional `description`, and a flattened kind payload tagged by `type`.
-/// For `type: "select"` the payload is `currentValue` plus `options`, each of
-/// which keys on `value` (not `id`).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConfigOption {
-    pub config_id: String,
-    #[serde(default)]
-    pub name: String,
-    /// The agent's own words about what this option does. goose sends one
-    /// for `thinking_effort`, which is exactly the option a user is most
-    /// likely to find stuck on a single value.
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub category: Option<String>,
-    #[serde(default, rename = "type")]
-    pub kind: Option<String>,
-    #[serde(default)]
-    pub current_value: Option<String>,
-    #[serde(default)]
-    pub options: Vec<ConfigChoice>,
-}
-
-impl ConfigOption {
-    /// The label for the current value, falling back to the raw id.
-    #[must_use]
-    pub fn current_label(&self) -> Option<&str> {
-        let current = self.current_value.as_deref()?;
-        Some(
-            self.options
-                .iter()
-                .find(|o| o.value == current)
-                .map_or(current, |o| o.name.as_str()),
-        )
-    }
-
-    /// Whether choosing between the values would change anything.
-    ///
-    /// An option with one value is a fact, not a control: goose ships
-    /// `thinking_effort` as a select whose only value is `off` whenever the
-    /// session's model is not a reasoning model. Offering that as a menu
-    /// would be a control that does nothing (design rule 11); reporting it
-    /// tells the user *why* effort is not adjustable here.
-    #[must_use]
-    pub const fn is_adjustable(&self) -> bool {
-        self.options.len() > 1
-    }
-}
-
-/// One selectable value of a `select` config option.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConfigChoice {
-    pub value: String,
-    #[serde(default)]
-    pub name: String,
 }
 
 /// One choice offered by a `session/request_permission` request.
@@ -493,76 +371,5 @@ mod tests {
             }
             other => panic!("wrong variant: {other:?}"),
         }
-    }
-
-    #[test]
-    fn parses_session_info() {
-        let raw = json!({
-            "sessionId": "20260821_1",
-            "cwd": "/home/me/project",
-            "title": "Fix the build",
-            "updatedAt": "2026-08-21T09:00:00Z",
-            "additionalDirectories": [],
-            "_meta": {
-                "messageCount": 12,
-                "createdAt": "2026-08-20T18:00:00Z",
-                "userSetName": false,
-                "sessionType": "user",
-                "hasRecipe": false,
-                "lastMessageSnippet": "Done — the build is green."
-            }
-        });
-        let info: SessionInfo = serde_json::from_value(raw).unwrap();
-        assert_eq!(info.session_id, "20260821_1");
-        assert_eq!(info.display_title(), "Fix the build");
-        assert_eq!(info.message_count(), Some(12));
-        assert_eq!(
-            info.last_message_snippet().as_deref(),
-            Some("Done — the build is green.")
-        );
-    }
-
-    /// The four options goose builds in `acp::response_builder`, verbatim.
-    #[test]
-    fn parses_every_config_option_goose_sends() {
-        let raw = json!([
-            {"configId": "provider", "name": "Provider", "type": "select",
-             "currentValue": "anthropic",
-             "options": [{"value": "anthropic", "name": "Anthropic"},
-                         {"value": "openai", "name": "OpenAI"}]},
-            {"configId": "mode", "name": "Mode", "category": "mode", "type": "select",
-             "currentValue": "auto",
-             "options": [{"value": "auto", "name": "Auto"},
-                         {"value": "approve", "name": "Manual approval"}]},
-            {"configId": "model", "name": "Model", "category": "model", "type": "select",
-             "currentValue": "claude-opus-5",
-             "options": [{"value": "claude-opus-5", "name": "Claude Opus 5"}]},
-            {"configId": "thinking_effort", "name": "Thinking effort",
-             "category": "thought_level", "type": "select",
-             "description": "Controls reasoning effort for models that support extended thinking.",
-             "currentValue": "off",
-             "options": [{"value": "off", "name": "off"}]}
-        ]);
-        let opts: Vec<ConfigOption> = serde_json::from_value(raw).unwrap();
-        let ids: Vec<&str> = opts.iter().map(|o| o.config_id.as_str()).collect();
-        assert_eq!(ids, ["provider", "mode", "model", "thinking_effort"]);
-
-        assert!(opts[0].is_adjustable());
-        assert!(opts[1].is_adjustable());
-        // One value is a fact, not a control — see `is_adjustable`.
-        assert!(!opts[2].is_adjustable());
-        assert!(!opts[3].is_adjustable());
-        assert_eq!(opts[2].current_label(), Some("Claude Opus 5"));
-        assert!(opts[3]
-            .description
-            .as_deref()
-            .is_some_and(|d| d.starts_with("Controls reasoning effort")));
-    }
-
-    /// `configOptions` is absent whenever the session has no provider/model
-    /// yet, so the sheet has to survive an empty set rather than assume one.
-    #[test]
-    fn missing_config_options_is_an_empty_set() {
-        assert!(crate::config_options_from(&json!({"sessionId": "x"})).is_empty());
     }
 }

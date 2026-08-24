@@ -4,8 +4,17 @@
 //! id; notifications and agent-initiated requests are surfaced through an
 //! [`AcpEvent`] channel. `session/prompt` stays pending for the whole agent
 //! turn, so requests carry no default timeout — callers opt in per call.
+//!
+//! This file is the transport and nothing else: the connection handshake,
+//! `request`/`notify`/`respond`, and the frame loop. The per-method wrappers
+//! that build params and type replies live in [`session`] and, for goose's own
+//! namespace, in [`crate::goose`] — separate `impl AcpClient` blocks in
+//! separate files, which Rust allows within one crate.
 
-use std::collections::HashMap;
+mod session;
+
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -15,36 +24,13 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::types::ConfigOption;
 use tokio_tungstenite::{connect_async_tls_with_config, MaybeTlsStream, WebSocketStream};
 
+use crate::error::AcpError;
 use crate::tls;
-use crate::types::{
-    AcpEvent, ContentBlock, InitializeInfo, NewSessionResponse, PermissionRequest,
-    SessionListResponse, SessionUpdate,
-};
+use crate::types::{AcpEvent, InitializeInfo, PermissionRequest, SessionUpdate};
 
 pub const CLIENT_NAME: &str = "goose-mobile";
-
-#[derive(Debug, thiserror::Error)]
-pub enum AcpError {
-    #[error("connection failed: {0}")]
-    Connect(String),
-    #[error("transport error: {0}")]
-    Transport(String),
-    #[error("connection closed")]
-    Closed,
-    #[error("timed out")]
-    Timeout,
-    #[error("{message}")]
-    Rpc {
-        code: i64,
-        message: String,
-        data: Option<Value>,
-    },
-    #[error("invalid configuration: {0}")]
-    Config(String),
-}
 
 /// How to reach the server.
 #[derive(Debug, Clone, Default)]
@@ -131,17 +117,17 @@ enum Cmd {
 #[derive(Clone, Debug)]
 pub struct AcpClient {
     tx: mpsc::UnboundedSender<Cmd>,
-}
-
-/// Pull a `configOptions` array out of any response that carries one.
-///
-/// `session/new` types it; `session/load` and `session/set_config_option`
-/// come back as raw JSON, and all three carry the same array.
-#[must_use]
-pub fn config_options_from(raw: &Value) -> Vec<ConfigOption> {
-    raw.get("configOptions")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default()
+    /// Methods this server answered with `-32601`, so the next call can fail
+    /// without a round trip. Shared behind an `Arc` so every clone of the
+    /// handle learns from every other one, and so cloning stays cheap; a
+    /// fresh [`AcpClient::connect`] starts empty, which is what we want —
+    /// the user may have just restarted goose with the flag that switches the
+    /// feature on.
+    ///
+    /// Keyed by method, deliberately not by feature. `session/rename` has
+    /// shipped far longer than `session/share/nostr`, so one absent method
+    /// under a per-feature key would darken a whole screen that mostly works.
+    pub(crate) unsupported: Arc<Mutex<HashSet<&'static str>>>,
 }
 
 impl AcpClient {
@@ -179,7 +165,10 @@ impl AcpClient {
         let (event_tx, event_rx) = mpsc::channel(1024);
         tokio::spawn(actor(socket, cmd_rx, event_tx));
 
-        let client = Self { tx: cmd_tx };
+        let client = Self {
+            tx: cmd_tx,
+            unsupported: Arc::default(),
+        };
         let init = client
             .request_with_timeout(
                 "initialize",
@@ -267,188 +256,6 @@ impl AcpClient {
     /// Close the connection. The event stream will yield `Disconnected`.
     pub fn close(&self) {
         let _ = self.tx.send(Cmd::Close);
-    }
-
-    // ---- convenience wrappers -------------------------------------------
-
-    /// Create a session. `cwd` must be an absolute path on the *server*.
-    ///
-    /// # Errors
-    ///
-    /// [`AcpError::Rpc`] if the server rejects `cwd` (relative paths and paths
-    /// it cannot open are refused), [`AcpError::Timeout`] after 60 s,
-    /// [`AcpError::Closed`] if the connection drops, or
-    /// [`AcpError::Transport`] if the reply is not a [`NewSessionResponse`].
-    pub async fn session_new(&self, cwd: &str) -> Result<NewSessionResponse, AcpError> {
-        let result = self
-            .request_with_timeout(
-                "session/new",
-                json!({
-                    "cwd": cwd,
-                    "mcpServers": [],
-                    "_meta": {"client": CLIENT_NAME},
-                }),
-                Duration::from_secs(60),
-            )
-            .await?;
-        serde_json::from_value(result).map_err(|e| AcpError::Transport(e.to_string()))
-    }
-
-    /// Load an existing session. The server replays its history as
-    /// `session/update` events *before* this resolves.
-    ///
-    /// # Errors
-    ///
-    /// [`AcpError::Rpc`] if the server does not know `session_id` or refuses
-    /// `cwd`, [`AcpError::Timeout`] if the replay takes longer than 120 s, or
-    /// [`AcpError::Closed`] if the connection drops mid-replay.
-    pub async fn session_load(&self, session_id: &str, cwd: &str) -> Result<Value, AcpError> {
-        self.request_with_timeout(
-            "session/load",
-            json!({
-                "sessionId": session_id,
-                "cwd": cwd,
-                "mcpServers": [],
-            }),
-            Duration::from_secs(120),
-        )
-        .await
-    }
-
-    /// # Errors
-    ///
-    /// [`AcpError::Rpc`] if the server rejects the cursor,
-    /// [`AcpError::Timeout`] after 30 s, [`AcpError::Closed`] if the
-    /// connection drops, or [`AcpError::Transport`] if the reply is not a
-    /// [`SessionListResponse`].
-    pub async fn session_list(
-        &self,
-        cursor: Option<String>,
-    ) -> Result<SessionListResponse, AcpError> {
-        let mut params = json!({
-            "_meta": {
-                "types": ["user"],
-                "goose": {"includeLastMessageSnippet": true},
-            }
-        });
-        if let Some(cursor) = cursor {
-            params["cursor"] = Value::String(cursor);
-        }
-        let result = self
-            .request_with_timeout("session/list", params, Duration::from_secs(30))
-            .await?;
-        serde_json::from_value(result).map_err(|e| AcpError::Transport(e.to_string()))
-    }
-
-    /// Send a user message; resolves at end of turn with the stop reason
-    /// (`end_turn`, `max_tokens`, `refusal`, `cancelled`, …).
-    ///
-    /// # Errors
-    ///
-    /// [`AcpError::Rpc`] if the agent fails the turn (an unknown session id, a
-    /// provider error), or [`AcpError::Closed`] if the connection drops before
-    /// the turn ends. There is no timeout — a turn may legitimately run for
-    /// minutes.
-    pub async fn prompt(&self, session_id: &str, text: &str) -> Result<String, AcpError> {
-        let result = self
-            .request(
-                "session/prompt",
-                json!({
-                    "sessionId": session_id,
-                    "prompt": [ContentBlock::text(text)],
-                }),
-            )
-            .await?;
-        Ok(result
-            .get("stopReason")
-            .and_then(Value::as_str)
-            .unwrap_or("end_turn")
-            .to_string())
-    }
-
-    /// Cancel the running turn; the pending `prompt` resolves with
-    /// `cancelled`.
-    pub fn cancel(&self, session_id: &str) {
-        self.notify("session/cancel", json!({"sessionId": session_id}));
-    }
-
-    /// Change one session config option — `provider`, `model`, `mode` or
-    /// `thinking_effort` — and get the full option set back.
-    ///
-    /// Takes effect on the session immediately; the next `session/prompt`
-    /// uses it. The agent also pushes a `config_option_update` notification,
-    /// so a second client watching the same session stays in step.
-    ///
-    /// # Errors
-    ///
-    /// [`AcpError::Rpc`] if the server rejects the option or its value,
-    /// [`AcpError::Timeout`], or [`AcpError::Closed`] if the connection
-    /// drops.
-    pub async fn set_config_option(
-        &self,
-        session_id: &str,
-        config_id: &str,
-        value: &str,
-    ) -> Result<Vec<ConfigOption>, AcpError> {
-        // `type: "id"` is the discriminator every id-based option kind uses;
-        // `value` is flattened alongside it, not nested under it.
-        let raw = self
-            .request(
-                "session/set_config_option",
-                json!({
-                    "sessionId": session_id,
-                    "configId": config_id,
-                    "type": "id",
-                    "value": value,
-                }),
-            )
-            .await?;
-        Ok(config_options_from(&raw))
-    }
-
-    /// Delete a session on the server.
-    ///
-    /// # Errors
-    ///
-    /// [`AcpError::Rpc`] if the server does not know `session_id`,
-    /// [`AcpError::Timeout`] after 30 s, or [`AcpError::Closed`] if the
-    /// connection drops.
-    pub async fn session_delete(&self, session_id: &str) -> Result<(), AcpError> {
-        self.request_with_timeout(
-            "session/delete",
-            json!({"sessionId": session_id}),
-            Duration::from_secs(30),
-        )
-        .await
-        .map(|_| ())
-    }
-
-    /// # Errors
-    ///
-    /// [`AcpError::Rpc`] if the server does not know `session_id` or does not
-    /// implement this unstable goose extension, [`AcpError::Timeout`] after
-    /// 30 s, or [`AcpError::Closed`] if the connection drops.
-    pub async fn session_rename(&self, session_id: &str, title: &str) -> Result<(), AcpError> {
-        self.request_with_timeout(
-            "_goose/unstable/session/rename",
-            json!({"sessionId": session_id, "title": title}),
-            Duration::from_secs(30),
-        )
-        .await
-        .map(|_| ())
-    }
-
-    /// Answer a `session/request_permission` request. `option_id = None`
-    /// reports the prompt as cancelled.
-    pub fn respond_permission(&self, request_id: Value, option_id: Option<String>) {
-        let outcome = match option_id {
-            Some(id) => json!({"outcome": {"outcome": "selected", "optionId": id}}),
-            None => json!({"outcome": {"outcome": "cancelled"}}),
-        };
-        let _ = self.tx.send(Cmd::Respond {
-            id: request_id,
-            result: Ok(outcome),
-        });
     }
 }
 

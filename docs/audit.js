@@ -56,6 +56,11 @@ const LONGEST = {
   '.chip-label': 'Qwen3 Coder 480B A35B Instruct',
   '.session-title': 'Refactor the transcript folding so streamed parts land in order',
   '.topbar > .title': 'Refactor the transcript folding so streamed parts land in order',
+  // Every settings-shaped row on every screen puts server text here — a model
+  // name, an MCP command line, a cron sentence read back as English — and
+  // none of it was being stressed.
+  '.setting-value': 'npx -y @modelcontextprotocol/server-filesystem /srv/goose/workspaces/current',
+  '.session-meta': 'Every weekday at 09:00 America/Los_Angeles · 20250823_140512_9f3ab2',
 };
 
 const stressed = (states) => states.flatMap((state) => {
@@ -264,7 +269,7 @@ const CONTRAST = () => {
   // A row that renders nothing renders no line box, so it measures zero and
   // disappears. That is how every blank line in a diff silently vanished,
   // closing up the gaps the author put there.
-  for (const el of document.querySelectorAll('.diff-line, .setting-row, .drawer-item')) {
+  for (const el of document.querySelectorAll('.diff-line, .setting-row, .drawer-item, .session-item')) {
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') continue;
     if (el.getBoundingClientRect().height < 1) {
