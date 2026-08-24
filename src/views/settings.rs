@@ -2,10 +2,10 @@ use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use goose_acp_client::{probe, ProbeOutcome};
 
+use crate::icons::Icon;
 use crate::state::{
     disconnect, establish, refresh_sessions, show_toast, use_app_ctx, ConnState, Screen, Settings,
 };
-use crate::views::ConnBadge;
 
 #[component]
 pub fn SettingsView() -> Element {
@@ -74,18 +74,20 @@ pub fn SettingsView() -> Element {
 
     rsx! {
         header { class: "topbar",
-            if connected {
-                button {
-                    class: "icon-btn",
-                    onclick: move |_| {
-                        let mut screen = ctx.screen;
-                        screen.set(Screen::Sessions);
-                    },
-                    "‹ Back"
-                }
+            // Always present. Settings is a drawer destination, not a pushed
+            // screen, and the back chevron it replaces only rendered when
+            // connected — which left a disconnected user with no way off this
+            // screen once the tab bar went away.
+            button {
+                class: "icon-btn menu",
+                onclick: move |_| {
+                    let mut open = ctx.drawer_open;
+                    open.set(true);
+                },
+                Icon { name: "menu" }
             }
-            h1 { class: "title", "Goose Mobile" }
-            ConnBadge {}
+            h1 { class: "title", "Settings" }
+
         }
         main { class: "scroll settings",
             section { class: "card",
@@ -102,9 +104,11 @@ pub fn SettingsView() -> Element {
                     oninput: move |e| server_url.set(e.value()),
                 }
                 p { class: "hint",
-                    "Over Tailscale: use your server's MagicDNS name. With `tailscale serve` "
-                    "fronting goose this is an https:// URL; a plain `goose serve` on the tailnet "
-                    "is http://host:3284."
+                    "Over Tailscale: use your server's MagicDNS name. With "
+                    code { "tailscale serve" }
+                    " fronting goose this is an https:// URL; a plain "
+                    code { "goose serve" }
+                    " on the tailnet is http://host:3284."
                 }
 
                 label { class: "field-label", "Secret key" }
@@ -122,7 +126,7 @@ pub fn SettingsView() -> Element {
                 input {
                     class: "field",
                     r#type: "text",
-                    placeholder: "AA:BB:CC:… (only for goose serve --tls self-signed)",
+                    placeholder: "AA:BB:CC:…",
                     autocapitalize: "off",
                     autocomplete: "off",
                     spellcheck: "false",
@@ -215,6 +219,14 @@ pub fn SettingsView() -> Element {
             }
 
             section { class: "about",
+                // The bar shows connection state as a bare dot, so the thing
+                // it is connected to gets named here instead.
+                if let ConnState::Connected { agent } = &conn {
+                    p { class: "about-conn",
+                        span { class: "dot on" }
+                        " Connected to {agent}"
+                    }
+                }
                 p { "Connects to a remote goose AI agent over its ACP WebSocket API." }
                 p { "Reach a private server from anywhere with the Tailscale app enabled on this phone." }
             }

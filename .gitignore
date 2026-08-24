@@ -2,3 +2,7 @@
 /dist
 .DS_Store
 *.log
+
+# Playwright, used by docs/audit.js
+node_modules/
+package-lock.json

@@ -1,21 +1,291 @@
-/* Goose Mobile — dark, mobile-first chat UI */
+/* Goose Mobile — the design system.
+ *
+ * ATTRIBUTION, and the reason these numbers are not free to taste: the
+ * palette, type scale, radii and shadow ramp mirror the goose desktop app's
+ * design tokens, so the two read as one product. Treat them as tracking an
+ * upstream source — change a value to fix a real problem here, not to
+ * preference, and change it in both themes.
+ *
+ * Light is the base; dark comes from the system preference, or from
+ * data-theme on the root element when the user overrides it.
+ *
+ * Two rules hold the sheet together.
+ *
+ * ROUNDING IS TIERED, and nothing is square: pills (--radius-full) for
+ * anything whose shape is its identity — icon buttons, tabs, chips, send;
+ * 16px for containers that hold other things — cards, bubbles, the composer,
+ * modals; 12px for controls and insets inside them — buttons, fields, tool
+ * calls, code blocks. A control never sits at a tighter radius than the
+ * container around it, which is what makes a UI read as boxy.
+ *
+ * BORDERS SEPARATE, SHADOWS FLOAT. Anything in normal flow (tool cards,
+ * dividers, table cells) gets a 1px hairline and no shadow; only things that
+ * leave the flow — the bars, the composer, modals, toasts — cast one.
+ *
+ * CHROME FLOATS, CONTENT SCROLLS UNDER IT. The top bar and tab bar are not
+ * edge-to-edge boxes bolted to the frame: they are inset capsules floating
+ * over the page, translucent, with the content passing beneath them. This is
+ * the current iOS pattern (nav bars, toolbars and tab bars became floating
+ * glass in iOS 26) and it is the single thing that stops a phone UI reading
+ * as a stack of rectangles. Their heights are tokens because the scroll
+ * areas pad themselves by exactly that much — change one, not the other.
+ *
+ * Full rationale and sources: docs/design.md
+ */
+
+/* ── tokens: light ──────────────────────────────────────────────────── */
 
 :root {
-  --bg: #0e1113;
-  --panel: #171c1f;
-  --panel-2: #1e2528;
-  --border: #2a3237;
-  --text: #e8edef;
-  --text-dim: #9aa7ad;
-  --accent: #35b57c;
-  --accent-dim: #22684c;
-  --user-bubble: #234337;
-  --danger: #e5534b;
-  --warn: #d4a72c;
-  --radius: 14px;
+  color-scheme: light dark;
+
+  --bg-primary: #ffffff;
+  --bg-secondary: #f4f6f7;
+  --bg-tertiary: #e3e6ea;
+  --bg-inverse: #000000;
+  --bg-info: #5c98f9;
+  /* Darkened from upstream's #f94b4b so the white label on .btn.danger
+   * clears 4.5:1 — at #f94b4b "Delete" and "Stop" measured 3.4:1. */
+  --bg-danger: #d93030;
+  /* A status dot is a non-text indicator and needs 3:1 against the surface
+   * it sits on. Upstream's #91cb80 measured about 1.7:1 on the light glass
+   * bar, where the connection dot is the only thing reporting state. */
+  --bg-success: #4a9b34;
+  --bg-warning: #b8860b;
+  --bg-disabled: #e3e6ea;
+
+  --text-primary: #3f434b;
+  /* Upstream tunes the accent colours as fills. Every one this app also sets
+   * as text is darkened here so it clears 4.5:1 on the surface it actually
+   * lands on — which is the tool card (--tool-surface), not the page: status
+   * labels, link text and error text all sit there. Measured, not eyeballed;
+   * these are deliberate deviations, not mistakes to "correct" back. */
+  --text-secondary: #6f6f6f;
+  --text-tertiary: #a7b0b9;
+  --text-inverse: #ffffff;
+  --text-info: #2563c9;
+  --text-danger: #c62828;
+  --text-success: #487a38;
+  --text-warning: #8a6100;
+  /* #cbd1d6 measured 1.5:1 against the glass bar — a disabled control is
+   * exempt from the text threshold but still has to be visible. This lands
+   * where the dark theme's disabled text already sat. */
+  --text-disabled: #8e99a4;
+
+  --border-primary: #e3e6ea;
+  --border-secondary: #cbd1d6;
+  --border-danger: #f94b4b;
+
+  /* Accent. Used in exactly one place: the inline-code tint on dark. */
+  --block-teal: #13bbaf;
+
+  /* The assistant's surface. Light mode has none — the reply is plain text
+   * on the page, which is what keeps a transcript reading as prose. */
+  /* The agent's turn is never a panel. It is prose on the page, in both
+   * themes: it is the longest thing on screen, and a box around the longest
+   * thing on screen is the boxiest possible layout. Dark mode used to give it
+   * a faint raised surface to separate it from the near-black page; the serif
+   * does that job now, and does it without drawing a rectangle. */
+  --agent-surface: transparent;
+  --agent-padding: 0;
+
+  /* One step off the page, for in-flow blocks that are their own object:
+   * tool calls. Not a shadow — these do not float. */
+  --tool-surface: #f4f6f7;
+
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  /* Prose is set in the system serif — New York on iOS, which ui-serif
+   * resolves to with no font file to ship. Chrome (buttons, labels, meta,
+   * status) stays in the sans stack: the serif is the reading voice, not the
+   * interface voice. */
+  --font-serif: ui-serif, "New York", Charter, Georgia, serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --lh-xs: 1rem;
+  --lh-sm: 1.25rem;
+  --lh-md: 1.5rem;
+
+  /* Code slabs stay this dark in both themes. */
+  --code-bg: #282c34;
+  --code-fg: #e6e6e6;
+  /* Everything below is set ON --code-bg, which does not swap with the
+   * theme — so none of these may either, and they are deliberately absent
+   * from the dark blocks.
+   *
+   * The trap that forces them to exist: --bg-danger is the obvious token for
+   * a deletion marker, and its dark value (#ff6b6b) measures 5.04:1 on
+   * --code-bg while its light value (#d93030) measures 2.94:1 and FAILS the
+   * 3:1 a non-text indicator needs. Wiring the marker to it ships a deletion
+   * rule that passes in dark and vanishes in light — exactly the mistake
+   * that only ever shows up in one theme.
+   *
+   * The trap that forces the *values*: each of these paints two things — the
+   * 3px leading rule (an indicator, 3:1) and the +/- glyph in .diff-sign,
+   * which is TEXT sitting on the row tint and therefore wants 4.5:1. The
+   * glyph is the binding constraint and it is much the stricter of the two.
+   * At the more saturated #57a05a / #ef5350 the rules measured a comfortable
+   * 4.39:1 and 4.02:1 on the slab while the glyphs measured 3.38:1 and
+   * 3.27:1 on the tint and failed. Lifted until the glyph passes. */
+  --diff-add: #79c07c; /* 6.43:1 on --code-bg, 4.90:1 on --diff-add-fill */
+  --diff-del: #ff8a80; /* 6.13:1 on --code-bg, 4.80:1 on --diff-del-fill */
+  /* The secondary voice on a code slab. --text-secondary is the reflex and
+   * measures 2.79:1 there in light; this is 6.37:1 in both. */
+  --code-muted: #a7b0b9;
+  /* Row fills: a 14% tint of the two above. ~1.3:1 against the slab, which
+   * is the point — the tint is reinforcement, while the glyph and the
+   * leading rule carry the signal. Not 18%: at 18% the tint lifts far enough
+   * that the deletion glyph on it drops to 4.43:1. --code-fg on these
+   * measures 8.56:1 and 8.78:1. Rule 7: a tint, not a slab. */
+  --diff-add-fill: #33413e;
+  --diff-del-fill: #46393f;
+  --code-chip-bg: var(--bg-secondary);
+  /* The upstream burnt orange (#ff4f00) is 3.3:1 on this fill at 12px; same
+   * hue, darkened until it passes. */
+  --code-chip-fg: #c2410c;
+
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  /* Floating chrome. --edge is the gutter every floating thing shares, so the
+   * bars, the composer and the alerts all line up down the same margin. */
+  --edge: 16px;
+  /* How far the floating bars sit inside the safe area. Every scroll pad and
+   * composer margin has to add this too, or the gap you asked for is 8px
+   * smaller than the number you wrote: the bars start 8px lower than the
+   * safe-area edge the padding was measured from. */
+  --chrome-gap: 8px;
+  /* Width of the tool card's leading icon column. The disclosure chevron
+   * below uses it too, so "Output" lines up with the tool title above it. */
+  --tool-gutter: 18px;
+  --topbar-h: 52px;
+  --glass-blur: blur(20px) saturate(180%);
+  /* Thin enough that the blur is visibly doing its job. Where the blur is
+   * genuinely absent the answer is the prefers-reduced-transparency rule
+   * below, not a permanently thicker pane for everyone. */
+  --glass-tint: 78%;
+  /* How far past the bar the scroll-edge scrim runs before it fades out. The
+   * fade has to happen *below* the bar: put it inside the bar's own band and
+   * it thins the material exactly where the title sits. */
+  --scrim-fade: 24px;
+
+  /* Anything that floats over content sits above it. */
+  --z-scrim: 15;
+  --z-chrome: 20;
+  --z-toast: 60;
+  --z-modal: 100;
 }
+
+/* ── tokens: dark ───────────────────────────────────────────────────── */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg-primary: #22252a;
+    --bg-secondary: #3f434b;
+    --bg-tertiary: #474e57;
+    --bg-inverse: #cbd1d6;
+    --bg-info: #7cacff;
+    --bg-danger: #ff6b6b;
+    --bg-success: #a3d795;
+    --bg-warning: #ffd966;
+    --bg-disabled: #474e57;
+
+    --text-primary: #ffffff;
+    /* Lifted from upstream's #878787 and #ff6b6b. Tuned against
+     * --bg-secondary (#3f434b), which is the lightest surface this actually
+     * lands on — an earlier note claimed that was --tool-surface (#33373e)
+     * and was wrong, leaving the session preview and the composer chips at
+     * 3.8:1. #b8b8b8 measures 5.0:1 on #3f434b, 6.0:1 on #33373e, 7.8:1 on
+     * the page. */
+    --text-secondary: #b8b8b8;
+    --text-tertiary: #606c7a;
+    --text-inverse: #000000;
+    --text-info: #7cacff;
+    --text-danger: #ff8080;
+    --text-success: #a3d795;
+    --text-warning: #ffd966;
+    --text-disabled: #525b68;
+
+    --border-primary: #3f434b;
+    --border-secondary: #525b68;
+    --border-danger: #ff6b6b;
+
+    /* Dark is the only mode where the agent gets a surface of its own. */
+    --agent-surface: transparent;
+    --agent-padding: 0;
+
+    /* A lighter step in dark, where the agent surface goes darker than the
+     * page — a tool call should read as sitting on top of the reply. Kept
+     * clear of --code-bg (#282c34) so the output slab inside a tool card
+     * still reads as inset rather than merging with it. */
+    --tool-surface: #33373e;
+
+    --code-chip-bg: transparent;
+    --code-chip-fg: var(--block-teal);
+
+    /* Dark glass needs to be more opaque or the text on it loses contrast. */
+    --glass-tint: 86%;
+
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.2);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.2);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.3), 0 4px 6px -4px rgb(0 0 0 / 0.2);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg-primary: #22252a;
+  --bg-secondary: #3f434b;
+  --bg-tertiary: #474e57;
+  --bg-inverse: #cbd1d6;
+  --bg-info: #7cacff;
+  --bg-danger: #ff6b6b;
+  --bg-success: #a3d795;
+  --bg-warning: #ffd966;
+  --bg-disabled: #474e57;
+
+  --text-primary: #ffffff;
+  /* Same measured lift as the media-query block above. */
+  --text-secondary: #b8b8b8;
+  --text-tertiary: #606c7a;
+  --text-inverse: #000000;
+  --text-info: #7cacff;
+  --text-danger: #ff8080;
+  --text-success: #a3d795;
+  --text-warning: #ffd966;
+  --text-disabled: #525b68;
+
+  --border-primary: #3f434b;
+  --border-secondary: #525b68;
+  --border-danger: #ff6b6b;
+
+  --agent-surface: transparent;
+  --agent-padding: 0;
+  --tool-surface: #33373e;
+
+  --code-chip-bg: transparent;
+  --code-chip-fg: var(--block-teal);
+  --glass-tint: 86%;
+
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.2);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.2);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.3), 0 4px 6px -4px rgb(0 0 0 / 0.2);
+}
+
+/* ── base ───────────────────────────────────────────────────────────── */
 
 * {
   box-sizing: border-box;
@@ -24,659 +294,2481 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/* The document itself must not be scrollable.
+ *
+ * When a field is focused, iOS reveals it by scrolling the VISUAL viewport —
+ * which slides the whole page up and carries the floating header off the top
+ * of the screen. It can only do that if there is a document to scroll. Pinned
+ * like this there is not, and the only scroller left is the inner .scroll,
+ * which the layout already sizes to the space the keyboard leaves.
+ *
+ * `interactive-widget=resizes-content` in the viewport meta is the standards
+ * answer to the same problem, and it is set — but iOS 26's WKWebView did not
+ * honour it in testing, so this does the work. */
 html,
 body {
+  position: fixed;
+  inset: 0;
+  width: 100%;
   height: 100%;
+  overflow: hidden;
 }
 
 body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
-    Arial, sans-serif;
-  font-size: 16px;
-  line-height: 1.45;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: var(--lh-md);
   overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+  /* A phone app is not a web page. Long-pressing a bar title, a settings
+   * label or a tab popped iOS's text-selection UI with grab handles, and a
+   * drag that began on a label selected text instead of scrolling the list.
+   * Selection is switched back on below for the things that are genuinely
+   * content and worth copying. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Content, not chrome: an answer, a code block, tool output and a session
+ * preview are all things you might legitimately want to copy out. */
+.md,
+.bubble-text,
+.session-snippet,
+.tool-output pre,
+.diff-code,
+code,
+pre {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 #main {
   height: 100%;
 }
 
+/* Sized and placed against the VISUAL viewport, not the layout one. See
+ * src/viewport.rs: with the keyboard up iOS offsets the visual viewport
+ * rather than shrinking the layout, and everything in here is positioned
+ * against the shell. The fallbacks are what a browser without the
+ * VisualViewport API gets, which is the old behaviour. */
 .app {
+  position: absolute;
+  top: var(--vv-top, 0px);
+  left: 0;
+  right: 0;
   display: flex;
   flex-direction: column;
   height: 100vh;
   height: 100dvh;
+  height: var(--vv-height, 100dvh);
+  overflow: hidden;
+  background: var(--bg-primary);
 }
 
-/* ---- top bar -------------------------------------------------------- */
+/* The shared material for floating chrome: a tinted, blurred pane. The solid
+ * background is the fallback — where backdrop-filter is unsupported the
+ * surfaces are simply opaque, which is correct, just less alive.
+ *
+ * The top of the screen is no longer one bar. It is a row of detached
+ * controls — a circle at the leading edge, a group pill at the trailing edge
+ * — with the title floating between them over the page itself. The material
+ * belongs to the controls, not to a container behind them; what keeps the
+ * title readable is the scroll-edge scrim further down this file. */
+.glass,
+.topbar > .icon-btn,
+.topbar-actions {
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-md);
+}
+
+/* Controls inside the group pill share its material rather than stacking a
+ * second pane on top of it. */
+.topbar-actions > .icon-btn {
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .glass,
+  .topbar > .icon-btn,
+  .topbar-actions {
+    background: color-mix(in srgb, var(--bg-primary) var(--glass-tint), transparent);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    /* A hairline ring, not a border: on a white page a white bar is carried
+     * by its shadow alone and the edge disappears. Inset so it does not
+     * count as a separator between it and anything else. */
+    box-shadow: var(--shadow-md), inset 0 0 0 1px var(--border-primary);
+  }
+}
+
+/* Reduce Transparency turns the blur off at the OS level, which would leave a
+ * 78%-opaque pane with sharp text showing straight through it. Ask for the
+ * preference rather than guessing at it: everyone else keeps the glass, and
+ * the people who switched it off get an honest opaque bar. */
+@media (prefers-reduced-transparency: reduce) {
+  .glass,
+  .topbar > .icon-btn,
+  .topbar-actions {
+    background: var(--bg-primary);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* The status bar band. The bars float 8px below the safe-area edge, so above
+ * them is a 70px strip that scrolled content passes through with nothing over
+ * it — on device the transcript ran straight into the clock and the Dynamic
+ * Island. This is the same material as the bars, fading out at its lower edge
+ * so there is no hard line across the page. Opaque base, glass only where
+ * backdrop-filter exists, matching every other glass surface here. */
+.app::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(var(--safe-top) + var(--chrome-gap) + var(--topbar-h) + var(--scrim-fade));
+  z-index: var(--z-scrim);
+  pointer-events: none;
+  background: var(--bg-primary);
+}
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .app::before {
+    /* Same tint as the bars, so the band above the capsule and the capsule
+     * itself read as one material. The fade runs from the bar's bottom edge
+     * down, and only there: expressed as a percentage of the band it used to
+     * start at 55%, which on a 122px band put the whole 52px bar inside the
+     * fade. The icon buttons did not care — they carry glass of their own —
+     * but the title does not, so a dark code block scrolling under it stayed
+     * legible straight through the serif. */
+    background: color-mix(in srgb, var(--bg-primary) var(--glass-tint), transparent);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--scrim-fade)), transparent);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - var(--scrim-fade)), transparent);
+  }
+}
+
+/* ── top bar ────────────────────────────────────────────────────────── */
 
 .topbar {
+  position: absolute;
+  top: calc(var(--safe-top) + var(--chrome-gap));
+  left: var(--edge);
+  right: var(--edge);
+  z-index: var(--z-chrome);
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: calc(10px + var(--safe-top)) 14px 10px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
+  gap: 4px;
+  height: var(--topbar-h);
 }
 
+/* Allowed to shrink before the controls do, so a long chat name never pushes
+ * them off the bar. */
 .topbar .title {
-  font-size: 17px;
-  font-weight: 650;
   flex: 1;
   min-width: 0;
+  padding: 0;
+  font-family: var(--font-serif);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: var(--lh-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ellipsis {
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+/* The title centres on the screen's centre line. It is out of flow because
+ * the leading and trailing control groups are different widths on every
+ * screen, and centring "between them" is not centring — it lands half a
+ * back-button off, which is what the flex version did. */
+.topbar > .title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 180px);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* In a bar the connection state is just its dot — everywhere, however the
+ * badge is nested. The agent name and version are ~107px of text, and a
+ * centred title cannot clear them: on Settings the two ran straight into each
+ * other. Rule 6 of the design guide already says state rides on a dot, and
+ * Settings names what it is connected to in its own body instead. */
+.topbar .conn-label {
+  display: none;
+}
+
+/* With the title out of flow the trailing group has to push itself over. */
+.topbar > .conn-badge,
+.topbar > .topbar-actions {
+  margin-left: auto;
+}
+
+.topbar > .conn-badge + .topbar-actions {
+  margin-left: 8px;
+}
+
+/* The trailing group is one cell, so any number of controls can live there
+ * without each claiming a column of its own. */
+/* A two-line title: the thing, then where it lives. Takes the centre cell of
+ * the bar the same way a single-line title does. */
+.titlegroup {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 180px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+}
+
+.titlegroup > .title {
+  position: static;
+  transform: none;
+  max-width: 100%;
+}
+
+.subtitle {
+  max-width: 100%;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+/* A status chip that carries its own dot. */
+.chip .dot {
+  margin-right: 2px;
+}
+
+/* The trailing controls share one pill, the way the reference apps group a
+ * secondary action next to an overflow menu. One control in it still reads as
+ * a circle, because the pill is exactly as wide as what it holds. */
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 0 2px;
+  border-radius: var(--radius-full);
+}
+
+.topbar-actions:empty {
+  display: none;
+}
+
+/* ── icons ──────────────────────────────────────────────────────────── */
+
+/* Line icons size to the text around them and inherit its colour, so every
+ * existing colour rule keeps working without knowing an icon is there. */
+.icon {
+  width: 1em;
+  height: 1em;
+  flex-shrink: 0;
+  display: block;
+}
+
+/* ── buttons ────────────────────────────────────────────────────────── */
+
+/* True circles at the HIG's 44pt. They used to be 40px on the argument that
+ * the surrounding bar padding made up the difference — but there is no bar
+ * any more, these float on their own, and nothing is padding them. The glyph
+ * is set larger than body text because a chevron or gear at 16px reads as a
+ * smudge, not a control. */
 .icon-btn {
-  background: none;
-  border: none;
-  color: var(--text);
-  font-size: 18px;
-  padding: 6px 10px;
-  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+/* A labelled action in a bar: sized to its text, not squeezed into a circle.
+ * A label in a fixed 40px circle wraps and overflows — which is exactly what
+ * "⇪ PR" and the old "‹ Back" were doing. */
+.icon-btn.action {
+  width: auto;
+  min-width: 44px;
+  padding: 0 12px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* The back chevron carries a whole navigation gesture on one thin glyph, so
+ * it gets the size and weight to look deliberate, and optical centring —
+ * "‹" sits right of centre in most fonts. */
+.icon-btn.back {
+  color: var(--text-primary);
+  font-size: 28px;
+  font-weight: 300;
+  padding-right: 3px;
+}
+
+.icon-btn:active:not(:disabled) {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+/* Faded, the same way .btn:disabled is: one disabled treatment across every
+ * control. The token swap it replaces measured 1.5:1 against the light glass
+ * bar — exempt from the text threshold, but invisible is not "disabled". */
+.icon-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Text buttons take the control radius; the round variant is .icon-btn. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  line-height: var(--lh-sm);
+  cursor: pointer;
+  transition: opacity 120ms ease, background-color 120ms ease;
+}
+
+/* The default action is an inverted surface — black on white, light on dark.
+ * Presses alpha-dim the fill rather than picking a second colour. */
+.btn.primary {
+  background: var(--bg-inverse);
+  color: var(--text-inverse);
+}
+
+.btn.primary:active:not(:disabled) {
+  opacity: 0.9;
+}
+
+/* The fill alone is 1.08:1 against the light page — "Test connection" had no
+ * visible button at all. The hairline is what gives it an edge; in dark the
+ * fill already separates and the border just firms it up. */
+.btn.secondary {
+  background: var(--bg-secondary);
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+}
+
+.btn.secondary:active:not(:disabled) {
+  opacity: 0.8;
+}
+
+.btn.danger {
+  background: var(--bg-danger);
+  color: var(--text-inverse);
+}
+
+.btn.danger:active:not(:disabled) {
+  opacity: 0.9;
+}
+
+.btn.danger-outline {
+  background: transparent;
+  border-color: var(--border-danger);
+  color: var(--text-danger);
+}
+
+.btn.danger-outline:active:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
+/* Every variant reads as disabled, not just the primary one — by fading the
+ * variant's own colours rather than swapping in the disabled tokens. Painting
+ * --text-disabled onto --bg-disabled put two near-identical greys on top of
+ * each other and the label vanished. */
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Deleted along with the confirm row it was written for, and wanted again by
+ * the review screen's "Mark all" — which was written on another branch, back
+ * when the stylesheet still had this. Without it that button comes out at the
+ * full 40px with a 14px label: taller than the 32px progress row it sits in,
+ * and louder than the "N of M files reviewed" text it is subordinate to. */
+.btn.small {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.btn.grow {
+  flex: 1;
+}
+
+/* Same grid as the modal's actions, for the same reason: buttons sized to
+ * their own labels left a ragged row of different widths against a page of
+ * full-width cards. Two per row, and a row holding one button — or an odd
+ * last one — takes the whole width. */
+.btn-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.btn-row > :last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+/* The primary action floats over the list at the bottom right, where a thumb
+ * reaches it on any screen length, instead of sitting in a row at the top
+ * that scrolls away. High-contrast fill so it reads as the one thing to do
+ * here. */
+.fab {
+  position: absolute;
+  right: var(--edge);
+  bottom: calc(var(--safe-bottom) + var(--chrome-gap) + 12px);
+  z-index: var(--z-chrome);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  padding: 0 20px 0 16px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--bg-inverse);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-inverse);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
   cursor: pointer;
 }
 
-.icon-btn:active {
-  background: var(--panel-2);
+.fab:active {
+  opacity: 0.9;
 }
 
-.icon-btn.trash {
-  color: var(--text-dim);
-  font-size: 15px;
+/* The list keeps clear of the floating action's landing zone. */
+.scroll.has-fab {
+  padding-bottom: calc(var(--safe-bottom) + var(--chrome-gap) + 24px + 60px);
 }
 
+/* A lone refresh keeps its place in the bar rather than joining the fab. */
+.list-actions {
+  grid-template-columns: 1fr auto;
+  margin-top: 0;
+  margin-bottom: 12px;
+}
+
+.list-actions > :last-child:nth-child(odd) {
+  grid-column: auto;
+}
+
+/* ── connection badge + status dots ─────────────────────────────────── */
+
+/* State rides on a bare 8px dot; numbers are monospace. No chips. */
 .conn-badge {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
-  color: var(--text-dim);
-  max-width: 40vw;
-  overflow: hidden;
+  flex-shrink: 0;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  cursor: pointer;
 }
 
 .conn-label {
-  white-space: nowrap;
+  /* Wide enough for "goose-mock 1.47.0"; at 96px it ellipsised mid-version
+   * ("goose-mock 1....") which reads as a rendering fault rather than as a
+   * shortened name. The title beside it shrinks first — it has min-width 0
+   * and its own ellipsis, and a truncated title is normal. */
+  max-width: 148px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+/* inline-block, not inline: the session title is a -webkit-box for line
+ * clamping rather than a flex row, and an inline span ignores width and
+ * height — the per-session status dot collapsed to nothing there. In the
+ * flex contexts (.conn-badge, .error-box) the value is blockified anyway,
+ * so one declaration covers both. */
 .dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
+  display: inline-block;
+  vertical-align: 0.08em;
+  width: 8px;
+  height: 8px;
   flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background: var(--text-tertiary);
 }
 
-.dot.on { background: var(--accent); }
-.dot.off { background: #555f66; }
-.dot.err { background: var(--danger); }
+.dot.on {
+  background: var(--bg-success);
+}
+
+.dot.off {
+  background: var(--text-tertiary);
+}
+
+.dot.err {
+  background: var(--bg-danger);
+}
+
 .dot.busy {
-  background: var(--warn);
-  animation: pulse 1s ease-in-out infinite;
+  background: var(--bg-warning);
+  animation: pulse 1.4s ease-in-out infinite;
 }
 
 @keyframes pulse {
-  50% { opacity: 0.35; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
-/* ---- scrolling content ---------------------------------------------- */
+/* ── scroll regions ─────────────────────────────────────────────────── */
 
+/* Content runs the full height of the shell and passes beneath the bars; the
+ * padding is what keeps the first and last rows out from under them. */
 .scroll {
   flex: 1;
   overflow-y: auto;
+  padding: calc(var(--safe-top) + var(--chrome-gap) + var(--topbar-h) + var(--scrim-fade)) 16px
+    calc(var(--safe-bottom) + var(--chrome-gap) + 24px);
   -webkit-overflow-scrolling: touch;
-  padding: 14px;
 }
 
+/* On chat screens the composer sits below the scroll area and already clears
+ * the tab bar, so the transcript only needs its own breathing room. */
+.scroll.chat {
+  padding-bottom: 8px;
+}
+
+/* An empty screen is mostly empty screen: pinned to the top of an 844px
+ * phone the message reads as a failed load. Give it room and centre it in
+ * that room, slightly above true centre where the eye expects it. */
 .empty {
-  color: var(--text-dim);
+  font-family: var(--font-serif);
+  display: grid;
+  place-items: center;
+  /* The scroll box already pads itself clear of both bars, so 100% here is
+   * exactly the space between them. 42vh was a guess and it centred the text
+   * in the upper third. */
+  min-height: 100%;
+  padding: 32px 24px;
   text-align: center;
-  padding: 32px 16px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
 }
 
-/* ---- settings ------------------------------------------------------- */
+/* ── cards, fields, settings ────────────────────────────────────────── */
+
+.card {
+  padding: 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+}
 
 .settings .card {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 16px;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .settings h2 {
-  font-size: 14px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-dim);
   margin-bottom: 12px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: var(--lh-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Groups run label → field → optional hint, repeated. Without a gap between
+ * groups a hint sat hard against the next label and the two read as one
+ * paragraph; the sibling selectors add it only between groups, so the first
+ * label under a section heading is untouched. */
+.field + .field-label,
+.hint + .field-label {
+  margin-top: 16px;
 }
 
 .field-label {
   display: block;
-  font-size: 13px;
-  color: var(--text-dim);
-  margin: 12px 0 6px;
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
 }
 
+/* Ring-less focus: the border steps up a shade, nothing glows. */
 .field {
   width: 100%;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  color: var(--text);
-  padding: 12px;
-  font-size: 15px;
+  min-height: 40px;
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+.field::placeholder {
+  color: var(--text-secondary);
 }
 
 .field:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--border-secondary);
+}
+
+/* No resize grip: it is the one hard-cornered thing in a rounded field, and
+ * the gesture does not exist on the platform this ships to anyway. */
+textarea.field {
+  resize: none;
+}
+
+select.field {
+  appearance: none;
+  padding-right: 34px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%),
+    linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
+  background-position: calc(100% - 18px) calc(50% + 1px),
+    calc(100% - 13px) calc(50% + 1px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
 }
 
 .hint {
-  font-size: 12px;
-  color: var(--text-dim);
   margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
 }
 
+/* A tinted surface carrying red text and a red hairline, not a saturated
+ * slab: a full-bleed red rectangle was the loudest and most rectangular
+ * thing on the screen, and it sat directly above an equally solid Retry.
+ * The tint is mixed from the danger colour so it tracks both themes from one
+ * declaration. It stays in flow — it explains the screen it is on, so it
+ * takes a border and no shadow, like everything else that does not float. */
 .error-box {
-  background: rgba(229, 83, 75, 0.12);
-  border: 1px solid var(--danger);
-  color: #f1a7a3;
-  border-radius: 10px;
-  padding: 12px;
-  margin-bottom: 14px;
-  font-size: 14px;
-  word-break: break-word;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  background: color-mix(in srgb, var(--bg-danger) 12%, var(--bg-primary));
+  border: 1px solid color-mix(in srgb, var(--border-danger) 45%, transparent);
+  border-radius: var(--radius-xl);
+  color: var(--text-danger);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+/* State rides on a dot here too, so the message reads as text rather than as
+ * a painted band. Drawn rather than marked up, because .error-box is a bare
+ * <p> in five places. */
+.error-box::before {
+  content: "";
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-danger);
 }
 
 .about {
-  color: var(--text-dim);
-  font-size: 13px;
-  text-align: center;
-  padding: 18px 8px calc(18px + var(--safe-bottom));
+  margin-top: 24px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
 }
 
-.about p { margin-bottom: 6px; }
-
-/* ---- buttons -------------------------------------------------------- */
-
-.btn {
-  border: none;
-  border-radius: 10px;
-  padding: 12px 18px;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-  color: var(--text);
+.about p {
+  margin-bottom: 6px;
 }
 
-.btn.primary { background: var(--accent); color: #08130e; }
-.btn.primary:disabled { background: var(--accent-dim); color: #4c5a55; }
-.btn.secondary {
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-}
-.btn.danger { background: var(--danger); }
-.btn.danger-outline {
-  background: none;
-  border: 1px solid var(--danger);
-  color: var(--danger);
-}
-.btn.small { padding: 6px 12px; font-size: 13px; }
-.btn.grow { flex: 1; }
-
-.btn-row {
-  display: flex;
-  gap: 10px;
-  margin: 10px 0;
-}
-
-.list-actions { margin-top: 0; }
-
-/* ---- session list --------------------------------------------------- */
-
-.session-list {
-  list-style: none;
-}
-
-.session-item {
+.about-conn {
   display: flex;
   align-items: center;
-  gap: 6px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px 14px;
-  margin-bottom: 10px;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+}
+
+/* ── session list ───────────────────────────────────────────────────── */
+
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* A card that behaves: it does not tint on press, it lifts.
+ *
+ * It is also the swipe scroller. The row's actions are laid out *after* the
+ * card body in a horizontal snap container, so at rest they are past the
+ * right edge and clipped away, and dragging the row left brings them in.
+ *
+ * A scroller rather than an ontouchmove-driven transform on purpose: the
+ * native renderer serialises every listened-to event through a *synchronous*
+ * XHR (`handleVirtualdomEventSync`), so tracking a finger in Rust means ~60
+ * blocking round-trips a second, each with a vdom diff behind it. WebKit does
+ * the tracking, the rubber band, the momentum and the snap on the compositor
+ * for free, with no IPC and no re-render — and it does not synthesise a click
+ * from a touch that became a scroll, so the row's own tap handler needs no
+ * threshold and no suppression flag to keep a swipe from opening the chat.
+ *
+ * Nothing here sets a transform on an ancestor of the floating chrome, so
+ * backdrop-filter is untouched. */
+.session-item {
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  cursor: pointer;
+  transition: box-shadow 140ms ease, transform 140ms ease;
+}
+
+/* A scrollbar under every row in a list of rows is a stripe of chrome the
+ * design does not have. Mail shows no affordance either; the gesture is the
+ * affordance. */
+.session-item::-webkit-scrollbar {
+  display: none;
+}
+
+/* The lift is a shadow, and a shadow on a near-black page is nothing at all,
+ * so a press in dark had no feedback. The tint is what carries it there. */
+.session-item:active {
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+/* The card body — what the row itself used to be. Exactly the width of the
+ * row, so the tray is out of sight until it is dragged in, and the snap point
+ * at its start is what "closed" means. */
+.session-swipe {
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+}
+
+/* Full row height, and the second snap point: releasing anywhere past halfway
+ * settles with the tray exactly flush to the row's trailing edge. */
+.session-actions {
+  flex: 0 0 auto;
+  display: flex;
+  scroll-snap-align: end;
+}
+
+/* The destructive control rule 7 exempts: this one is pressed, so it takes
+ * the saturated fill rather than a tint. It carries the card's curve on the
+ * trailing edge and is square only along the seam the card body covers — and
+ * that curve is concentric, 15px inside the row's 16px behind a 1px border,
+ * for the same reason the tool-call slab is 11px inside 12px. */
+.swipe-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 84px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 0 15px 15px 0;
+  font-family: inherit;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: var(--lh-sm);
+  cursor: pointer;
+}
+
+.swipe-action .icon {
+  font-size: 20px;
+}
+
+.swipe-action.danger {
+  background: var(--bg-danger);
+  color: var(--text-inverse);
+}
+
+.swipe-action:active {
+  opacity: 0.9;
+}
+
+/* A leading tile, the way both reference apps mark a row. It is a shape, not
+ * a picture: the icon inside is the same line set as everywhere else. */
+.session-tile {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 20px;
 }
 
 .session-main {
   flex: 1;
   min-width: 0;
-  cursor: pointer;
+}
+
+/* Title and its age share a line; the age never wraps and never shrinks. */
+.session-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+/* Secondary, not tertiary: this is the row's only recency signal, and
+ * tertiary measured 2.2:1 in light. Tertiary stays for dots and rules, which
+ * are non-text and only need 3:1. */
+.session-age {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* The last thing said, quoted inside the row on its own surface. This is the
+ * part that makes a list of sessions scannable — the title says what it was
+ * about, the quote says where it got to. */
+.session-quote {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-lg);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
 }
 
 .session-title {
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.session-snippet {
-  color: var(--text-dim);
-  font-size: 13px;
-  margin-top: 3px;
+  font-family: var(--font-serif);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  font-size: var(--text-md);
+  font-weight: 400;
+  line-height: var(--lh-md);
 }
 
+.session-snippet {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+/* Flex so a long id and a timestamp wrap as whole items with even gaps,
+ * instead of the date breaking across lines mid-value. */
 .session-meta {
   display: flex;
-  gap: 6px;
-  color: var(--text-dim);
-  font-size: 11.5px;
-  margin-top: 5px;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
 }
 
-.confirm-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text-dim);
-}
-
-/* ---- chat ----------------------------------------------------------- */
+/* ── chat transcript ────────────────────────────────────────────────── */
 
 .chat {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  padding-bottom: 24px;
+}
+
+/* The transcript is a flex column that is also the scroll container, so its
+ * children shrink to fit by default — a long tool output was squashed to a
+ * fraction of its height and the next message drew straight over the clipped
+ * remains. Turns keep their natural height and the container scrolls. */
+.chat > * {
+  flex-shrink: 0;
+}
+
+/* A transcript grows upward from the composer. Without this a two-turn chat
+ * sat at the top of the screen with half a viewport of white under it.
+ *
+ * Not justify-content: flex-end — that makes overflowing content unreachable
+ * at the top in WebKit. Not `> *:first-child` either: the framework renders
+ * hidden placeholder elements for its conditional blocks, so the first child
+ * is often not the first thing you can see. A generated box is always the
+ * first flex item, and its auto margin collapses to nothing the moment the
+ * content fills the box. */
+.chat::before {
+  content: "";
+  margin-top: auto;
 }
 
 .bubble {
-  max-width: 86%;
-  border-radius: var(--radius);
-  padding: 10px 14px;
-  word-wrap: break-word;
+  margin-top: 16px;
+  max-width: 90%;
 }
 
+.bubble:first-child {
+  margin-top: 0;
+}
+
+/* The user's turn is an inverted pill — dark on light, light on dark. */
 .bubble.user {
   align-self: flex-end;
-  background: var(--user-bubble);
-  border: 1px solid #2f5a49;
+  width: fit-content;
+  max-width: 85%;
+  padding: 10px 16px;
+  background: var(--text-primary);
+  border-radius: var(--radius-xl);
+  color: var(--bg-primary);
 }
 
 .bubble.user .bubble-text {
+  font-family: var(--font-serif);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
 }
 
+/* The agent's turn has no bubble in light mode — plain text on the page.
+ * Dark mode gives it a faint raised surface so it separates from the
+ * near-black page. */
 .bubble.assistant {
-  align-self: flex-start;
-  background: var(--panel);
-  border: 1px solid var(--border);
+  align-self: stretch;
+  max-width: 100%;
+  padding: var(--agent-padding);
+  background: var(--agent-surface);
+  border-radius: var(--radius-xl);
+  color: var(--text-primary);
 }
 
+/* ── thinking ───────────────────────────────────────────────────────── */
+
+/* The quietest element in the app: no box, no fill — a whisper under the
+ * answer. */
 .thought {
-  align-self: flex-start;
-  max-width: 86%;
-  background: none;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-  padding: 8px 12px;
-  color: var(--text-dim);
-  font-size: 14px;
+  margin-top: 16px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
 }
 
 .thought summary {
+  list-style: none;
   cursor: pointer;
   font-style: italic;
+  color: var(--text-secondary);
 }
 
-.thought .md { margin-top: 8px; }
+.thought summary::-webkit-details-marker {
+  display: none;
+}
 
+.thought .md {
+  margin-top: 6px;
+  padding-left: 18px;
+  font-style: italic;
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* ── tool calls ─────────────────────────────────────────────────────── */
+
+/* Its own object on the page: a surface one step off the background, with a
+ * hairline to separate it. In flow, so no shadow. */
 .tool {
-  align-self: stretch;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--warn);
-  border-radius: 10px;
-  padding: 8px 12px;
-  font-size: 14px;
+  margin-top: 16px;
+  background: var(--tool-surface);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
 }
-
-.tool.status-completed { border-left-color: var(--accent); }
-.tool.status-failed { border-left-color: var(--danger); }
-.tool.status-in_progress { border-left-color: var(--warn); }
 
 .tool-head {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  padding: 8px 12px;
 }
 
-.tool-icon { flex-shrink: 0; }
+.tool-icon {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  width: var(--tool-gutter);
+  color: var(--text-secondary);
+}
 
 .tool-title {
   flex: 1;
   min-width: 0;
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
 }
 
+/* A word, so it is set like one: no monospace, no shouting. Uppercased
+ * backend enum names ("IN_PROGRESS") read as debug output and ate the width
+ * the tool title needed. */
 .tool-status {
-  font-size: 11px;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: var(--lh-xs);
 }
 
-.tool-output {
-  margin-top: 6px;
+/* Both backends' vocabularies are covered, so no state falls through: ACP
+ * emits pending/in_progress/completed/failed, OpenCode emits
+ * pending/running/completed/error. */
+.tool.status-completed .tool-status {
+  color: var(--text-success);
+}
+
+.tool.status-failed .tool-status,
+.tool.status-error .tool-status {
+  color: var(--text-danger);
+}
+
+.tool.status-in_progress .tool-status,
+.tool.status-running .tool-status {
+  color: var(--text-warning);
+}
+
+/* Secondary rather than tertiary: this is a word the reader has to read, and
+ * tertiary on the tool surface measures 2.2:1. */
+.tool.status-pending .tool-status {
+  color: var(--text-secondary);
+}
+
+.tool.status-failed,
+.tool.status-error {
+  border-color: var(--border-danger);
+}
+
+/* Sections are introduced by a hairline. Nothing nests, nothing gets its own
+ * radius or fill — depth is expressed with rules, not boxes. Scoped to the
+ * card, because the permission modal reuses this element standalone. */
+.tool > .tool-output {
+  border-top: 1px solid var(--border-primary);
 }
 
 .tool-output summary {
+  padding: 6px 12px;
+  list-style: none;
   cursor: pointer;
-  font-size: 12px;
-  color: var(--text-dim);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
 }
 
-.tool-output pre {
-  margin-top: 6px;
-  background: var(--bg);
-  border-radius: 8px;
-  padding: 10px;
-  overflow-x: auto;
-  font-size: 12.5px;
-  max-height: 40vh;
-  overflow-y: auto;
+.tool-output summary::-webkit-details-marker {
+  display: none;
 }
+
+/* The native marker is dropped because it is a filled triangle that matches
+ * nothing else here, but dropping it left "Output" and "Thinking" looking
+ * like stray labels with no hint that they open. One chevron, rotated when
+ * the section is open, for both. */
+.tool-output summary,
+.thought summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-output summary::before,
+.thought summary::before {
+  content: "\203a";
+  flex-shrink: 0;
+  width: var(--tool-gutter);
+  text-align: center;
+  /* Secondary, not tertiary: this glyph is the only indication that the
+   * section opens and the only indication of its state, so it is a non-text
+   * indicator rather than decoration. Tertiary measured 2.0:1 here. */
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+
+details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+/* Inside the card it closes the box, so it takes that card's bottom corners
+ * (11px inside a 12px border). Standalone — in the modal — it is just a slab
+ * and rounds on all four. */
+.tool-output pre {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--code-bg);
+  color: var(--code-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.tool > .tool-output pre {
+  border-radius: 0 0 11px 11px;
+}
+
+/* In the modal the disclosure is a standalone block: it needs its own gap
+ * before the actions, and its summary lines up with the modal's own text
+ * rather than being indented like a card's section header. */
+.modal .tool-output {
+  margin-bottom: 16px;
+}
+
+.modal .tool-output summary {
+  padding: 0 0 6px;
+}
+
+/* "There was a gap here, and it resumed at this time." A rule either side of
+ * the time, so it reads as a divider rather than as a message. */
+.timemark {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.timemark::before,
+.timemark::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border-primary);
+}
+
+/* A folded run of tool calls. Closed it is one quiet line; open it is the
+ * cards exactly as they render on their own. */
+.tool-run {
+  margin-top: 16px;
+}
+
+.tool-run > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+.tool-run > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-run > summary::after {
+  content: "\203a";
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+
+.tool-run[open] > summary::after {
+  transform: rotate(90deg);
+}
+
+/* The first card inside an open run does not need its own top margin — the
+ * summary above it already provides the gap. */
+.tool-run[open] > .tool:first-of-type {
+  margin-top: 8px;
+}
+
+/* ── typing indicator ───────────────────────────────────────────────── */
 
 .typing {
-  align-self: flex-start;
   display: flex;
-  gap: 5px;
-  padding: 12px 16px;
+  align-items: center;
+  gap: 4px;
+  margin-top: 16px;
+  padding: 4px 2px;
 }
 
 .dot-anim {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-dim);
-  animation: bounce 1.2s infinite;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--text-tertiary);
+  animation: bounce 1.2s ease-in-out infinite;
 }
 
-.dot-anim:nth-child(2) { animation-delay: 0.15s; }
-.dot-anim:nth-child(3) { animation-delay: 0.3s; }
+.dot-anim:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.dot-anim:nth-child(3) {
+  animation-delay: 0.3s;
+}
 
 @keyframes bounce {
-  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-  30% { transform: translateY(-5px); opacity: 1; }
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
 }
 
 .usage {
-  font-size: 11.5px;
-  color: var(--text-dim);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   flex-shrink: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
 }
 
-/* ---- composer ------------------------------------------------------- */
+/* ── composer ───────────────────────────────────────────────────────── */
 
+/* A floating outlined card inset from the edges — not a docked bar. */
+/* Two rows, the way both reference apps build it: what you are writing on
+ * top, and the controls that act on it underneath. The field then gets the
+ * full width instead of sharing a line with a button, which is what lets it
+ * grow to several lines without the send button drifting around. */
 .composer {
   display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+  margin: 0 var(--edge) calc(var(--safe-bottom) + var(--chrome-gap));
+  padding: 10px 10px 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 24px;
+  box-shadow: var(--shadow-sm);
+}
+
+.composer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* With no chips to show, the control row holds one button and the two-row
+ * shape becomes a tall box with a lone circle floating in it. Fold back to a
+ * single row in that case. */
+.composer:has(.composer-row > .send:only-child) {
+  flex-direction: row;
   align-items: flex-end;
-  gap: 10px;
-  padding: 10px 14px calc(10px + var(--safe-bottom));
-  background: var(--panel);
-  border-top: 1px solid var(--border);
+  padding: 6px 6px 6px 14px;
+}
+
+.composer:has(.composer-row > .send:only-child) .input {
+  align-self: center;
+  padding: 8px 0;
+}
+
+/* Chips carry what is real on this screen — the session's settings and the
+ * token budget here, diff and PR on the Code tab. Only what a backend can
+ * actually change becomes a control; the rest is stated as a fact inside the
+ * sheet the settings chip opens. See docs/design.md rule 11. */
+.composer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  /* Chips do not shrink by default. A flex item's automatic minimum size is
+   * its content width, so a chip holding server-supplied text would otherwise
+   * hold the row open at whatever the model happens to be called and push the
+   * send button off the right edge — "Qwen3 Coder 480B A35B Instruct"
+   * measures 237px in a 348px row that also carries Diff, PR and Send. */
+  flex-shrink: 0;
+  padding: 0 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  white-space: nowrap;
+}
+
+/* Shrinking is granted only to a chip that can actually give way — one whose
+ * text is wrapped in .chip-label and can ellipsise. `min-width: 0` on a chip
+ * without one does not shorten anything; it just lets the pill close in on
+ * text that then renders outside it, which is worse than the overflow it was
+ * meant to fix. The model name is the right thing to lose: the sheet the chip
+ * opens states it in full. */
+.composer-chip:has(.chip-label) {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+/* Only the label gives way; the chevron beside it must stay, or the chip
+ * stops reading as something you can open.
+ *
+ * min-width here as well as on the chip: this is itself a flex item, and
+ * without it the label holds its full content width and spills out of a chip
+ * that has already given way — the pill closes in and the text stays put. */
+.chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer-chip > .icon {
   flex-shrink: 0;
 }
 
-.input {
-  flex: 1;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  color: var(--text);
-  font-size: 15px;
+.composer-chip.action {
   font-family: inherit;
-  padding: 12px;
-  resize: none;
+  cursor: pointer;
+}
+
+.composer-chip.action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.composer-chip.action:active:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+.composer-chip .icon {
+  color: var(--text-secondary);
+}
+
+/* Send is a filled circle at the trailing end, always in the same place. */
+.send {
+  flex-shrink: 0;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--bg-inverse);
+  color: var(--text-inverse);
+  font-size: 20px;
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+
+.send:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.send.stop {
+  background: var(--bg-danger);
+  color: var(--text-inverse);
+}
+
+.send:active:not(:disabled) {
+  opacity: 0.85;
+}
+
+/* Chromeless: every bit of framing comes from the card around it. */
+.input {
+  width: 100%;
+  min-width: 0;
   max-height: 120px;
+  padding: 4px 2px;
+  background: transparent;
+  border: 0;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  resize: none;
+}
+
+.input::placeholder {
+  color: var(--text-secondary);
 }
 
 .input:focus {
   outline: none;
-  border-color: var(--accent);
 }
 
-/* ---- markdown ------------------------------------------------------- */
+/* Send and stop are round, sized to the composer's rhythm. */
+.composer .btn {
+  min-height: 40px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+}
 
-.md > * + * { margin-top: 8px; }
+/* ── markdown prose ─────────────────────────────────────────────────── */
 
+/* The reading voice. Everything the agent says is prose, and prose is set in
+ * the serif; the interface around it stays sans. */
+.md {
+  /* A pasted URL is one unbreakable word and ran off the side of the page. */
+  overflow-wrap: anywhere;
+  font-family: var(--font-serif);
+  font-size: var(--text-md);
+  line-height: 1.65;
+}
+
+.md > * + * {
+  margin-top: 8px;
+}
+
+/* Headings are regular weight — size carries the hierarchy, not boldness.
+ * All six levels, or h5/h6 fall back to the browser's bold defaults. */
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.md h5,
+.md h6 {
+  font-size: 1rem;
+  color: var(--text-secondary);
+}
+
+/* Left alone, a rule renders as the browser's inset 3D border — a bright bar
+ * in dark mode and the heaviest thing on the page. */
+.md hr {
+  height: 0;
+  margin: 16px 0;
+  border: 0;
+  border-top: 1px solid var(--border-primary);
+}
+
+.md h1 {
+  font-size: 1.5rem;
+}
+
+.md h2 {
+  font-size: 1.25rem;
+}
+
+.md h3 {
+  font-size: 1.125rem;
+}
+
+.md h4 {
+  font-size: 1rem;
+}
+
+/* Code slabs stay dark in both themes. */
 .md pre {
-  background: var(--bg);
-  border-radius: 8px;
-  padding: 10px;
+  padding: 12px;
+  background: var(--code-bg);
+  border-radius: var(--radius-lg);
+  color: var(--code-fg);
   overflow-x: auto;
-  font-size: 13px;
-}
-
-.md code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.92em;
-  background: rgba(255, 255, 255, 0.07);
-  border-radius: 4px;
-  padding: 1px 5px;
 }
 
 .md pre code {
-  background: none;
   padding: 0;
+  background: transparent;
+  color: inherit;
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* Inline code is a burnt-orange chip on light. On dark the chip disappears
+ * and the tint goes teal: orange on slate is muddy, and a run of chips makes
+ * a paragraph look speckled. */
+.md code {
+  padding: 2px 4px;
+  background: var(--code-chip-bg);
+  border-radius: var(--radius-md);
+  color: var(--code-chip-fg);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
 }
 
 .md ul,
 .md ol {
-  padding-left: 22px;
+  padding-left: 20px;
+}
+
+.md li + li {
+  margin-top: 4px;
 }
 
 .md blockquote {
-  border-left: 3px solid var(--border);
-  padding-left: 10px;
-  color: var(--text-dim);
+  padding-left: 12px;
+  border-left: 2px solid var(--border-primary);
+  color: var(--text-secondary);
 }
 
+/* A grid of bordered cells is the boxiest thing markdown can produce, and it
+ * was the last one left in the app. Rows are separated by a hairline the way
+ * a list is; the columns are held by alignment, not by lines. */
 .md table {
-  border-collapse: collapse;
   display: block;
+  width: max-content;
+  min-width: 100%;
+  margin: 12px 0;
+  border-collapse: collapse;
   overflow-x: auto;
-  max-width: 100%;
+  font-size: var(--text-xs);
 }
 
 .md th,
 .md td {
-  border: 1px solid var(--border);
-  padding: 6px 10px;
-  font-size: 14px;
+  padding: 8px 16px 8px 0;
+  border: 0;
+  border-bottom: 1px solid var(--border-primary);
+  text-align: left;
+  white-space: nowrap;
 }
 
-.md a { color: #6cb6ff; }
-
-.md h1, .md h2, .md h3, .md h4 {
-  line-height: 1.3;
-  margin-top: 12px;
+/* The last column absorbs the slack, so every row rule spans the full column
+ * width instead of stopping wherever the content happened to end. */
+.md tr > *:last-child {
+  width: 100%;
+  padding-right: 0;
 }
 
-.md h1 { font-size: 1.25em; }
-.md h2 { font-size: 1.15em; }
-.md h3 { font-size: 1.05em; }
+/* The table ends on content, not on a rule — the block below it separates
+ * itself. */
+.md tbody tr:last-child > * {
+  border-bottom: 0;
+}
 
-/* ---- modal ---------------------------------------------------------- */
+.md th {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* Markdown task lists emit a bare <input type=checkbox>, which the browser
+ * paints as a small hard-cornered grey square, off-palette in both themes.
+ * Drawn here instead: the tick is one dark stroke, legible on both the light
+ * and the dark theme's green without needing a second asset. */
+.md input[type="checkbox"] {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 0 8px 0 0;
+  vertical-align: -2px;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary) no-repeat center / 12px 12px;
+}
+
+.md input[type="checkbox"]:checked {
+  border-color: transparent;
+  background-color: var(--text-success);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23131416' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.5l3 3 6-6'/%3E%3C/svg%3E");
+}
+
+.md a {
+  color: var(--text-info);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.md img {
+  max-width: 100%;
+  border-radius: var(--radius-lg);
+}
+
+/* ── modals ─────────────────────────────────────────────────────────── */
 
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  z-index: var(--z-modal);
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  z-index: 50;
+  background: rgb(0 0 0 / 0.5);
 }
 
+/* The one element that carries both a border and a shadow. */
 .modal {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius) var(--radius) 0 0;
-  padding: 20px 18px calc(20px + var(--safe-bottom));
   width: 100%;
   max-width: 560px;
-  max-height: 80vh;
+  max-height: 85vh;
   overflow-y: auto;
+  padding: 24px 20px calc(24px + var(--safe-bottom));
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  box-shadow: var(--shadow-lg);
 }
 
 .modal h2 {
-  font-size: 16px;
-  margin-bottom: 8px;
-}
-
-.modal-tool {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13.5px;
-  background: var(--bg);
-  border-radius: 8px;
-  padding: 10px;
-  margin-bottom: 10px;
-  word-break: break-all;
-}
-
-.modal-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 14px;
-}
-
-/* ---- toast ---------------------------------------------------------- */
-
-.toast {
-  position: fixed;
-  left: 50%;
-  bottom: calc(90px + var(--safe-bottom));
-  transform: translateX(-50%);
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 12px;
-  padding: 10px 16px;
-  font-size: 14px;
-  max-width: 88vw;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
-  z-index: 60;
-  animation: toast-in 0.2s ease-out;
-}
-
-@keyframes toast-in {
-  from { opacity: 0; transform: translate(-50%, 8px); }
-  to { opacity: 1; transform: translate(-50%, 0); }
+  margin-bottom: 16px;
+  font-size: var(--text-lg);
+  font-weight: 500;
+  line-height: var(--lh-md);
 }
 
 .modal-session {
-  font-size: 12.5px;
-  color: var(--warn);
-  margin-bottom: 6px;
+  margin-bottom: 12px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+/* An alert says one sentence about what it is about to cost. That is body
+ * text — not the metadata line .modal-session sets, and not the mono slab
+ * .modal-tool is for quoting a tool call. */
+.modal-body {
+  margin-bottom: 20px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--lh-md);
+}
+
+.modal-tool {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  background: transparent;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  overflow-x: auto;
+}
+
+/* Four full-width bars stacked is a wall of rectangles. Pair them instead:
+ * an action and its "always" variant share a row, and an odd last action —
+ * three options rather than four — takes the whole width rather than leaving
+ * a hole beside it. */
+.modal-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.modal-actions > :last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+/* Which action is solid is decided in Rust from what the option *is*
+ * (`permission_button_class`), not from where it lands in the list — the
+ * backend controls that order, and a sibling rule here painted whichever
+ * allow-option happened to come first. Kept only as a backstop for the code
+ * modal, whose two allow buttons are hardcoded in order. */
+.modal-actions .btn.primary ~ .btn.primary {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
 }
 
 .modal-pending {
-  font-size: 12px;
-  color: var(--text-dim);
+  margin-top: 12px;
   text-align: center;
-  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
 }
 
-/* ---- Home/Code tab bar ---- */
-.tabbar {
-  display: flex;
-  border-top: 1px solid var(--border, #2a2a2e);
-  background: var(--bg-raised, #161618);
-  padding-bottom: env(safe-area-inset-bottom, 0);
-  flex-shrink: 0;
-}
-.tabbar .tab {
-  flex: 1;
+/* ── drawer ─────────────────────────────────────────────────────────── */
+
+/* A panel over the page, not a column beside it: at phone width there is no
+ * room for both. The page dims and stays put behind it, so closing the drawer
+ * returns you to exactly what you left. */
+.drawer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: var(--z-modal);
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 8px 0 6px;
-  background: none;
-  border: none;
-  color: var(--fg-dim, #8a8a90);
-  font-size: 12px;
-  cursor: pointer;
-}
-.tabbar .tab.active {
-  color: var(--fg, #ececf0);
-}
-.tabbar .tab-icon {
-  font-size: 17px;
-  line-height: 1;
+  width: min(300px, 82%);
+  padding: calc(var(--safe-top) + 20px) 16px calc(var(--safe-bottom) + 20px);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-lg);
+  transform: translateX(-100%);
+  transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
 }
 
-/* ---- Code tab ---- */
-.chip {
-  font-size: 11px;
-  padding: 1px 7px;
-  border-radius: 9px;
-  background: var(--bg-raised, #232327);
-  color: var(--fg-dim, #9a9aa0);
-  margin-left: 6px;
-  vertical-align: 1px;
+.drawer.open {
+  transform: translateX(0);
 }
-.banner {
-  margin: 8px 12px;
+
+/* The panel is 300px wide and the action floats bottom-right, so the two
+ * overlap and the drawer cut the pill in half. It is also not an action that
+ * applies while you are choosing a destination. */
+.app:has(.drawer.open) .fab {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Closed, the panel is only translated out of view — its shadow still spilled
+ * a grey band down the left edge of every screen in light mode. */
+.drawer:not(.open) {
+  box-shadow: none;
+}
+
+/* Not display:none when closed — the panel has to be in the tree for the
+ * slide to animate, so it is moved out of view and made unclickable instead. */
+.drawer-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: calc(var(--z-modal) - 1);
+  background: rgb(0 0 0 / 0.4);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms ease;
+}
+
+.drawer-scrim.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.drawer-brand {
+  /* 12px matches .drawer-item's padding, so the wordmark starts on the same
+   * line as the icons below it. */
+  margin: 0 12px 24px;
+  font-family: var(--font-serif);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  line-height: var(--lh-md);
+}
+
+.drawer-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 48px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-md);
+  cursor: pointer;
+  text-align: left;
+}
+
+.drawer-item .icon {
+  color: var(--text-secondary);
+}
+
+/* Tertiary, not secondary: at 1.08:1 against the light page the selected
+ * destination was indistinguishable from the unselected ones. */
+.drawer-item.active {
+  background: var(--bg-tertiary);
+}
+
+.drawer-item.active .icon {
+  color: var(--text-primary);
+}
+
+.drawer-item:active {
+  background: var(--bg-secondary);
+}
+
+/* A sheet that is a list of choices: taller than an alert, shorter than a
+ * screen, and it stops at what it holds. */
+.modal.sheet {
+  max-height: 70vh;
+}
+
+/* Drilling into one setting swaps the sheet's title for a back control and
+ * the name of what you are choosing. The chevron keeps the full 44px tap
+ * target every icon button gets and is pulled back out of the modal's
+ * padding, so the glyph lines up with the list below it rather than sitting
+ * a button's worth of air to its right. The heading drops the block margin
+ * it carries at the top of a modal so the two sit on one line. */
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 12px -10px;
+}
+
+.sheet-head h2 {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The settings sheet's row grammar. A row is a control (name, value,
+ * chevron, pressable) or a fact (name, value, and the reason it is a fact) —
+ * and nothing that cannot change is ever pressable. docs/design.md rule 11.
+ *
+ * Both shapes are the same box so the list reads as one list; only the
+ * chevron, the press state and the reason line differ. */
+.setting-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 -8px;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
   padding: 8px 12px;
-  border-radius: 10px;
-  background: var(--bg-raised, #232327);
-  color: var(--fg-dim, #b9b9c0);
-  font-size: 13px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Secondary, not tertiary. A control row and a fact row are the same box —
+ * same height, same name, same value, same note — so this chevron is the only
+ * thing that says one of them opens. Tertiary measures 2.20:1 in light and
+ * 2.87:1 in dark, under the 3:1 this file demands of a non-text indicator,
+ * and it is the same argument already made for the tool disclosure caret. */
+.setting-row .icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+/* Wraps, so a row that carries a note puts it on its own line instead of
+ * letting it fight the value for the same one — without it, "Medium" was
+ * ellipsised to "M..." to make room for the description beside it. */
+.setting-main {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 12px;
+}
+
+.setting-name {
+  flex-shrink: 0;
+}
+
+.setting-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+/* A fact is not a button: it wraps to hold its reason, and it does not lift
+ * under a thumb, because pressing it would do nothing. */
+.setting-row.fact {
+  flex-wrap: wrap;
+  cursor: default;
+}
+
+/* Secondary, not tertiary: this line is the whole reason a fact row exists —
+ * it says why the setting is stuck — so it has to be as readable as `.hint`,
+ * not as quiet as a divider label. */
+.setting-note {
+  flex-basis: 100%;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+.setting-row:not(.fact):active {
+  background: var(--bg-secondary);
+}
+
+.choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 -8px;
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.choice-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.choice .icon {
+  color: var(--text-success);
+}
+
+.choice.selected {
+  background: var(--bg-secondary);
+}
+
+.choice:active {
+  background: var(--bg-secondary);
+}
+
+/* ── toast ──────────────────────────────────────────────────────────── */
+
+/* A fully inverted chip: black on light, light on dark. */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--safe-bottom) + var(--chrome-gap) + 80px);
+  z-index: var(--z-toast);
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 8px 16px;
+  background: var(--bg-inverse);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-inverse);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  animation: toast-in 150ms ease;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* ── chips + banners ────────────────────────────────────────────────── */
+
+/* A step brighter than other secondary text: these carry live state
+ * ("working", "crashed"), and secondary-on-secondary fails at phone size. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-full);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* Same treatment as .error-box, for the same reason: a saturated fill across
+ * the top of the transcript shouted louder than the message it carried. */
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-shrink: 0;
+  margin: 0 0 16px;
+  padding: 10px 16px;
+  background: color-mix(in srgb, var(--bg-info) 12%, var(--bg-primary));
+  border: 1px solid color-mix(in srgb, var(--bg-info) 45%, transparent);
+  border-radius: var(--radius-xl);
+  color: var(--text-info);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
   text-align: center;
 }
-.diff-panel {
-  margin: 8px 0;
-  border: 1px solid var(--border, #2a2a2e);
-  border-radius: 10px;
+
+.banner::before {
+  content: "";
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-info);
+}
+
+/* ── diff review ────────────────────────────────────────────────────── */
+
+/* This used to be `.diff-panel`: one <pre> of every file's patch concatenated,
+ * wedged between the transcript and the composer. It could not have worked.
+ * OpenCode builds each patch with `context: Number.MAX_SAFE_INTEGER`, so a
+ * three-line edit to a 1200-line file arrives as a 1204-line patch — the
+ * panel was not showing a blob by accident, it was showing the repo. The
+ * re-hunking that makes this readable is in src/diff.rs; what is here is the
+ * surface it lands on. */
+
+/* How far you are through the review, and one control to declare yourself
+ * done with the rest. Hidden below two files, where the answer is on screen
+ * anyway (rule 11: only offer controls that do something). */
+.diff-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin-bottom: 8px;
+}
+
+.diff-progress-label {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.diff-progress-track {
+  height: 4px;
+  margin-bottom: 16px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+}
+
+/* A non-text indicator, so 3:1 against the track: 3.21:1 light, 6.01:1
+ * dark. */
+.diff-progress-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--bg-success);
+  transition: width 160ms ease;
+}
+
+/* Borrowed wholesale from .tool: a surface one step off the page with a
+ * hairline, in flow so no shadow (rule 5), at the control radius (rule 4). */
+.diff-file {
+  margin-bottom: 12px;
+  background: var(--tool-surface);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
-.diff-panel pre {
-  margin: 0;
-  padding: 10px;
-  overflow-x: auto;
-  font-size: 12px;
-  max-height: 45vh;
+
+/* Reviewed reads on the card's own edge rather than by fading its text: a
+ * dimmed head is a contrast failure waiting to happen, and the filled check
+ * beside it is already saying it in a second channel. */
+.diff-file.seen {
+  border-color: color-mix(in srgb, var(--bg-success) 55%, transparent);
 }
-select.field {
-  appearance: none;
+
+.diff-file-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px 6px 4px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.diff-file-head::-webkit-details-marker {
+  display: none;
+}
+
+/* Same chevron as a tool card's disclosure, in the same gutter, rotated by
+ * the shared details[open] rule above. */
+.diff-file-head::before {
+  content: "\203a";
+  flex-shrink: 0;
+  width: var(--tool-gutter);
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+
+.diff-file-id {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.diff-path {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* The directory gives way first and the filename never shrinks. The filename
+ * is what you scan a file list for; a path truncated the usual way loses it
+ * and leaves you reading four rows of "crates/opencode-client/src/…". */
+.diff-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.diff-name {
+  flex-shrink: 0;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.diff-stat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.diff-stat .add {
+  color: var(--text-success);
+  font-weight: 600;
+}
+
+.diff-stat .del {
+  color: var(--text-danger);
+  font-weight: 600;
+}
+
+/* .chip's geometry and .chip's reasoning, one surface lighter: a chip's own
+ * fill is --bg-secondary, which in light is the same colour as the card it
+ * would sit on. Primary rather than secondary text for the same reason .chip
+ * is — secondary on this fill measures 4.01:1 light and 4.24:1 dark. Only
+ * present when there is something to say: a plain modified file has no
+ * badge. */
+.diff-badge {
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* GitHub's "Viewed" checkbox, at the HIG's 44px. It lives inside a
+ * <summary>, so its handler stops the click reaching the fold. */
+.diff-seen {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.diff-seen[aria-pressed="true"] {
+  background: var(--bg-success);
+  border-color: transparent;
+  color: var(--text-inverse);
+}
+
+/* The code surface, closing the card, so it takes that card's bottom corners
+ * (11px inside a 12px border) exactly as .tool > .tool-output pre does. */
+.diff-body {
+  border-radius: 0 0 11px 11px;
+  background: var(--code-bg);
+  color: var(--code-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* A row, not a surface: full-bleed inside the slab above, which is what
+ * rounds it. Three channels tell a changed line apart and only one of them
+ * is colour — the glyph in .diff-sign, the 3px leading rule, and the tint. */
+.diff-line {
+  display: flex;
+  align-items: flex-start;
+  /* A blank line has an empty code cell and a space for a sign, and neither
+   * generates a line box — so the row measured zero and every blank line in
+   * the file simply vanished, closing up the gaps the author put there. The
+   * blank rows in an *added* file survived only because "+" is a real glyph,
+   * which is what made the loss look like a parser bug rather than a layout
+   * one. One line's worth of height, whatever the row holds. */
+  min-height: var(--lh-sm);
+  padding-right: 8px;
+  border-left: 3px solid transparent;
+}
+
+.diff-line.add {
+  background: var(--diff-add-fill);
+  border-left-color: var(--diff-add);
+}
+
+.diff-line.del {
+  background: var(--diff-del-fill);
+  border-left-color: var(--diff-del);
+}
+
+/* Its own flex cell rather than the first character of the text, so one
+ * sign sits against the whole of a wrapped run and "one source line is one
+ * logical row" stays true at four visual rows — which is the thing wrapping
+ * normally breaks. */
+.diff-sign {
+  flex-shrink: 0;
+  width: 15px;
+  text-align: center;
+  color: var(--code-muted);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.diff-line.add .diff-sign {
+  color: var(--diff-add);
+}
+
+.diff-line.del .diff-sign {
+  color: var(--diff-del);
+}
+
+/* Wrapping is the default, and the reason is that horizontal scroll hides
+ * characters — at the 47 columns this width allows, a -/+ pair that differs
+ * past column 47 looks identical, and you cannot know there is something to
+ * scroll to without scrolling to it. Two smaller reasons: a per-hunk scroll
+ * offset does not survive the next card, and a horizontally scrollable child
+ * inside a vertically scrolling list captures near-diagonal swipes, so the
+ * page reads as stuck. `anywhere` because the long tokens in real code are
+ * paths, URLs and base64, which have no break opportunities; the hanging
+ * indent keeps a continuation visibly subordinate to its first row. */
+.diff-code {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-indent: -2ch;
+  padding-left: 2ch;
+}
+
+/* The escape hatch, for the two cases wrapping genuinely loses: a
+ * column-aligned table and ASCII art. Screen-level rather than per-file, so
+ * flipping it does not leave a handful of independent scroll offsets. */
+/* Both axes stated, and `hidden` on a box whose height is auto clips
+ * nothing: it is what says "this scrolls sideways and only sideways". A
+ * scroll region that only sets one axis has the other coerced to `auto` by
+ * the used-value rules, and then nothing downstream — docs/audit.js
+ * included — can tell a deliberate horizontal scrollport from the vertical
+ * one every screen already has. */
+.diff-body.nowrap {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.diff-body.nowrap .diff-code {
+  white-space: pre;
+  text-indent: 0;
+  padding-left: 0;
+}
+
+/* The rows have to be as wide as the widest of them, or the tints and the
+ * leading rules stop at the fold and the scrolled-to region is bare slab. */
+.diff-body.nowrap .diff-line,
+.diff-body.nowrap .diff-skip,
+.diff-body.nowrap .diff-note {
+  width: max-content;
+  min-width: 100%;
+}
+
+/* Scrolled right, the leading rule is off the left edge and the row's only
+ * remaining cue would be a colour it is hard to judge in isolation. The sign
+ * is the channel that has to survive, so it stays pinned; it carries the
+ * row's own fill so the code passes underneath it rather than through it. */
+.diff-body.nowrap .diff-sign {
+  position: sticky;
+  left: 0;
+  background: var(--code-bg);
+}
+
+.diff-body.nowrap .diff-line.add .diff-sign {
+  background: var(--diff-add-fill);
+}
+
+.diff-body.nowrap .diff-line.del .diff-sign {
+  background: var(--diff-del-fill);
+}
+
+/* A collapsed run of unchanged lines. The line number lives here rather than
+ * in a per-row gutter: a gutter costs 4 of 47 columns, and under soft wrap a
+ * number is only correct on the first visual row of a source line, so it
+ * becomes a mostly-blank column. This band is where you actually need the
+ * anchor. */
+.diff-skip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
+  min-height: 32px;
+  padding: 6px 8px 6px 18px;
+  border: 0;
+  background: color-mix(in srgb, var(--code-fg) 8%, var(--code-bg));
+  color: var(--code-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.diff-skip:active {
+  background: color-mix(in srgb, var(--code-fg) 16%, var(--code-bg));
+}
+
+.diff-skip-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-skip-at {
+  flex-shrink: 0;
+}
+
+/* Prose about a file rather than a line of it — binary, deleted, truncated,
+ * no trailing newline — so it is set in the interface voice on the slab. */
+.diff-note {
+  padding: 8px 12px 8px 18px;
+  color: var(--code-muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* ── scrollbars ─────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-secondary);
+  border-radius: var(--radius-full);
+}
+
+/* ── reduced motion ─────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

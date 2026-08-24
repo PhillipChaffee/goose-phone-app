@@ -13,7 +13,7 @@ use std::time::Duration;
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use goose_acp_client::{
-    AcpClient, AcpEvent, ConnectConfig, MessageChunk, PermissionRequest, SessionInfo,
+    AcpClient, AcpEvent, ConfigOption, ConnectConfig, MessageChunk, PermissionRequest, SessionInfo,
     SessionUpdate, ToolCallUpdate,
 };
 use serde::{Deserialize, Serialize};
@@ -39,7 +39,7 @@ pub(crate) enum Tab {
 /// `serde(default)` is load-bearing: settings persisted by older builds lack
 /// the code-agent fields, and a parse failure would silently wipe the saved
 /// goose server config (the storage layer falls back to `Default`).
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Settings {
     pub server_url: String,
@@ -50,6 +50,48 @@ pub(crate) struct Settings {
     pub code_server_url: String,
     /// `OPENCODE_SERVER_PASSWORD`.
     pub code_password: String,
+}
+
+/// A compile-time seed for a development build.
+///
+/// Installing over the app wipes its container, so every rebuild otherwise
+/// means retyping four fields before anything can be tested against a local
+/// server. Setting these when you build fills them in instead:
+///
+/// ```sh
+/// GOOSE_DEV_SERVER_URL=http://127.0.0.1:3285 \
+/// GOOSE_DEV_SECRET_KEY=mock-secret \
+/// GOOSE_DEV_CODE_URL=http://127.0.0.1:4399 \
+/// GOOSE_DEV_CODE_PASSWORD=... \
+///   dx build --platform ios --no-default-features --features mobile
+/// ```
+///
+/// A release build expands to an empty string no matter what was set, so a
+/// development endpoint cannot ride along into one.
+macro_rules! dev_seed {
+    ($name:literal) => {{
+        #[cfg(debug_assertions)]
+        {
+            option_env!($name).unwrap_or("").to_owned()
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            String::new()
+        }
+    }};
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            server_url: dev_seed!("GOOSE_DEV_SERVER_URL"),
+            secret_key: dev_seed!("GOOSE_DEV_SECRET_KEY"),
+            fingerprint: String::new(),
+            working_dir: dev_seed!("GOOSE_DEV_WORKING_DIR"),
+            code_server_url: dev_seed!("GOOSE_DEV_CODE_URL"),
+            code_password: dev_seed!("GOOSE_DEV_CODE_PASSWORD"),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -96,6 +138,13 @@ pub(crate) struct ChatState {
     pub cwd: String,
     pub title: String,
     pub items: Vec<ChatItem>,
+    /// Where a long pause happened: `(index of the item after the pause,
+    /// unix seconds)`. Kept beside `items` rather than as an item of its own
+    /// because `CodeChatState::part_index` holds indices into that vector and
+    /// inserting into it would silently misroute streamed part updates.
+    pub marks: Vec<(usize, i64)>,
+    /// When the last item was appended, for deciding the above.
+    pub last_at: i64,
     pub running: bool,
     pub loading: bool,
 }
@@ -121,16 +170,28 @@ pub(crate) struct AppCtx {
     /// turn blocks on it.
     pub permission: Signal<Vec<PermissionRequest>>,
     pub usage: Signal<Option<Usage>>,
+    /// Session config the agent offers — provider, model, mode, thinking
+    /// effort — with the model list already in it. Arrives with session/new
+    /// and `session/load`, and is refreshed by `config_option_update`.
+    pub config_options: Signal<Vec<ConfigOption>>,
     pub toast: Signal<Option<String>>,
 
     // ---- Code tab (per-chat OpenCode containers on the brain; src/code.rs) ----
     pub tab: Signal<Tab>,
+    /// The navigation drawer. It replaced a bottom tab bar, which cost 100px
+    /// of every screen to show two destinations.
+    pub drawer_open: Signal<bool>,
     pub code_screen: Signal<crate::code::CodeScreen>,
     pub code_client: Signal<Option<opencode_client::CodeClient>>,
     pub code_conn: Signal<ConnState>,
     pub code_chats: Signal<Vec<opencode_client::ChatMeta>>,
     pub code_chats_loading: Signal<bool>,
     pub code_repos: Signal<Vec<opencode_client::RepoEntry>>,
+    /// The chat servers' model catalogue — names, context windows and
+    /// thinking-effort tiers. Fetched once, on the first open of the session
+    /// settings sheet; nothing else needs it.
+    pub code_models: Signal<Vec<opencode_client::ModelInfo>>,
+    pub code_models_loading: Signal<bool>,
     pub code_chat: Signal<crate::code::CodeChatState>,
     /// Pending permission asks from code chats, tagged by chat id. A separate
     /// queue from `permission` by construction: goose and `OpenCode` ids can
@@ -142,6 +203,25 @@ pub(crate) struct AppCtx {
     /// Bumped whenever a different code chat is opened; stale SSE pumps and
     /// poll loops observe the change and exit.
     pub code_epoch: Signal<u64>,
+    /// The review screen's state for the open chat. Deliberately not a field
+    /// on `CodeChatState`: the chat screen clones its whole state on every
+    /// keystroke, and parsed whole-file patches are the largest thing this
+    /// tab holds.
+    pub code_diff: Signal<crate::code::DiffState>,
+    /// Review screen: soft-wrap long code lines (the default) or scroll them
+    /// horizontally. One switch for the whole screen rather than one per
+    /// file, so flipping it does not leave a handful of independent scroll
+    /// offsets to chase. Session-scoped on purpose — it is an escape hatch
+    /// for a particular diff, not a setting.
+    pub code_diff_wrap: Signal<bool>,
+    /// What is typed in the code composer but not yet sent.
+    ///
+    /// Not component-local, because the review screen is a screen: opening it
+    /// unmounts `CodeChatView` and a `use_signal` draft dies with the scope.
+    /// The one workflow the review screen exists for — type a correction, go
+    /// check what the agent actually changed, come back and send — was the
+    /// one that silently lost what you had written.
+    pub code_draft: Signal<String>,
 }
 
 pub(crate) fn use_app_ctx_provider() -> AppCtx {
@@ -162,18 +242,25 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         running_sessions: use_signal(HashSet::new),
         permission: use_signal(Vec::new),
         usage: use_signal(|| None),
+        config_options: use_signal(Vec::new),
         toast: use_signal(|| None),
         tab: use_signal(|| Tab::Home),
+        drawer_open: use_signal(|| false),
         code_screen: use_signal(|| crate::code::CodeScreen::List),
         code_client: use_signal(|| None),
         code_conn: use_signal(|| ConnState::Disconnected),
         code_chats: use_signal(Vec::new),
         code_chats_loading: use_signal(|| false),
         code_repos: use_signal(Vec::new),
+        code_models: use_signal(Vec::new),
+        code_models_loading: use_signal(|| false),
         code_chat: use_signal(crate::code::CodeChatState::default),
         code_permissions: use_signal(Vec::new),
         code_cache,
         code_epoch: use_signal(|| 0),
+        code_diff: use_signal(crate::code::DiffState::default),
+        code_diff_wrap: use_signal(|| true),
+        code_draft: use_signal(String::new),
     };
     use_context_provider(|| ctx);
     ctx
@@ -354,8 +441,14 @@ async fn reload_chat(ctx: &AppCtx, session_id: String, cwd: String) {
     let result = client.session_load(&session_id, &cwd).await;
     if chat.peek().session_id.as_deref() == Some(session_id.as_str()) {
         chat.write().loading = false;
-        if let Err(e) = result {
-            show_toast(ctx, format!("Failed to reload session: {e}"));
+        match result {
+            Ok(raw) => {
+                let opts = goose_acp_client::config_options_from(&raw);
+                if !opts.is_empty() {
+                    ctx.config_options.clone().set(opts);
+                }
+            }
+            Err(e) => show_toast(ctx, format!("Failed to reload session: {e}")),
         }
     }
 }
@@ -376,7 +469,14 @@ fn apply_update(ctx: &AppCtx, session_id: &str, update: SessionUpdate) {
         }
         SessionUpdate::ToolCall(call) if is_current => {
             let mut c = chat.write();
-            c.items.push(ChatItem::Tool {
+            let ChatState {
+                items,
+                marks,
+                last_at,
+                ..
+            } = &mut *c;
+            mark_gap(items.len(), marks, last_at);
+            items.push(ChatItem::Tool {
                 id: call.tool_call_id.clone(),
                 title: call
                     .title
@@ -390,6 +490,14 @@ fn apply_update(ctx: &AppCtx, session_id: &str, update: SessionUpdate) {
         }
         SessionUpdate::ToolCallUpdate(update) if is_current => {
             apply_tool_update(&mut chat, &update);
+        }
+        SessionUpdate::ConfigOptionUpdate(raw) => {
+            // The agent pushes this after every change, including ones made
+            // from another client, so the picker never shows a stale model.
+            let opts = goose_acp_client::config_options_from(&raw);
+            if !opts.is_empty() {
+                ctx.config_options.clone().set(opts);
+            }
         }
         SessionUpdate::SessionInfoUpdate(info) => {
             if let Some(title) = info.title {
@@ -451,7 +559,14 @@ fn push_chunk(chat: &mut Signal<ChatState>, chunk: MessageChunk, kind: ChunkKind
         _ => {}
     }
 
-    c.items.push(match kind {
+    let ChatState {
+        items,
+        marks,
+        last_at,
+        ..
+    } = &mut *c;
+    mark_gap(items.len(), marks, last_at);
+    items.push(match kind {
         ChunkKind::User => ChatItem::User { text },
         ChunkKind::Assistant => ChatItem::Assistant { message_id, text },
         ChunkKind::Thought => ChatItem::Thought { message_id, text },
@@ -534,6 +649,8 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
     let running = ctx.running_sessions.peek().contains(&info.session_id);
 
     chat.set(ChatState {
+        marks: Vec::new(),
+        last_at: 0,
         session_id: Some(info.session_id.clone()),
         cwd: cwd.clone(),
         title: info.display_title(),
@@ -558,8 +675,14 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
         let mut chat = ctx.chat;
         if chat.peek().session_id.as_deref() == Some(info.session_id.as_str()) {
             chat.write().loading = false;
-            if let Err(e) = result {
-                show_toast(&ctx, format!("Failed to load session: {e}"));
+            match result {
+                Ok(raw) => {
+                    let opts = goose_acp_client::config_options_from(&raw);
+                    if !opts.is_empty() {
+                        ctx.config_options.clone().set(opts);
+                    }
+                }
+                Err(e) => show_toast(&ctx, format!("Failed to load session: {e}")),
             }
         }
     });
@@ -586,7 +709,10 @@ pub(crate) fn new_session(ctx: &AppCtx) {
                 let mut chat = ctx.chat;
                 let mut screen = ctx.screen;
                 let mut usage = ctx.usage;
+                ctx.config_options.clone().set(resp.config_options);
                 chat.set(ChatState {
+                    marks: Vec::new(),
+                    last_at: 0,
                     session_id: Some(resp.session_id),
                     cwd: working_dir,
                     title: "New chat".to_string(),
@@ -615,7 +741,14 @@ pub(crate) fn send_prompt(ctx: &AppCtx, text: String) -> bool {
     };
     {
         let mut c = chat.write();
-        c.items.push(ChatItem::User { text: text.clone() });
+        let ChatState {
+            items,
+            marks,
+            last_at,
+            ..
+        } = &mut *c;
+        mark_gap(items.len(), marks, last_at);
+        items.push(ChatItem::User { text: text.clone() });
         c.running = true;
     }
     let mut running_sessions = ctx.running_sessions;
@@ -687,13 +820,129 @@ pub(crate) fn answer_permission(ctx: &AppCtx, request_id: &Value, option_id: Opt
         .retain(|req| req.request_id != *request_id);
 }
 
-/// Human-friendly `updatedAt` (RFC3339 → "YYYY-MM-DD HH:MM").
-pub(crate) fn short_timestamp(ts: &str) -> String {
-    let date = ts.get(0..10).unwrap_or(ts);
-    let time = ts.get(11..16).unwrap_or("");
-    if time.is_empty() {
-        date.to_string()
-    } else {
-        format!("{date} {time}")
+/// A pause long enough that the reader wants to know when things resumed.
+/// Ten minutes: shorter and an ordinary think-time would litter the
+/// transcript with rules.
+const GAP_SECS: i64 = 600;
+
+/// Unix seconds now.
+pub(crate) fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs().cast_signed())
+}
+
+/// Record a time mark before the item about to be appended at `items_len`,
+/// if enough time has passed since the last one.
+///
+/// Only live appends are stamped. History arrives from the server in one
+/// burst with no per-message times, so a replayed transcript carries no
+/// marks — which is honest: we do not know when those turns happened.
+pub(crate) fn mark_gap(items_len: usize, marks: &mut Vec<(usize, i64)>, last_at: &mut i64) {
+    let now = now_secs();
+    if *last_at != 0 && now - *last_at >= GAP_SECS {
+        marks.push((items_len, now));
     }
+    *last_at = now;
+}
+
+/// Days since the Unix epoch for a civil date, by Howard Hinnant's
+/// `days_from_civil`. Written out rather than pulling in a date crate: this
+/// and `relative_time` below are the only date arithmetic the app does.
+const fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// Unix seconds for an RFC3339 timestamp, or `None` if it is not one.
+/// Offsets are ignored — every timestamp the servers send is UTC, and an
+/// hour of drift cannot change which side of a "2h" boundary a row lands on
+/// in a way anybody would notice.
+pub(crate) fn rfc3339_to_epoch(ts: &str) -> Option<i64> {
+    let num = |r: std::ops::Range<usize>| ts.get(r)?.parse::<i64>().ok();
+    let (y, m, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (hh, mm) = (num(11..13).unwrap_or(0), num(14..16).unwrap_or(0));
+    let ss = num(17..19).unwrap_or(0);
+    Some(days_from_civil(y, m, d) * 86_400 + hh * 3_600 + mm * 60 + ss)
+}
+
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/// Age of a floating-point Unix timestamp, as the `OpenCode` API reports it.
+/// The fractional part is sub-second and the value is far inside i64, so the
+/// saturating cast cannot lose anything that matters here.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "sub-second precision is irrelevant to a row badge, and the               value is many orders of magnitude inside i64"
+)]
+pub(crate) fn relative_time_secs(epoch: f64) -> String {
+    relative_time(epoch as i64)
+}
+
+/// Age of `epoch` as a list-row badge: "now", "5m", "2h", "3d", then a date.
+/// Recent things get a duration because that is what you are tracking; old
+/// things get a date because "47d" is not a fact anybody holds in their head.
+pub(crate) fn relative_time(epoch: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs().cast_signed());
+    let age = now - epoch;
+    match age {
+        ..60 => "now".to_owned(),
+        60..3_600 => format!("{}m", age / 60),
+        3_600..86_400 => format!("{}h", age / 3_600),
+        86_400..604_800 => format!("{}d", age / 86_400),
+        _ => {
+            // Walk back from the epoch day to a civil date for the label.
+            let mut days = epoch.div_euclid(86_400) + 719_468;
+            let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+            days -= era * 146_097;
+            let doy = days - (365 * (days / 365) + (days / 365) / 4 - (days / 365) / 100);
+            let yoe = (days - doy / 365) / 365;
+            let doy = days - (365 * yoe + yoe / 4 - yoe / 100);
+            let mp = (5 * doy + 2) / 153;
+            let d = doy - (153 * mp + 2) / 5 + 1;
+            let m = if mp < 10 { mp + 3 } else { mp - 9 };
+            MONTHS
+                .get(usize::try_from(m - 1).unwrap_or(0))
+                .map_or_else(|| "earlier".to_owned(), |name| format!("{name} {d}"))
+        }
+    }
+}
+
+/// Set one session config option, whichever one the sheet was pointed at.
+///
+/// Deliberately id-agnostic: goose routes `provider`, `mode`, `model` and
+/// `thinking_effort` and rejects anything else, so the list of what is
+/// settable is the agent's to state and this app's to relay.
+///
+/// The agent applies it to the session immediately and answers with the full
+/// option set, which is also pushed as a `config_option_update`; both paths
+/// land in `ctx.config_options`, so whichever arrives first wins and they
+/// agree.
+pub(crate) fn set_config_option(ctx: &AppCtx, config_id: &str, value: &str) {
+    let Some(client) = ctx.client.peek().clone() else {
+        return;
+    };
+    let Some(session_id) = ctx.chat.peek().session_id.clone() else {
+        return;
+    };
+    let (ctx, config_id, value) = (*ctx, config_id.to_owned(), value.to_owned());
+    spawn_forever(async move {
+        match client
+            .set_config_option(&session_id, &config_id, &value)
+            .await
+        {
+            Ok(opts) if !opts.is_empty() => ctx.config_options.clone().set(opts),
+            Ok(_) => {}
+            Err(e) => show_toast(&ctx, format!("Could not switch: {e}")),
+        }
+    });
 }

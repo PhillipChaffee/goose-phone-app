@@ -14,6 +14,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
+
+use crate::types::ConfigOption;
 use tokio_tungstenite::{connect_async_tls_with_config, MaybeTlsStream, WebSocketStream};
 
 use crate::tls;
@@ -129,6 +131,17 @@ enum Cmd {
 #[derive(Clone, Debug)]
 pub struct AcpClient {
     tx: mpsc::UnboundedSender<Cmd>,
+}
+
+/// Pull a `configOptions` array out of any response that carries one.
+///
+/// `session/new` types it; `session/load` and `session/set_config_option`
+/// come back as raw JSON, and all three carry the same array.
+#[must_use]
+pub fn config_options_from(raw: &Value) -> Vec<ConfigOption> {
+    raw.get("configOptions")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default()
 }
 
 impl AcpClient {
@@ -359,6 +372,42 @@ impl AcpClient {
         self.notify("session/cancel", json!({"sessionId": session_id}));
     }
 
+    /// Change one session config option — `provider`, `model`, `mode` or
+    /// `thinking_effort` — and get the full option set back.
+    ///
+    /// Takes effect on the session immediately; the next `session/prompt`
+    /// uses it. The agent also pushes a `config_option_update` notification,
+    /// so a second client watching the same session stays in step.
+    ///
+    /// # Errors
+    ///
+    /// [`AcpError::Rpc`] if the server rejects the option or its value,
+    /// [`AcpError::Timeout`], or [`AcpError::Closed`] if the connection
+    /// drops.
+    pub async fn set_config_option(
+        &self,
+        session_id: &str,
+        config_id: &str,
+        value: &str,
+    ) -> Result<Vec<ConfigOption>, AcpError> {
+        // `type: "id"` is the discriminator every id-based option kind uses;
+        // `value` is flattened alongside it, not nested under it.
+        let raw = self
+            .request(
+                "session/set_config_option",
+                json!({
+                    "sessionId": session_id,
+                    "configId": config_id,
+                    "type": "id",
+                    "value": value,
+                }),
+            )
+            .await?;
+        Ok(config_options_from(&raw))
+    }
+
+    /// Delete a session on the server.
+    ///
     /// # Errors
     ///
     /// [`AcpError::Rpc`] if the server does not know `session_id`,

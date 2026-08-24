@@ -1,10 +1,12 @@
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 
+use crate::icons::Icon;
 use crate::state::{
-    new_session, open_session, refresh_sessions, short_timestamp, show_toast, use_app_ctx, Screen,
+    new_session, open_session, refresh_sessions, relative_time, rfc3339_to_epoch, show_toast,
+    use_app_ctx,
 };
-use crate::views::ConnBadge;
+use crate::views::{ConfirmDelete, ConnBadge, SwipeDelete};
 
 #[component]
 pub fn SessionsView() -> Element {
@@ -16,34 +18,28 @@ pub fn SessionsView() -> Element {
 
     rsx! {
         header { class: "topbar",
-            h1 { class: "title", "Sessions" }
-            ConnBadge {}
             button {
-                class: "icon-btn",
+                class: "icon-btn menu",
                 onclick: move |_| {
-                    let mut screen = ctx.screen;
-                    screen.set(Screen::Settings);
+                    let mut open = ctx.drawer_open;
+                    open.set(true);
                 },
-                "⚙"
+                Icon { name: "menu" }
             }
-        }
-        main { class: "scroll",
-            div { class: "btn-row list-actions",
+            h1 { class: "title", "Chats" }
+            ConnBadge {}
+            div { class: "topbar-actions",
                 button {
-                    class: "btn primary grow",
-                    onclick: move |_| new_session(&ctx),
-                    "＋ New chat"
-                }
-                button {
-                    class: "btn secondary",
+                    class: "icon-btn",
                     disabled: loading,
                     onclick: move |_| {
                         spawn_forever(async move { refresh_sessions(&ctx, false).await });
                     },
-                    if loading { "…" } else { "↻" }
+                    if loading { "…" } else { Icon { name: "refresh" } }
                 }
             }
-
+        }
+        main { class: "scroll has-fab",
             if sessions.is_empty() && !loading {
                 p { class: "empty", "No sessions yet — start a new chat." }
             }
@@ -53,61 +49,35 @@ pub fn SessionsView() -> Element {
                     li {
                         key: "{info.session_id}",
                         class: "session-item",
-                        div {
-                            class: "session-main",
-                            onclick: move |_| open_session(&ctx, info.clone()),
-                            div { class: "session-title", "{info.display_title()}" }
-                            if let Some(snippet) = info.last_message_snippet() {
-                                div { class: "session-snippet", "{snippet}" }
-                            }
-                            div { class: "session-meta",
-                                span { "{info.session_id}" }
-                                if let Some(count) = info.message_count() {
-                                    span { "· {count} msgs" }
+                        onclick: move |_| open_session(&ctx, info.clone()),
+                        div { class: "session-swipe",
+                            div { class: "session-tile", Icon { name: "message" } }
+                            div {
+                                class: "session-main",
+                                div { class: "session-head",
+                                    div { class: "session-title", "{info.display_title()}" }
+                                    if let Some(age) = info.updated_at.as_deref()
+                                        .and_then(rfc3339_to_epoch)
+                                        .map(relative_time)
+                                    {
+                                        span { class: "session-age", "{age}" }
+                                    }
                                 }
-                                if let Some(ts) = &info.updated_at {
-                                    span { "· {short_timestamp(ts)}" }
+                                div { class: "session-meta",
+                                    if let Some(count) = info.message_count() {
+                                        span { "{count} msgs" }
+                                    }
+                                    span { "{info.session_id}" }
+                                }
+                                if let Some(snippet) = info.last_message_snippet() {
+                                    div { class: "session-quote", "{snippet}" }
                                 }
                             }
                         }
-                        if confirm_delete.read().as_deref() == Some(info.session_id.as_str()) {
-                            div { class: "confirm-row",
-                                span { "Delete?" }
-                                button {
-                                    class: "btn danger small",
-                                    onclick: {
-                                        let session_id = info.session_id.clone();
-                                        move |_| {
-                                            let session_id = session_id.clone();
-                                            confirm_delete.set(None);
-                                            spawn_forever(async move {
-                                                let Some(client) = ctx.client.peek().clone() else { return };
-                                                match client.session_delete(&session_id).await {
-                                                    Ok(()) => {
-                                                        let mut sessions = ctx.sessions;
-                                                        sessions.write().retain(|s| s.session_id != session_id);
-                                                    }
-                                                    Err(e) => show_toast(&ctx, format!("Delete failed: {e}")),
-                                                }
-                                            });
-                                        }
-                                    },
-                                    "Delete"
-                                }
-                                button {
-                                    class: "btn secondary small",
-                                    onclick: move |_| confirm_delete.set(None),
-                                    "Cancel"
-                                }
-                            }
-                        } else {
-                            button {
-                                class: "icon-btn trash",
-                                onclick: {
-                                    let session_id = info.session_id.clone();
-                                    move |_| confirm_delete.set(Some(session_id.clone()))
-                                },
-                                "🗑"
+                        SwipeDelete {
+                            on_delete: {
+                                let session_id = info.session_id.clone();
+                                move |()| confirm_delete.set(Some(session_id.clone()))
                             }
                         }
                     }
@@ -125,6 +95,36 @@ pub fn SessionsView() -> Element {
                         "Load more"
                     }
                 }
+            }
+        }
+
+        button {
+            class: "fab",
+            onclick: move |_| new_session(&ctx),
+            Icon { name: "plus" }
+            "New chat"
+        }
+
+        if let Some(session_id) = confirm_delete() {
+            ConfirmDelete {
+                title: "Delete this chat?",
+                body: "The whole conversation goes from the goose server. \
+                       This cannot be undone.",
+                on_cancel: move |()| confirm_delete.set(None),
+                on_confirm: move |()| {
+                    let session_id = session_id.clone();
+                    confirm_delete.set(None);
+                    spawn_forever(async move {
+                        let Some(client) = ctx.client.peek().clone() else { return };
+                        match client.session_delete(&session_id).await {
+                            Ok(()) => {
+                                let mut sessions = ctx.sessions;
+                                sessions.write().retain(|s| s.session_id != session_id);
+                            }
+                            Err(e) => show_toast(&ctx, format!("Delete failed: {e}")),
+                        }
+                    });
+                },
             }
         }
     }

@@ -8,8 +8,13 @@
 
 mod app;
 mod code;
+mod diff;
+#[cfg(debug_assertions)]
+mod domdump;
+mod icons;
 mod markdown;
 mod state;
+mod viewport;
 mod views;
 
 fn main() {

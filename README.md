@@ -1,7 +1,7 @@
 # Goose Mobile
 
 [![CI](https://github.com/PhillipChaffee/goose-phone-app/actions/workflows/ci.yml/badge.svg)](https://github.com/PhillipChaffee/goose-phone-app/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/PhillipChaffee/goose-phone-app/branch/main/graph/badge.svg)](https://codecov.io/gh/PhillipChaffee/goose-phone-app)
+[![Coverage Status](https://coveralls.io/repos/github/PhillipChaffee/goose-phone-app/badge.svg?branch=main)](https://coveralls.io/github/PhillipChaffee/goose-phone-app?branch=main)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **Talk to your own [goose](https://github.com/aaif-goose/goose) AI agent from your phone.**
@@ -17,6 +17,11 @@ for **iOS**, **Android**, and desktop.
   <img src="docs/images/permission.png" alt="Tool permission prompt" width="32%">
   <img src="docs/images/sessions.png" alt="Session list" width="32%">
 </p>
+
+<sub>Real captures from the running app on an iPhone 17 Pro simulator —
+`scripts/shoot-simulator.sh <name>`. Every screen, in both themes, is in
+[`docs/style-gallery.html`](docs/style-gallery.html), which is generated from
+the app's own DOM rather than written by hand.</sub>
 
 ## Features
 
@@ -129,6 +134,7 @@ Tap **Test connection**, then **Save & Connect**.
 
 <p align="center">
   <img src="docs/images/settings.png" alt="Settings screen" width="45%">
+  <img src="docs/images/code-chat.png" alt="A code agent working, in light mode" width="45%">
 </p>
 
 ## Connection options
@@ -159,7 +165,18 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace           # unit + integration tests
 cargo llvm-cov -p goose-acp-client --summary-only   # coverage
 dx serve --desktop               # run the app
+node docs/audit.js               # UI geometry + contrast, every state, both themes
+scripts/capture-gallery.py       # regenerate the gallery from the running app
+scripts/shoot-simulator.sh chat  # regenerate a README image from the simulator
 ```
+
+`docs/audit.js` rebuilds every captured state as a standalone 402×874 document
+and checks each for overflow, clipped text, square-cornered surfaces,
+undersized tap targets, radius-nesting mistakes and text below the WCAG AA
+contrast threshold. It exits non-zero on a finding. The states it reads are
+captured from the running app, so it cannot drift from what ships. The rules
+it enforces, and why they are the rules, are in
+[`docs/design.md`](docs/design.md).
 
 ```
 ├── src/                     # Dioxus app
@@ -168,6 +185,8 @@ dx serve --desktop               # run the app
 ├── crates/goose-acp-client/ # ACP protocol library (reusable, UI-independent)
 ├── crates/mock-goose-server/# fake goose server for testing
 ├── scripts/check-server.sh  # verify a server is app-ready
+├── docs/design.md           # the design rules, and why they are the rules
+├── docs/style-gallery.html  # every screen state, against the real stylesheet
 └── docs/iphone-setup.md     # iPhone deployment walkthrough
 ```
 

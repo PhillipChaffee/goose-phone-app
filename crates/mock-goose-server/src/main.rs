@@ -50,10 +50,37 @@ struct SessionData {
     snippet: String,
 }
 
-#[derive(Default)]
 struct State {
     sessions: HashMap<String, SessionData>,
     next_session: u64,
+    /// Whatever the client last selected on each option, so a switch actually
+    /// sticks and a reload shows it.
+    config: SessionConfig,
+}
+
+/// The four options goose routes in `session/set_config_option`. Anything
+/// outside them is an `invalid_params` error there and here.
+#[derive(Clone)]
+struct SessionConfig {
+    provider: String,
+    mode: String,
+    model: String,
+    thinking_effort: String,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            next_session: 0,
+            config: SessionConfig {
+                provider: "anthropic".to_string(),
+                mode: "auto".to_string(),
+                model: "claude-sonnet-5".to_string(),
+                thinking_effort: "off".to_string(),
+            },
+        }
+    }
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -383,7 +410,8 @@ fn handle_request(
                 );
                 sid
             };
-            Ok(json!({"sessionId": sid, "modes": null, "configOptions": []}))
+            let config = state.lock().unwrap().config.clone();
+            Ok(json!({"sessionId": sid, "modes": null, "configOptions": config_options(&config)}))
         }
         "session/load" => {
             let sid = params
@@ -396,10 +424,47 @@ fn handle_request(
                     for update in &data.conversation {
                         session_update(out, sid, update);
                     }
-                    Ok(json!({"modes": null, "configOptions": []}))
+                    let config = state.lock().unwrap().config.clone();
+                    Ok(json!({"modes": null, "configOptions": config_options(&config)}))
                 }
                 None => Err((-32002, format!("session not found: {sid}"))),
             }
+        }
+        "session/set_config_option" => {
+            let sid = params
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let config_id = params.get("configId").and_then(Value::as_str).unwrap_or("");
+            let value = params.get("value").and_then(Value::as_str).unwrap_or("");
+            let config = {
+                let mut s = state.lock().unwrap();
+                match config_id {
+                    "provider" => s.config.provider = value.to_string(),
+                    "mode" => s.config.mode = value.to_string(),
+                    "model" => {
+                        s.config.model = value.to_string();
+                        // Effort is a property of the model: switching to one
+                        // that cannot reason drops the session back to `off`,
+                        // exactly as goose's response builder does.
+                        if !is_reasoning_model(value) {
+                            s.config.thinking_effort = "off".to_string();
+                        }
+                    }
+                    "thinking_effort" => s.config.thinking_effort = value.to_string(),
+                    other => return Err((-32602, format!("Unsupported config option: {other}"))),
+                }
+                s.config.clone()
+            };
+            let opts = config_options(&config);
+            // The real agent pushes this after every change so a second
+            // client watching the same session stays in step.
+            session_update(
+                out,
+                sid,
+                &json!({"sessionUpdate": "config_option_update", "configOptions": opts}),
+            );
+            Ok(json!({"configOptions": opts}))
         }
         "session/list" => Ok(json!({"sessions": list_sessions(state), "nextCursor": null})),
         "session/delete" => {
@@ -427,6 +492,84 @@ struct Listed {
 
 /// The `session/list` payload: every session that has messages, newest
 /// session id first.
+/// Whether the model takes an extended-thinking effort at all.
+///
+/// The distinction is the point: goose offers the five effort tiers only for
+/// a reasoning model and collapses to a lone `off` otherwise, which is what
+/// makes the app's fact-row path reachable without a real provider.
+fn is_reasoning_model(model: &str) -> bool {
+    model != "qwen3-coder-480b"
+}
+
+/// The `configOptions` array a real agent returns, in the shape ACP schema
+/// 1.5 defines: a flattened kind tagged by `type`, an optional `description`,
+/// and select options keyed on `value`.
+///
+/// All four options goose builds, in its order — `session/set_config_option`
+/// routes exactly these ids, so a fifth here would be a control the real
+/// agent rejects.
+fn config_options(config: &SessionConfig) -> Value {
+    let efforts: Value = if is_reasoning_model(&config.model) {
+        json!([
+            {"value": "off", "name": "off"},
+            {"value": "low", "name": "low"},
+            {"value": "medium", "name": "medium"},
+            {"value": "high", "name": "high"},
+            {"value": "max", "name": "max"},
+        ])
+    } else {
+        json!([{"value": "off", "name": "off"}])
+    };
+    json!([
+        {
+            "configId": "provider",
+            "name": "Provider",
+            "type": "select",
+            "currentValue": config.provider,
+            "options": [
+                {"value": "anthropic", "name": "Anthropic"},
+                {"value": "openai", "name": "OpenAI"},
+            ]
+        },
+        {
+            "configId": "mode",
+            "name": "Mode",
+            "category": "mode",
+            "type": "select",
+            "currentValue": config.mode,
+            "options": [
+                {"value": "auto", "name": "Auto", "description": "Run tools without asking."},
+                {"value": "approve", "name": "Manual approval",
+                 "description": "Ask before every tool call."},
+                {"value": "chat", "name": "Chat only", "description": "No tools at all."},
+            ]
+        },
+        {
+            "configId": "model",
+            "name": "Model",
+            "category": "model",
+            "type": "select",
+            "currentValue": config.model,
+            "options": [
+                {"value": "claude-opus-5", "name": "Claude Opus 5"},
+                {"value": "claude-sonnet-5", "name": "Claude Sonnet 5"},
+                {"value": "gpt-5.2", "name": "GPT-5.2"},
+                {"value": "qwen3-coder-480b", "name": "Qwen3 Coder 480B"},
+            ]
+        },
+        {
+            "configId": "thinking_effort",
+            "name": "Thinking effort",
+            "category": "thought_level",
+            "type": "select",
+            "description":
+                "Controls reasoning effort for models that support extended thinking.",
+            "currentValue": config.thinking_effort,
+            "options": efforts
+        }
+    ])
+}
+
 fn list_sessions(state: &Shared) -> Vec<Value> {
     let mut listed: Vec<Listed> = {
         let s = state.lock().unwrap();
@@ -717,4 +860,47 @@ fn finish(
     }
     let frame = json!({"jsonrpc":"2.0","id":request_id,"result":{"stopReason":stop_reason}});
     let _ = out.send(Message::Text(frame.to_string().into()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ids(v: &Value) -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["configId"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn effort_values(v: &Value) -> usize {
+        let effort = &v.as_array().unwrap()[3];
+        assert_eq!(effort["configId"], "thinking_effort");
+        effort["options"].as_array().unwrap().len()
+    }
+
+    /// Exactly the ids goose routes — no more, since the real agent answers
+    /// `invalid_params` to anything else, and no fewer, since the app renders
+    /// whatever arrives instead of naming ids of its own.
+    #[test]
+    fn offers_the_four_options_goose_routes() {
+        let config = State::default().config;
+        assert_eq!(
+            ids(&config_options(&config)),
+            ["provider", "mode", "model", "thinking_effort"]
+        );
+    }
+
+    /// The edge case the app's fact row exists for: a model that cannot
+    /// reason leaves exactly one effort to "choose" between.
+    #[test]
+    fn a_non_reasoning_model_collapses_effort_to_one_value() {
+        let mut config = State::default().config;
+        config.model = "qwen3-coder-480b".to_string();
+        assert_eq!(effort_values(&config_options(&config)), 1);
+
+        config.model = "claude-opus-5".to_string();
+        assert_eq!(effort_values(&config_options(&config)), 5);
+    }
 }

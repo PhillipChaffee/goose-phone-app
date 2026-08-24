@@ -26,6 +26,20 @@ justified in that table; one-off exceptions go in the code as
 `#[expect(lint, reason = "...")]` — `expect`, not `allow`, so an exception
 that stops being needed fails the build instead of rotting.
 
+Styling: [`docs/design.md`](docs/design.md) is the design guide — where the
+look comes from and the rules that produce it (floating chrome, tiered
+rounding, borders vs shadows, tap targets). Read it before changing
+`assets/main.css`, which is the whole design system: semantic tokens, light
+and dark, with `data-theme` on the root element overriding the system
+preference.
+
+`docs/style-gallery.html` renders every state in a 402x874 frame against that
+stylesheet: open it in a browser after a CSS change and all of them are
+visible at once, with no build and no device. It is **generated** from the
+running app by `scripts/capture-gallery.py` — never hand-edited — and
+`node docs/audit.js both` plus `node docs/measure-composer.js 360` are the
+checks that read it. See the end of `docs/design.md` for how to re-capture.
+
 The toolchain is pinned in `rust-toolchain.toml` and rustup honours it
 automatically, so a local `cargo clippy` sees exactly the lints CI sees.
 Bumping the channel is a deliberate change: raise it, re-run the gate, and

@@ -133,9 +133,22 @@ async fn score_aftermath(s: &mut Score, client: &CodeClient, chat_id: &str, sess
     );
 
     let diff = client.diff(chat_id, session_id).await;
+    // Field names, not just "it is an array": the review screen keys every
+    // file by its path and re-hunks its patch, so an entry that decodes to an
+    // empty path or an empty patch is a payload change worth failing on.
     s.check(
-        "diff endpoint",
-        diff.as_ref().is_ok_and(serde_json::value::Value::is_array),
+        "diff endpoint names its files",
+        diff.as_ref()
+            .is_ok_and(|files| !files.is_empty() && files.iter().all(|f| !f.file.is_empty())),
+        &format!("{diff:?}"),
+    );
+    s.check(
+        "diff carries a unified patch",
+        diff.as_ref().is_ok_and(|files| {
+            files
+                .iter()
+                .any(|f| f.patch.lines().any(|l| l.starts_with("@@")))
+        }),
         &format!("{diff:?}"),
     );
 }
@@ -191,6 +204,7 @@ async fn main() {
             &chat.id,
             &session.id,
             "push the branch and open a pull request",
+            None,
             None,
         )
         .await

@@ -68,24 +68,17 @@ jobs:
           cargo llvm-cov report --package goose-acp-client --package opencode-client
           --summary-only
 
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@v5
+      # Coveralls authenticates with the GITHUB_TOKEN that Actions provides
+      # automatically: no account to create, no repository secret, and it
+      # registers the repo on first upload. That is why 517f6a2 chose it, and
+      # why a detour through Codecov was a mistake — Codecov needs a token for
+      # uploads onto a protected branch and answers "Repository not found"
+      # until someone signs up, so it reported nothing at all in the meantime.
+      - name: Upload to Coveralls
+        uses: coverallsapp/github-action@v2
         with:
-          files: lcov.info
-          flags: rust
-          # ONE-TIME SETUP: sign in at codecov.io with GitHub (free for public
-          # repos) so this repository exists there, then add its upload token
-          # as the CODECOV_TOKEN secret — without it Codecov answers
-          # "Repository not found" and nothing is reported.
-          #
-          # This replaces Coveralls, which was chosen precisely because it
-          # needed no setup (517f6a2). Codecov's token-free alternative
-          # (use_oidc) does not avoid that setup — the repository still has to
-          # exist there — and Codecov requires a token for uploads landing on
-          # a protected branch, which main is (codecov-action#1806, #1817).
-          token: ${{ secrets.CODECOV_TOKEN }}
-          # A reporting failure must not fail a build whose tests passed.
-          fail_ci_if_error: false
+          file: lcov.info
+          format: lcov
 
   ios:
     name: Build check (iOS target)
