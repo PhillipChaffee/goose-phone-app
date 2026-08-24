@@ -6,29 +6,19 @@ use crate::state::{
     new_session, open_session, refresh_sessions, relative_time, rfc3339_to_epoch, show_toast,
     use_app_ctx,
 };
-use crate::views::{ConfirmDelete, ConnBadge, SwipeDelete};
+use crate::views::chrome::{ListRow, RowAction, TopBar};
+use crate::views::ConfirmDelete;
 
 #[component]
 pub fn SessionsView() -> Element {
     let ctx = use_app_ctx();
     let sessions = (ctx.sessions)();
     let loading = (ctx.sessions_loading)();
-    let has_more = ctx.sessions_cursor.read().is_some();
+    let has_more = ctx.sessions_next.read().is_some();
     let mut confirm_delete = use_signal(|| None::<String>);
 
     rsx! {
-        header { class: "topbar",
-            button {
-                class: "icon-btn menu",
-                onclick: move |_| {
-                    let mut open = ctx.drawer_open;
-                    open.set(true);
-                },
-                Icon { name: "menu" }
-            }
-            h1 { class: "title", "Chats" }
-            ConnBadge {}
-        }
+        TopBar { title: "Chats", conn: true }
         main {
             class: "scroll has-fab",
             // Named, so the pull-to-refresh listener knows this list has
@@ -41,39 +31,29 @@ pub fn SessionsView() -> Element {
 
             ul { class: "session-list",
                 for info in sessions {
-                    li {
+                    ListRow {
                         key: "{info.session_id}",
-                        class: "session-item",
-                        onclick: move |_| open_session(&ctx, info.clone()),
-                        div { class: "session-swipe",
-                            div { class: "session-tile", Icon { name: "message" } }
-                            div {
-                                class: "session-main",
-                                div { class: "session-head",
-                                    div { class: "session-title", "{info.display_title()}" }
-                                    if let Some(age) = info.updated_at.as_deref()
-                                        .and_then(rfc3339_to_epoch)
-                                        .map(relative_time)
-                                    {
-                                        span { class: "session-age", "{age}" }
-                                    }
-                                }
-                                div { class: "session-meta",
-                                    if let Some(count) = info.message_count() {
-                                        span { "{count} msgs" }
-                                    }
-                                    span { "{info.session_id}" }
-                                }
-                                if let Some(snippet) = info.last_message_snippet() {
-                                    div { class: "session-quote", "{snippet}" }
-                                }
+                        icon: "message",
+                        title: info.display_title(),
+                        trailing: info.updated_at.as_deref()
+                            .and_then(rfc3339_to_epoch)
+                            .map(relative_time),
+                        actions: vec![RowAction::delete(EventHandler::new({
+                            let session_id = info.session_id.clone();
+                            move |()| confirm_delete.set(Some(session_id.clone()))
+                        }))],
+                        on_open: EventHandler::new({
+                            let info = info.clone();
+                            move |()| open_session(&ctx, info.clone())
+                        }),
+                        div { class: "session-meta",
+                            if let Some(count) = info.message_count() {
+                                span { "{count} msgs" }
                             }
+                            span { "{info.session_id}" }
                         }
-                        SwipeDelete {
-                            on_delete: {
-                                let session_id = info.session_id.clone();
-                                move |()| confirm_delete.set(Some(session_id.clone()))
-                            }
+                        if let Some(snippet) = info.last_message_snippet() {
+                            div { class: "session-quote", "{snippet}" }
                         }
                     }
                 }

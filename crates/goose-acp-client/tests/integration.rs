@@ -19,7 +19,7 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use goose_acp_client::{
     probe, AcpClient, AcpError, AcpEvent, ConnectConfig, Feature, ProbeOutcome, SessionKind,
-    SessionUpdate,
+    SessionQuery, SessionUpdate,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -453,7 +453,7 @@ async fn session_new_and_list_round_trip() {
     assert_eq!(session.session_id, "20260821_1");
 
     let page = client
-        .session_list(&[SessionKind::User], None)
+        .session_list(&SessionQuery::new(&[SessionKind::User], None))
         .await
         .unwrap();
     assert_eq!(page.sessions.len(), 1);
@@ -465,7 +465,7 @@ async fn session_new_and_list_round_trip() {
     // The kind filter reaches the wire: the stub's one session is a user
     // session, so asking for scheduled ones only comes back empty.
     let scheduled = client
-        .session_list(&[SessionKind::Scheduled], None)
+        .session_list(&SessionQuery::new(&[SessionKind::Scheduled], None))
         .await
         .unwrap();
     assert!(scheduled.sessions.is_empty());

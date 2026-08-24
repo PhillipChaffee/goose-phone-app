@@ -15,6 +15,38 @@ pub(crate) struct SessionData {
     pub(crate) conversation: Vec<Value>,
     pub(crate) message_count: u64,
     pub(crate) snippet: String,
+    /// What produced this session — the thing `_meta.types` filters on.
+    pub(crate) kind: Kind,
+}
+
+/// The three session kinds goose's `session/list` will filter by.
+///
+/// Spelled out here rather than borrowed from `goose-acp-client` on purpose:
+/// the mock is the *other side* of the wire, and a shared enum could not
+/// disagree with the client about a wire string. The wire tests are what
+/// prove the two agree.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Kind {
+    #[default]
+    User,
+    Scheduled,
+    Acp,
+}
+
+impl Kind {
+    pub(crate) const ALL: [Self; 3] = [Self::User, Self::Scheduled, Self::Acp];
+
+    pub(crate) const fn as_wire(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Scheduled => "scheduled",
+            Self::Acp => "acp",
+        }
+    }
+
+    pub(crate) fn from_wire(wire: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_wire() == wire)
+    }
 }
 
 /// Which set of canned data the mock serves.
@@ -128,9 +160,40 @@ pub(crate) fn seed(state: &Shared) {
         ],
         message_count: 2,
         snippet: "Your project contains Cargo.toml, a src/ directory…".to_string(),
+        kind: Kind::User,
+    };
+
+    // A scheduler run and another agent client's session. The app filtered
+    // `session/list` down to `user` for its whole life, so these two are the
+    // fixtures for the sessions it used to hide — and, at a page size of two,
+    // for the second page as well.
+    let scheduled = SessionData {
+        cwd: "/home/demo".to_string(),
+        title: "Nightly dependency audit".to_string(),
+        conversation: vec![
+            json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Audit dependencies for advisories."}}),
+            json!({"sessionUpdate":"agent_message_chunk","messageId":"sched_m1",
+                   "content":{"type":"text","text":"No new advisories since yesterday."}}),
+        ],
+        message_count: 2,
+        snippet: "No new advisories since yesterday.".to_string(),
+        kind: Kind::Scheduled,
+    };
+    let agent = SessionData {
+        cwd: "/home/demo/tools".to_string(),
+        title: "Sub-agent: summarise the audit".to_string(),
+        conversation: vec![
+            json!({"sessionUpdate":"agent_message_chunk","messageId":"acp_m1",
+                   "content":{"type":"text","text":"Summary written to audit.md."}}),
+        ],
+        message_count: 1,
+        snippet: "Summary written to audit.md.".to_string(),
+        kind: Kind::Acp,
     };
 
     let mut s = state.lock().unwrap();
     s.next_session = 2;
     s.sessions.insert("20260820_1".to_string(), seeded);
+    s.sessions.insert("20260819_1".to_string(), scheduled);
+    s.sessions.insert("20260818_1".to_string(), agent);
 }

@@ -14,7 +14,7 @@ use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use goose_acp_client::{
     AcpClient, AcpError, AcpEvent, ConfigOption, ConnectConfig, MessageChunk, PermissionRequest,
-    SessionInfo, SessionKind, SessionUpdate, ToolCallUpdate,
+    SessionInfo, SessionKind, SessionQuery, SessionUpdate, ToolCallUpdate,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -295,7 +295,11 @@ pub(crate) struct AppCtx {
     pub client: Signal<Option<AcpClient>>,
     pub want_connected: Signal<bool>,
     pub sessions: Signal<Vec<SessionInfo>>,
-    pub sessions_cursor: Signal<Option<String>>,
+    /// The request that would fetch the *next* page of the chats list, or
+    /// `None` when the list is complete. It carries the filters as well as
+    /// the cursor because the server refuses a cursor that arrives beside
+    /// different filters — see [`SessionQuery`].
+    pub sessions_next: Signal<Option<SessionQuery>>,
     pub sessions_loading: Signal<bool>,
     pub chat: Signal<ChatState>,
     /// Sessions with a turn currently in flight (client-side view).
@@ -394,7 +398,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         client: use_signal(|| None),
         want_connected: use_signal(|| false),
         sessions: use_signal(Vec::new),
-        sessions_cursor: use_signal(|| None),
+        sessions_next: use_signal(|| None),
         sessions_loading: use_signal(|| false),
         chat: use_signal(ChatState::default),
         running_sessions: use_signal(HashSet::new),
@@ -780,14 +784,24 @@ pub(crate) async fn refresh_sessions(ctx: &AppCtx, more: bool) {
         return;
     };
     let mut sessions = ctx.sessions;
-    let mut cursor = ctx.sessions_cursor;
+    let mut next = ctx.sessions_next;
     let mut loading = ctx.sessions_loading;
 
-    let page_cursor = if more { cursor.peek().clone() } else { None };
+    // `more` with no next page is not a re-fetch of page one: the list is
+    // already whole, so there is nothing to ask for.
+    let query = if more {
+        let Some(query) = next.peek().clone() else {
+            return;
+        };
+        query
+    } else {
+        SessionQuery::new(&[SessionKind::User], None)
+    };
+
     loading.set(true);
-    match client.session_list(&[SessionKind::User], page_cursor).await {
+    match client.session_list(&query).await {
         Ok(page) => {
-            cursor.set(page.next_cursor.clone());
+            next.set(query.next_page(&page));
             if more {
                 sessions.write().extend(page.sessions);
             } else {
