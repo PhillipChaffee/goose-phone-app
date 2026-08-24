@@ -6,6 +6,7 @@
 //! edit at once.
 
 pub(crate) mod core;
+pub(crate) mod recipes;
 
 use serde_json::Value;
 
@@ -17,7 +18,7 @@ pub(crate) type Handled = Option<Result<Value, (i64, String)>>;
 pub(crate) type Handler = fn(&str, &Value, &Shared, &Out) -> Handled;
 
 /// Alphabetical, so five branches appending here merge deterministically.
-const HANDLERS: [Handler; 1] = [core::handle];
+const HANDLERS: [Handler; 2] = [core::handle, recipes::handle];
 
 /// Run a request past every handler, in order.
 pub(crate) fn dispatch(

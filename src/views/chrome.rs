@@ -144,7 +144,6 @@ pub(crate) struct RowAction {
     pub on_pick: EventHandler<()>,
 }
 
-#[expect(dead_code, reason = "as `RowFace` above")]
 impl RowAction {
     pub(crate) const fn new(face: RowFace, on_pick: EventHandler<()>) -> Self {
         Self { face, on_pick }

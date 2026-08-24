@@ -14,6 +14,8 @@ mod app;
 
 mod code;
 
+mod cron;
+
 mod css;
 
 mod diff;
@@ -26,6 +28,8 @@ mod icons;
 mod markdown;
 
 mod nav;
+
+mod recipes;
 
 mod state;
 

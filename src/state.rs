@@ -37,8 +37,7 @@ pub(crate) enum Screen {
 pub(crate) enum Tab {
     Home,
     Code,
-    // recipes — PR 3 replaces this line
-
+    Recipes,
     // skills — PR 4 replaces this line
 
     // scheduler — PR 5 replaces this line
@@ -182,17 +181,6 @@ pub(crate) type Usage = (u64, u64);
 /// on screen behind it stays on screen, and a failure over a list you can
 /// still read is a toast.
 #[derive(Debug, Clone, PartialEq, Eq)]
-// `cfg_attr(not(test))` because the tests below do use it: an expectation
-// that holds in one cfg and not the other is an error in whichever cfg it
-// does not hold in.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the shell has no list of its own; the first screen to hold \
-                  one arrives in PR 3, and this expectation fails then"
-    )
-)]
 pub(crate) struct Remote<T> {
     pub items: Vec<T>,
     pub loading: bool,
@@ -210,7 +198,6 @@ impl<T> Default for Remote<T> {
     }
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "as `Remote` above"))]
 impl<T> Remote<T> {
     pub(crate) const fn new() -> Self {
         Self {
@@ -266,7 +253,6 @@ impl<T> Remote<T> {
 /// Every one of the five features does this, and each of them getting it
 /// slightly wrong is five screens that disagree about what a missing feature
 /// looks like.
-#[expect(dead_code, reason = "as `Remote` above")]
 pub(crate) async fn load_remote<T: 'static>(
     ctx: &AppCtx,
     mut slot: Signal<Remote<T>>,
@@ -370,9 +356,7 @@ pub(crate) struct AppCtx {
     // A feature's state is a struct it defines and this holds, rather than a
     // handful of loose signals: five branches adding five fields to one
     // struct merge, five branches adding thirty do not.
-
-    // recipes — PR 3 replaces this line
-
+    pub recipes: crate::recipes::Ctx,
     // skills — PR 4 replaces this line
 
     // scheduler — PR 5 replaces this line
@@ -420,6 +404,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_diff: use_signal(crate::code::DiffState::default),
         code_diff_wrap: use_signal(|| true),
         code_draft: use_signal(String::new),
+        recipes: crate::recipes::use_recipes(),
     };
     use_context_provider(|| ctx);
     ctx
