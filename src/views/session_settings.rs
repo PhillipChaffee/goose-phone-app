@@ -225,6 +225,11 @@ fn render_row(row: &SettingRow, mut open_row: Signal<Option<String>>) -> Element
     let name = row.name.clone();
     let value = row.value.clone();
     let note = row.note.clone();
+    // The note renders in BOTH shapes. It used to hang off the fact branch
+    // only, which silently dropped every note attached to something you can
+    // actually change — including the one warning that free models are being
+    // withheld from a private repo, which exists precisely for a row that is
+    // still pickable.
     if row.is_control() {
         let id = row.id.clone();
         return rsx! {
@@ -235,6 +240,9 @@ fn render_row(row: &SettingRow, mut open_row: Signal<Option<String>>) -> Element
                 span { class: "setting-main",
                     span { class: "setting-name", "{name}" }
                     span { class: "setting-value", "{value}" }
+                    if let Some(note) = note {
+                        span { class: "setting-note", "{note}" }
+                    }
                 }
                 Icon { name: "chevron-right" }
             }
@@ -245,9 +253,9 @@ fn render_row(row: &SettingRow, mut open_row: Signal<Option<String>>) -> Element
             span { class: "setting-main",
                 span { class: "setting-name", "{name}" }
                 span { class: "setting-value", "{value}" }
-            }
-            if let Some(note) = note {
-                span { class: "setting-note", "{note}" }
+                if let Some(note) = note {
+                    span { class: "setting-note", "{note}" }
+                }
             }
         }
     }

@@ -325,18 +325,27 @@ async fn attach_chat(ctx: &AppCtx, chat_id: String, epoch: u64) {
             .filter(|id| list.iter().any(|s| &s.id == id))
             .or_else(|| list.first().map(|s| s.id.clone()))
     };
-    // The session record is the server's own answer to what the next turn
-    // will use, and it outranks whatever the chat was created with.
+    // The session record is the server's answer to what the next turn will
+    // use, and it outranks whatever the chat was created with — but only
+    // while the reader has not said otherwise.
+    //
+    // OpenCode writes the model onto the session when a TURN IS SENT, not
+    // when it is picked. This path also runs on an SSE reconnect, so adopting
+    // the server's value unconditionally threw away a pick the user had made
+    // and not yet sent, with no visible cause. A local choice is the more
+    // recent intent and stands until the next turn makes the server agree.
     if let Some(model) = list
         .iter()
         .find(|s| Some(&s.id) == session_id.as_ref())
         .and_then(|s| s.model.as_ref())
     {
         let mut c = chat.write();
-        if let Some(reference) = model.reference() {
-            c.model = Some(reference);
+        if c.model.is_none() {
+            if let Some(reference) = model.reference() {
+                c.model = Some(reference);
+            }
+            c.effort = model.effort().map(str::to_owned);
         }
-        c.effort = model.effort().map(str::to_owned);
     }
     chat.write().session_id.clone_from(&session_id);
     chat.write().waking = false;

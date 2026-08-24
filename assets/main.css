@@ -2082,13 +2082,17 @@ details[open] > summary::before {
   color: var(--text-tertiary);
 }
 
+/* Wraps, so a row that carries a note puts it on its own line instead of
+ * letting it fight the value for the same one — without it, "Medium" was
+ * ellipsised to "M..." to make room for the description beside it. */
 .setting-main {
   display: flex;
   flex: 1;
+  flex-wrap: wrap;
   min-width: 0;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
+  gap: 0 12px;
 }
 
 .setting-name {
