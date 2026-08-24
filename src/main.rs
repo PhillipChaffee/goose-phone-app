@@ -11,6 +11,7 @@ mod code;
 mod diff;
 #[cfg(debug_assertions)]
 mod domdump;
+mod external;
 mod icons;
 mod markdown;
 mod state;

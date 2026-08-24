@@ -228,6 +228,19 @@ not `128.0k/200.0k`, since a tenth of a thousand is a hundred tokens and no
 one is deciding anything on it. `docs/measure-composer.js` fails if the tier
 takes more than 40px, or if a name that has been ellipsised is left holding
 less than twice what the tier holds.
+The composer's chip row holds what is real on that screen: the token budget on
+the goose tab, and one chip per tab that opens the session's settings. The code
+tab's own two — the diff and the branch's pull requests — sit in the action row
+above it, because they are about the work rather than about the message. A
+control that does nothing is worse than no control.
+
+Each of those two carries a number, and the number is the reason the chip is
+worth its width: `+N −M` for the diff, a count for the pull requests. Both are
+withheld until they can be backed. `0` is a claim like any other, and a chip
+that printed one before the fetch landed would be stating something it had not
+been told. The pull-request count is also *scoped* — it counts what this chat's
+branch has open, never the repo's other pull requests — because a chip reading
+"4" that included someone else's work would be worse than no chip at all.
 
 Everything adjustable lives behind that one chip rather than getting a chip of
 its own — four settings would be four chips and a composer that is mostly

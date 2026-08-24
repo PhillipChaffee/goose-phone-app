@@ -1,23 +1,25 @@
 //! Code tab views: the chat list (with lifecycle status), the new-session
-//! form, the chat screen (cached-instant open, live streaming, PR), the
-//! review screen, and the permission modal for code chats. Transcript items
-//! render through the same `chat::render_item` the Home tab uses.
+//! form, the chat screen (cached-instant open, live streaming), the review
+//! screen, the pull-request screen, and the permission modal for code chats.
+//! Transcript items render through the same `chat::render_item` the Home tab
+//! uses.
 
 use std::collections::HashMap;
 
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
-use opencode_client::FileStatus;
+use opencode_client::{Checks, FileStatus, PullRequest};
 
 use crate::code::{
-    answer_code_permission, delete_code_chat, ensure_code_agents, ensure_code_models,
-    expand_diff_gap, is_free_model, load_code_diff, mark_all_diff_seen, new_code_chat,
-    open_chat_allows_free_models, open_code_chat, refresh_code_chats, request_pr,
-    reveal_removed_lines, send_code_prompt, set_code_agent, set_code_effort, set_code_model,
-    start_code_poll, status_label, stop_code_turn, toggle_diff_file, toggle_diff_seen, CodeScreen,
-    DiffFile, DiffState,
+    answer_code_permission, checks_label, delete_code_chat, ensure_code_agents, ensure_code_models,
+    expand_diff_gap, is_free_model, load_code_diff, mark_all_diff_seen, merge_block_note,
+    merge_pull, new_code_chat, open_chat_allows_free_models, open_code_chat, open_code_pulls,
+    pull_state_label, refresh_code_chats, reveal_removed_lines, send_code_prompt, set_code_agent,
+    set_code_effort, set_code_model, start_code_poll, status_label, stop_code_turn,
+    toggle_diff_file, toggle_diff_seen, CodeScreen, DiffFile, DiffState,
 };
 use crate::diff::Block;
+use crate::external::open_external;
 use crate::icons::Icon;
 use crate::state::{relative_time_secs, use_app_ctx, AppCtx, ConnState};
 use crate::views::chat::{format_tokens, render_transcript};
@@ -26,7 +28,7 @@ use crate::views::session_settings::{
     SettingRow,
 };
 use crate::views::{
-    ConfirmDelete, MenuItem, OverflowButton, OverflowSheet, ScrollToBottom, SwipeDelete,
+    Confirm, ConfirmDelete, MenuItem, OverflowButton, OverflowSheet, ScrollToBottom, SwipeDelete,
 };
 use opencode_client::{Agent, ModelInfo};
 
@@ -592,6 +594,12 @@ pub fn CodeChatView() -> Element {
         let d = ctx.code_diff.read();
         (!d.files.is_empty()).then(|| d.totals())
     };
+    // Likewise None until GitHub has answered — and `0` is a claim too, so it
+    // is only shown once there is an answer to back it.
+    let pull_count = {
+        let p = ctx.code_pulls.read();
+        p.loaded.then(|| p.pulls.len())
+    };
 
     let mut submit = move || {
         let text = draft.peek().trim().to_string();
@@ -679,13 +687,18 @@ pub fn CodeChatView() -> Element {
                     span { class: "stat del", "−{removed}" }
                 }
             }
+            // Never disabled, unlike the composer beside it: the manager
+            // answers this from GitHub, so it works while the container is
+            // still waking and while a turn is running.
             button {
                 class: "action-chip",
-                title: "Push branch + open a PR",
-                disabled: !can_send,
-                onclick: move |_| request_pr(&ctx),
+                title: "Pull requests from this branch",
+                onclick: move |_| open_code_pulls(&ctx),
                 Icon { name: "pull-request" }
-                "PR"
+                "Pull requests"
+                if let Some(count) = pull_count {
+                    span { class: "stat count", "{count}" }
+                }
             }
         }
 
@@ -1097,6 +1110,199 @@ fn diff_rows(ctx: &AppCtx, state: &DiffState, file: &DiffFile) -> Vec<Element> {
         });
     }
     rows
+}
+
+/// The pull-request screen: what this chat's branch has on GitHub.
+///
+/// **Scoped to the branch, and it says so.** A repo has pull requests that
+/// have nothing to do with this conversation — someone else's, an earlier
+/// chat's, your own from last week — and a screen that listed them would make
+/// the count on the chip a number about the repo rather than about this work.
+/// The subtitle names the branch for the same reason.
+///
+/// Nothing here goes near the chat's container: the manager answers both
+/// routes from GitHub with its own credential, so this screen works on a chat
+/// that is fast asleep and does not wake it by being looked at.
+#[component]
+pub fn CodePullsView() -> Element {
+    let ctx = use_app_ctx();
+    let state = (ctx.code_pulls)();
+    let mut confirm = use_signal(|| None::<u64>);
+
+    let subtitle = {
+        let chat = ctx.code_chat.read();
+        match (chat.repo.as_str(), chat.branch.as_str()) {
+            ("", "") => chat.title.clone(),
+            (repo, "") => repo.to_owned(),
+            ("", branch) => branch.to_owned(),
+            (repo, branch) => format!("{repo} · {branch}"),
+        }
+    };
+    let show_empty = !state.loading && state.pulls.is_empty() && state.error.is_none();
+    let confirming = confirm().and_then(|number| {
+        state
+            .pulls
+            .iter()
+            .find(|pull| pull.number == number)
+            .cloned()
+    });
+    let rows = state
+        .pulls
+        .iter()
+        .map(|pull| render_pull(&ctx, pull, state.merging, confirm));
+
+    rsx! {
+        header { class: "topbar",
+            button {
+                class: "icon-btn back",
+                onclick: move |_| {
+                    let mut screen = ctx.code_screen;
+                    screen.set(CodeScreen::Chat);
+                },
+                Icon { name: "chevron-left" }
+            }
+            div { class: "titlegroup",
+                h1 { class: "title ellipsis", "Pull requests" }
+                span { class: "subtitle ellipsis", "{subtitle}" }
+            }
+        }
+
+        main {
+            class: "scroll",
+            "data-refresh": "pulls",
+            "data-refreshing": "{state.loading}",
+            if let Some(error) = state.error.as_ref() {
+                p { class: "error-box", "{error}" }
+            }
+            if state.loading && state.pulls.is_empty() {
+                p { class: "empty", "Asking GitHub…" }
+            }
+            if show_empty {
+                p { class: "empty",
+                    "Nothing from this branch yet. Ask the agent to push and open one — "
+                    "the push is permission-gated, so it will ask you first."
+                }
+            }
+            ul { class: "session-list", {rows} }
+        }
+
+        if let Some(pull) = confirming {
+            Confirm {
+                title: "Merge #{pull.number}?",
+                body: merge_confirm_body(&pull),
+                confirm_label: "Merge",
+                danger: false,
+                on_cancel: move |()| confirm.set(None),
+                on_confirm: move |()| {
+                    confirm.set(None);
+                    merge_pull(&ctx, pull.number);
+                },
+            }
+        }
+    }
+}
+
+/// One pull request: what it is, where it stands, and the one thing that can
+/// be done to it from a phone.
+///
+/// The row itself opens GitHub, the way a session row opens its session
+/// (design rule 9) — everything a pull request is for beyond merging it lives
+/// there, and none of it belongs in a 402px column. Merge stops the click so
+/// the two do not fight.
+fn render_pull(
+    ctx: &AppCtx,
+    pull: &PullRequest,
+    merging: Option<u64>,
+    mut confirm: Signal<Option<u64>>,
+) -> Element {
+    let ctx = *ctx;
+    let number = pull.number;
+    let url = pull.url.clone();
+    let (state_dot, state_word) = pull_state_label(pull);
+    let (checks_dot, checks_word) = checks_label(pull.checks);
+    let note = merge_block_note(pull);
+    let offer_merge = pull.is_mergeable();
+    let busy = merging == Some(number);
+
+    rsx! {
+        li {
+            key: "{number}",
+            class: "session-item",
+            title: "Open on GitHub",
+            onclick: move |_| {
+                if crate::external::is_web_url(&url) {
+                    open_external(&url);
+                } else {
+                    crate::state::show_toast(&ctx, "This pull request came without a web address");
+                }
+            },
+            div { class: "session-swipe",
+                div { class: "session-tile", Icon { name: "pull-request" } }
+                div { class: "session-main",
+                    div { class: "session-head",
+                        div { class: "session-title", "{pull.title}" }
+                        span { class: "session-age", "#{number}" }
+                    }
+                    div { class: "session-meta",
+                        span { class: "chip",
+                            span { class: "{state_dot}" }
+                            "{state_word}"
+                        }
+                        span { class: "chip",
+                            span { class: "{checks_dot}" }
+                            "{checks_word}"
+                        }
+                    }
+                    // Why there is no Merge button. Rule 11 says only offer
+                    // controls that do something; a reader still deserves to
+                    // know what is missing and why.
+                    if let Some(note) = note {
+                        p { class: "pull-note", "{note}" }
+                    }
+                    if offer_merge {
+                        div { class: "pull-actions",
+                            button {
+                                class: "btn small primary",
+                                disabled: busy,
+                                onclick: move |e: Event<MouseData>| {
+                                    e.stop_propagation();
+                                    confirm.set(Some(number));
+                                },
+                                if busy { "Merging…" } else { "Merge" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// What the merge confirm says out loud.
+///
+/// The base branch and the check status are both in it because they are the
+/// two facts that decide whether merging *now* is a good idea, and neither is
+/// on the button. Pending checks especially: the merge is offered while they
+/// run — they are checks that have not answered, not checks that said no —
+/// and this is where that gets said.
+fn merge_confirm_body(pull: &PullRequest) -> String {
+    let base = if pull.base.is_empty() {
+        "the base branch"
+    } else {
+        pull.base.as_str()
+    };
+    let checks = match pull.checks {
+        Checks::Passing => "Its checks have passed.",
+        Checks::Pending => "Its checks are still running.",
+        Checks::None => "Nothing runs checks on this repo.",
+        Checks::Unknown => "Its check results could not be read.",
+        Checks::Failing => "Its checks are failing.",
+    };
+    format!(
+        "“{}” merges into {base} on GitHub, straight away. {checks} \
+         It cannot be undone from here.",
+        pull.title
+    )
 }
 
 #[cfg(test)]

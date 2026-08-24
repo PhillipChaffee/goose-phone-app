@@ -359,6 +359,7 @@ pub(crate) fn use_pull_to_refresh() {
                         spawn_forever(async move { crate::code::refresh_code_chats(&ctx).await });
                     }
                     "diff" => crate::code::load_code_diff(&ctx),
+                    "pulls" => crate::code::refresh_pulls(&ctx),
                     _ => {}
                 }
             }
