@@ -42,6 +42,22 @@
 //! `extra` is the evidence. Test fixtures are therefore complete server
 //! responses, not minimal ones.
 
+// One `mod` + `pub use` pair per feature area, each on its own hunk so the
+// branches that add the other four never touch this one's lines. Everything
+// here is re-exported flat by `crate::lib`, so the public path is
+// `goose_acp_client::Thing` whichever file the thing lives in.
+
+// recipes — PR 3 replaces this line
+
+// skills — PR 4 replaces this line
+
+// scheduler — PR 5 replaces this line
+
+mod extensions;
+pub use extensions::*;
+
+// session history — PR 7 replaces this line
+
 use std::collections::HashSet;
 use std::sync::{MutexGuard, PoisonError};
 use std::time::Duration;

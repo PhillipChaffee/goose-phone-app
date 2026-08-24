@@ -9,6 +9,7 @@
 //!   `MOCK_SECRET`=...                                    (default mock-secret)
 //!   `MOCK_FIXTURES`=full|empty|broken                        (default full)
 //!   `MOCK_NO_SCHEDULER`=1        (goose started without --enable-scheduler)
+//!   `MOCK_DROP_ALLOWLIST`=1     (a goose that drops `available_tools` too)
 //!   `MOCK_SILENT`=1                    (go dead after the handshake)
 //!
 //! Prompt keywords: "slow" = long stream (time to hit Stop);

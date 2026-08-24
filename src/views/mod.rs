@@ -10,7 +10,7 @@ pub(crate) mod code;
 
 // scheduler — PR 5 replaces this line
 
-// extensions — PR 6 replaces this line
+pub(crate) mod extensions;
 
 // Session history (PR 7) adds no module: it is `sessions` growing kinds,
 // rename and search.

@@ -64,6 +64,10 @@ pub(crate) struct State {
     /// Which canned data to serve. Read by the startup banner today; the
     /// feature handlers that consume it land with the features themselves.
     pub(crate) fixtures: Fixtures,
+    /// The configured extensions and the secret-store key names. Its shape
+    /// lives with the handler that owns it, so the feature's storage arrives
+    /// and leaves in one file.
+    pub(crate) extensions: crate::features::extensions::Store,
     /// Stand in for a goose started without `--enable-scheduler`, whose
     /// scheduler methods answer `-32601` with the reason in `data`. Same
     /// story: plumbed here so a scheduler branch has somewhere to read it.
@@ -92,6 +96,7 @@ impl Default for State {
                 thinking_effort: "off".to_string(),
             },
             fixtures: Fixtures::Full,
+            extensions: crate::features::extensions::Store::default(),
             no_scheduler: false,
         }
     }
@@ -102,8 +107,13 @@ impl State {
     /// Reading them once at startup — rather than per request — is what makes
     /// them describable in the banner.
     pub(crate) fn from_env() -> Self {
+        let fixtures = Fixtures::from_env();
         Self {
-            fixtures: Fixtures::from_env(),
+            fixtures,
+            // Fixture-driven canned data is built here rather than in
+            // `default`, so a unit test constructing a bare `State` starts
+            // from nothing and says what it wants out loud.
+            extensions: crate::features::extensions::Store::new(fixtures),
             no_scheduler: std::env::var("MOCK_NO_SCHEDULER").is_ok_and(|v| v == "1"),
             ..Self::default()
         }

@@ -153,8 +153,36 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
     // skills — PR 4 replaces this line
 
     // scheduler — PR 5 replaces this line
-
-    // extensions — PR 6 replaces this line
+    Destination {
+        id: "extensions",
+        label: "Extensions",
+        icon: "package",
+        group: Group::Server,
+        // Nothing to name: Extensions owns `extensions.screen` outright, so a
+        // trip through the drawer leaves it exactly where it was.
+        go: |ctx| {
+            let mut tab = ctx.tab;
+            tab.set(Tab::Extensions);
+        },
+        // Root only, the same reading Chats and Code have: from an
+        // extension's detail screen, Extensions is where you came from.
+        at_root: |ctx| {
+            (ctx.tab)() == Tab::Extensions
+                && (ctx.extensions.screen)() == crate::extensions::Screen::List
+        },
+        view: |ctx| match (ctx.extensions.screen)() {
+            crate::extensions::Screen::List => rsx! { views::extensions::ExtensionsView {} },
+            crate::extensions::Screen::Detail => {
+                rsx! { views::extensions::ExtensionDetailView {} }
+            }
+        },
+        // The key mapping is a free function in `crate::extensions`, next to
+        // the enum it reads, so it can be tested without a Dioxus runtime.
+        key: |ctx| {
+            ((ctx.tab)() == Tab::Extensions)
+                .then(|| crate::extensions::dump_key((ctx.extensions.screen)()))
+        },
+    },
     Destination {
         id: "settings",
         label: "Settings",

@@ -11,6 +11,7 @@
     reason = "test harness: an unwrap or a wrong-variant panic is the assertion"
 )]
 
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -18,8 +19,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use goose_acp_client::{
-    probe, AcpClient, AcpError, AcpEvent, ConnectConfig, Feature, ProbeOutcome, SessionKind,
-    SessionUpdate,
+    assert_round_trip, probe, AcpClient, AcpError, AcpEvent, ConfigExtensions, ConnectConfig,
+    Feature, GooseExtension, McpServer, ProbeOutcome, SessionKind, SessionUpdate, StdioMcpServer,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -148,6 +149,33 @@ fn check_secret(req: &Request, resp: Response) -> Result<Response, ErrorResponse
 
 async fn send(tx: &mut WsTx, frame: Value) {
     let _ = tx.send(Message::Text(frame.to_string().into())).await;
+}
+
+/// The canned JSON-RPC text goose leaves in `message`.
+///
+/// This is not decoration. goose builds every error as
+/// `Error::internal_error().data(reason)` / `Error::invalid_params().data(..)`,
+/// so `message` never says anything specific and `data` says everything. A
+/// stub that put the reason in `message` would be testing a shape goose does
+/// not send, and would pass whether or not the client reads `data`.
+const fn canned(code: i64) -> &'static str {
+    match code {
+        -32700 => "Parse error",
+        -32600 => "Invalid Request",
+        -32601 => "Method not found",
+        -32602 => "Invalid params",
+        -32002 => "Session not found",
+        _ => "Internal error",
+    }
+}
+
+/// A JSON-RPC error frame in goose's shape: canned `message`, reason in
+/// `data`.
+fn error_frame(id: Option<&Value>, code: i64, reason: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0", "id": id,
+        "error": {"code": code, "message": canned(code), "data": reason},
+    })
 }
 
 /// Send a `session/update` notification carrying `update`.
@@ -389,6 +417,298 @@ async fn ask_permission(tx: &mut WsTx, rx: &mut WsRx, session_id: &str) -> bool 
         }
     }
     true
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket stub speaking the `_goose/unstable/*` extension methods.
+//
+// Separate from the prompt stub above because it models something different:
+// a tiny config store, held per connection, that behaves the way goose's does
+// — including the way it misbehaves.
+
+/// How the stub treats the tool allowlist it is sent.
+#[derive(Clone, Copy, PartialEq)]
+enum ExtBehavior {
+    /// Stores `available_tools` as sent, like a correct exchange.
+    Faithful,
+    /// Accepts the add, answers OK, and stores the extension *without* its
+    /// allowlist. This is not a made-up failure: it is exactly what goose does
+    /// when the field arrives as camelCase `availableTools` (no
+    /// `deny_unknown_fields`, so the key is dropped in silence), and the
+    /// resulting extension has every tool allowed. Nothing in the add's reply
+    /// distinguishes it from success, which is why the client re-lists.
+    DropsAllowlist,
+    /// Answers every extension method with `-32601`, the way a goose server
+    /// older than the namespace does.
+    NoExtensions,
+}
+
+async fn spawn_ext_stub(behavior: ExtBehavior) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((sock, _)) = listener.accept().await else {
+                continue;
+            };
+            tokio::spawn(handle_ext_ws(sock, behavior));
+        }
+    });
+    addr
+}
+
+/// goose's `name_to_key`: lowercase, whitespace dropped, anything outside
+/// `[A-Za-z0-9_-]` folded to `_`.
+fn name_to_key(name: &str) -> String {
+    name.chars()
+        .filter(|c| !c.is_whitespace())
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// The extension's name, which for an `mcp` extension lives on the server.
+fn ext_name(ext: &Value) -> String {
+    ext.pointer("/server/name")
+        .or_else(|| ext.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+/// The stub's per-connection state.
+///
+/// Secrets are tracked by NAME ONLY — the stub never keeps a credential's
+/// value, for the same reason the app never reads one back.
+#[derive(Default)]
+struct ExtStore {
+    configured: Vec<Value>,
+    secret_keys: HashSet<String>,
+    /// Live session ids. `session/extensions/add` checks membership, so a
+    /// handshake against a session that was never created — or has already
+    /// been deleted — fails the way the real server fails it.
+    sessions: HashSet<String>,
+    next_session: u32,
+}
+
+async fn handle_ext_ws(sock: TcpStream, behavior: ExtBehavior) {
+    let Ok(ws) = tokio_tungstenite::accept_hdr_async(sock, check_secret).await else {
+        return;
+    };
+    let (mut tx, mut rx) = ws.split();
+
+    let mut store = ExtStore::default();
+
+    while let Some(Ok(msg)) = rx.next().await {
+        let Message::Text(text) = msg else { continue };
+        let Ok(frame) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let id = frame.get("id").cloned();
+        let method = frame.get("method").and_then(Value::as_str).unwrap_or("");
+        let params = frame.get("params").cloned().unwrap_or(Value::Null);
+
+        let outcome = ext_request(method, &params, behavior, &mut store);
+        let reply = match outcome {
+            Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+            // The reason goes in `data`, as goose sends it.
+            Err((code, reason)) => error_frame(id.as_ref(), code, &reason),
+        };
+        send(&mut tx, reply).await;
+    }
+}
+
+/// One request against the stub's config store.
+fn ext_request(
+    method: &str,
+    params: &Value,
+    behavior: ExtBehavior,
+    store: &mut ExtStore,
+) -> Result<Value, (i64, String)> {
+    if behavior == ExtBehavior::NoExtensions && method.contains("extensions") {
+        return Err((-32601, "Extensions are not available".to_string()));
+    }
+    match method {
+        "initialize" => Ok(json!({
+            "protocolVersion": 1,
+            "agentInfo": {"name": "stub-goose", "version": "1.46.0"}
+        })),
+
+        "_goose/unstable/extensions/available" => Ok(json!({"extensions": [
+            // Deliberately allowlist-free, as goose's real catalogue is.
+            {"type": "builtin", "name": "developer", "display_name": "Developer",
+             "description": "Shell and file editing", "bundled": true},
+            {"type": "platform", "name": "memory", "display_name": "Memory", "bundled": true},
+        ]})),
+
+        "_goose/unstable/config/extensions/list" => {
+            Ok(json!({"extensions": store.configured, "warnings": []}))
+        }
+
+        "_goose/unstable/config/extensions/add" => {
+            let mut extension = params.get("extension").cloned().unwrap_or(Value::Null);
+            let enabled = params
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if behavior == ExtBehavior::DropsAllowlist {
+                if let Some(obj) = extension.as_object_mut() {
+                    obj.remove("available_tools");
+                }
+            }
+            let name = ext_name(&extension);
+            store
+                .configured
+                .retain(|e| ext_name(&e["extension"]) != name);
+            store.configured.push(json!({
+                "extension": extension,
+                "enabled": enabled,
+                "configKey": name_to_key(&name),
+            }));
+            Ok(json!({}))
+        }
+
+        "_goose/unstable/config/extensions/set-enabled" => {
+            let key = params
+                .get("configKey")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let enabled = params
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            match store
+                .configured
+                .iter_mut()
+                .find(|e| e["configKey"].as_str() == Some(key))
+            {
+                Some(entry) => {
+                    entry["enabled"] = Value::Bool(enabled);
+                    Ok(json!({}))
+                }
+                None => Err((-32602, format!("Extension '{key}' not found"))),
+            }
+        }
+
+        "_goose/unstable/config/upsert" => {
+            let key = params.get("key").and_then(Value::as_str).unwrap_or("");
+            // goose logs "Secret value is not a string; skipping" and
+            // carries on, leaving the extension credential-less. The stub
+            // reproduces the skip so a client that ever sent a bare number
+            // would fail the handshake below rather than pass silently.
+            if params.get("value").and_then(Value::as_str).is_some() {
+                store.secret_keys.insert(key.to_string());
+            }
+            Ok(json!({}))
+        }
+
+        _ => session_request(method, params, store),
+    }
+}
+
+/// The session half of the stub: enough of `session/new` and `session/delete`
+/// for the credential handshake, which needs a session to run in and makes a
+/// throwaway one when no chat is open.
+///
+/// Session ids are predictable (`ext-1`, `ext-2`, …) so a test can ask
+/// afterwards whether a throwaway really was deleted, and
+/// `session/extensions/add` checks the id — an unverified credential must not
+/// be able to masquerade as a verified one just because the session was made
+/// up.
+fn session_request(
+    method: &str,
+    params: &Value,
+    store: &mut ExtStore,
+) -> Result<Value, (i64, String)> {
+    match method {
+        "session/new" => {
+            let cwd = params.get("cwd").and_then(Value::as_str).unwrap_or("");
+            if !cwd.starts_with('/') {
+                return Err((-32602, format!("cwd must be absolute, got `{cwd}`")));
+            }
+            store.next_session += 1;
+            let sid = format!("ext-{}", store.next_session);
+            store.sessions.insert(sid.clone());
+            Ok(json!({"sessionId": sid}))
+        }
+
+        "session/delete" => {
+            let sid = session_id(params);
+            if store.sessions.remove(sid) {
+                Ok(json!({}))
+            } else {
+                Err((-32002, format!("session not found: {sid}")))
+            }
+        }
+
+        "_goose/unstable/session/extensions/add" => {
+            // The handshake. goose launches the MCP server here, and a
+            // stdio child whose declared env key has no stored secret is a
+            // hard startup failure — so that is what a missing secret does.
+            let sid = session_id(params);
+            if !store.sessions.contains(sid) {
+                return Err((-32002, format!("session not found: {sid}")));
+            }
+            let extension = params.get("extension").cloned().unwrap_or(Value::Null);
+            let missing: Vec<String> = extension
+                .get("envKeys")
+                .and_then(Value::as_array)
+                .map(|keys| {
+                    keys.iter()
+                        .filter_map(Value::as_str)
+                        .filter(|k| !store.secret_keys.contains(*k))
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if missing.is_empty() {
+                Ok(json!({}))
+            } else {
+                Err((
+                    -32603,
+                    format!(
+                        "failed to start extension: missing env {}",
+                        missing.join(", ")
+                    ),
+                ))
+            }
+        }
+
+        other => Err((-32601, format!("method not found: {other}"))),
+    }
+}
+
+fn session_id(params: &Value) -> &str {
+    params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+/// The connector the extension tests add: a stdio MCP server with a
+/// credential and a read-biased allowlist, shaped like the manifests in the
+/// brain repo's `config/connectors/`.
+fn mail_extension() -> GooseExtension {
+    GooseExtension::mcp(
+        McpServer::Stdio(StdioMcpServer::new(
+            "mail-imap",
+            "uvx",
+            vec!["mcp-email-server@1.4.2".into(), "stdio".into()],
+        )),
+        vec!["MCP_EMAIL_SERVER_PASSWORD".into()],
+        "IMAP/SMTP mail via a provider app password",
+        vec![
+            "list_mailboxes".into(),
+            "list_emails_metadata".into(),
+            "get_emails_content".into(),
+        ],
+    )
 }
 
 fn config(addr: SocketAddr, secret: &str) -> ConnectConfig {
@@ -652,6 +972,359 @@ async fn losing_the_connection_emits_disconnected_and_fails_pending_requests() {
 
     // The in-flight prompt must not hang once the socket is gone.
     assert!(turn.await.unwrap().is_err(), "pending request should fail");
+}
+
+// ---------------------------------------------------------------------------
+// Extensions: the add -> read-back assertion
+
+#[tokio::test]
+async fn adding_an_extension_round_trips_its_tool_allowlist() {
+    let addr = spawn_ext_stub(ExtBehavior::Faithful).await;
+    let (client, _events, _) = AcpClient::connect(&config(addr, SECRET)).await.unwrap();
+
+    let extension = mail_extension();
+    let entry = client
+        .add_extension_verified(&extension, true)
+        .await
+        .unwrap();
+
+    assert!(entry.enabled);
+    assert_eq!(entry.config_key.as_deref(), Some("mail-imap"));
+    assert_eq!(
+        entry.extension.available_tools(),
+        extension.available_tools(),
+        "the persisted allowlist must be exactly what was sent"
+    );
+
+    // And it is visible to a plain list, with its credential named but never
+    // valued.
+    let listed = client.config_extensions_list().await.unwrap();
+    assert_eq!(listed.extensions.len(), 1);
+    assert_eq!(
+        listed.extensions[0].extension.env_keys(),
+        ["MCP_EMAIL_SERVER_PASSWORD"]
+    );
+
+    client.close();
+}
+
+/// The test the whole read-back exists for. The server accepts the add and
+/// answers OK; only the re-list reveals that the extension is unrestricted.
+/// A client that trusted the OK would have quietly given an MCP server every
+/// tool it publishes.
+#[tokio::test]
+async fn an_extension_that_loses_its_allowlist_is_a_hard_error() {
+    let addr = spawn_ext_stub(ExtBehavior::DropsAllowlist).await;
+    let (client, _events, _) = AcpClient::connect(&config(addr, SECRET)).await.unwrap();
+
+    // The bare add is happy — that is the trap.
+    client
+        .config_extension_add(&mail_extension(), true)
+        .await
+        .unwrap();
+
+    let err = client
+        .add_extension_verified(&mail_extension(), true)
+        .await
+        .unwrap_err();
+    match &err {
+        AcpError::Verification(message) => {
+            assert!(
+                message.contains("every tool is allowed"),
+                "the error must say what is now permitted: {message}"
+            );
+            assert!(
+                message.contains("snake_case"),
+                "and why it happened: {message}"
+            );
+        }
+        other => panic!("expected a Verification error, got {other:?}"),
+    }
+
+    // And it is not running. The add is sent with `enabled: false` whatever
+    // the caller asked for, so the unrestricted-and-live state the quarantine
+    // code used to clean up never exists in the first place.
+    let listed = client.config_extensions_list().await.unwrap();
+    assert_eq!(listed.extensions.len(), 1);
+    assert!(
+        !listed.extensions[0].enabled,
+        "a failed verification must leave the extension switched off"
+    );
+
+    client.close();
+}
+
+/// An empty allowlist reads like "nothing allowed" and means the opposite, so
+/// it never reaches the wire.
+#[tokio::test]
+async fn an_empty_allowlist_is_refused_before_it_is_sent() {
+    let addr = spawn_ext_stub(ExtBehavior::Faithful).await;
+    let (client, _events, _) = AcpClient::connect(&config(addr, SECRET)).await.unwrap();
+
+    let unrestricted = GooseExtension::mcp(
+        McpServer::Stdio(StdioMcpServer::new("anything", "uvx", vec![])),
+        vec![],
+        "no allowlist at all",
+        vec![],
+    );
+    let err = client
+        .add_extension_verified(&unrestricted, true)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, AcpError::Verification(m) if m.contains("empty tool allowlist")),
+        "got: {err:?}"
+    );
+
+    // Nothing was persisted: the refusal happens client-side.
+    assert!(client
+        .config_extensions_list()
+        .await
+        .unwrap()
+        .extensions
+        .is_empty());
+
+    client.close();
+}
+
+/// A credential is proved by handshake — bringing the extension up in a live
+/// session, which is where a missing secret becomes a startup failure — and
+/// never by reading the value back.
+#[tokio::test]
+async fn a_credential_is_verified_by_handshake_not_by_reading_it_back() {
+    let addr = spawn_ext_stub(ExtBehavior::Faithful).await;
+    let (client, _events, _) = AcpClient::connect(&config(addr, SECRET)).await.unwrap();
+    let extension = mail_extension();
+    client
+        .add_extension_verified(&extension, true)
+        .await
+        .unwrap();
+    let session = client.session_new("/home/demo").await.unwrap();
+
+    // Without the secret the extension cannot start, and the ACP error says
+    // so — in `data`, which is the only place goose puts a reason.
+    let err = client
+        .session_extension_add(&session.session_id, &extension)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("MCP_EMAIL_SERVER_PASSWORD"),
+        "got: {err}"
+    );
+
+    client
+        .store_secret("MCP_EMAIL_SERVER_PASSWORD", "an-app-password")
+        .await
+        .unwrap();
+    client
+        .session_extension_add(&session.session_id, &extension)
+        .await
+        .unwrap();
+
+    client.close();
+}
+
+/// The fresh-install case: nothing has opened a chat, so there is no session
+/// to hand shake in. Skipping the handshake would report a mistyped credential
+/// as connected, so one is created for the check and deleted afterwards —
+/// including when the check fails.
+#[tokio::test]
+async fn the_handshake_borrows_a_throwaway_session_when_none_is_open() {
+    let addr = spawn_ext_stub(ExtBehavior::Faithful).await;
+    let (client, _events, _) = AcpClient::connect(&config(addr, SECRET)).await.unwrap();
+    let extension = mail_extension();
+    client
+        .add_extension_verified(&extension, true)
+        .await
+        .unwrap();
+
+    // No session id: the check still runs, and still catches the missing
+    // credential. "session not found" here would mean it never ran at all.
+    let err = client
+        .verify_extension_starts(None, "/home/demo", &extension)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("MCP_EMAIL_SERVER_PASSWORD"),
+        "the throwaway session must reach the real startup check, got: {err}"
+    );
+
+    client
+        .store_secret("MCP_EMAIL_SERVER_PASSWORD", "an-app-password")
+        .await
+        .unwrap();
+    client
+        .verify_extension_starts(None, "/home/demo", &extension)
+        .await
+        .unwrap();
+
+    // Both throwaways are gone — the failing one too, which is the case a
+    // plain `?` would have leaked.
+    for sid in ["ext-1", "ext-2"] {
+        let err = client
+            .session_extension_add(sid, &extension)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("session not found"),
+            "throwaway session {sid} was left behind: {err}"
+        );
+    }
+
+    // An open session is used as-is: no new session is created for it, so the
+    // next throwaway is still ext-3.
+    let session = client.session_new("/home/demo").await.unwrap();
+    assert_eq!(session.session_id, "ext-3");
+    client
+        .verify_extension_starts(Some(&session.session_id), "/home/demo", &extension)
+        .await
+        .unwrap();
+    client
+        .session_extension_add(&session.session_id, &extension)
+        .await
+        .unwrap(); // a session the caller owns must survive the handshake
+
+    client.close();
+}
+
+#[tokio::test]
+async fn extensions_can_be_toggled_and_the_catalogue_listed() {
+    let addr = spawn_ext_stub(ExtBehavior::Faithful).await;
+    let (client, _events, _) = AcpClient::connect(&config(addr, SECRET)).await.unwrap();
+
+    let available = client.extensions_available().await.unwrap();
+    assert_eq!(available.len(), 2);
+    assert_eq!(available[0].name(), "developer");
+    assert_eq!(available[0].transport(), "builtin");
+    assert!(
+        available[0].available_tools().is_empty(),
+        "goose's own catalogue is unrestricted, and the type must not hide it"
+    );
+
+    client
+        .add_extension_verified(&mail_extension(), true)
+        .await
+        .unwrap();
+    client
+        .config_extension_set_enabled("mail-imap", false)
+        .await
+        .unwrap();
+    let listed = client.config_extensions_list().await.unwrap();
+    assert!(!listed.extensions[0].enabled);
+
+    // The reason names the key, which only `data` carries: `message` is the
+    // canned "Invalid params" and would tell the user nothing.
+    let err = client
+        .config_extension_set_enabled("no-such-extension", true)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("Extension 'no-such-extension' not found"),
+        "got: {err}"
+    );
+
+    client.close();
+}
+
+/// Every extension method goes out through `goose_request`, so a server that
+/// has never heard of the namespace produces the same "feature is absent"
+/// error the rest of the app already knows how to render, not a raw `-32601`
+/// the Connect screen would have to spell out for itself.
+#[tokio::test]
+async fn an_extension_method_on_an_older_server_is_unsupported() {
+    let addr = spawn_ext_stub(ExtBehavior::NoExtensions).await;
+    let (client, _events, _) = AcpClient::connect(&config(addr, SECRET)).await.unwrap();
+
+    match client.config_extensions_list().await {
+        Err(AcpError::Unsupported {
+            feature,
+            method,
+            reason,
+        }) => {
+            assert_eq!(feature, Feature::Extensions);
+            assert_eq!(method, "_goose/unstable/config/extensions/list");
+            assert_eq!(reason.as_deref(), Some("Extensions are not available"));
+        }
+        other => panic!("expected Unsupported, got {other:?}"),
+    }
+
+    // Each method is cached separately, and every one of them classifies as
+    // Extensions — including the session-scoped handshake, which lives under
+    // `session/` and would otherwise read as session history.
+    for err in [
+        client.extensions_available().await.unwrap_err(),
+        client
+            .session_extension_add("ext-1", &mail_extension())
+            .await
+            .unwrap_err(),
+        client
+            .config_extension_add(&mail_extension(), false)
+            .await
+            .unwrap_err(),
+        client
+            .config_extension_set_enabled("mail-imap", true)
+            .await
+            .unwrap_err(),
+    ] {
+        assert!(err.is_unsupported(), "got: {err:?}");
+        assert_eq!(
+            err.to_string(),
+            "Extensions: Extensions are not available",
+            "every extension method reports the same feature"
+        );
+    }
+
+    client.close();
+}
+
+/// A whole `config/extensions/list` reply, parsed and written straight back.
+///
+/// The fixture is a complete response with every optional field present, for
+/// the reason `assert_round_trip` documents: an absent field cannot be shown
+/// to have been read. It covers the three shapes one reply mixes — a stdio
+/// `mcp` server with no `type` tag, an http one that carries `type: "http"`
+/// plus the 1.47 OAuth fields this crate does not model, and the tagless
+/// `builtin`/`platform` pair — and proves each survives a write-back.
+///
+/// This complements rather than replaces
+/// `serializes_the_exact_wire_spellings`. `GooseExtension` keeps goose's own
+/// `skip_serializing_if`, so a field this crate spelled camelCase would come
+/// back out of `extra` and the round trip would still match; only the literal
+/// frame assertion catches that. What the round trip catches here is the rest:
+/// a value mangled in transit, an untagged variant matching the wrong arm, and
+/// `configKey`, which is *not* skipped and so shows up as an invented
+/// `config_key: null` the moment its casing is wrong.
+#[test]
+fn the_list_fixture_round_trips() {
+    let raw: Value = serde_json::from_str(include_str!("fixtures/extensions.json")).unwrap();
+    let listed: ConfigExtensions = assert_round_trip(&raw);
+
+    let names: Vec<&str> = listed
+        .extensions
+        .iter()
+        .map(|e| e.extension.name())
+        .collect();
+    assert_eq!(names, ["mail-imap", "todoist", "developer", "memory"]);
+
+    let transports: Vec<&str> = listed
+        .extensions
+        .iter()
+        .map(|e| e.extension.transport())
+        .collect();
+    assert_eq!(transports, ["stdio", "http", "builtin", "platform"]);
+
+    // The OAuth machinery a 1.47 server sends is carried, not modelled.
+    assert_eq!(
+        listed.extensions[1].extension.available_tools(),
+        ["find-tasks"]
+    );
+    assert_eq!(
+        listed.extensions.iter().filter(|e| e.enabled).count(),
+        3,
+        "todoist is the one switched off"
+    );
+    assert_eq!(listed.warnings.len(), 1);
 }
 
 #[tokio::test]

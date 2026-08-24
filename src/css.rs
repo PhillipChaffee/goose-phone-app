@@ -19,8 +19,6 @@ pub(crate) const STYLES: &str = concat!(
     // skills — PR 4 replaces this line
 
     // scheduler — PR 5 replaces this line
-
-    // extensions — PR 6 replaces this line
-
+    include_str!("../assets/features/extensions.css"),
     // session history — PR 7 replaces this line
 );
