@@ -187,6 +187,11 @@ pub(crate) struct AppCtx {
     pub code_chats: Signal<Vec<opencode_client::ChatMeta>>,
     pub code_chats_loading: Signal<bool>,
     pub code_repos: Signal<Vec<opencode_client::RepoEntry>>,
+    /// The chat servers' model catalogue — names, context windows and
+    /// thinking-effort tiers. Fetched once, on the first open of the session
+    /// settings sheet; nothing else needs it.
+    pub code_models: Signal<Vec<opencode_client::ModelInfo>>,
+    pub code_models_loading: Signal<bool>,
     pub code_chat: Signal<crate::code::CodeChatState>,
     /// Pending permission asks from code chats, tagged by chat id. A separate
     /// queue from `permission` by construction: goose and `OpenCode` ids can
@@ -198,6 +203,25 @@ pub(crate) struct AppCtx {
     /// Bumped whenever a different code chat is opened; stale SSE pumps and
     /// poll loops observe the change and exit.
     pub code_epoch: Signal<u64>,
+    /// The review screen's state for the open chat. Deliberately not a field
+    /// on `CodeChatState`: the chat screen clones its whole state on every
+    /// keystroke, and parsed whole-file patches are the largest thing this
+    /// tab holds.
+    pub code_diff: Signal<crate::code::DiffState>,
+    /// Review screen: soft-wrap long code lines (the default) or scroll them
+    /// horizontally. One switch for the whole screen rather than one per
+    /// file, so flipping it does not leave a handful of independent scroll
+    /// offsets to chase. Session-scoped on purpose — it is an escape hatch
+    /// for a particular diff, not a setting.
+    pub code_diff_wrap: Signal<bool>,
+    /// What is typed in the code composer but not yet sent.
+    ///
+    /// Not component-local, because the review screen is a screen: opening it
+    /// unmounts `CodeChatView` and a `use_signal` draft dies with the scope.
+    /// The one workflow the review screen exists for — type a correction, go
+    /// check what the agent actually changed, come back and send — was the
+    /// one that silently lost what you had written.
+    pub code_draft: Signal<String>,
 }
 
 pub(crate) fn use_app_ctx_provider() -> AppCtx {
@@ -228,10 +252,15 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_chats: use_signal(Vec::new),
         code_chats_loading: use_signal(|| false),
         code_repos: use_signal(Vec::new),
+        code_models: use_signal(Vec::new),
+        code_models_loading: use_signal(|| false),
         code_chat: use_signal(crate::code::CodeChatState::default),
         code_permissions: use_signal(Vec::new),
         code_cache,
         code_epoch: use_signal(|| 0),
+        code_diff: use_signal(crate::code::DiffState::default),
+        code_diff_wrap: use_signal(|| true),
+        code_draft: use_signal(String::new),
     };
     use_context_provider(|| ctx);
     ctx
@@ -888,7 +917,11 @@ pub(crate) fn relative_time(epoch: i64) -> String {
     }
 }
 
-/// Set one session config option — the model picker's only job.
+/// Set one session config option, whichever one the sheet was pointed at.
+///
+/// Deliberately id-agnostic: goose routes `provider`, `mode`, `model` and
+/// `thinking_effort` and rejects anything else, so the list of what is
+/// settable is the agent's to state and this app's to relay.
 ///
 /// The agent applies it to the session immediately and answers with the full
 /// option set, which is also pushed as a `config_option_update`; both paths

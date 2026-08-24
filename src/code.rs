@@ -14,17 +14,17 @@
 //!     `once` / `always` / `reject`
 
 use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::time::Duration;
 
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use opencode_client::{
-    ChatMeta, CodeClient, CodeConfig, CodeEvent, CodePermission, MessageWithParts, Part,
+    ChatMeta, CodeClient, CodeConfig, CodeEvent, CodePermission, FileDiff, MessageWithParts, Part,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::diff::{DiffLine, Gap};
 use crate::state::{show_toast, AppCtx, ChatItem, ConnState};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -32,10 +32,22 @@ pub(crate) enum CodeScreen {
     List,
     New,
     Chat,
+    /// Reviewing the session's changes. Its own screen rather than a panel in
+    /// the transcript: the thing being reviewed is a whole working tree, and
+    /// a review has its own navigation, its own chrome and its own state.
+    Diff,
 }
 
 /// Everything the code chat screen renders.
 #[derive(Clone, PartialEq, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "these four are independent facts about the screen, not a state \
+              machine to collapse into an enum: a chat can be waking AND \
+              loading at once, running is orthogonal to both, and picked is \
+              about where the model came from rather than about the chat's \
+              lifecycle at all"
+)]
 pub(crate) struct CodeChatState {
     pub chat_id: Option<String>,
     pub title: String,
@@ -56,7 +68,132 @@ pub(crate) struct CodeChatState {
     pub loading: bool,
     /// Container is booting; the transcript shown is the on-device cache.
     pub waking: bool,
-    pub diff: Option<String>,
+    /// What the next turn will run on, as `provider/model`. Seeded from the
+    /// chat's own record, replaced by the server's session record once the
+    /// container is awake, and by the settings sheet when the user picks.
+    pub model: Option<String>,
+    /// Thinking-effort tier for the next turn (`OpenCode` calls it a
+    /// variant). `None` means the model's own default.
+    pub effort: Option<String>,
+    /// The reader picked `model`/`effort` in the settings sheet, as opposed
+    /// to them being seeded from the chat record.
+    ///
+    /// This cannot be recovered from `Option`: a chat created with a named
+    /// model arrives with `model` already `Some`, so "has a value" and "the
+    /// reader chose it" are different questions. Answering the second with
+    /// the first makes the server's session record permanently unadoptable —
+    /// the sheet then shows the create-time model forever, and the next turn
+    /// writes it back over whatever the reader actually chose.
+    pub picked: bool,
+}
+
+/// The review screen's state for the open chat.
+///
+/// A signal of its own rather than a field on `CodeChatState`, because the
+/// chat screen re-renders on every keystroke in the composer and reads its
+/// state by cloning it. A whole-file patch parsed into lines is by far the
+/// largest thing this tab holds, and the transcript has no use for it.
+#[derive(Clone, PartialEq, Default)]
+pub(crate) struct DiffState {
+    pub files: Vec<DiffFile>,
+    pub loading: bool,
+    pub error: Option<String>,
+    /// Per-file review state, keyed by path.
+    pub view: HashMap<String, FileView>,
+}
+
+/// One file, parsed once at fetch time rather than on every render — the
+/// patch carries the whole file, so this is the expensive part.
+#[derive(Clone, PartialEq)]
+pub(crate) struct DiffFile {
+    pub info: FileDiff,
+    /// Fingerprint of `info.patch`; what "reviewed" is pinned to.
+    pub fingerprint: u64,
+    pub lines: Vec<DiffLine>,
+    pub gaps: Vec<Gap>,
+}
+
+impl From<FileDiff> for DiffFile {
+    fn from(info: FileDiff) -> Self {
+        let lines = crate::diff::parse(&info.patch);
+        Self {
+            fingerprint: crate::diff::fingerprint(&info.patch),
+            gaps: crate::diff::gaps(&lines),
+            lines,
+            info,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Default)]
+pub(crate) struct FileView {
+    /// Card expanded. `None` means "follow `seen`" — marking a file read
+    /// folds it away, which is what stops a long diff making you scroll past
+    /// work you have finished with, while an explicit value keeps the two
+    /// decoupled so a read file can be reopened without unmarking it.
+    pub open: Option<bool>,
+    /// The patch fingerprint that was marked reviewed, if any.
+    pub seen: Option<u64>,
+    /// Gap `start` -> lines revealed out of it.
+    pub expanded: HashMap<usize, usize>,
+    /// A deleted file's removed lines have been asked for.
+    pub show_removed: bool,
+}
+
+impl DiffState {
+    pub(crate) fn is_seen(&self, file: &DiffFile) -> bool {
+        self.view.get(&file.info.file).and_then(|v| v.seen) == Some(file.fingerprint)
+    }
+
+    pub(crate) fn is_open(&self, file: &DiffFile) -> bool {
+        self.view
+            .get(&file.info.file)
+            .and_then(|v| v.open)
+            .unwrap_or_else(|| !self.is_seen(file))
+    }
+
+    pub(crate) fn reviewed(&self) -> usize {
+        self.files.iter().filter(|f| self.is_seen(f)).count()
+    }
+
+    /// (added, removed) across every file in the diff.
+    pub(crate) fn totals(&self) -> (u32, u32) {
+        self.files.iter().fold((0, 0), |(a, d), f| {
+            (
+                a.saturating_add(f.info.additions),
+                d.saturating_add(f.info.deletions),
+            )
+        })
+    }
+
+    /// path -> the fingerprint marked reviewed, for persistence.
+    fn marks(&self) -> HashMap<String, u64> {
+        self.view
+            .iter()
+            .filter_map(|(path, v)| v.seen.map(|hash| (path.clone(), hash)))
+            .collect()
+    }
+}
+
+/// Rebuild per-file review state from marks alone.
+///
+/// Everything in `FileView` except `seen` is positional — an expanded gap is
+/// an index into the patch that was parsed — so a fresh payload has to start
+/// from the marks and nothing else. `seen` survives because it carries the
+/// fingerprint it was taken against and can check itself.
+fn marks_to_view(marks: &HashMap<String, u64>) -> HashMap<String, FileView> {
+    marks
+        .iter()
+        .map(|(path, hash)| {
+            (
+                path.clone(),
+                FileView {
+                    seen: Some(*hash),
+                    ..FileView::default()
+                },
+            )
+        })
+        .collect()
 }
 
 /// On-device transcript cache (issue #2, A11): instant open while the
@@ -73,6 +210,10 @@ pub(crate) struct CachedChat {
     pub title: String,
     pub session_id: Option<String>,
     pub items: Vec<ChatItem>,
+    /// path -> the patch fingerprint that was marked reviewed. Persisted
+    /// because a review is a task you leave and come back to, and the app
+    /// being backgrounded while a container wakes is the normal case here.
+    pub diff_seen: HashMap<String, u64>,
     /// Unix seconds of the last cache write — the LRU eviction key.
     pub updated: u64,
 }
@@ -175,6 +316,86 @@ pub(crate) fn start_code_poll(ctx: &AppCtx) {
     });
 }
 
+// ------------------------------------------------------- session settings
+
+/// Zen's free models train on their input (personal-ai-setup
+/// `docs/privacy.md`, hard rule 1). The manager refuses them when a chat is
+/// *created* against a repo that is not `public_throwaway` — but a per-turn
+/// model rides through its transparent `/chat/<id>/…` proxy with no such
+/// check, so the picker must not offer them either. Same rule the manager
+/// applies, "free" substring net included.
+pub(crate) fn is_free_model(reference: &str) -> bool {
+    let bare = reference
+        .rsplit('/')
+        .next()
+        .unwrap_or(reference)
+        .to_ascii_lowercase();
+    matches!(bare.as_str(), "big-pickle" | "muse-spark-contributor") || bare.contains("free")
+}
+
+/// Whether the open chat's repo is flagged a public throwaway — the one case
+/// where a model that trains on its input is allowed to see the code.
+pub(crate) fn open_chat_allows_free_models(ctx: &AppCtx) -> bool {
+    let repo = ctx.code_chat.peek().repo.clone();
+    ctx.code_repos
+        .peek()
+        .iter()
+        .any(|r| r.name == repo && r.public_throwaway)
+}
+
+/// Fetch the chat server's model catalogue, once, on first need.
+///
+/// Deliberately not part of opening a chat: it is every model of every
+/// provider and nothing outside the settings sheet reads it, so it is paid
+/// for when that sheet is opened and not before.
+pub(crate) fn ensure_code_models(ctx: &AppCtx) {
+    if !ctx.code_models.peek().is_empty() || *ctx.code_models_loading.peek() {
+        return;
+    }
+    let Some(chat_id) = ctx.code_chat.peek().chat_id.clone() else {
+        return;
+    };
+    let Some(client) = ctx.code_client.peek().clone() else {
+        return;
+    };
+    let mut loading = ctx.code_models_loading;
+    loading.set(true);
+    let ctx = *ctx;
+    spawn_forever(async move {
+        match client.models(&chat_id).await {
+            Ok(models) => ctx.code_models.clone().set(models),
+            Err(e) => show_toast(&ctx, format!("Model list unavailable: {e}")),
+        }
+        ctx.code_models_loading.clone().set(false);
+    });
+}
+
+/// Point the open chat's next turn at `reference` (`provider/model`).
+pub(crate) fn set_code_model(ctx: &AppCtx, reference: &str) {
+    let mut chat = ctx.code_chat;
+    let mut c = chat.write();
+    if c.model.as_deref() == Some(reference) {
+        // Still a choice, even when it names what was already there: it means
+        // the reader looked and kept it, so the server must not overrule it.
+        c.picked = true;
+        return;
+    }
+    c.picked = true;
+    c.model = Some(reference.to_owned());
+    // Effort tiers belong to a model, not to a session: one model's `xhigh`
+    // is a 400 on the next. Carrying the old tier across a switch would send
+    // a value the new model never offered.
+    c.effort = None;
+}
+
+/// Set the open chat's thinking-effort tier; `None` is the model's default.
+pub(crate) fn set_code_effort(ctx: &AppCtx, effort: Option<&str>) {
+    let mut chat = ctx.code_chat;
+    let mut c = chat.write();
+    c.picked = true;
+    c.effort = effort.map(str::to_owned);
+}
+
 // ------------------------------------------------------------ open / fold
 
 /// Open a chat: cached transcript instantly (read-only, "waking…" when the
@@ -186,8 +407,24 @@ pub(crate) fn open_code_chat(ctx: &AppCtx, meta: ChatMeta) {
     let new_epoch = *epoch.peek() + 1;
     epoch.set(new_epoch);
 
+    // A draft belongs to the chat it was typed in. It survives the review
+    // screen (that is the point of hoisting it out of the view) but must not
+    // follow you into a different conversation.
+    if ctx.code_chat.peek().chat_id.as_deref() != Some(meta.id.as_str()) {
+        ctx.code_draft.clone().set(String::new());
+    }
+
     let cached = ctx.code_cache.peek().chats.get(&meta.id).cloned();
     let waking = !meta.is_running();
+    // The review starts empty (the diff is fetched on demand) but not
+    // forgetful: the marks come back off the cache.
+    ctx.code_diff.clone().set(DiffState {
+        view: cached
+            .as_ref()
+            .map(|c| marks_to_view(&c.diff_seen))
+            .unwrap_or_default(),
+        ..DiffState::default()
+    });
     chat.set(CodeChatState {
         marks: Vec::new(),
         last_at: 0,
@@ -206,7 +443,9 @@ pub(crate) fn open_code_chat(ctx: &AppCtx, meta: ChatMeta) {
         running: false,
         loading: true,
         waking,
-        diff: None,
+        model: meta.model.clone(),
+        effort: None,
+        picked: false,
     });
     screen.set(CodeScreen::Chat);
     let ctx = *ctx;
@@ -228,13 +467,8 @@ async fn attach_chat(ctx: &AppCtx, chat_id: String, epoch: u64) {
     if *ctx.code_epoch.peek() != epoch {
         return;
     }
-    let session_id = match sessions {
-        Ok(list) => {
-            let cached = chat.peek().session_id.clone();
-            cached
-                .filter(|id| list.iter().any(|s| &s.id == id))
-                .or_else(|| list.first().map(|s| s.id.clone()))
-        }
+    let list = match sessions {
+        Ok(list) => list,
         Err(e) => {
             chat.write().loading = false;
             chat.write().waking = false;
@@ -242,6 +476,34 @@ async fn attach_chat(ctx: &AppCtx, chat_id: String, epoch: u64) {
             return;
         }
     };
+    let session_id = {
+        let cached = chat.peek().session_id.clone();
+        cached
+            .filter(|id| list.iter().any(|s| &s.id == id))
+            .or_else(|| list.first().map(|s| s.id.clone()))
+    };
+    // The session record is the server's answer to what the next turn will
+    // use, and it outranks whatever the chat was created with — but only
+    // while the reader has not said otherwise.
+    //
+    // OpenCode writes the model onto the session when a TURN IS SENT, not
+    // when it is picked. This path also runs on an SSE reconnect, so adopting
+    // the server's value unconditionally threw away a pick the user had made
+    // and not yet sent, with no visible cause. A local choice is the more
+    // recent intent and stands until the next turn makes the server agree.
+    if let Some(model) = list
+        .iter()
+        .find(|s| Some(&s.id) == session_id.as_ref())
+        .and_then(|s| s.model.as_ref())
+    {
+        let mut c = chat.write();
+        if !c.picked {
+            if let Some(reference) = model.reference() {
+                c.model = Some(reference);
+            }
+            c.effort = model.effort().map(str::to_owned);
+        }
+    }
     chat.write().session_id.clone_from(&session_id);
     chat.write().waking = false;
 
@@ -474,6 +736,23 @@ fn fold_part_into(
             } else {
                 full
             };
+            // The prompt goes into the transcript the moment it is sent, so
+            // the bubble does not wait on a round trip. The server then
+            // streams the same message back as a part of its own, and with
+            // nothing matching the two up every code session opened with the
+            // task written out twice. Adopt the optimistic bubble instead:
+            // it is always the last item, and its text is exactly what was
+            // sent.
+            if role == "user" {
+                if let Some(idx) = items.len().checked_sub(1) {
+                    let same =
+                        matches!(items.get(idx), Some(ChatItem::User { text: t }) if *t == text);
+                    if same && !part_index.values().any(|&i| i == idx) {
+                        part_index.insert(part.id.clone(), idx);
+                        return;
+                    }
+                }
+            }
             let item = match (part.kind.as_str(), role) {
                 ("reasoning", _) => ChatItem::Thought {
                     message_id: Some(part.id.clone()),
@@ -585,7 +864,18 @@ pub(crate) fn send_code_prompt(ctx: &AppCtx, text: String) -> bool {
                 }
             },
         };
-        if let Err(e) = client.prompt_async(&chat_id, &sid, &text, None).await {
+        // Model and effort ride on the turn: OpenCode has no "set the
+        // session's model" call, it copies whatever the turn asked for onto
+        // the session record. That is why the sheet says "from your next
+        // message" and means it.
+        let (model, effort) = {
+            let c = ctx.code_chat.peek();
+            (c.model.clone(), c.effort.clone())
+        };
+        if let Err(e) = client
+            .prompt_async(&chat_id, &sid, &text, model.as_deref(), effort.as_deref())
+            .await
+        {
             ctx.code_chat.clone().write().running = false;
             show_toast(&ctx, format!("Prompt failed: {e}"));
         }
@@ -639,7 +929,11 @@ pub(crate) fn answer_code_permission(
     });
 }
 
-/// Fetch and render the session's cumulative diff into the chat state.
+/// Open the review screen and fetch the session's cumulative diff into it.
+///
+/// Navigates first and fetches after: the request wakes a stopped container
+/// and can take the better part of a minute, and a chip that does nothing
+/// visible for that long reads as broken.
 pub(crate) fn load_code_diff(ctx: &AppCtx) {
     let chat = ctx.code_chat.peek();
     let (Some(chat_id), Some(sid)) = (chat.chat_id.clone(), chat.session_id.clone()) else {
@@ -648,60 +942,108 @@ pub(crate) fn load_code_diff(ctx: &AppCtx) {
     };
     drop(chat);
     let Some(client) = ctx.code_client.peek().clone() else {
+        show_toast(ctx, "Code plane not connected — check Settings");
         return;
     };
+    {
+        let mut diff = ctx.code_diff;
+        let mut d = diff.write();
+        d.loading = true;
+        d.error = None;
+    }
+    ctx.code_screen.clone().set(CodeScreen::Diff);
     let ctx = *ctx;
     spawn_forever(async move {
-        match client.diff(&chat_id, &sid).await {
-            Ok(v) => {
-                let rendered = render_diff(&v);
-                ctx.code_chat.clone().write().diff = Some(rendered);
+        let result = client.diff(&chat_id, &sid).await;
+        // The user may have walked back to the list and opened another chat
+        // while the container woke; writing this chat's files into that one
+        // would be a silent lie about what changed.
+        if ctx.code_chat.peek().chat_id.as_deref() != Some(chat_id.as_str()) {
+            return;
+        }
+        let mut diff = ctx.code_diff;
+        let mut d = diff.write();
+        d.loading = false;
+        match result {
+            Ok(files) => {
+                d.view = marks_to_view(&d.marks());
+                d.files = files.into_iter().map(DiffFile::from).collect();
+                d.error = None;
             }
-            Err(e) => show_toast(&ctx, format!("Diff failed: {e}")),
+            Err(e) => d.error = Some(e.to_string()),
         }
     });
 }
 
-/// Render the `FileDiff[]` payload from `GET /session/:id/diff` as readable
-/// text. Lenient on shape: common field names first, pretty JSON as the
-/// fallback so a server change degrades visibly instead of blankly.
-fn render_diff(v: &Value) -> String {
-    let Some(files) = v.as_array() else {
-        return serde_json::to_string_pretty(v).unwrap_or_default();
+/// Fold or unfold one file's card. Independent of whether it is marked
+/// reviewed, and independent of every other file.
+pub(crate) fn toggle_diff_file(ctx: &AppCtx, path: &str) {
+    let mut diff = ctx.code_diff;
+    let open = {
+        let d = diff.peek();
+        d.files
+            .iter()
+            .find(|f| f.info.file == path)
+            .map(|f| d.is_open(f))
     };
-    if files.is_empty() {
-        return "No changes yet.".to_string();
-    }
-    let mut out = String::new();
-    for f in files {
-        let path = f
-            .get("path")
-            .or_else(|| f.get("file"))
-            .or_else(|| f.get("filename"))
-            .and_then(Value::as_str)
-            .unwrap_or("(unknown file)");
-        let adds = f.get("additions").and_then(Value::as_u64);
-        let dels = f.get("deletions").and_then(Value::as_u64);
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        let _ = write!(out, "── {path}");
-        if let (Some(a), Some(d)) = (adds, dels) {
-            let _ = write!(out, "  (+{a} −{d})");
-        }
-        out.push('\n');
-        if let Some(patch) = f
-            .get("patch")
-            .or_else(|| f.get("diff"))
-            .and_then(Value::as_str)
-        {
-            out.push_str(patch);
-            if !patch.ends_with('\n') {
-                out.push('\n');
-            }
+    let Some(open) = open else { return };
+    diff.write().view.entry(path.to_owned()).or_default().open = Some(!open);
+}
+
+/// Mark a file reviewed, or clear the mark. Marking also folds the card,
+/// which is the point: a finished file stops occupying the scroll.
+pub(crate) fn toggle_diff_seen(ctx: &AppCtx, path: &str, fingerprint: u64) {
+    let mut diff = ctx.code_diff;
+    {
+        let mut d = diff.write();
+        let entry = d.view.entry(path.to_owned()).or_default();
+        if entry.seen == Some(fingerprint) {
+            entry.seen = None;
+            entry.open = Some(true);
+        } else {
+            entry.seen = Some(fingerprint);
+            entry.open = Some(false);
         }
     }
-    out
+    write_cache(ctx);
+}
+
+pub(crate) fn mark_all_diff_seen(ctx: &AppCtx) {
+    let mut diff = ctx.code_diff;
+    {
+        let mut d = diff.write();
+        let marks: Vec<(String, u64)> = d
+            .files
+            .iter()
+            .map(|f| (f.info.file.clone(), f.fingerprint))
+            .collect();
+        for (path, fingerprint) in marks {
+            let entry = d.view.entry(path).or_default();
+            entry.seen = Some(fingerprint);
+            entry.open = Some(false);
+        }
+    }
+    write_cache(ctx);
+}
+
+/// Give back part of a collapsed band of unchanged lines.
+pub(crate) fn expand_diff_gap(ctx: &AppCtx, path: &str, key: usize, hidden: usize) {
+    let mut diff = ctx.code_diff;
+    let mut d = diff.write();
+    let entry = d.view.entry(path.to_owned()).or_default();
+    let revealed = entry.expanded.entry(key).or_insert(0);
+    *revealed = crate::diff::expand_to(*revealed, hidden);
+}
+
+/// Show the body of a deleted file, which is otherwise a count rather than
+/// several hundred red rows nobody reads line by line.
+pub(crate) fn reveal_removed_lines(ctx: &AppCtx, path: &str) {
+    let mut diff = ctx.code_diff;
+    diff.write()
+        .view
+        .entry(path.to_owned())
+        .or_default()
+        .show_removed = true;
 }
 
 /// The "Open PR" action is an instruction to the agent — git is its job
@@ -773,6 +1115,7 @@ pub(crate) fn write_cache(ctx: &AppCtx) {
         title: chat.title.clone(),
         session_id: chat.session_id.clone(),
         items,
+        diff_seen: ctx.code_diff.peek().marks(),
         updated: now_secs(),
     };
     drop(chat);
@@ -800,5 +1143,118 @@ pub(crate) fn status_label(meta: &ChatMeta, running_turn: bool) -> (&'static str
         ("running", false) => ("dot on", "idle".to_string()),
         ("stopped" | "absent", _) => ("dot off", "asleep".to_string()),
         (other, _) => ("dot err", other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fold_part_into, ChatItem, GapSink, HashMap};
+    use opencode_client::Part;
+
+    fn text_part(id: &str, message_id: &str, text: &str) -> Part {
+        Part {
+            id: id.to_owned(),
+            message_id: message_id.to_owned(),
+            session_id: "ses_1".to_owned(),
+            kind: "text".to_owned(),
+            text: Some(text.to_owned()),
+            tool: None,
+            call_id: None,
+            state: None,
+        }
+    }
+
+    /// The prompt is shown the instant it is sent, and the server streams the
+    /// same message back a moment later. Both have to end up as one bubble.
+    #[test]
+    fn server_echo_adopts_the_optimistic_prompt() {
+        let mut items = vec![ChatItem::User {
+            text: "refactor the folding".to_owned(),
+        }];
+        let mut part_index = HashMap::new();
+        let mut roles = HashMap::new();
+        roles.insert("msg_1".to_owned(), "user".to_owned());
+        let (mut marks, mut last_at) = (Vec::new(), 0);
+
+        fold_part_into(
+            &mut items,
+            &mut part_index,
+            &roles,
+            &text_part("prt_1", "msg_1", "refactor the folding"),
+            None,
+            &mut GapSink {
+                marks: &mut marks,
+                last_at: &mut last_at,
+            },
+        );
+
+        assert_eq!(items.len(), 1, "the echo should not add a second bubble");
+        assert_eq!(
+            part_index.get("prt_1"),
+            Some(&0),
+            "echo bound to the bubble"
+        );
+    }
+
+    /// Sending the same text twice is two prompts, not one echoed twice: the
+    /// second optimistic bubble is the one the second echo may adopt, and the
+    /// first must be left alone.
+    #[test]
+    fn the_same_prompt_twice_stays_two_bubbles() {
+        let mut items = Vec::new();
+        let mut part_index = HashMap::new();
+        let mut roles = HashMap::new();
+        roles.insert("msg_1".to_owned(), "user".to_owned());
+        roles.insert("msg_2".to_owned(), "user".to_owned());
+        let (mut marks, mut last_at) = (Vec::new(), 0);
+
+        for (n, msg) in [("prt_1", "msg_1"), ("prt_2", "msg_2")] {
+            items.push(ChatItem::User {
+                text: "again".to_owned(),
+            });
+            fold_part_into(
+                &mut items,
+                &mut part_index,
+                &roles,
+                &text_part(n, msg, "again"),
+                None,
+                &mut GapSink {
+                    marks: &mut marks,
+                    last_at: &mut last_at,
+                },
+            );
+        }
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(part_index.get("prt_1"), Some(&0));
+        assert_eq!(part_index.get("prt_2"), Some(&1));
+    }
+
+    /// An assistant reply after the prompt is a new item, not an adoption —
+    /// the guard keys on role, and must not swallow the answer.
+    #[test]
+    fn an_assistant_reply_is_still_its_own_item() {
+        let mut items = vec![ChatItem::User {
+            text: "hello".to_owned(),
+        }];
+        let mut part_index = HashMap::new();
+        let mut roles = HashMap::new();
+        roles.insert("msg_2".to_owned(), "assistant".to_owned());
+        let (mut marks, mut last_at) = (Vec::new(), 0);
+
+        fold_part_into(
+            &mut items,
+            &mut part_index,
+            &roles,
+            &text_part("prt_2", "msg_2", "hello"),
+            None,
+            &mut GapSink {
+                marks: &mut marks,
+                last_at: &mut last_at,
+            },
+        );
+
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[1], ChatItem::Assistant { .. }));
     }
 }

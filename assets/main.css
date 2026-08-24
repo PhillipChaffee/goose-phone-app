@@ -123,6 +123,36 @@
   /* Code slabs stay this dark in both themes. */
   --code-bg: #282c34;
   --code-fg: #e6e6e6;
+  /* Everything below is set ON --code-bg, which does not swap with the
+   * theme — so none of these may either, and they are deliberately absent
+   * from the dark blocks.
+   *
+   * The trap that forces them to exist: --bg-danger is the obvious token for
+   * a deletion marker, and its dark value (#ff6b6b) measures 5.04:1 on
+   * --code-bg while its light value (#d93030) measures 2.94:1 and FAILS the
+   * 3:1 a non-text indicator needs. Wiring the marker to it ships a deletion
+   * rule that passes in dark and vanishes in light — exactly the mistake
+   * that only ever shows up in one theme.
+   *
+   * The trap that forces the *values*: each of these paints two things — the
+   * 3px leading rule (an indicator, 3:1) and the +/- glyph in .diff-sign,
+   * which is TEXT sitting on the row tint and therefore wants 4.5:1. The
+   * glyph is the binding constraint and it is much the stricter of the two.
+   * At the more saturated #57a05a / #ef5350 the rules measured a comfortable
+   * 4.39:1 and 4.02:1 on the slab while the glyphs measured 3.38:1 and
+   * 3.27:1 on the tint and failed. Lifted until the glyph passes. */
+  --diff-add: #79c07c; /* 6.43:1 on --code-bg, 4.90:1 on --diff-add-fill */
+  --diff-del: #ff8a80; /* 6.13:1 on --code-bg, 4.80:1 on --diff-del-fill */
+  /* The secondary voice on a code slab. --text-secondary is the reflex and
+   * measures 2.79:1 there in light; this is 6.37:1 in both. */
+  --code-muted: #a7b0b9;
+  /* Row fills: a 14% tint of the two above. ~1.3:1 against the slab, which
+   * is the point — the tint is reinforcement, while the glyph and the
+   * leading rule carry the signal. Not 18%: at 18% the tint lifts far enough
+   * that the deletion glyph on it drops to 4.43:1. --code-fg on these
+   * measures 8.56:1 and 8.78:1. Rule 7: a tint, not a slab. */
+  --diff-add-fill: #33413e;
+  --diff-del-fill: #46393f;
   --code-chip-bg: var(--bg-secondary);
   /* The upstream burnt orange (#ff4f00) is 3.3:1 on this fill at 12px; same
    * hue, darkened until it passes. */
@@ -148,6 +178,10 @@
    * genuinely absent the answer is the prefers-reduced-transparency rule
    * below, not a permanently thicker pane for everyone. */
   --glass-tint: 78%;
+  /* How far past the bar the scroll-edge scrim runs before it fades out. The
+   * fade has to happen *below* the bar: put it inside the bar's own band and
+   * it thins the material exactly where the title sits. */
+  --scrim-fade: 24px;
 
   /* Anything that floats over content sits above it. */
   --z-scrim: 15;
@@ -304,7 +338,7 @@ body {
 .bubble-text,
 .session-snippet,
 .tool-output pre,
-.diff-panel pre,
+.diff-code,
 code,
 pre {
   -webkit-user-select: text;
@@ -399,7 +433,7 @@ pre {
   top: 0;
   left: 0;
   right: 0;
-  height: calc(var(--safe-top) + var(--chrome-gap) + var(--topbar-h));
+  height: calc(var(--safe-top) + var(--chrome-gap) + var(--topbar-h) + var(--scrim-fade));
   z-index: var(--z-scrim);
   pointer-events: none;
   background: var(--bg-primary);
@@ -408,15 +442,17 @@ pre {
 @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
   .app::before {
     /* Same tint as the bars, so the band above the capsule and the capsule
-     * itself read as one material. The fade is short and lives at the very
-     * bottom edge, where the bar's own shadow hides the seam — at 60% the
-     * fade started level with the status bar and a message bubble sailed
-     * through it fully legible. */
+     * itself read as one material. The fade runs from the bar's bottom edge
+     * down, and only there: expressed as a percentage of the band it used to
+     * start at 55%, which on a 122px band put the whole 52px bar inside the
+     * fade. The icon buttons did not care — they carry glass of their own —
+     * but the title does not, so a dark code block scrolling under it stayed
+     * legible straight through the serif. */
     background: color-mix(in srgb, var(--bg-primary) var(--glass-tint), transparent);
     -webkit-backdrop-filter: var(--glass-blur);
     backdrop-filter: var(--glass-blur);
-    -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
-    mask-image: linear-gradient(to bottom, #000 55%, transparent);
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--scrim-fade)), transparent);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - var(--scrim-fade)), transparent);
   }
 }
 
@@ -611,10 +647,6 @@ pre {
   cursor: default;
 }
 
-.icon-btn.trash:active:not(:disabled) {
-  color: var(--text-danger);
-}
-
 /* Text buttons take the control radius; the round variant is .icon-btn. */
 .btn {
   display: inline-flex;
@@ -687,6 +719,11 @@ pre {
   cursor: default;
 }
 
+/* Deleted along with the confirm row it was written for, and wanted again by
+ * the review screen's "Mark all" — which was written on another branch, back
+ * when the stylesheet still had this. Without it that button comes out at the
+ * full 40px with a 14px label: taller than the 32px progress row it sits in,
+ * and louder than the "N of M files reviewed" text it is subordinate to. */
 .btn.small {
   min-height: 32px;
   padding: 0 12px;
@@ -836,7 +873,7 @@ pre {
 .scroll {
   flex: 1;
   overflow-y: auto;
-  padding: calc(var(--safe-top) + var(--chrome-gap) + var(--topbar-h) + 20px) 16px
+  padding: calc(var(--safe-top) + var(--chrome-gap) + var(--topbar-h) + var(--scrim-fade)) 16px
     calc(var(--safe-bottom) + var(--chrome-gap) + 24px);
   -webkit-overflow-scrolling: touch;
 }
@@ -1013,15 +1050,30 @@ select.field {
 }
 
 /* A card that behaves: it does not tint on press, it lifts.
- * It wraps because the delete confirmation is a sibling of the row body —
- * without this it competes for the same line and crushes the title to one
- * word per line. */
+ *
+ * It is also the swipe scroller. The row's actions are laid out *after* the
+ * card body in a horizontal snap container, so at rest they are past the
+ * right edge and clipped away, and dragging the row left brings them in.
+ *
+ * A scroller rather than an ontouchmove-driven transform on purpose: the
+ * native renderer serialises every listened-to event through a *synchronous*
+ * XHR (`handleVirtualdomEventSync`), so tracking a finger in Rust means ~60
+ * blocking round-trips a second, each with a vdom diff behind it. WebKit does
+ * the tracking, the rubber band, the momentum and the snap on the compositor
+ * for free, with no IPC and no re-render — and it does not synthesise a click
+ * from a touch that became a scroll, so the row's own tap handler needs no
+ * threshold and no suppression flag to keep a swipe from opening the chat.
+ *
+ * Nothing here sets a transform on an ancestor of the floating chrome, so
+ * backdrop-filter is untouched. */
 .session-item {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px;
+  align-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
   background: var(--bg-primary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-xl);
@@ -1029,12 +1081,11 @@ select.field {
   transition: box-shadow 140ms ease, transform 140ms ease;
 }
 
-/* The trailing control aligns with the row's first line, not with the middle
- * of the whole row — at centre it sat against the snippet it has nothing to
- * do with. */
-.session-item > .icon-btn.trash {
-  align-self: flex-start;
-  margin-top: -8px;
+/* A scrollbar under every row in a list of rows is a stripe of chrome the
+ * design does not have. Mail shows no affordance either; the gesture is the
+ * affordance. */
+.session-item::-webkit-scrollbar {
+  display: none;
 }
 
 /* The lift is a shadow, and a shadow on a near-black page is nothing at all,
@@ -1043,6 +1094,61 @@ select.field {
   background: var(--bg-secondary);
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
+}
+
+/* The card body — what the row itself used to be. Exactly the width of the
+ * row, so the tray is out of sight until it is dragged in, and the snap point
+ * at its start is what "closed" means. */
+.session-swipe {
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+}
+
+/* Full row height, and the second snap point: releasing anywhere past halfway
+ * settles with the tray exactly flush to the row's trailing edge. */
+.session-actions {
+  flex: 0 0 auto;
+  display: flex;
+  scroll-snap-align: end;
+}
+
+/* The destructive control rule 7 exempts: this one is pressed, so it takes
+ * the saturated fill rather than a tint. It carries the card's curve on the
+ * trailing edge and is square only along the seam the card body covers — and
+ * that curve is concentric, 15px inside the row's 16px behind a 1px border,
+ * for the same reason the tool-call slab is 11px inside 12px. */
+.swipe-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 84px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 0 15px 15px 0;
+  font-family: inherit;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: var(--lh-sm);
+  cursor: pointer;
+}
+
+.swipe-action .icon {
+  font-size: 20px;
+}
+
+.swipe-action.danger {
+  background: var(--bg-danger);
+  color: var(--text-inverse);
+}
+
+.swipe-action:active {
+  opacity: 0.9;
 }
 
 /* A leading tile, the way both reference apps mark a row. It is a shape, not
@@ -1132,18 +1238,6 @@ select.field {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: 1.5;
-}
-
-/* Full width so it drops onto its own line under the row it belongs to. */
-.confirm-row {
-  flex-basis: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 4px;
-  font-size: var(--text-sm);
-  line-height: var(--lh-sm);
 }
 
 /* ── chat transcript ────────────────────────────────────────────────── */
@@ -1552,15 +1646,21 @@ details[open] > summary::before {
   padding: 8px 0;
 }
 
-/* Chips carry the facts that belong to this turn — token budget here, the
- * diff and PR state on the Code tab. They are not a model picker: this app
- * does not choose a model at send time, and a control that does nothing is
- * worse than no control. */
+/* Chips carry what is real on this screen — the session's settings and the
+ * token budget here, diff and PR on the Code tab. Only what a backend can
+ * actually change becomes a control; the rest is stated as a fact inside the
+ * sheet the settings chip opens. See docs/design.md rule 11. */
 .composer-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   height: 32px;
+  /* Chips do not shrink by default. A flex item's automatic minimum size is
+   * its content width, so a chip holding server-supplied text would otherwise
+   * hold the row open at whatever the model happens to be called and push the
+   * send button off the right edge — "Qwen3 Coder 480B A35B Instruct"
+   * measures 237px in a 348px row that also carries Diff, PR and Send. */
+  flex-shrink: 0;
   padding: 0 12px;
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-full);
@@ -1569,6 +1669,33 @@ details[open] > summary::before {
   font-size: var(--text-xs);
   line-height: var(--lh-xs);
   white-space: nowrap;
+}
+
+/* Shrinking is granted only to a chip that can actually give way — one whose
+ * text is wrapped in .chip-label and can ellipsise. `min-width: 0` on a chip
+ * without one does not shorten anything; it just lets the pill close in on
+ * text that then renders outside it, which is worse than the overflow it was
+ * meant to fix. The model name is the right thing to lose: the sheet the chip
+ * opens states it in full. */
+.composer-chip:has(.chip-label) {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+/* Only the label gives way; the chevron beside it must stay, or the chip
+ * stops reading as something you can open.
+ *
+ * min-width here as well as on the chip: this is itself a flex item, and
+ * without it the label holds its full content width and spills out of a chip
+ * that has already given way — the pill closes in and the text stays put. */
+.chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer-chip > .icon {
+  flex-shrink: 0;
 }
 
 .composer-chip.action {
@@ -1868,6 +1995,16 @@ details[open] > summary::before {
   line-height: var(--lh-xs);
 }
 
+/* An alert says one sentence about what it is about to cost. That is body
+ * text — not the metadata line .modal-session sets, and not the mono slab
+ * .modal-tool is for quoting a tool call. */
+.modal-body {
+  margin-bottom: 20px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--lh-md);
+}
+
 .modal-tool {
   margin-bottom: 16px;
   padding: 10px 12px;
@@ -2026,6 +2163,116 @@ details[open] > summary::before {
   max-height: 70vh;
 }
 
+/* Drilling into one setting swaps the sheet's title for a back control and
+ * the name of what you are choosing. The chevron keeps the full 44px tap
+ * target every icon button gets and is pulled back out of the modal's
+ * padding, so the glyph lines up with the list below it rather than sitting
+ * a button's worth of air to its right. The heading drops the block margin
+ * it carries at the top of a modal so the two sit on one line. */
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 12px -10px;
+}
+
+.sheet-head h2 {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The settings sheet's row grammar. A row is a control (name, value,
+ * chevron, pressable) or a fact (name, value, and the reason it is a fact) —
+ * and nothing that cannot change is ever pressable. docs/design.md rule 11.
+ *
+ * Both shapes are the same box so the list reads as one list; only the
+ * chevron, the press state and the reason line differ. */
+.setting-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 -8px;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Secondary, not tertiary. A control row and a fact row are the same box —
+ * same height, same name, same value, same note — so this chevron is the only
+ * thing that says one of them opens. Tertiary measures 2.20:1 in light and
+ * 2.87:1 in dark, under the 3:1 this file demands of a non-text indicator,
+ * and it is the same argument already made for the tool disclosure caret. */
+.setting-row .icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+/* Wraps, so a row that carries a note puts it on its own line instead of
+ * letting it fight the value for the same one — without it, "Medium" was
+ * ellipsised to "M..." to make room for the description beside it. */
+.setting-main {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 12px;
+}
+
+.setting-name {
+  flex-shrink: 0;
+}
+
+.setting-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+/* A fact is not a button: it wraps to hold its reason, and it does not lift
+ * under a thumb, because pressing it would do nothing. */
+.setting-row.fact {
+  flex-wrap: wrap;
+  cursor: default;
+}
+
+/* Secondary, not tertiary: this line is the whole reason a fact row exists —
+ * it says why the setting is stuck — so it has to be as readable as `.hint`,
+ * not as quiet as a divider label. */
+.setting-note {
+  flex-basis: 100%;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+.setting-row:not(.fact):active {
+  background: var(--bg-secondary);
+}
+
 .choice-list {
   display: flex;
   flex-direction: column;
@@ -2100,7 +2347,7 @@ details[open] > summary::before {
   }
 }
 
-/* ── chips, banners, diff ───────────────────────────────────────────── */
+/* ── chips + banners ────────────────────────────────────────────────── */
 
 /* A step brighter than other secondary text: these carry live state
  * ("working", "crashed"), and secondary-on-secondary fails at phone size. */
@@ -2144,29 +2391,358 @@ details[open] > summary::before {
   background: var(--bg-info);
 }
 
-/* Inset and rounded like every other block, rather than a full-bleed slab
- * wedged between the transcript and the composer. */
-.diff-panel {
-  flex-shrink: 0;
-  max-height: 45%;
-  overflow: hidden auto;
-  margin: 8px var(--edge);
-  background: var(--bg-primary);
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-xl);
+/* ── diff review ────────────────────────────────────────────────────── */
+
+/* This used to be `.diff-panel`: one <pre> of every file's patch concatenated,
+ * wedged between the transcript and the composer. It could not have worked.
+ * OpenCode builds each patch with `context: Number.MAX_SAFE_INTEGER`, so a
+ * three-line edit to a 1200-line file arrives as a 1204-line patch — the
+ * panel was not showing a blob by accident, it was showing the repo. The
+ * re-hunking that makes this readable is in src/diff.rs; what is here is the
+ * surface it lands on. */
+
+/* How far you are through the review, and one control to declare yourself
+ * done with the rest. Hidden below two files, where the answer is on screen
+ * anyway (rule 11: only offer controls that do something). */
+.diff-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin-bottom: 8px;
 }
 
-.diff-panel pre {
-  margin: 0;
-  padding: 12px;
-  border-radius: 0 0 15px 15px;
+.diff-progress-label {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.diff-progress-track {
+  height: 4px;
+  margin-bottom: 16px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+}
+
+/* A non-text indicator, so 3:1 against the track: 3.21:1 light, 6.01:1
+ * dark. */
+.diff-progress-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--bg-success);
+  transition: width 160ms ease;
+}
+
+/* Borrowed wholesale from .tool: a surface one step off the page with a
+ * hairline, in flow so no shadow (rule 5), at the control radius (rule 4). */
+.diff-file {
+  margin-bottom: 12px;
+  background: var(--tool-surface);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+/* Reviewed reads on the card's own edge rather than by fading its text: a
+ * dimmed head is a contrast failure waiting to happen, and the filled check
+ * beside it is already saying it in a second channel. */
+.diff-file.seen {
+  border-color: color-mix(in srgb, var(--bg-success) 55%, transparent);
+}
+
+.diff-file-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px 6px 4px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.diff-file-head::-webkit-details-marker {
+  display: none;
+}
+
+/* Same chevron as a tool card's disclosure, in the same gutter, rotated by
+ * the shared details[open] rule above. */
+.diff-file-head::before {
+  content: "\203a";
+  flex-shrink: 0;
+  width: var(--tool-gutter);
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+
+.diff-file-id {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.diff-path {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* The directory gives way first and the filename never shrinks. The filename
+ * is what you scan a file list for; a path truncated the usual way loses it
+ * and leaves you reading four rows of "crates/opencode-client/src/…". */
+.diff-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.diff-name {
+  flex-shrink: 0;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.diff-stat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.diff-stat .add {
+  color: var(--text-success);
+  font-weight: 600;
+}
+
+.diff-stat .del {
+  color: var(--text-danger);
+  font-weight: 600;
+}
+
+/* .chip's geometry and .chip's reasoning, one surface lighter: a chip's own
+ * fill is --bg-secondary, which in light is the same colour as the card it
+ * would sit on. Primary rather than secondary text for the same reason .chip
+ * is — secondary on this fill measures 4.01:1 light and 4.24:1 dark. Only
+ * present when there is something to say: a plain modified file has no
+ * badge. */
+.diff-badge {
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* GitHub's "Viewed" checkbox, at the HIG's 44px. It lives inside a
+ * <summary>, so its handler stops the click reaching the fold. */
+.diff-seen {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.diff-seen[aria-pressed="true"] {
+  background: var(--bg-success);
+  border-color: transparent;
+  color: var(--text-inverse);
+}
+
+/* The code surface, closing the card, so it takes that card's bottom corners
+ * (11px inside a 12px border) exactly as .tool > .tool-output pre does. */
+.diff-body {
+  border-radius: 0 0 11px 11px;
   background: var(--code-bg);
   color: var(--code-fg);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: var(--lh-sm);
-  white-space: pre;
+}
+
+/* A row, not a surface: full-bleed inside the slab above, which is what
+ * rounds it. Three channels tell a changed line apart and only one of them
+ * is colour — the glyph in .diff-sign, the 3px leading rule, and the tint. */
+.diff-line {
+  display: flex;
+  align-items: flex-start;
+  /* A blank line has an empty code cell and a space for a sign, and neither
+   * generates a line box — so the row measured zero and every blank line in
+   * the file simply vanished, closing up the gaps the author put there. The
+   * blank rows in an *added* file survived only because "+" is a real glyph,
+   * which is what made the loss look like a parser bug rather than a layout
+   * one. One line's worth of height, whatever the row holds. */
+  min-height: var(--lh-sm);
+  padding-right: 8px;
+  border-left: 3px solid transparent;
+}
+
+.diff-line.add {
+  background: var(--diff-add-fill);
+  border-left-color: var(--diff-add);
+}
+
+.diff-line.del {
+  background: var(--diff-del-fill);
+  border-left-color: var(--diff-del);
+}
+
+/* Its own flex cell rather than the first character of the text, so one
+ * sign sits against the whole of a wrapped run and "one source line is one
+ * logical row" stays true at four visual rows — which is the thing wrapping
+ * normally breaks. */
+.diff-sign {
+  flex-shrink: 0;
+  width: 15px;
+  text-align: center;
+  color: var(--code-muted);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.diff-line.add .diff-sign {
+  color: var(--diff-add);
+}
+
+.diff-line.del .diff-sign {
+  color: var(--diff-del);
+}
+
+/* Wrapping is the default, and the reason is that horizontal scroll hides
+ * characters — at the 47 columns this width allows, a -/+ pair that differs
+ * past column 47 looks identical, and you cannot know there is something to
+ * scroll to without scrolling to it. Two smaller reasons: a per-hunk scroll
+ * offset does not survive the next card, and a horizontally scrollable child
+ * inside a vertically scrolling list captures near-diagonal swipes, so the
+ * page reads as stuck. `anywhere` because the long tokens in real code are
+ * paths, URLs and base64, which have no break opportunities; the hanging
+ * indent keeps a continuation visibly subordinate to its first row. */
+.diff-code {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-indent: -2ch;
+  padding-left: 2ch;
+}
+
+/* The escape hatch, for the two cases wrapping genuinely loses: a
+ * column-aligned table and ASCII art. Screen-level rather than per-file, so
+ * flipping it does not leave a handful of independent scroll offsets. */
+/* Both axes stated, and `hidden` on a box whose height is auto clips
+ * nothing: it is what says "this scrolls sideways and only sideways". A
+ * scroll region that only sets one axis has the other coerced to `auto` by
+ * the used-value rules, and then nothing downstream — docs/audit.js
+ * included — can tell a deliberate horizontal scrollport from the vertical
+ * one every screen already has. */
+.diff-body.nowrap {
   overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.diff-body.nowrap .diff-code {
+  white-space: pre;
+  text-indent: 0;
+  padding-left: 0;
+}
+
+/* The rows have to be as wide as the widest of them, or the tints and the
+ * leading rules stop at the fold and the scrolled-to region is bare slab. */
+.diff-body.nowrap .diff-line,
+.diff-body.nowrap .diff-skip,
+.diff-body.nowrap .diff-note {
+  width: max-content;
+  min-width: 100%;
+}
+
+/* Scrolled right, the leading rule is off the left edge and the row's only
+ * remaining cue would be a colour it is hard to judge in isolation. The sign
+ * is the channel that has to survive, so it stays pinned; it carries the
+ * row's own fill so the code passes underneath it rather than through it. */
+.diff-body.nowrap .diff-sign {
+  position: sticky;
+  left: 0;
+  background: var(--code-bg);
+}
+
+.diff-body.nowrap .diff-line.add .diff-sign {
+  background: var(--diff-add-fill);
+}
+
+.diff-body.nowrap .diff-line.del .diff-sign {
+  background: var(--diff-del-fill);
+}
+
+/* A collapsed run of unchanged lines. The line number lives here rather than
+ * in a per-row gutter: a gutter costs 4 of 47 columns, and under soft wrap a
+ * number is only correct on the first visual row of a source line, so it
+ * becomes a mostly-blank column. This band is where you actually need the
+ * anchor. */
+.diff-skip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px 6px 18px;
+  border: 0;
+  background: color-mix(in srgb, var(--code-fg) 8%, var(--code-bg));
+  color: var(--code-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.diff-skip:active {
+  background: color-mix(in srgb, var(--code-fg) 16%, var(--code-bg));
+}
+
+.diff-skip-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-skip-at {
+  flex-shrink: 0;
+}
+
+/* Prose about a file rather than a line of it — binary, deleted, truncated,
+ * no trailing newline — so it is set in the interface voice on the slab. */
+.diff-note {
+  padding: 8px 12px 8px 18px;
+  color: var(--code-muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
 }
 
 /* ── scrollbars ─────────────────────────────────────────────────────── */

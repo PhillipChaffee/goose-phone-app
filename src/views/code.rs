@@ -1,20 +1,31 @@
 //! Code tab views: the chat list (with lifecycle status), the new-session
-//! form, the chat screen (cached-instant open, live streaming, diff, PR),
-//! and the permission modal for code chats. Transcript items render through
-//! the same `chat::render_item` the Home tab uses.
+//! form, the chat screen (cached-instant open, live streaming, PR), the
+//! review screen, and the permission modal for code chats. Transcript items
+//! render through the same `chat::render_item` the Home tab uses.
+
+use std::collections::HashMap;
 
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::document;
 use dioxus::prelude::*;
+use opencode_client::FileStatus;
 
 use crate::code::{
-    answer_code_permission, delete_code_chat, load_code_diff, new_code_chat, open_code_chat,
-    refresh_code_chats, request_pr, send_code_prompt, start_code_poll, status_label,
-    stop_code_turn, CodeScreen,
+    answer_code_permission, delete_code_chat, ensure_code_models, expand_diff_gap, is_free_model,
+    load_code_diff, mark_all_diff_seen, new_code_chat, open_chat_allows_free_models,
+    open_code_chat, refresh_code_chats, request_pr, reveal_removed_lines, send_code_prompt,
+    set_code_effort, set_code_model, start_code_poll, status_label, stop_code_turn,
+    toggle_diff_file, toggle_diff_seen, CodeScreen, DiffFile, DiffState,
 };
+use crate::diff::Block;
 use crate::icons::Icon;
-use crate::state::{relative_time_secs, use_app_ctx, ConnState};
-use crate::views::chat::render_transcript;
+use crate::state::{relative_time_secs, use_app_ctx, AppCtx, ConnState};
+use crate::views::chat::{format_tokens, render_transcript};
+use crate::views::session_settings::{
+    choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
+};
+use crate::views::{ConfirmDelete, SwipeDelete};
+use opencode_client::ModelInfo;
 
 #[component]
 pub fn CodeSessionsView() -> Element {
@@ -116,64 +127,39 @@ pub fn CodeSessionsView() -> Element {
                             key: "{meta.id}",
                             class: "session-item",
                             onclick: move |_| open_code_chat(&ctx, meta.clone()),
-                            div { class: "session-tile", Icon { name: "code" } }
-                            div {
-                                class: "session-main",
-                                div { class: "session-head",
-                                    div { class: "session-title", "{meta.title}" }
-                                    span { class: "session-age",
-                                        {relative_time_secs(meta.last_active)}
+                            div { class: "session-swipe",
+                                div { class: "session-tile", Icon { name: "code" } }
+                                div {
+                                    class: "session-main",
+                                    div { class: "session-head",
+                                        div { class: "session-title", "{meta.title}" }
+                                        span { class: "session-age",
+                                            {relative_time_secs(meta.last_active)}
+                                        }
                                     }
-                                }
-                                div { class: "session-meta",
-                                    {
-                                        let turn = running_chat.as_deref() == Some(meta.id.as_str())
-                                            && running_turn;
-                                        let (dot, label) = status_label(&meta, turn);
-                                        rsx! {
-                                            span { class: "chip",
-                                                span { class: "{dot}" }
-                                                "{label}"
-                                            }
-                                            span { "{meta.repo}" }
-                                            if !meta.branch.is_empty() {
-                                                span { "{meta.branch}" }
+                                    div { class: "session-meta",
+                                        {
+                                            let turn = running_chat.as_deref() == Some(meta.id.as_str())
+                                                && running_turn;
+                                            let (dot, label) = status_label(&meta, turn);
+                                            rsx! {
+                                                span { class: "chip",
+                                                    span { class: "{dot}" }
+                                                    "{label}"
+                                                }
+                                                span { "{meta.repo}" }
+                                                if !meta.branch.is_empty() {
+                                                    span { "{meta.branch}" }
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
-                            if confirm_delete.read().as_deref() == Some(meta.id.as_str()) {
-                                div { class: "confirm-row", onclick: move |e: Event<MouseData>| e.stop_propagation(),
-                                    span { "Delete chat + workspace?" }
-                                    button {
-                                        class: "btn danger small",
-                                        onclick: {
-                                            let id = meta.id.clone();
-                                            move |_| {
-                                                confirm_delete.set(None);
-                                                delete_code_chat(&ctx, id.clone());
-                                            }
-                                        },
-                                        "Delete"
-                                    }
-                                    button {
-                                        class: "btn secondary small",
-                                        onclick: move |_| confirm_delete.set(None),
-                                        "Cancel"
-                                    }
-                                }
-                            } else {
-                                button {
-                                    class: "icon-btn trash",
-                                    onclick: {
-                                        let id = meta.id.clone();
-                                        move |e: Event<MouseData>| {
-                                            e.stop_propagation();
-                                            confirm_delete.set(Some(id.clone()));
-                                        }
-                                    },
-                                    Icon { name: "trash" }
+                            SwipeDelete {
+                                on_delete: {
+                                    let id = meta.id.clone();
+                                    move |()| confirm_delete.set(Some(id.clone()))
                                 }
                             }
                         }
@@ -191,6 +177,255 @@ pub fn CodeSessionsView() -> Element {
                 },
                 Icon { name: "plus" }
                 "New session"
+            }
+        }
+
+        if let Some(chat_id) = confirm_delete() {
+            ConfirmDelete {
+                title: "Delete this session?",
+                body: "The chat and its workspace both go — any work on the \
+                       branch that has not been pushed goes with them.",
+                on_cancel: move |()| confirm_delete.set(None),
+                on_confirm: move |()| {
+                    confirm_delete.set(None);
+                    delete_code_chat(&ctx, chat_id.clone());
+                },
+            }
+        }
+    }
+}
+
+const ROW_MODEL: &str = "model";
+
+const ROW_EFFORT: &str = "effort";
+
+/// The chip's face: the model the next message will run on, by its catalogue
+/// name once that has loaded and by its bare id before then.
+fn code_chip_label(reference: Option<&str>, models: &[ModelInfo]) -> String {
+    let Some(reference) = reference else {
+        return "Model".to_owned();
+    };
+    models
+        .iter()
+        .find(|m| m.reference() == reference)
+        .map_or_else(
+            || reference.rsplit('/').next().unwrap_or(reference).to_owned(),
+            |m| m.name.clone(),
+        )
+}
+
+/// The code tab's rows: the two settings `OpenCode` really takes on a turn,
+/// and the one number it only ever reports.
+///
+/// Model and thinking effort are both per-turn parameters of
+/// `session/:id/prompt_async` (`model` and `variant`), which the server then
+/// copies onto the session record — so "applies from your next message" is
+/// literally the mechanism, not a hedge. Context length is not a parameter of
+/// anything: it is catalogue metadata, and the one route that rewrites it
+/// (`PATCH /config`) restarts the chat's server, killing the event stream the
+/// app is reading. It is reported, not offered.
+fn code_setting_rows(ctx: &AppCtx, models: &[ModelInfo], loading: bool) -> Vec<SettingRow> {
+    let (current, effort) = {
+        let chat = ctx.code_chat.peek();
+        (chat.model.clone(), chat.effort.clone())
+    };
+    let allow_free = open_chat_allows_free_models(ctx);
+
+    let offered: Vec<&ModelInfo> = models
+        .iter()
+        .filter(|m| allow_free || !is_free_model(&m.reference()))
+        .collect();
+    let withheld = models.len() - offered.len();
+    let selected = current
+        .as_deref()
+        .and_then(|r| models.iter().find(|m| m.reference() == r));
+    let unknown = || unknown_model_note(models, loading, current.is_some()).to_owned();
+
+    let model_note = if withheld > 0 {
+        // Say it plainly rather than letting models silently go missing: the
+        // manager only checks this when a chat is created, and a per-turn
+        // model would sail past that check through its transparent proxy.
+        let (count, verb) = if withheld == 1 {
+            ("1 free model".to_owned(), "is")
+        } else {
+            (format!("{withheld} free models"), "are")
+        };
+        Some(format!(
+            "{count} {verb} hidden — they train on their input, and this repo \
+             is not a public throwaway."
+        ))
+    } else if models.is_empty() {
+        Some(unknown())
+    } else {
+        None
+    };
+
+    let mut rows = vec![SettingRow::select(
+        ROW_MODEL,
+        "Model",
+        current.as_deref(),
+        model_choices(&offered),
+        model_note,
+    )];
+
+    // "Default" is a real value here, not a placeholder: OpenCode records the
+    // literal string `default` on a session whose turn asked for no variant.
+    let efforts = selected.map(ModelInfo::efforts).unwrap_or_default();
+    let chosen = effort.as_deref().unwrap_or_default();
+    let effort_value = if chosen.is_empty() {
+        "Default".to_owned()
+    } else {
+        choice_label(chosen, chosen)
+    };
+    rows.push(if efforts.is_empty() {
+        SettingRow::fact(
+            ROW_EFFORT,
+            "Thinking effort",
+            effort_value,
+            selected.map_or_else(unknown, |_| {
+                "This model has no thinking-effort tiers.".to_owned()
+            }),
+        )
+    } else {
+        let mut choices = vec![SettingChoice::new("", "Default")];
+        choices.extend(
+            efforts
+                .iter()
+                .map(|e| SettingChoice::new(*e, choice_label(e, e))),
+        );
+        SettingRow::select(ROW_EFFORT, "Thinking effort", Some(chosen), choices, None)
+    });
+
+    rows.push(match selected.and_then(|m| m.limit.context_tokens()) {
+        Some(limit) => SettingRow::fact(
+            "context_length",
+            "Context length",
+            format!("{} tokens", format_tokens(limit)),
+            "Declared by the model. A turn carries no context window.",
+        ),
+        None => SettingRow::fact("context_length", "Context length", "—", unknown()),
+    });
+    rows
+}
+
+/// Catalogue entries as choices. A name shared by two providers is shown as
+/// `provider/model` instead, so two rows are never indistinguishable.
+/// Shared by the effort row and the context-length row so the two can never
+/// give different reasons for the same missing catalogue.
+const fn unknown_model_note(
+    models: &[ModelInfo],
+    loading: bool,
+    model_chosen: bool,
+) -> &'static str {
+    if models.is_empty() {
+        if loading {
+            "Available once the model list has loaded."
+        } else {
+            "The chat server did not offer a model list."
+        }
+    } else if model_chosen {
+        "This model is not in the chat server's catalogue."
+    } else {
+        "Pick a model above and this follows from it."
+    }
+}
+
+fn model_choices(offered: &[&ModelInfo]) -> Vec<SettingChoice> {
+    offered
+        .iter()
+        .map(|m| {
+            // Compare the whole reference, not just the id: `anthropic` and
+            // the `opencode` zen proxy both offer `claude-sonnet-4-5` under
+            // the same display name, and `o.id != m.id` is false for that
+            // pair — so the one case this test exists for was the one it
+            // called unambiguous, and the picker drew two identical rows for
+            // two different providers.
+            let ambiguous = offered
+                .iter()
+                .any(|o| o.name == m.name && (o.provider_id != m.provider_id || o.id != m.id));
+            let label = if ambiguous || m.name.is_empty() {
+                m.reference()
+            } else {
+                m.name.clone()
+            };
+            SettingChoice::new(m.reference(), label)
+        })
+        .collect()
+}
+
+#[component]
+pub fn CodePermissionModal() -> Element {
+    let ctx = use_app_ctx();
+    let queue = (ctx.code_permissions)();
+    let Some((chat_id, perm)) = queue.first().cloned() else {
+        return rsx! {};
+    };
+
+    let detail = if perm.metadata.is_null() {
+        String::new()
+    } else {
+        serde_json::to_string_pretty(&perm.metadata).unwrap_or_default()
+    };
+    let chat_label = {
+        let chats = ctx.code_chats.read();
+        chats
+            .iter()
+            .find(|c| c.id == chat_id)
+            .map_or_else(|| chat_id.clone(), |c| c.title.clone())
+    };
+    let pending_more = queue.len().saturating_sub(1);
+    let title = if perm.title.is_empty() {
+        perm.kind.clone()
+    } else {
+        perm.title.clone()
+    };
+
+    rsx! {
+        div { class: "modal-backdrop",
+            div { class: "modal",
+                h2 { "Code agent asks" }
+                p { class: "modal-session", "Session: {chat_label}" }
+                p { class: "modal-tool", "{title}" }
+                if !detail.is_empty() {
+                    details { class: "tool-output",
+                        summary { "Details" }
+                        pre { "{detail}" }
+                    }
+                }
+                div { class: "modal-actions",
+                    button {
+                        class: "btn primary",
+                        onclick: {
+                            let chat_id = chat_id.clone();
+                            let perm = perm.clone();
+                            move |_| {
+                                answer_code_permission(&ctx, chat_id.clone(), perm.clone(), "once");
+                            }
+                        },
+                        "Allow once"
+                    }
+                    button {
+                        class: "btn primary",
+                        onclick: {
+                            let chat_id = chat_id.clone();
+                            let perm = perm.clone();
+                            move |_| {
+                                answer_code_permission(&ctx, chat_id.clone(), perm.clone(), "always");
+                            }
+                        },
+                        "Always allow"
+                    }
+                    button {
+                        class: "btn danger-outline",
+                        onclick: move |_| {
+                            answer_code_permission(&ctx, chat_id.clone(), perm.clone(), "reject");
+                        },
+                        "Reject"
+                    }
+                }
+                if pending_more > 0 {
+                    p { class: "modal-pending", "+{pending_more} more waiting" }
+                }
             }
         }
     }
@@ -287,7 +522,7 @@ pub fn CodeNewView() -> Element {
 pub fn CodeChatView() -> Element {
     let ctx = use_app_ctx();
     let chat = (ctx.code_chat)();
-    let mut draft = use_signal(String::new);
+    let mut draft = ctx.code_draft;
 
     use_effect(move || {
         let _ = ctx.code_chat.read().items.len();
@@ -302,6 +537,11 @@ pub fn CodeChatView() -> Element {
     let running = chat.running;
     // Cached transcript is read-only until the server is authoritative (A5).
     let can_send = !running && !chat.waking && !chat.loading;
+
+    let models = (ctx.code_models)();
+    let models_loading = (ctx.code_models_loading)();
+    let mut sheet = use_signal(|| false);
+    let chip_label = code_chip_label(chat.model.as_deref(), &models);
 
     let mut submit = move || {
         let text = draft.peek().trim().to_string();
@@ -348,22 +588,6 @@ pub fn CodeChatView() -> Element {
                 p { class: "empty", "Loading history…" }
             }
             {render_transcript(&chat.items, &chat.marks)}
-            if let Some(diff) = &chat.diff {
-                div { class: "diff-panel",
-                    div { class: "tool-head",
-                        span { class: "tool-title", "Session diff" }
-                        button {
-                            class: "icon-btn",
-                            onclick: move |_| {
-                                let mut c = ctx.code_chat;
-                                c.write().diff = None;
-                            },
-                            "✕"
-                        }
-                    }
-                    pre { "{diff}" }
-                }
-            }
             if running {
                 div { class: "typing",
                     span { class: "dot-anim" }
@@ -393,7 +617,17 @@ pub fn CodeChatView() -> Element {
             div { class: "composer-row",
                 button {
                     class: "composer-chip action",
-                    title: "Show diff",
+                    title: "Session settings",
+                    onclick: move |_| {
+                        ensure_code_models(&ctx);
+                        sheet.set(true);
+                    },
+                    span { class: "chip-label", "{chip_label}" }
+                    Icon { name: "chevron-down" }
+                }
+                button {
+                    class: "composer-chip action",
+                    title: "Review the session's changes",
                     onclick: move |_| load_code_diff(&ctx),
                     Icon { name: "diff" }
                     "Diff"
@@ -424,86 +658,375 @@ pub fn CodeChatView() -> Element {
                 }
             }
         }
+
+        if sheet() {
+            // Built here rather than beside `chip_label`: this component
+            // re-renders on every keystroke and every streamed part, and the
+            // row list is n^2 in the catalogue with a String per model.
+            SessionSettingsSheet {
+                backend: "code agent",
+                rows: code_setting_rows(&ctx, &models, models_loading),
+                onchoose: move |(id, value): (String, String)| match id.as_str() {
+                    ROW_MODEL => set_code_model(&ctx, &value),
+                    ROW_EFFORT => set_code_effort(
+                        &ctx,
+                        if value.is_empty() { None } else { Some(value.as_str()) },
+                    ),
+                    _ => {}
+                },
+                onclose: move |()| sheet.set(false),
+            }
+        }
     }
 }
 
-/// Modal for the front of the code-permission queue. Backend-tagged by
-/// construction: it answers over the code client only, so a goose ask and a
-/// code ask can never be confused (issue #2, A6).
+/// The review screen: the session's cumulative diff, one collapsible card
+/// per file.
+///
+/// **Unified, not split.** At 402px the two columns of a split view get
+/// `(368 − 2×18 − 8) ÷ 2 = 162px`, about 22 monospace columns each.
+/// `pub(crate) fn load_code_diff(` is 30 characters, so every real line wraps
+/// on both sides — and to *different* heights on each side, which stops the
+/// rows lining up. Lining the before and after up on one visual row is the
+/// entire value of split view, so at this width it is not merely cramped, it
+/// is self-defeating.
 #[component]
-pub fn CodePermissionModal() -> Element {
+pub fn CodeDiffView() -> Element {
     let ctx = use_app_ctx();
-    let queue = (ctx.code_permissions)();
-    let Some((chat_id, perm)) = queue.first().cloned() else {
-        return rsx! {};
-    };
+    let diff = (ctx.code_diff)();
+    let wrap = (ctx.code_diff_wrap)();
 
-    let detail = if perm.metadata.is_null() {
-        String::new()
+    let total = diff.files.len();
+    let reviewed = diff.reviewed();
+    let (added, removed) = diff.totals();
+    let subtitle = if total == 0 {
+        ctx.code_chat.read().title.clone()
+    } else if total == 1 {
+        format!("1 file · +{added} −{removed}")
     } else {
-        serde_json::to_string_pretty(&perm.metadata).unwrap_or_default()
+        format!("{total} files · +{added} −{removed}")
     };
-    let chat_label = {
-        let chats = ctx.code_chats.read();
-        chats
-            .iter()
-            .find(|c| c.id == chat_id)
-            .map_or_else(|| chat_id.clone(), |c| c.title.clone())
-    };
-    let pending_more = queue.len().saturating_sub(1);
-    let title = if perm.title.is_empty() {
-        perm.kind.clone()
-    } else {
-        perm.title.clone()
-    };
+    let percent = (reviewed * 100).checked_div(total).unwrap_or(0);
+    let show_empty = !diff.loading && diff.files.is_empty() && diff.error.is_none();
+    let cards = diff
+        .files
+        .iter()
+        .map(|file| render_diff_file(&ctx, &diff, file, wrap));
 
     rsx! {
-        div { class: "modal-backdrop",
-            div { class: "modal",
-                h2 { "Code agent asks" }
-                p { class: "modal-session", "Session: {chat_label}" }
-                p { class: "modal-tool", "{title}" }
-                if !detail.is_empty() {
-                    details { class: "tool-output",
-                        summary { "Details" }
-                        pre { "{detail}" }
-                    }
+        header { class: "topbar",
+            button {
+                class: "icon-btn back",
+                onclick: move |_| {
+                    let mut screen = ctx.code_screen;
+                    screen.set(CodeScreen::Chat);
+                },
+                Icon { name: "chevron-left" }
+            }
+            div { class: "titlegroup",
+                h1 { class: "title ellipsis", "Review" }
+                span { class: "subtitle ellipsis", "{subtitle}" }
+            }
+            div { class: "topbar-actions",
+                button {
+                    class: "icon-btn",
+                    title: if wrap { "Scroll long lines instead of wrapping" } else { "Wrap long lines" },
+                    "aria-pressed": "{wrap}",
+                    onclick: move |_| {
+                        let mut w = ctx.code_diff_wrap;
+                        let next = !*w.peek();
+                        w.set(next);
+                    },
+                    Icon { name: "wrap-text" }
                 }
-                div { class: "modal-actions",
-                    button {
-                        class: "btn primary",
-                        onclick: {
-                            let chat_id = chat_id.clone();
-                            let perm = perm.clone();
-                            move |_| {
-                                answer_code_permission(&ctx, chat_id.clone(), perm.clone(), "once");
-                            }
-                        },
-                        "Allow once"
-                    }
-                    button {
-                        class: "btn primary",
-                        onclick: {
-                            let chat_id = chat_id.clone();
-                            let perm = perm.clone();
-                            move |_| {
-                                answer_code_permission(&ctx, chat_id.clone(), perm.clone(), "always");
-                            }
-                        },
-                        "Always allow"
-                    }
-                    button {
-                        class: "btn danger-outline",
-                        onclick: move |_| {
-                            answer_code_permission(&ctx, chat_id.clone(), perm.clone(), "reject");
-                        },
-                        "Reject"
-                    }
-                }
-                if pending_more > 0 {
-                    p { class: "modal-pending", "+{pending_more} more waiting" }
+                button {
+                    class: "icon-btn",
+                    title: "Re-fetch the diff",
+                    disabled: diff.loading,
+                    onclick: move |_| load_code_diff(&ctx),
+                    Icon { name: "refresh" }
                 }
             }
         }
+
+        main { class: "scroll diff", id: "code-diff-scroll",
+            if let Some(error) = diff.error.as_ref() {
+                p { class: "error-box", "{error}" }
+            }
+            if diff.loading && diff.files.is_empty() {
+                p { class: "empty", "Reading the working tree — waking the container if it was asleep…" }
+            }
+            if show_empty {
+                p { class: "empty", "Nothing has changed on this branch yet." }
+            }
+            if total > 1 {
+                div { class: "diff-progress",
+                    span { class: "diff-progress-label", "{reviewed} of {total} files reviewed" }
+                    if reviewed < total {
+                        button {
+                            class: "btn small secondary",
+                            onclick: move |_| mark_all_diff_seen(&ctx),
+                            "Mark all"
+                        }
+                    }
+                }
+                div { class: "diff-progress-track",
+                    div { class: "diff-progress-fill", style: "width: {percent}%" }
+                }
+            }
+            {cards}
+        }
+    }
+}
+
+/// One file's card: a head you can scan, and a body that folds away
+/// independently of every other file's.
+fn render_diff_file(ctx: &AppCtx, state: &DiffState, file: &DiffFile, wrap: bool) -> Element {
+    let ctx = *ctx;
+    let path = file.info.file.clone();
+    let (dir, name) = crate::diff::split_path(&file.info.file);
+    let (dir, name) = (dir.to_owned(), name.to_owned());
+    let fingerprint = file.fingerprint;
+    let seen = state.is_seen(file);
+    let open = state.is_open(file);
+    let binary = file.info.is_binary();
+    let deleted = file.info.status == FileStatus::Deleted;
+
+    // Only for a card that is actually showing them. Re-hunking every file on
+    // every render meant a session touching twenty files paid for twenty
+    // parses to display one — and <details open=false> does not render its
+    // children, so the work was thrown away.
+    let rows = if open {
+        Some(diff_rows(&ctx, state, file))
+    } else {
+        None
+    };
+
+    rsx! {
+        details {
+            key: "{path}",
+            class: if seen { "diff-file seen" } else { "diff-file" },
+            open,
+            summary {
+                class: "diff-file-head",
+                // The native <summary> toggle is suppressed so `open` stays
+                // the app's to decide: marking a file reviewed folds it, and
+                // a DOM that had toggled itself would not hear about it.
+                onclick: {
+                    let path = path.clone();
+                    move |e: Event<MouseData>| {
+                        e.prevent_default();
+                        toggle_diff_file(&ctx, &path);
+                    }
+                },
+                div { class: "diff-file-id",
+                    div { class: "diff-path",
+                        if !dir.is_empty() {
+                            span { class: "diff-dir", "{dir}" }
+                        }
+                        span { class: "diff-name", "{name}" }
+                    }
+                    div { class: "diff-stat",
+                        if binary {
+                            span { class: "diff-badge", "binary" }
+                        } else {
+                            if deleted {
+                                span { class: "diff-badge", "deleted" }
+                            }
+                            if file.info.status == FileStatus::Added {
+                                span { class: "diff-badge", "added" }
+                            }
+                            span { class: "add", "+{file.info.additions}" }
+                            span { class: "del", "−{file.info.deletions}" }
+                        }
+                    }
+                }
+                // A trailing control inside a row-sized target: it stops the
+                // click reaching the summary, the same way the list's trash
+                // button does (design rule 9).
+                button {
+                    class: "diff-seen",
+                    "aria-pressed": "{seen}",
+                    title: if seen { "Reviewed — tap to unmark" } else { "Mark reviewed" },
+                    onclick: move |e: Event<MouseData>| {
+                        e.stop_propagation();
+                        e.prevent_default();
+                        toggle_diff_seen(&ctx, &path, fingerprint);
+                    },
+                    Icon { name: "check" }
+                }
+            }
+            // Rendered only when open: a closed card costs nothing, which is
+            // what keeps a twenty-file diff cheap.
+            if open {
+                div { class: if wrap { "diff-body" } else { "diff-body nowrap" },
+                    {rows.into_iter().flatten()}
+                }
+            }
+        }
+    }
+}
+
+/// The contents of one file's body: rows, collapsed bands, and the notes
+/// that stand in for a body there is no point rendering.
+fn diff_rows(ctx: &AppCtx, state: &DiffState, file: &DiffFile) -> Vec<Element> {
+    let ctx = *ctx;
+    let path = file.info.file.clone();
+    let view = state.view.get(&path);
+    let no_expansions = HashMap::new();
+    let expanded = view.map_or(&no_expansions, |v| &v.expanded);
+
+    let mut rows: Vec<Element> = Vec::new();
+    if file.info.is_binary() {
+        rows.push(rsx! {
+            p { key: "binary-{path}", class: "diff-note", "Binary file — not shown." }
+        });
+        return rows;
+    }
+    // Nobody reviews a deletion line by line, and its patch is one `-` row
+    // per line of the file that used to be there.
+    if file.info.status == FileStatus::Deleted && !view.is_some_and(|v| v.show_removed) {
+        rows.push(rsx! {
+            p { key: "deleted-{path}", class: "diff-note",
+                "File deleted · {file.info.deletions} lines removed"
+            }
+        });
+        rows.push(rsx! {
+            button {
+                key: "reveal-{path}",
+                class: "diff-skip",
+                onclick: {
+                    let path = path.clone();
+                    move |_| reveal_removed_lines(&ctx, &path)
+                },
+                span { class: "diff-skip-label", "Show removed lines" }
+            }
+        });
+        return rows;
+    }
+    if file.lines.is_empty() {
+        rows.push(rsx! {
+            p { key: "empty-{path}", class: "diff-note", "No line changes — file metadata only." }
+        });
+        return rows;
+    }
+
+    let rendered = crate::diff::blocks(&file.lines, &file.gaps, expanded);
+    for block in &rendered.blocks {
+        match *block {
+            Block::Rows { start, end } => {
+                for (offset, line) in file.lines[start..end].iter().enumerate() {
+                    let index = start + offset;
+                    rows.push(rsx! {
+                        div { key: "l{index}", class: "{line.row_class()}",
+                            span { class: "diff-sign", "{line.sign()}" }
+                            span { class: "diff-code", "{line.text}" }
+                        }
+                    });
+                    if line.no_newline {
+                        rows.push(rsx! {
+                            p { key: "n{index}", class: "diff-note", "No newline at end of file" }
+                        });
+                    }
+                }
+            }
+            Block::Gap { key, hidden, at } => rows.push(rsx! {
+                button {
+                    key: "g{key}",
+                    class: "diff-skip",
+                    onclick: {
+                        let path = path.clone();
+                        move |_| expand_diff_gap(&ctx, &path, key, hidden)
+                    },
+                    span { class: "diff-skip-label", "⋯ {hidden} unchanged lines" }
+                    span { class: "diff-skip-at", "{at}" }
+                }
+            }),
+        }
+    }
+    if rendered.dropped > 0 {
+        rows.push(rsx! {
+            p { key: "capped-{path}", class: "diff-note",
+                if rendered.dropped_changes > 0 {
+                    "{rendered.dropped} more lines, {rendered.dropped_changes} of them changes — too long to render in one screen."
+                } else {
+                    "{rendered.dropped} more unchanged lines — too long to render in one screen."
+                }
+            }
+        });
+    }
+    rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{code_chip_label, model_choices, ModelInfo};
+
+    fn model(provider: &str, id: &str, name: &str) -> ModelInfo {
+        ModelInfo {
+            id: id.to_owned(),
+            provider_id: provider.to_owned(),
+            name: name.to_owned(),
+            ..ModelInfo::default()
+        }
+    }
+
+    /// The same display name from two providers is the case the label test
+    /// exists for: one is the vendor direct, the other a proxy, and which one
+    /// runs decides who sees the code.
+    #[test]
+    fn two_providers_offering_one_name_get_told_apart() {
+        let a = model("anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5");
+        let b = model("opencode", "claude-sonnet-4-5", "Claude Sonnet 4.5");
+        let choices = model_choices(&[&a, &b]);
+        let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            ["anthropic/claude-sonnet-4-5", "opencode/claude-sonnet-4-5"],
+            "identical names must fall back to the full reference"
+        );
+    }
+
+    /// Two different models that merely share a name are also ambiguous.
+    #[test]
+    fn one_name_on_two_ids_is_ambiguous_too() {
+        let a = model("opencode", "sonnet-4-5", "Claude Sonnet 4.5");
+        let b = model("opencode", "sonnet-4-5-thinking", "Claude Sonnet 4.5");
+        let labels: Vec<String> = model_choices(&[&a, &b])
+            .into_iter()
+            .map(|c| c.label)
+            .collect();
+        assert_eq!(
+            labels,
+            ["opencode/sonnet-4-5", "opencode/sonnet-4-5-thinking"]
+        );
+    }
+
+    /// Distinct names stay readable — the fallback is for collisions only.
+    #[test]
+    fn distinct_names_are_left_alone() {
+        let a = model("anthropic", "claude-opus-4-1", "Claude Opus 4.1");
+        let b = model("opencode", "claude-sonnet-4-5", "Claude Sonnet 4.5");
+        let labels: Vec<String> = model_choices(&[&a, &b])
+            .into_iter()
+            .map(|c| c.label)
+            .collect();
+        assert_eq!(labels, ["Claude Opus 4.1", "Claude Sonnet 4.5"]);
+    }
+
+    /// The chip names the model before the catalogue has loaded, and after a
+    /// model the catalogue does not list.
+    #[test]
+    fn the_chip_falls_back_to_the_bare_id() {
+        assert_eq!(code_chip_label(None, &[]), "Model");
+        assert_eq!(
+            code_chip_label(Some("opencode/deepseek-v4-flash"), &[]),
+            "deepseek-v4-flash"
+        );
+        let known = model("opencode", "deepseek-v4-flash", "DeepSeek V4 Flash");
+        assert_eq!(
+            code_chip_label(Some("opencode/deepseek-v4-flash"), &[known]),
+            "DeepSeek V4 Flash"
+        );
     }
 }

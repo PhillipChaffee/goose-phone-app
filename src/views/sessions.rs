@@ -6,7 +6,7 @@ use crate::state::{
     new_session, open_session, refresh_sessions, relative_time, rfc3339_to_epoch, show_toast,
     use_app_ctx,
 };
-use crate::views::ConnBadge;
+use crate::views::{ConfirmDelete, ConnBadge, SwipeDelete};
 
 #[component]
 pub fn SessionsView() -> Element {
@@ -50,69 +50,34 @@ pub fn SessionsView() -> Element {
                         key: "{info.session_id}",
                         class: "session-item",
                         onclick: move |_| open_session(&ctx, info.clone()),
-                        div { class: "session-tile", Icon { name: "message" } }
-                        div {
-                            class: "session-main",
-                            div { class: "session-head",
-                                div { class: "session-title", "{info.display_title()}" }
-                                if let Some(age) = info.updated_at.as_deref()
-                                    .and_then(rfc3339_to_epoch)
-                                    .map(relative_time)
-                                {
-                                    span { class: "session-age", "{age}" }
+                        div { class: "session-swipe",
+                            div { class: "session-tile", Icon { name: "message" } }
+                            div {
+                                class: "session-main",
+                                div { class: "session-head",
+                                    div { class: "session-title", "{info.display_title()}" }
+                                    if let Some(age) = info.updated_at.as_deref()
+                                        .and_then(rfc3339_to_epoch)
+                                        .map(relative_time)
+                                    {
+                                        span { class: "session-age", "{age}" }
+                                    }
                                 }
-                            }
-                            div { class: "session-meta",
-                                if let Some(count) = info.message_count() {
-                                    span { "{count} msgs" }
+                                div { class: "session-meta",
+                                    if let Some(count) = info.message_count() {
+                                        span { "{count} msgs" }
+                                    }
+                                    span { "{info.session_id}" }
                                 }
-                                span { "{info.session_id}" }
-                            }
-                            if let Some(snippet) = info.last_message_snippet() {
-                                div { class: "session-quote", "{snippet}" }
+                                if let Some(snippet) = info.last_message_snippet() {
+                                    div { class: "session-quote", "{snippet}" }
+                                }
                             }
                         }
-                        if confirm_delete.read().as_deref() == Some(info.session_id.as_str()) {
-                            div { class: "confirm-row", onclick: move |e: Event<MouseData>| e.stop_propagation(),
-                                span { "Delete?" }
-                                button {
-                                    class: "btn danger small",
-                                    onclick: {
-                                        let session_id = info.session_id.clone();
-                                        move |_| {
-                                            let session_id = session_id.clone();
-                                            confirm_delete.set(None);
-                                            spawn_forever(async move {
-                                                let Some(client) = ctx.client.peek().clone() else { return };
-                                                match client.session_delete(&session_id).await {
-                                                    Ok(()) => {
-                                                        let mut sessions = ctx.sessions;
-                                                        sessions.write().retain(|s| s.session_id != session_id);
-                                                    }
-                                                    Err(e) => show_toast(&ctx, format!("Delete failed: {e}")),
-                                                }
-                                            });
-                                        }
-                                    },
-                                    "Delete"
-                                }
-                                button {
-                                    class: "btn secondary small",
-                                    onclick: move |_| confirm_delete.set(None),
-                                    "Cancel"
-                                }
-                            }
-                        } else {
-                            button {
-                                class: "icon-btn trash",
-                                onclick: {
-                                    let session_id = info.session_id.clone();
-                                    move |e: Event<MouseData>| {
-                                        e.stop_propagation();
-                                        confirm_delete.set(Some(session_id.clone()));
-                                    }
-                                },
-                                Icon { name: "trash" }
+                        SwipeDelete {
+                            on_delete: {
+                                let session_id = info.session_id.clone();
+                                move |()| confirm_delete.set(Some(session_id.clone()))
                             }
                         }
                     }
@@ -138,6 +103,29 @@ pub fn SessionsView() -> Element {
             onclick: move |_| new_session(&ctx),
             Icon { name: "plus" }
             "New chat"
+        }
+
+        if let Some(session_id) = confirm_delete() {
+            ConfirmDelete {
+                title: "Delete this chat?",
+                body: "The whole conversation goes from the goose server. \
+                       This cannot be undone.",
+                on_cancel: move |()| confirm_delete.set(None),
+                on_confirm: move |()| {
+                    let session_id = session_id.clone();
+                    confirm_delete.set(None);
+                    spawn_forever(async move {
+                        let Some(client) = ctx.client.peek().clone() else { return };
+                        match client.session_delete(&session_id).await {
+                            Ok(()) => {
+                                let mut sessions = ctx.sessions;
+                                sessions.write().retain(|s| s.session_id != session_id);
+                            }
+                            Err(e) => show_toast(&ctx, format!("Delete failed: {e}")),
+                        }
+                    });
+                },
+            }
         }
     }
 }

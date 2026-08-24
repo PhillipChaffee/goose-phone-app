@@ -67,6 +67,11 @@ pub struct ChatMeta {
     /// `running` | `stopped` | `absent` (absent = recreated on next wake).
     #[serde(default)]
     pub status: String,
+    /// `provider/model` the chat was created with, if one was named. The
+    /// manager has always sent this; it is what the settings sheet can show
+    /// before the chat's container is awake enough to have a session.
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default)]
     pub last_active: f64,
 }
@@ -75,6 +80,60 @@ impl ChatMeta {
     #[must_use]
     pub fn is_running(&self) -> bool {
         self.status == "running"
+    }
+}
+
+/// What happened to a file in a session's diff.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FileStatus {
+    Added,
+    Deleted,
+    #[default]
+    Modified,
+}
+
+/// One file's entry in `GET /session/:id/diff` — `OpenCode`'s
+/// `SnapshotFileDiff` (`packages/schema/src/file-diff.ts`).
+#[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
+pub struct FileDiff {
+    /// Repo-relative path. Upstream names the field `file`; the mock
+    /// `OpenCode` server in personal-ai-setup names it `path`, hence the
+    /// alias.
+    #[serde(default, alias = "path")]
+    pub file: String,
+    /// Unified patch, as `jsdiff`'s `formatPatch` writes it: a four-line
+    /// `Index:` preamble and then **one** `@@` hunk carrying the *whole*
+    /// file, because `Snapshot.diffFull` asks for
+    /// `context: Number.MAX_SAFE_INTEGER`. So a three-line change in a
+    /// 1200-line file arrives as 1204 lines, and anything rendering this has
+    /// to re-hunk it (`src/diff.rs` in the app). Empty for a binary file.
+    #[serde(default)]
+    pub patch: String,
+    #[serde(default)]
+    pub additions: u32,
+    #[serde(default)]
+    pub deletions: u32,
+    /// Absent or unrecognised reads as [`FileStatus::Modified`] rather than
+    /// failing the whole entry — a status this client has not heard of is
+    /// still a file worth showing.
+    #[serde(default, deserialize_with = "de_file_status")]
+    pub status: FileStatus,
+}
+
+fn de_file_status<'de, D: serde::Deserializer<'de>>(d: D) -> Result<FileStatus, D::Error> {
+    let raw = Option::<String>::deserialize(d)?;
+    Ok(match raw.as_deref() {
+        Some("added") => FileStatus::Added,
+        Some("deleted") => FileStatus::Deleted,
+        _ => FileStatus::Modified,
+    })
+}
+
+impl FileDiff {
+    /// A binary file: the server sends no patch and no counts for one.
+    #[must_use]
+    pub fn is_binary(&self) -> bool {
+        self.patch.trim().is_empty()
     }
 }
 
@@ -147,6 +206,175 @@ pub struct SessionMeta {
     pub id: String,
     pub title: String,
     pub directory: String,
+    /// What the session is currently set to. `OpenCode` writes this on every
+    /// turn whose model or variant differs from the record, so it is the
+    /// server's own answer to "what will the next message use".
+    pub model: Option<SessionModel>,
+}
+
+/// The model a session is set to, as `Session.model` ships it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct SessionModel {
+    /// Model id within its provider, e.g. `deepseek-v4-flash`.
+    pub id: String,
+    #[serde(rename = "providerID")]
+    pub provider_id: String,
+    /// Thinking-effort tier, `OpenCode`'s "variant". Recorded as the literal
+    /// string `default` when the turn asked for none.
+    pub variant: Option<String>,
+}
+
+impl SessionModel {
+    /// `provider/model` — the one form the manager, the composer and the
+    /// prompt body all speak.
+    #[must_use]
+    pub fn reference(&self) -> Option<String> {
+        (!self.id.is_empty() && !self.provider_id.is_empty())
+            .then(|| format!("{}/{}", self.provider_id, self.id))
+    }
+
+    /// The variant that is an actual choice. `default` is not one: it is how
+    /// `OpenCode` records "no variant was asked for".
+    #[must_use]
+    pub fn effort(&self) -> Option<&str> {
+        self.variant
+            .as_deref()
+            .filter(|v| !v.is_empty() && *v != "default")
+    }
+}
+
+/// One model in a chat server's catalogue (`Provider.models[id]`).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct ModelInfo {
+    pub id: String,
+    #[serde(rename = "providerID")]
+    pub provider_id: String,
+    pub name: String,
+    pub limit: ModelLimit,
+    /// Thinking-effort tiers this model accepts, keyed by variant name. It is
+    /// legitimately empty — `OpenCode` returns no variants at all for the
+    /// minimax / qwen / glm / kimi / deepseek-v3 families, which includes the
+    /// template's default small model.
+    pub variants: std::collections::BTreeMap<String, Value>,
+}
+
+impl ModelInfo {
+    /// `provider/model`, matching what `create_chat` and `prompt_async` take.
+    #[must_use]
+    pub fn reference(&self) -> String {
+        format!("{}/{}", self.provider_id, self.id)
+    }
+
+    /// Effort tiers, weakest first.
+    ///
+    /// The wire shape is a JSON object and `serde_json`'s map is sorted, so
+    /// the server's own ordering is gone by the time this decodes — and
+    /// alphabetical would put `high` before `low`. Ordering by the tier
+    /// ladder `OpenCode` builds them from restores an order a reader can use;
+    /// a name outside the ladder keeps its place at the end rather than
+    /// disappearing.
+    #[must_use]
+    pub fn efforts(&self) -> Vec<&str> {
+        const LADDER: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+        let mut names: Vec<&str> = self.variants.keys().map(String::as_str).collect();
+        names.sort_by_key(|n| {
+            (
+                LADDER.iter().position(|l| l == n).unwrap_or(LADDER.len()),
+                *n,
+            )
+        });
+        names
+    }
+}
+
+/// A model's declared limits. Read-only catalogue data: nothing in the
+/// prompt API takes a context window, and the one route that rewrites it
+/// (`PATCH /config`) restarts the chat's server.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct ModelLimit {
+    /// Context window in tokens. Typed `f64` because the server's schema
+    /// types it as a finite number: a `200000.0` must not make the whole
+    /// catalogue fail to decode.
+    pub context: f64,
+}
+
+impl ModelLimit {
+    /// The context window in whole tokens, or `None` if none was declared.
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "guarded positive above, and a context window is many orders \
+                  of magnitude inside u64"
+    )]
+    pub fn context_tokens(&self) -> Option<u64> {
+        (self.context >= 1.0).then_some(self.context as u64)
+    }
+}
+
+/// `GET /config/providers` and `GET /provider` differ only in the key their
+/// provider array hangs off; both carry the same `Provider` objects.
+#[derive(Debug, Deserialize)]
+struct ProviderCatalog {
+    #[serde(default)]
+    providers: Vec<ProviderEntry>,
+    #[serde(default)]
+    all: Vec<ProviderEntry>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ProviderEntry {
+    id: String,
+    models: std::collections::BTreeMap<String, ModelInfo>,
+}
+
+impl ProviderCatalog {
+    /// Every model, flattened, with each entry's `providerID` filled in from
+    /// its provider when the server left it off.
+    fn models(self) -> Vec<ModelInfo> {
+        let mut out: Vec<ModelInfo> = self
+            .providers
+            .into_iter()
+            .chain(self.all)
+            .flat_map(|p| {
+                let provider_id = p.id;
+                p.models.into_iter().map(move |(key, mut m)| {
+                    if m.id.is_empty() {
+                        m.id = key;
+                    }
+                    if m.provider_id.is_empty() {
+                        m.provider_id.clone_from(&provider_id);
+                    }
+                    if m.name.is_empty() {
+                        m.name.clone_from(&m.id);
+                    }
+                    m
+                })
+            })
+            .collect();
+        // Both keys are read because a build answers on one route or the
+        // other, but a build that fills in both would otherwise hand back
+        // every model twice — and two entries with the same reference are
+        // indistinguishable in a picker, so there is nothing downstream can
+        // do about it.
+        out.sort_by(|a, b| {
+            a.provider_id
+                .cmp(&b.provider_id)
+                .then_with(|| a.id.cmp(&b.id))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        out.dedup_by(|a, b| a.provider_id == b.provider_id && a.id == b.id);
+        out.sort_by(|a, b| {
+            a.provider_id
+                .cmp(&b.provider_id)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        out
+    }
 }
 
 /// Events off a chat's SSE stream, pre-dispatched on the `type` tag.
@@ -452,6 +680,48 @@ impl CodeClient {
         Ok(serde_json::from_value(v).unwrap_or_default())
     }
 
+    /// Every model a chat's `OpenCode` server can route to, with its context
+    /// window and its thinking-effort tiers.
+    ///
+    /// Two routes carry the same catalogue. `/config/providers` is the older
+    /// and more widely deployed of the two, `/provider` the newer; the
+    /// container tracks a rolling `:latest` tag, so this asks for the first
+    /// and falls back to the second instead of betting on which build is
+    /// installed.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or waking a stopped
+    /// chat outruns the client's 150s request timeout, and
+    /// [`CodeError::Status`] from the *fallback* route when neither answers —
+    /// a build that has only one of the two still succeeds.
+    pub async fn models(&self, chat_id: &str) -> Result<Vec<ModelInfo>, CodeError> {
+        let mut last: Option<CodeError> = None;
+        for path in ["/config/providers", "/provider"] {
+            let attempt = self
+                .req(reqwest::Method::GET, &Self::chat_path(chat_id, path))
+                .send()
+                .await;
+            match attempt {
+                Ok(resp) => match Self::json_of(resp).await {
+                    Ok(v) => {
+                        if let Ok(catalog) = serde_json::from_value::<ProviderCatalog>(v) {
+                            let models = catalog.models();
+                            if !models.is_empty() {
+                                return Ok(models);
+                            }
+                        }
+                    }
+                    Err(e) => last = Some(e),
+                },
+                Err(e) => last = Some(e.into()),
+            }
+        }
+        // Both routes answered but neither held a catalogue: an empty list is
+        // the honest report, and the sheet renders it as "none offered".
+        last.map_or_else(|| Ok(Vec::new()), Err)
+    }
+
     /// Create the chat's `OpenCode` session in its workspace.
     ///
     /// # Errors
@@ -504,7 +774,10 @@ impl CodeClient {
 
     /// Fire-and-forget prompt: the turn runs server-side; progress arrives
     /// over the SSE stream. `model` is `provider/model`; one without a `/`
-    /// is dropped and the session's own model is used.
+    /// is dropped and the session's own model is used. `variant` is the
+    /// thinking-effort tier, which is a property of the turn in the same way
+    /// the model is — `OpenCode` copies both onto the session record when
+    /// they differ from what is there.
     ///
     /// # Errors
     ///
@@ -520,12 +793,16 @@ impl CodeClient {
         session_id: &str,
         text: &str,
         model: Option<&str>,
+        variant: Option<&str>,
     ) -> Result<(), CodeError> {
         let mut body = json!({"parts": [{"type": "text", "text": text}]});
         if let Some(m) = model {
             if let Some((provider, model_id)) = m.split_once('/') {
                 body["model"] = json!({"providerID": provider, "modelID": model_id});
             }
+        }
+        if let Some(v) = variant.filter(|v| !v.is_empty()) {
+            body["variant"] = json!(v);
         }
         Self::json_of(
             self.req(
@@ -560,7 +837,12 @@ impl CodeClient {
         .map(|_| ())
     }
 
-    /// The session's cumulative diff (`FileDiff[]`, kept raw for rendering).
+    /// The session's cumulative diff, one [`FileDiff`] per changed file.
+    ///
+    /// Decoded element by element: an entry this client cannot make sense of
+    /// is dropped on its own rather than collapsing the whole answer to "no
+    /// changes", which is what a whole-array `unwrap_or_default` would do the
+    /// day upstream adds a field shape we do not expect.
     ///
     /// # Errors
     ///
@@ -568,8 +850,8 @@ impl CodeClient {
     /// chat outruns the client's 150s request timeout, and
     /// [`CodeError::Status`] on a non-2xx answer (404 for an unknown
     /// `chat_id` or `session_id`).
-    pub async fn diff(&self, chat_id: &str, session_id: &str) -> Result<Value, CodeError> {
-        Self::json_of(
+    pub async fn diff(&self, chat_id: &str, session_id: &str) -> Result<Vec<FileDiff>, CodeError> {
+        let body = Self::json_of(
             self.req(
                 reqwest::Method::GET,
                 &Self::chat_path(chat_id, &format!("/session/{session_id}/diff")),
@@ -577,7 +859,14 @@ impl CodeClient {
             .send()
             .await?,
         )
-        .await
+        .await?;
+        let Value::Array(items) = body else {
+            return Ok(Vec::new());
+        };
+        Ok(items
+            .into_iter()
+            .filter_map(|item| serde_json::from_value(item).ok())
+            .collect())
     }
 
     /// Pending permission asks (reconnect catch-up).
@@ -731,11 +1020,56 @@ fn parse_sse_frame(frame: &[u8]) -> Option<CodeEvent> {
 #[cfg(test)]
 #[expect(
     clippy::panic,
-    reason = "test assertions: an unexpected event kind is a test failure, and panic! carries the offending value into the report"
+    clippy::unwrap_used,
+    reason = "test assertions: an unexpected event kind or a fixture that does not decode is a test failure, and the panic carries the offending value into the report"
 )]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Both routes carry the same providers under different keys, so a build
+    /// that fills in both must not hand back every model twice: two entries
+    /// with the same reference are indistinguishable in a picker.
+    #[test]
+    fn a_model_on_both_keys_is_returned_once() {
+        let raw = json!({
+            "providers": [{"id": "anthropic", "models": {
+                "claude-sonnet-4-5": {"name": "Claude Sonnet 4.5"}
+            }}],
+            "all": [{"id": "anthropic", "models": {
+                "claude-sonnet-4-5": {"name": "Claude Sonnet 4.5"}
+            }}]
+        });
+        let models = serde_json::from_value::<ProviderCatalog>(raw)
+            .unwrap()
+            .models();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].reference(), "anthropic/claude-sonnet-4-5");
+    }
+
+    /// The same model id offered by two providers is two different models —
+    /// one direct, one proxied — and both have to survive the flattening.
+    #[test]
+    fn the_same_id_from_two_providers_is_two_models() {
+        let raw = json!({
+            "providers": [
+                {"id": "anthropic", "models": {
+                    "claude-sonnet-4-5": {"name": "Claude Sonnet 4.5"}
+                }},
+                {"id": "opencode", "models": {
+                    "claude-sonnet-4-5": {"name": "Claude Sonnet 4.5"}
+                }}
+            ]
+        });
+        let models = serde_json::from_value::<ProviderCatalog>(raw)
+            .unwrap()
+            .models();
+        let refs: Vec<String> = models.iter().map(ModelInfo::reference).collect();
+        assert_eq!(
+            refs,
+            ["anthropic/claude-sonnet-4-5", "opencode/claude-sonnet-4-5"]
+        );
+    }
 
     #[test]
     fn dispatches_part_updated_with_delta() {
@@ -806,5 +1140,68 @@ mod tests {
             CodeEvent::Unknown { tag, .. } => assert_eq!(tag, "todo.updated"),
             other => panic!("wrong event: {other:?}"),
         }
+    }
+
+    #[test]
+    fn session_carries_its_model_and_effort() {
+        let raw = json!({
+            "id": "ses_1", "title": "t", "directory": "/chat/workspace",
+            "version": "1.0.0", "projectID": "p", "slug": "s",
+            "time": {"created": 1, "updated": 2},
+            "model": {"id": "deepseek-v4", "providerID": "opencode", "variant": "high"}
+        });
+        let s: SessionMeta = serde_json::from_value(raw).unwrap();
+        let model = s.model.unwrap_or_default();
+        assert_eq!(model.reference().as_deref(), Some("opencode/deepseek-v4"));
+        assert_eq!(model.effort(), Some("high"));
+    }
+
+    /// `default` is how `OpenCode` records "the turn asked for no variant", so
+    /// it must not show up as a chosen effort tier.
+    #[test]
+    fn default_variant_is_not_an_effort() {
+        let model = SessionModel {
+            id: "minimax-m2.7".into(),
+            provider_id: "opencode".into(),
+            variant: Some("default".into()),
+        };
+        assert_eq!(model.effort(), None);
+    }
+
+    #[test]
+    fn catalog_decodes_from_either_route() {
+        let models = json!({
+            "gpt-5.2": {
+                "id": "gpt-5.2", "providerID": "openai", "name": "GPT-5.2",
+                "limit": {"context": 400_000.0, "output": 128_000.0},
+                "variants": {"high": {}, "low": {}, "none": {}, "xhigh": {}}
+            },
+            "minimax-m2.7": {
+                "id": "minimax-m2.7", "providerID": "opencode", "name": "MiniMax M2.7",
+                "limit": {"context": 204_800}
+            }
+        });
+        for body in [
+            json!({"providers": [{"id": "x", "models": models}], "default": {}}),
+            json!({"all": [{"id": "x", "models": models}], "default": {}, "connected": []}),
+        ] {
+            let catalog: ProviderCatalog = serde_json::from_value(body).unwrap();
+            let all = catalog.models();
+            assert_eq!(all.len(), 2);
+            let gpt = all.iter().find(|m| m.id == "gpt-5.2").unwrap();
+            assert_eq!(gpt.reference(), "openai/gpt-5.2");
+            assert_eq!(gpt.limit.context_tokens(), Some(400_000));
+            // Weakest first, not the alphabetical order the map decoded into.
+            assert_eq!(gpt.efforts(), ["none", "low", "high", "xhigh"]);
+
+            let mini = all.iter().find(|m| m.id == "minimax-m2.7").unwrap();
+            assert!(mini.efforts().is_empty());
+            assert_eq!(mini.limit.context_tokens(), Some(204_800));
+        }
+    }
+
+    #[test]
+    fn a_model_with_no_declared_window_reports_none() {
+        assert_eq!(ModelLimit::default().context_tokens(), None);
     }
 }

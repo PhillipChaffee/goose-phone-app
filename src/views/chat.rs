@@ -2,9 +2,16 @@ use dioxus::dioxus_core::spawn_forever;
 use dioxus::document;
 use dioxus::prelude::*;
 
+use goose_acp_client::ConfigOption;
+
 use crate::icons::Icon;
 use crate::markdown;
-use crate::state::{answer_permission, send_prompt, stop_turn, use_app_ctx, ChatItem, Screen};
+use crate::state::{
+    answer_permission, send_prompt, stop_turn, use_app_ctx, ChatItem, Screen, Usage,
+};
+use crate::views::session_settings::{
+    choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
+};
 
 #[component]
 pub fn ChatView() -> Element {
@@ -28,12 +35,18 @@ pub fn ChatView() -> Element {
     let running = chat.running;
     let can_send = !running && !chat.loading;
 
-    // The agent sends every session config option; the picker only offers the
-    // model. The others (provider, mode, thinking effort) are deliberately
-    // not surfaced yet — one control at a time.
+    // Whatever the agent says it has, in the order it says it: provider,
+    // mode, model and thinking effort today. Reading the list rather than
+    // naming ids means a fifth option upstream appears without an app
+    // change, and one goose stops sending disappears honestly.
     let config = (ctx.config_options)();
-    let model_option = config.iter().find(|o| o.config_id == "model").cloned();
-    let mut picker = use_signal(|| false);
+    let chip_label = config
+        .iter()
+        .find(|o| o.config_id == "model")
+        .and_then(ConfigOption::current_label)
+        .map_or_else(|| "Session".to_owned(), str::to_owned);
+    let rows = goose_setting_rows(&config, usage);
+    let mut sheet = use_signal(|| false);
 
     let mut submit = move || {
         let text = draft.peek().trim().to_string();
@@ -93,11 +106,12 @@ pub fn ChatView() -> Element {
                 },
             }
             div { class: "composer-row",
-                if let Some(model) = model_option.as_ref() {
+                if !rows.is_empty() {
                     button {
                         class: "composer-chip action",
-                        onclick: move |_| picker.set(true),
-                        {model.current_label().unwrap_or("Model").to_string()}
+                        title: "Session settings",
+                        onclick: move |_| sheet.set(true),
+                        span { class: "chip-label", "{chip_label}" }
                         Icon { name: "chevron-down" }
                     }
                 }
@@ -125,39 +139,53 @@ pub fn ChatView() -> Element {
             }
         }
 
-        if picker() {
-            if let Some(model) = model_option {
-                div { class: "modal-backdrop", onclick: move |_| picker.set(false),
-                    div { class: "modal sheet", onclick: move |e: Event<MouseData>| e.stop_propagation(),
-                        h2 { "{model.name}" }
-                        div { class: "choice-list",
-                            for choice in model.options.iter() {
-                                button {
-                                    key: "{choice.value}",
-                                    class: if model.current_value.as_deref() == Some(choice.value.as_str()) {
-                                        "choice selected"
-                                    } else {
-                                        "choice"
-                                    },
-                                    onclick: {
-                                        let value = choice.value.clone();
-                                        move |_| {
-                                            crate::state::set_config_option(&ctx, "model", &value);
-                                            picker.set(false);
-                                        }
-                                    },
-                                    span { class: "choice-name", "{choice.name}" }
-                                    if model.current_value.as_deref() == Some(choice.value.as_str()) {
-                                        Icon { name: "check" }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+        if sheet() {
+            SessionSettingsSheet {
+                backend: "goose",
+                rows,
+                onchoose: move |(config_id, value): (String, String)| {
+                    crate::state::set_config_option(&ctx, &config_id, &value);
+                },
+                onclose: move |()| sheet.set(false),
             }
         }
     }
+}
+
+/// The goose tab's rows: every option the agent offers, plus the one fact
+/// about the session that is worth stating and cannot be changed.
+///
+/// Context length is that fact. `session/set_config_option` routes exactly
+/// four ids — provider, mode, model, `thinking_effort` — and rejects anything
+/// else; a context window reaches the client only as read-only information
+/// about a model. The number is already flowing in on every `usage_update`,
+/// so the sheet reports it rather than pretending to a control.
+fn goose_setting_rows(config: &[ConfigOption], usage: Option<Usage>) -> Vec<SettingRow> {
+    let mut rows: Vec<SettingRow> = config
+        .iter()
+        .map(|option| {
+            SettingRow::select(
+                &option.config_id,
+                &option.name,
+                option.current_value.as_deref(),
+                option
+                    .options
+                    .iter()
+                    .map(|c| SettingChoice::new(&c.value, choice_label(&c.name, &c.value)))
+                    .collect(),
+                option.description.clone(),
+            )
+        })
+        .collect();
+    if let Some((_, limit)) = usage {
+        rows.push(SettingRow::fact(
+            "context_length",
+            "Context length",
+            format!("{} tokens", format_tokens(limit)),
+            "Fixed by the model. The agent takes no context window on a session.",
+        ));
+    }
+    rows
 }
 
 /// Render a whole transcript, folding runs of tool calls into one line.
@@ -350,7 +378,7 @@ fn tool_icon(kind: &str) -> &'static str {
     }
 }
 
-fn format_tokens(n: u64) -> String {
+pub(crate) fn format_tokens(n: u64) -> String {
     // Scoped to this one cast, not to the whole function: anything else added
     // here should have to justify its own arithmetic.
     #[expect(

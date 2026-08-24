@@ -22,6 +22,7 @@ fn path_for(name: &str) -> Option<&'static str> {
         "home" => "M3 10.5 12 3l9 7.5M5.5 9.5V20a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V9.5",
         "code" => "m8 6-6 6 6 6M16 6l6 6-6 6",
         "chevron-left" => "m15 5-7 7 7 7",
+        "chevron-right" => "m9 5 7 7-7 7",
         "plus" => "M12 5v14M5 12h14",
         "chevron-down" => "m6 9 6 6 6-6",
         "check" => "m5 13 4 4 10-10",
@@ -40,6 +41,9 @@ fn path_for(name: &str) -> Option<&'static str> {
         "arrow-up" => "M12 20V4M5 11l7-7 7 7",
         "wrench" => "M14.7 6.3a4 4 0 0 0 5 5l-9.4 9.4a2.1 2.1 0 0 1-3-3z",
         "diff" => "M12 5v10M7 10h10M7 19h10",
+        // A line that runs on, turns back and points home: the soft-wrap
+        // toggle on the review screen.
+        "wrap-text" => "M4 6h16M4 12h13a3 3 0 1 1 0 6h-5M14 16l-2 2 2 2M4 18h7",
         "pull-request" => "M6 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 9v12M18 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 15V9a3 3 0 0 0-3-3h-4m0 0 3-3m-3 3 3 3",
         _ => return None,
     })
