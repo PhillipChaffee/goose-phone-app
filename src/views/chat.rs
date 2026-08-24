@@ -447,6 +447,14 @@ fn tool_icon(kind: &str) -> &'static str {
     }
 }
 
+/// A token count, as short as it can be said without losing anything.
+///
+/// The decimal earns its place under ten thousand, where a tenth of a
+/// thousand is a tenth of what is on screen. Above that it is noise that
+/// costs room: "128.0k/200.0k" measured 106px of the 306px the goose
+/// composer's chip row has at 360pt, which is what left the model name with
+/// nothing to give when the effort tier arrived beside it. "128k/200k" says
+/// the same thing in 86.
 pub(crate) fn format_tokens(n: u64) -> String {
     // Scoped to this one cast, not to the whole function: anything else added
     // here should have to justify its own arithmetic.
@@ -458,6 +466,8 @@ pub(crate) fn format_tokens(n: u64) -> String {
     let tokens = n as f64;
     if n >= 1_000_000 {
         format!("{:.1}M", tokens / 1_000_000.0)
+    } else if n >= 10_000 {
+        format!("{:.0}k", tokens / 1_000.0)
     } else if n >= 1_000 {
         format!("{:.1}k", tokens / 1_000.0)
     } else {
@@ -583,5 +593,25 @@ fn permission_label(name: Option<&str>, option_id: &str) -> String {
         "reject_once" => "Reject".to_string(),
         "reject_always" => "Always reject".to_string(),
         other => other.replace('_', " "),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_tokens;
+
+    /// A count keeps its decimal only where the decimal is a real difference.
+    /// Above ten thousand it is a hundred tokens, and it is spent on the one
+    /// row in the app that has no width to spare.
+    #[test]
+    fn a_token_count_carries_a_decimal_only_while_it_says_something() {
+        assert_eq!(format_tokens(0), "0");
+        assert_eq!(format_tokens(842), "842");
+        assert_eq!(format_tokens(1_200), "1.2k");
+        assert_eq!(format_tokens(9_400), "9.4k");
+        assert_eq!(format_tokens(10_000), "10k");
+        assert_eq!(format_tokens(128_400), "128k");
+        assert_eq!(format_tokens(200_000), "200k");
+        assert_eq!(format_tokens(1_500_000), "1.5M");
     }
 }

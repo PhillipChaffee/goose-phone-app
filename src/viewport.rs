@@ -106,6 +106,14 @@ pub(crate) fn use_close_open_row() {
 /// replaced another, or a tap on the button. It is deliberately read as
 /// `!== false`, because before this listener has run there is nothing to have
 /// scrolled away from and the pin must not wait on it.
+///
+/// Scrolling is not the only thing that moves the bottom of a transcript
+/// away from the reader, which is why there is a `ResizeObserver` here as
+/// well as a scroll listener. The scroller losing *height* at a fixed
+/// `scrollTop` has exactly the same effect and fires no scroll event at all:
+/// the keyboard shrinks `.app` to `--vv-height` — 68px for the accessory bar
+/// alone, far more once the keys are up — and a draft growing to several
+/// lines takes the same room out of the transcript from the other end.
 const TRANSCRIPT_BOTTOM: &str = r"
 (() => {
   if (window.__tbWired) return;
@@ -115,13 +123,38 @@ const TRANSCRIPT_BOTTOM: &str = r"
   // next frame pins it again, and an exact test would flash the button on
   // for that frame of every streamed part.
   const NEAR = 48;
-  document.addEventListener('scroll', (e) => {
-    const el = e.target;
-    if (el !== window.__transcript) return;
+  const settle = (el) => {
     const away = el.scrollHeight - el.scrollTop - el.clientHeight > NEAR;
     window.__atBottom = !away;
     document.body.classList.toggle('away-from-bottom', away);
+  };
+  document.addEventListener('scroll', (e) => {
+    if (e.target !== window.__transcript) return;
+    settle(e.target);
   }, { capture: true, passive: true });
+  // A shorter transcript, same scrollTop. Being at the bottom is a place
+  // rather than an offset, so a reader who was there is taken there again —
+  // that is what every native chat does when the keyboard covers the last
+  // message, and it beats the other reading of the same event, which is to
+  // tell them they have left a place they never moved from. A reader who was
+  // somewhere else is left where they are and only the answer is recomputed,
+  // since the distance to the bottom has just changed under them in whichever
+  // direction the box moved.
+  const observer = new ResizeObserver(() => {
+    const el = window.__transcript;
+    if (!el) return;
+    if (window.__atBottom === false) settle(el);
+    else el.scrollTop = el.scrollHeight;
+  });
+  window.__tbWatch = (el) => {
+    if (window.__tbWatched === el) return;
+    window.__tbWatched = el;
+    observer.disconnect();
+    observer.observe(el);
+  };
+  // The pin claims the transcript from an effect, and whether that effect
+  // has already run by the time this one does is not something to depend on.
+  if (window.__transcript) window.__tbWatch(window.__transcript);
 })();
 ";
 
@@ -153,6 +186,11 @@ fn pin_script(id: &str) -> String {
            if (!el) return; \
            const fresh = window.__transcript !== el; \
            window.__transcript = el; \
+           /* Watched for height as well as listened to for scrolling: a \
+              transcript that loses height under a reader who was at its \
+              bottom fires no scroll event, and the answer would go stale \
+              with the button hidden. */ \
+           if (window.__tbWatch) window.__tbWatch(el); \
            /* A transcript with nothing to scroll is at its bottom by \
               definition, and a transcript that has just replaced another has \
               not been read back from. Either way the answer is stale, and \
@@ -330,7 +368,7 @@ pub(crate) fn use_pull_to_refresh() {
 
 #[cfg(test)]
 mod tests {
-    use super::{jump_script, pin_script};
+    use super::{jump_script, pin_script, TRANSCRIPT_BOTTOM};
 
     /// Both scripts are `format!` over a wall of escaped braces, and getting
     /// one wrong fails silently on a device: the JS either does not parse or
@@ -343,5 +381,29 @@ mod tests {
             assert!(!script.contains("{{") && !script.contains("}}"), "{script}");
         }
         assert!(jump_script("code-chat-scroll").contains("'code-chat-scroll'"));
+    }
+
+    /// Every transcript is watched for height, not only listened to for
+    /// scrolling. The keyboard shrinking the shell moves the bottom of a
+    /// transcript away from a reader who has not scrolled at all, and a
+    /// scroller that nothing observes answers "still at the bottom" for as
+    /// long as the keyboard is up — with the button that would take them back
+    /// down hidden, because that is the same answer.
+    ///
+    /// `docs/measure-scroll-bottom.js` drives these scripts in a browser and
+    /// is where the behaviour itself is checked; this is only the wiring, and
+    /// the wiring is the half that fails silently.
+    #[test]
+    fn a_transcript_is_watched_for_height_as_well_as_for_scrolling() {
+        assert!(
+            TRANSCRIPT_BOTTOM.contains("ResizeObserver"),
+            "{TRANSCRIPT_BOTTOM}"
+        );
+        assert!(
+            TRANSCRIPT_BOTTOM.contains("window.__tbWatch = "),
+            "{TRANSCRIPT_BOTTOM}"
+        );
+        let script = pin_script("chat-scroll");
+        assert!(script.contains("window.__tbWatch(el)"), "{script}");
     }
 }

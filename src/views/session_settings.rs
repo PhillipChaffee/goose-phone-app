@@ -144,11 +144,26 @@ pub(crate) fn choice_label(name: &str, value: &str) -> String {
 /// records the literal string `default` on a session whose turn asked for no
 /// variant (see `SessionModel::effort`), while the app carries `None` for the
 /// same state and goose sends no value at all until one is set.
+///
+/// The two long tiers are shortened, because the chip has nowhere to put
+/// them. On the goose composer at 360pt the label is 120px and "Claude Sonnet
+/// 5" wants 94 of it, so a six-letter tier standing beside it took the name
+/// down to "Claude…" — the chip stopped answering the one question it exists
+/// to answer, in order to answer the second one. `medium`, which goose
+/// serves, and `minimal`, which `OpenCode` does, are the only tiers either
+/// backend has that are long enough to do that, and neither short form is
+/// ambiguous next to the `Max` already on the chip. The sheet the chip opens
+/// spells every tier out in full, and `.chip-effort` caps anything a backend
+/// sends that is not on either ladder.
 pub(crate) fn chip_effort(current: Option<&str>) -> Option<String> {
     let raw = current
         .map(str::trim)
         .filter(|v| !v.is_empty() && *v != "default")?;
-    Some(choice_label(raw, raw))
+    Some(match raw.to_ascii_lowercase().as_str() {
+        "minimal" => "Min".to_owned(),
+        "medium" => "Med".to_owned(),
+        _ => choice_label(raw, raw),
+    })
 }
 
 fn humanize(raw: &str) -> String {
@@ -336,6 +351,28 @@ mod tests {
         assert_eq!(chip_effort(Some("max")), Some("Max".to_owned()));
         assert_eq!(chip_effort(Some("xhigh")), Some("Xhigh".to_owned()));
         assert_eq!(chip_effort(Some("off")), Some("Off".to_owned()));
+    }
+
+    /// No tier either backend serves is long enough to crowd the model name
+    /// off the chip. Five characters is what `.chip-effort` gives one before
+    /// it starts clipping (assets/main.css), and the goose row at 360pt has
+    /// only 120px of label to divide between the two.
+    #[test]
+    fn every_tier_a_backend_serves_fits_the_chip() {
+        assert_eq!(chip_effort(Some("medium")), Some("Med".to_owned()));
+        assert_eq!(chip_effort(Some("minimal")), Some("Min".to_owned()));
+        // goose's ladder, then OpenCode's; `off` and `none` reach the chip
+        // only when a reader picked them from a list that offered something
+        // else, which is a choice worth stating.
+        for tier in [
+            "off", "low", "medium", "high", "max", "none", "minimal", "xhigh",
+        ] {
+            let shown = chip_effort(Some(tier)).unwrap_or_default();
+            assert!(
+                shown.chars().count() <= 5,
+                "{tier} reaches the chip as {shown}"
+            );
+        }
     }
 
     #[test]

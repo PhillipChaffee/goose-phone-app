@@ -1916,11 +1916,12 @@ body.away-from-bottom .scroll-bottom {
  * without it the label holds its full content width and spills out of a chip
  * that has already given way — the pill closes in and the text stays put.
  *
- * The label holds two facts, and only the first may give way, so it is a flex
- * row rather than one ellipsised string: ellipsising the string would eat the
- * effort tier first, since it comes last, and the tier is the entire reason
- * the chip says anything beyond a name. The name is the right thing to lose —
- * it is the long one, and the sheet the chip opens states it in full. */
+ * The label holds two facts, and they give way in a fixed order, so it is a
+ * flex row rather than one ellipsised string: ellipsising the string would eat
+ * the effort tier first, since it comes last, and the tier is the entire
+ * reason the chip says anything beyond a name. The name gives way instead —
+ * but only down to a point, because a name cut to one word has stopped
+ * naming anything. See .chip-effort for where that point is. */
 .chip-label {
   display: flex;
   align-items: baseline;
@@ -1943,9 +1944,24 @@ body.away-from-bottom .scroll-bottom {
  * gets, let alone the 4.5:1 this is. There is no headroom below secondary on
  * this fill, so the step is taken from the other end: the name lifts to
  * primary (9.16:1 light, 9.93:1 dark) and the tier keeps the secondary the
- * chip was already using (4.64:1 and 5.00:1). */
+ * chip was already using (4.64:1 and 5.00:1).
+ *
+ * Pinned, and bounded — the pin alone was the bug. The tier is the fact this
+ * label grew a second element to carry, so it must not be the part that
+ * ellipsises; but an unbounded pinned item spends the label's whole budget
+ * before the name gets any, and the goose row's label is 120px at 360pt while
+ * "Claude Sonnet 5" wants 94 of it. A six-letter tier left the name reading
+ * "Claude…", which is the one thing the chip cannot afford to stop saying.
+ * Five characters clears every tier either backend serves — `Xhigh`, the
+ * widest, measures 4.3 of them, and session_settings.rs shortens goose's
+ * `medium` and OpenCode's `minimal` on the way here — so the cap only ever
+ * bites on a word neither of them has, and it bites the tier rather than the
+ * name. */
 .chip-effort {
   flex-shrink: 0;
+  max-width: 5ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--text-secondary);
 }
 
