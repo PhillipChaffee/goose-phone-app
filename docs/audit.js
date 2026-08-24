@@ -40,6 +40,18 @@ const GEOMETRY = () => {
     const cls = typeof el.className === 'string' ? el.className.trim() : '';
     return el.tagName.toLowerCase() + (cls ? `.${cls.split(/\s+/).join('.')}` : '');
   };
+  // Anything inside something that scrolls sideways is reachable by scrolling
+  // rather than lost off the page, so it is not the spill this checks for: a
+  // session row is a swipe scroller, and its action tray is laid out past the
+  // row's trailing edge on purpose. The scroller itself is still measured —
+  // it is in this same loop, and it is the thing that has to fit.
+  const inSideScroller = (el) => {
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      const o = getComputedStyle(p).overflowX;
+      if ((o === 'auto' || o === 'scroll') && p.scrollWidth > p.clientWidth + 1) return true;
+    }
+    return false;
+  };
 
   for (const el of document.querySelectorAll('*')) {
     const cs = getComputedStyle(el);
@@ -52,7 +64,7 @@ const GEOMETRY = () => {
     // drawer is translated fully off the left edge on purpose. Only something
     // that is partly visible can be said to spill.
     const parked = r.right <= 0.5 || r.left >= vw - 0.5;
-    if (!parked && (r.right > vw + 0.5 || r.left < -0.5)) {
+    if (!parked && !inSideScroller(el) && (r.right > vw + 0.5 || r.left < -0.5)) {
       out.push(`OVERFLOW-X   ${name(el)} left=${r.left.toFixed(0)} right=${r.right.toFixed(0)} vw=${vw}`);
     }
     if (parked) continue;

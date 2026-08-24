@@ -611,10 +611,6 @@ pre {
   cursor: default;
 }
 
-.icon-btn.trash:active:not(:disabled) {
-  color: var(--text-danger);
-}
-
 /* Text buttons take the control radius; the round variant is .icon-btn. */
 .btn {
   display: inline-flex;
@@ -685,13 +681,6 @@ pre {
 .btn:disabled {
   opacity: 0.55;
   cursor: default;
-}
-
-.btn.small {
-  min-height: 32px;
-  padding: 0 12px;
-  font-size: var(--text-xs);
-  line-height: var(--lh-xs);
 }
 
 .btn.grow {
@@ -1013,15 +1002,30 @@ select.field {
 }
 
 /* A card that behaves: it does not tint on press, it lifts.
- * It wraps because the delete confirmation is a sibling of the row body —
- * without this it competes for the same line and crushes the title to one
- * word per line. */
+ *
+ * It is also the swipe scroller. The row's actions are laid out *after* the
+ * card body in a horizontal snap container, so at rest they are past the
+ * right edge and clipped away, and dragging the row left brings them in.
+ *
+ * A scroller rather than an ontouchmove-driven transform on purpose: the
+ * native renderer serialises every listened-to event through a *synchronous*
+ * XHR (`handleVirtualdomEventSync`), so tracking a finger in Rust means ~60
+ * blocking round-trips a second, each with a vdom diff behind it. WebKit does
+ * the tracking, the rubber band, the momentum and the snap on the compositor
+ * for free, with no IPC and no re-render — and it does not synthesise a click
+ * from a touch that became a scroll, so the row's own tap handler needs no
+ * threshold and no suppression flag to keep a swipe from opening the chat.
+ *
+ * Nothing here sets a transform on an ancestor of the floating chrome, so
+ * backdrop-filter is untouched. */
 .session-item {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px;
+  align-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
   background: var(--bg-primary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-xl);
@@ -1029,12 +1033,11 @@ select.field {
   transition: box-shadow 140ms ease, transform 140ms ease;
 }
 
-/* The trailing control aligns with the row's first line, not with the middle
- * of the whole row — at centre it sat against the snippet it has nothing to
- * do with. */
-.session-item > .icon-btn.trash {
-  align-self: flex-start;
-  margin-top: -8px;
+/* A scrollbar under every row in a list of rows is a stripe of chrome the
+ * design does not have. Mail shows no affordance either; the gesture is the
+ * affordance. */
+.session-item::-webkit-scrollbar {
+  display: none;
 }
 
 /* The lift is a shadow, and a shadow on a near-black page is nothing at all,
@@ -1043,6 +1046,61 @@ select.field {
   background: var(--bg-secondary);
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
+}
+
+/* The card body — what the row itself used to be. Exactly the width of the
+ * row, so the tray is out of sight until it is dragged in, and the snap point
+ * at its start is what "closed" means. */
+.session-swipe {
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+}
+
+/* Full row height, and the second snap point: releasing anywhere past halfway
+ * settles with the tray exactly flush to the row's trailing edge. */
+.session-actions {
+  flex: 0 0 auto;
+  display: flex;
+  scroll-snap-align: end;
+}
+
+/* The destructive control rule 7 exempts: this one is pressed, so it takes
+ * the saturated fill rather than a tint. It carries the card's curve on the
+ * trailing edge and is square only along the seam the card body covers — and
+ * that curve is concentric, 15px inside the row's 16px behind a 1px border,
+ * for the same reason the tool-call slab is 11px inside 12px. */
+.swipe-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 84px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 0 15px 15px 0;
+  font-family: inherit;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: var(--lh-sm);
+  cursor: pointer;
+}
+
+.swipe-action .icon {
+  font-size: 20px;
+}
+
+.swipe-action.danger {
+  background: var(--bg-danger);
+  color: var(--text-inverse);
+}
+
+.swipe-action:active {
+  opacity: 0.9;
 }
 
 /* A leading tile, the way both reference apps mark a row. It is a shape, not
@@ -1132,18 +1190,6 @@ select.field {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: 1.5;
-}
-
-/* Full width so it drops onto its own line under the row it belongs to. */
-.confirm-row {
-  flex-basis: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 4px;
-  font-size: var(--text-sm);
-  line-height: var(--lh-sm);
 }
 
 /* ── chat transcript ────────────────────────────────────────────────── */
@@ -1866,6 +1912,16 @@ details[open] > summary::before {
   color: var(--text-secondary);
   font-size: var(--text-xs);
   line-height: var(--lh-xs);
+}
+
+/* An alert says one sentence about what it is about to cost. That is body
+ * text — not the metadata line .modal-session sets, and not the mono slab
+ * .modal-tool is for quoting a tool call. */
+.modal-body {
+  margin-bottom: 20px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--lh-md);
 }
 
 .modal-tool {

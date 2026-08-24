@@ -15,6 +15,7 @@ use crate::code::{
 use crate::icons::Icon;
 use crate::state::{relative_time_secs, use_app_ctx, ConnState};
 use crate::views::chat::render_transcript;
+use crate::views::{ConfirmDelete, SwipeDelete};
 
 #[component]
 pub fn CodeSessionsView() -> Element {
@@ -116,64 +117,39 @@ pub fn CodeSessionsView() -> Element {
                             key: "{meta.id}",
                             class: "session-item",
                             onclick: move |_| open_code_chat(&ctx, meta.clone()),
-                            div { class: "session-tile", Icon { name: "code" } }
-                            div {
-                                class: "session-main",
-                                div { class: "session-head",
-                                    div { class: "session-title", "{meta.title}" }
-                                    span { class: "session-age",
-                                        {relative_time_secs(meta.last_active)}
+                            div { class: "session-swipe",
+                                div { class: "session-tile", Icon { name: "code" } }
+                                div {
+                                    class: "session-main",
+                                    div { class: "session-head",
+                                        div { class: "session-title", "{meta.title}" }
+                                        span { class: "session-age",
+                                            {relative_time_secs(meta.last_active)}
+                                        }
                                     }
-                                }
-                                div { class: "session-meta",
-                                    {
-                                        let turn = running_chat.as_deref() == Some(meta.id.as_str())
-                                            && running_turn;
-                                        let (dot, label) = status_label(&meta, turn);
-                                        rsx! {
-                                            span { class: "chip",
-                                                span { class: "{dot}" }
-                                                "{label}"
-                                            }
-                                            span { "{meta.repo}" }
-                                            if !meta.branch.is_empty() {
-                                                span { "{meta.branch}" }
+                                    div { class: "session-meta",
+                                        {
+                                            let turn = running_chat.as_deref() == Some(meta.id.as_str())
+                                                && running_turn;
+                                            let (dot, label) = status_label(&meta, turn);
+                                            rsx! {
+                                                span { class: "chip",
+                                                    span { class: "{dot}" }
+                                                    "{label}"
+                                                }
+                                                span { "{meta.repo}" }
+                                                if !meta.branch.is_empty() {
+                                                    span { "{meta.branch}" }
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
-                            if confirm_delete.read().as_deref() == Some(meta.id.as_str()) {
-                                div { class: "confirm-row", onclick: move |e: Event<MouseData>| e.stop_propagation(),
-                                    span { "Delete chat + workspace?" }
-                                    button {
-                                        class: "btn danger small",
-                                        onclick: {
-                                            let id = meta.id.clone();
-                                            move |_| {
-                                                confirm_delete.set(None);
-                                                delete_code_chat(&ctx, id.clone());
-                                            }
-                                        },
-                                        "Delete"
-                                    }
-                                    button {
-                                        class: "btn secondary small",
-                                        onclick: move |_| confirm_delete.set(None),
-                                        "Cancel"
-                                    }
-                                }
-                            } else {
-                                button {
-                                    class: "icon-btn trash",
-                                    onclick: {
-                                        let id = meta.id.clone();
-                                        move |e: Event<MouseData>| {
-                                            e.stop_propagation();
-                                            confirm_delete.set(Some(id.clone()));
-                                        }
-                                    },
-                                    Icon { name: "trash" }
+                            SwipeDelete {
+                                on_delete: {
+                                    let id = meta.id.clone();
+                                    move |()| confirm_delete.set(Some(id.clone()))
                                 }
                             }
                         }
@@ -191,6 +167,20 @@ pub fn CodeSessionsView() -> Element {
                 },
                 Icon { name: "plus" }
                 "New session"
+            }
+        }
+
+        if let Some(chat_id) = confirm_delete() {
+            ConfirmDelete {
+                title: "Delete this session?",
+                body: "The container and its workspace go with the chat — the \
+                       branch and anything uncommitted on it included. This \
+                       cannot be undone.",
+                on_cancel: move |()| confirm_delete.set(None),
+                on_confirm: move |()| {
+                    confirm_delete.set(None);
+                    delete_code_chat(&ctx, chat_id.clone());
+                },
             }
         }
     }

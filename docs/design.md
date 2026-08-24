@@ -130,10 +130,28 @@ label never goes inside a fixed-size circular button — it wraps and
 overflows.
 
 A list row is tappable across its **whole** area, not just the text block
-inside it. The handler belongs on the `li`; the trailing control and the
-confirm row stop propagation. With the handler on the inner block, 36% of a
-card — the padding ring and the column under the trash — did nothing while
-still lifting on press.
+inside it. The handler belongs on the `li`; anything else in the row that is
+itself a control stops propagation. With the handler on the inner block, 36%
+of a card — the padding ring and the column under the trailing button — did
+nothing while still lifting on press.
+
+The row's own destructive action is **behind** the row, not on it. A session
+row is a horizontal snap scroller: the card body is a pane exactly as wide as
+the row, and the action tray is the item after it, clipped away until you drag
+the row left. Two things follow from making the drag a scroller instead of a
+transform driven from Rust. The native renderer round-trips every listened-to
+event through a synchronous XHR, so tracking a finger in `ontouchmove` costs
+~60 blocking IPC calls and vdom diffs a second; WebKit does the tracking,
+rubber band, momentum and snap on its own for none of that. And WebKit does
+not synthesise a `click` from a touch that turned into a scroll, so the row's
+tap handler stays exactly where this rule puts it and needs no threshold, no
+suppression flag and no guard to keep a swipe from opening the session.
+
+Two costs that come with it, both accepted: nothing closes a *sibling* open
+row the way Mail does, because knowing another row's scroll offset means an
+`onscroll` listener and that is the per-frame IPC again; and on desktop the
+reveal wants a horizontal trackpad swipe or shift-wheel, which is a real
+narrowing against a button that was always there.
 
 ### 10. Long output folds
 
