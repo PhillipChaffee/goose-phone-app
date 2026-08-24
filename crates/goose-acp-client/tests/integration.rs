@@ -136,6 +136,33 @@ async fn send(tx: &mut WsTx, frame: Value) {
     let _ = tx.send(Message::Text(frame.to_string().into())).await;
 }
 
+/// The canned JSON-RPC text goose leaves in `message`.
+///
+/// This is not decoration. goose builds every error as
+/// `Error::internal_error().data(reason)` / `Error::invalid_params().data(..)`,
+/// so `message` never says anything specific and `data` says everything. A
+/// stub that put the reason in `message` would be testing a shape goose does
+/// not send, and would pass whether or not the client reads `data`.
+const fn canned(code: i64) -> &'static str {
+    match code {
+        -32700 => "Parse error",
+        -32600 => "Invalid Request",
+        -32601 => "Method not found",
+        -32602 => "Invalid params",
+        -32002 => "Session not found",
+        _ => "Internal error",
+    }
+}
+
+/// A JSON-RPC error frame in goose's shape: canned `message`, reason in
+/// `data`.
+fn error_frame(id: Option<&Value>, code: i64, reason: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0", "id": id,
+        "error": {"code": code, "message": canned(code), "data": reason},
+    })
+}
+
 /// Send a `session/update` notification carrying `update`.
 async fn notify(tx: &mut WsTx, session_id: &str, update: Value) {
     send(
@@ -183,8 +210,7 @@ async fn handle_ws(sock: TcpStream, behavior: PromptBehavior) {
                 let out = if cwd.starts_with('/') {
                     json!({"jsonrpc":"2.0","id":id,"result":{"sessionId":"20260821_1"}})
                 } else {
-                    json!({"jsonrpc":"2.0","id":id,
-                           "error":{"code":-32602,"message":"cwd must be absolute"}})
+                    error_frame(id.as_ref(), -32602, "cwd must be absolute")
                 };
                 send(&mut tx, out).await;
             }
@@ -213,12 +239,7 @@ async fn handle_ws(sock: TcpStream, behavior: PromptBehavior) {
                 send(&mut tx, json!({"jsonrpc":"2.0","id":id,"result":{}})).await;
             }
             "unknown/method" => {
-                send(
-                    &mut tx,
-                    json!({"jsonrpc":"2.0","id":id,
-                        "error":{"code":-32601,"message":"method not found"}}),
-                )
-                .await;
+                send(&mut tx, error_frame(id.as_ref(), -32601, "no such method")).await;
             }
             _ => {}
         }
@@ -409,17 +430,28 @@ fn ext_name(ext: &Value) -> String {
         .to_string()
 }
 
+/// The stub's per-connection state.
+///
+/// Secrets are tracked by NAME ONLY — the stub never keeps a credential's
+/// value, for the same reason the app never reads one back.
+#[derive(Default)]
+struct ExtStore {
+    configured: Vec<Value>,
+    secret_keys: HashSet<String>,
+    /// Live session ids. `session/extensions/add` checks membership, so a
+    /// handshake against a session that was never created — or has already
+    /// been deleted — fails the way the real server fails it.
+    sessions: HashSet<String>,
+    next_session: u32,
+}
+
 async fn handle_ext_ws(sock: TcpStream, behavior: ExtBehavior) {
     let Ok(ws) = tokio_tungstenite::accept_hdr_async(sock, check_secret).await else {
         return;
     };
     let (mut tx, mut rx) = ws.split();
 
-    // Per-connection config store. Secrets are tracked by NAME ONLY — the
-    // stub never keeps a credential's value, for the same reason the app never
-    // reads one back.
-    let mut configured: Vec<Value> = Vec::new();
-    let mut secret_keys: HashSet<String> = HashSet::new();
+    let mut store = ExtStore::default();
 
     while let Some(Ok(msg)) = rx.next().await {
         let Message::Text(text) = msg else { continue };
@@ -430,12 +462,11 @@ async fn handle_ext_ws(sock: TcpStream, behavior: ExtBehavior) {
         let method = frame.get("method").and_then(Value::as_str).unwrap_or("");
         let params = frame.get("params").cloned().unwrap_or(Value::Null);
 
-        let outcome = ext_request(method, &params, behavior, &mut configured, &mut secret_keys);
+        let outcome = ext_request(method, &params, behavior, &mut store);
         let reply = match outcome {
             Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
-            Err((code, message)) => {
-                json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
-            }
+            // The reason goes in `data`, as goose sends it.
+            Err((code, reason)) => error_frame(id.as_ref(), code, &reason),
         };
         send(&mut tx, reply).await;
     }
@@ -446,8 +477,7 @@ fn ext_request(
     method: &str,
     params: &Value,
     behavior: ExtBehavior,
-    configured: &mut Vec<Value>,
-    secret_keys: &mut HashSet<String>,
+    store: &mut ExtStore,
 ) -> Result<Value, (i64, String)> {
     match method {
         "initialize" => Ok(json!({
@@ -463,7 +493,7 @@ fn ext_request(
         ]})),
 
         "_goose/unstable/config/extensions/list" => {
-            Ok(json!({"extensions": configured, "warnings": []}))
+            Ok(json!({"extensions": store.configured, "warnings": []}))
         }
 
         "_goose/unstable/config/extensions/add" => {
@@ -478,8 +508,10 @@ fn ext_request(
                 }
             }
             let name = ext_name(&extension);
-            configured.retain(|e| ext_name(&e["extension"]) != name);
-            configured.push(json!({
+            store
+                .configured
+                .retain(|e| ext_name(&e["extension"]) != name);
+            store.configured.push(json!({
                 "extension": extension,
                 "enabled": enabled,
                 "configKey": name_to_key(&name),
@@ -496,7 +528,8 @@ fn ext_request(
                 .get("enabled")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            match configured
+            match store
+                .configured
                 .iter_mut()
                 .find(|e| e["configKey"].as_str() == Some(key))
             {
@@ -515,15 +548,58 @@ fn ext_request(
             // reproduces the skip so a client that ever sent a bare number
             // would fail the handshake below rather than pass silently.
             if params.get("value").and_then(Value::as_str).is_some() {
-                secret_keys.insert(key.to_string());
+                store.secret_keys.insert(key.to_string());
             }
             Ok(json!({}))
+        }
+
+        _ => session_request(method, params, store),
+    }
+}
+
+/// The session half of the stub: enough of `session/new` and `session/delete`
+/// for the credential handshake, which needs a session to run in and makes a
+/// throwaway one when no chat is open.
+///
+/// Session ids are predictable (`ext-1`, `ext-2`, …) so a test can ask
+/// afterwards whether a throwaway really was deleted, and
+/// `session/extensions/add` checks the id — an unverified credential must not
+/// be able to masquerade as a verified one just because the session was made
+/// up.
+fn session_request(
+    method: &str,
+    params: &Value,
+    store: &mut ExtStore,
+) -> Result<Value, (i64, String)> {
+    match method {
+        "session/new" => {
+            let cwd = params.get("cwd").and_then(Value::as_str).unwrap_or("");
+            if !cwd.starts_with('/') {
+                return Err((-32602, format!("cwd must be absolute, got `{cwd}`")));
+            }
+            store.next_session += 1;
+            let sid = format!("ext-{}", store.next_session);
+            store.sessions.insert(sid.clone());
+            Ok(json!({"sessionId": sid}))
+        }
+
+        "session/delete" => {
+            let sid = session_id(params);
+            if store.sessions.remove(sid) {
+                Ok(json!({}))
+            } else {
+                Err((-32002, format!("session not found: {sid}")))
+            }
         }
 
         "_goose/unstable/session/extensions/add" => {
             // The handshake. goose launches the MCP server here, and a
             // stdio child whose declared env key has no stored secret is a
             // hard startup failure — so that is what a missing secret does.
+            let sid = session_id(params);
+            if !store.sessions.contains(sid) {
+                return Err((-32002, format!("session not found: {sid}")));
+            }
             let extension = params.get("extension").cloned().unwrap_or(Value::Null);
             let missing: Vec<String> = extension
                 .get("envKeys")
@@ -531,7 +607,7 @@ fn ext_request(
                 .map(|keys| {
                     keys.iter()
                         .filter_map(Value::as_str)
-                        .filter(|k| !secret_keys.contains(*k))
+                        .filter(|k| !store.secret_keys.contains(*k))
                         .map(str::to_string)
                         .collect()
                 })
@@ -549,8 +625,15 @@ fn ext_request(
             }
         }
 
-        _ => Err((-32601, format!("method not found: {method}"))),
+        other => Err((-32601, format!("method not found: {other}"))),
     }
+}
+
+fn session_id(params: &Value) -> &str {
+    params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
 }
 
 /// The connector the extension tests add: a stdio MCP server with a
@@ -649,9 +732,21 @@ async fn server_errors_surface_as_rpc_errors() {
     let addr = spawn_ws_stub(PromptBehavior::Stream).await;
     let (client, _events, _) = AcpClient::connect(&config(addr, SECRET)).await.unwrap();
 
-    // A relative cwd is rejected by the server.
+    // A relative cwd is rejected by the server. The rejection arrives as
+    // goose sends every error — `message: "Invalid params"`, reason in `data`
+    // — so an error that renders as the canned text has lost the reason.
     let err = client.session_new("not/absolute").await.unwrap_err();
-    assert!(err.to_string().contains("absolute"), "got: {err}");
+    assert_eq!(err.to_string(), "cwd must be absolute", "got: {err}");
+    match &err {
+        AcpError::Rpc { code, message, .. } => {
+            assert_eq!(*code, -32602);
+            assert_eq!(
+                message, "Invalid params",
+                "the stub must send goose's shape"
+            );
+        }
+        other => panic!("expected an Rpc error, got {other:?}"),
+    }
 
     client.close();
 }
@@ -834,6 +929,16 @@ async fn an_extension_that_loses_its_allowlist_is_a_hard_error() {
         other => panic!("expected an Allowlist error, got {other:?}"),
     }
 
+    // And it is not running. The add is sent with `enabled: false` whatever
+    // the caller asked for, so the unrestricted-and-live state the quarantine
+    // code used to clean up never exists in the first place.
+    let listed = client.config_extensions_list().await.unwrap();
+    assert_eq!(listed.extensions.len(), 1);
+    assert!(
+        !listed.extensions[0].enabled,
+        "a failed verification must leave the extension switched off"
+    );
+
     client.close();
 }
 
@@ -882,10 +987,12 @@ async fn a_credential_is_verified_by_handshake_not_by_reading_it_back() {
         .add_extension_verified(&extension, true)
         .await
         .unwrap();
+    let session = client.session_new("/home/demo").await.unwrap();
 
-    // Without the secret the extension cannot start, and the ACP error says so.
+    // Without the secret the extension cannot start, and the ACP error says
+    // so — in `data`, which is the only place goose puts a reason.
     let err = client
-        .session_extension_add("20260821_1", &extension)
+        .session_extension_add(&session.session_id, &extension)
         .await
         .unwrap_err();
     assert!(
@@ -898,9 +1005,72 @@ async fn a_credential_is_verified_by_handshake_not_by_reading_it_back() {
         .await
         .unwrap();
     client
-        .session_extension_add("20260821_1", &extension)
+        .session_extension_add(&session.session_id, &extension)
         .await
         .unwrap();
+
+    client.close();
+}
+
+/// The fresh-install case: nothing has opened a chat, so there is no session
+/// to hand shake in. Skipping the handshake would report a mistyped credential
+/// as connected, so one is created for the check and deleted afterwards —
+/// including when the check fails.
+#[tokio::test]
+async fn the_handshake_borrows_a_throwaway_session_when_none_is_open() {
+    let addr = spawn_ext_stub(ExtBehavior::Faithful).await;
+    let (client, _events, _) = AcpClient::connect(&config(addr, SECRET)).await.unwrap();
+    let extension = mail_extension();
+    client
+        .add_extension_verified(&extension, true)
+        .await
+        .unwrap();
+
+    // No session id: the check still runs, and still catches the missing
+    // credential. "session not found" here would mean it never ran at all.
+    let err = client
+        .verify_extension_starts(None, "/home/demo", &extension)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("MCP_EMAIL_SERVER_PASSWORD"),
+        "the throwaway session must reach the real startup check, got: {err}"
+    );
+
+    client
+        .store_secret("MCP_EMAIL_SERVER_PASSWORD", "an-app-password")
+        .await
+        .unwrap();
+    client
+        .verify_extension_starts(None, "/home/demo", &extension)
+        .await
+        .unwrap();
+
+    // Both throwaways are gone — the failing one too, which is the case a
+    // plain `?` would have leaked.
+    for sid in ["ext-1", "ext-2"] {
+        let err = client
+            .session_extension_add(sid, &extension)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("session not found"),
+            "throwaway session {sid} was left behind: {err}"
+        );
+    }
+
+    // An open session is used as-is: no new session is created for it, so the
+    // next throwaway is still ext-3.
+    let session = client.session_new("/home/demo").await.unwrap();
+    assert_eq!(session.session_id, "ext-3");
+    client
+        .verify_extension_starts(Some(&session.session_id), "/home/demo", &extension)
+        .await
+        .unwrap();
+    client
+        .session_extension_add(&session.session_id, &extension)
+        .await
+        .unwrap(); // a session the caller owns must survive the handshake
 
     client.close();
 }
@@ -930,11 +1100,17 @@ async fn extensions_can_be_toggled_and_the_catalogue_listed() {
     let listed = client.config_extensions_list().await.unwrap();
     assert!(!listed.extensions[0].enabled);
 
+    // The reason names the key, which only `data` carries: `message` is the
+    // canned "Invalid params" and would tell the user nothing.
     let err = client
         .config_extension_set_enabled("no-such-extension", true)
         .await
         .unwrap_err();
-    assert!(err.to_string().contains("not found"), "got: {err}");
+    assert!(
+        err.to_string()
+            .contains("Extension 'no-such-extension' not found"),
+        "got: {err}"
+    );
 
     client.close();
 }

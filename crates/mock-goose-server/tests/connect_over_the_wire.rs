@@ -11,13 +11,17 @@
 // printed so a collision is diagnosable.
 #![expect(
     clippy::unwrap_used,
-    reason = "test harness: an unwrap here is the assertion"
+    clippy::panic,
+    reason = "test harness: an unwrap or a wrong-variant panic is the assertion"
 )]
 
 use std::process::Command;
 use std::time::Duration;
 
-use goose_acp_client::{AcpClient, ConnectConfig, GooseExtension, McpServer, StdioMcpServer};
+use goose_acp_client::{
+    AcpClient, AcpError, ConnectConfig, GooseExtension, McpServer, StdioMcpServer,
+};
+use serde_json::Value;
 
 /// A port of its own, so this can run beside a hand-started mock on 3285.
 const PORT: u16 = 3391;
@@ -80,23 +84,47 @@ async fn the_whole_connect_flow_works_over_the_wire() {
         ["list_mailboxes", "get_emails_content"]
     );
 
-    // The handshake: no credential, no start.
-    let session = client.session_new("/home/demo").await.unwrap();
+    // The handshake: no credential, no start. And it runs with no session
+    // open — `verify_extension_starts` makes a throwaway one — because a
+    // fresh install has never opened a chat, which is exactly when a mistyped
+    // credential most needs catching.
     let err = client
-        .session_extension_add(&session.session_id, &extension)
+        .verify_extension_starts(None, "/home/demo", &extension)
         .await
         .unwrap_err();
     assert!(
         err.to_string().contains("MCP_EMAIL_SERVER_PASSWORD"),
         "got: {err}"
     );
+    // The reason reached us through `data`; `message` is the canned text and
+    // carries nothing a user could act on. Asserting both keeps the mock
+    // honest about the shape goose actually sends.
+    match &err {
+        AcpError::Rpc { message, data, .. } => {
+            assert_eq!(message, "Internal error");
+            assert!(
+                data.as_ref()
+                    .and_then(Value::as_str)
+                    .is_some_and(|d| d.contains("MCP_EMAIL_SERVER_PASSWORD")),
+                "the reason must ride in data: {data:?}"
+            );
+        }
+        other => panic!("expected an Rpc error, got {other:?}"),
+    }
 
     client
         .store_secret("MCP_EMAIL_SERVER_PASSWORD", "an-app-password")
         .await
         .unwrap();
     client
-        .session_extension_add(&session.session_id, &extension)
+        .verify_extension_starts(None, "/home/demo", &extension)
+        .await
+        .unwrap();
+
+    // And with a session in hand, that one is used.
+    let session = client.session_new("/home/demo").await.unwrap();
+    client
+        .verify_extension_starts(Some(&session.session_id), "/home/demo", &extension)
         .await
         .unwrap();
 

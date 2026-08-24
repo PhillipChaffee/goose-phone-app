@@ -12,16 +12,21 @@
 //! no `deny_unknown_fields`, so a camelCase spelling is dropped in silence, and
 //! a dropped allowlist means *every* tool the MCP server publishes is callable.
 //! So nothing here trusts an `add` that returned OK: `add_extension_verified`
-//! re-lists and compares, and when the comparison fails the extension is
-//! switched off on the server before the error is shown.
+//! adds every extension switched OFF, re-lists and compares, and only switches
+//! it on once the allowlist has come back intact. An unrestricted extension is
+//! therefore never live, not even for the round trip it would take to notice
+//! and undo.
 //!
 //! **A credential goes one way only.** Secrets are written with
 //! `config/upsert` + `isSecret`, land in the server's `secrets.yaml`, and are
 //! never read back — `config/read` on a secret returns a clear prefix, so
 //! "check what we stored" is a leak. Verification is a handshake instead:
-//! bring the extension up in the open session and let goose fail if the
-//! credential is missing. Nothing typed into a credential field is persisted
-//! on the phone, and there is deliberately no reveal control.
+//! bring the extension up in a session and let goose fail if the credential is
+//! missing. That handshake always runs — with no chat open, a throwaway
+//! session is created for it and deleted again — because "connected" has to
+//! mean the service answered, not that a token was filed away. Nothing typed
+//! into a credential field is persisted on the phone, and there is
+//! deliberately no reveal control.
 //!
 //! OAuth-based services are absent from the catalogue on purpose. goose binds
 //! the redirect URI on the agent host, never puts the authorization URL in an
@@ -282,6 +287,7 @@ pub(crate) fn add_from_catalog(ctx: &AppCtx, index: usize, values: Vec<String>) 
     let keys: Vec<&'static str> = entry.secrets.iter().map(|s| s.key).collect();
     let display_name = entry.display_name;
     let session_id = ctx.chat.peek().session_id.clone();
+    let cwd = handshake_cwd(ctx);
 
     let ctx = *ctx;
     let mut busy = ctx.connect_busy;
@@ -306,16 +312,14 @@ pub(crate) fn add_from_catalog(ctx: &AppCtx, index: usize, values: Vec<String>) 
         match client.add_extension_verified(&extension, true).await {
             Ok(_) => {}
             Err(AcpError::Allowlist(message)) => {
-                // The extension is on the server and unrestricted. Turn it off
-                // before saying anything, so the window where it is live is as
-                // short as the round trip.
-                let quarantined = quarantine(&client, extension.name()).await;
-                let tail = if quarantined {
-                    "It has been switched off on the server."
-                } else {
-                    "It could NOT be switched off — disable it from the list below."
-                };
-                error.set(Some(format!("{message}\n\n{tail}")));
+                // It never went live: `add_extension_verified` stores every
+                // extension disabled and only switches it on once the
+                // allowlist has been read back intact. So there is nothing to
+                // undo here — just say what happened.
+                error.set(Some(format!(
+                    "{message}\n\nIt is switched off on the server and was never \
+                     started."
+                )));
                 busy.set(false);
                 refresh_extensions(&ctx).await;
                 return;
@@ -327,22 +331,24 @@ pub(crate) fn add_from_catalog(ctx: &AppCtx, index: usize, values: Vec<String>) 
             }
         }
 
-        // 3. The handshake. Adding it to the open session is what actually
-        //    launches the MCP server, so this is where a wrong or missing
-        //    credential surfaces — and it does so without reading anything
-        //    back. With no session open there is nothing to hand shake with;
-        //    the credential is still stored, and the next chat will use it.
-        if let Some(session_id) = session_id {
-            if let Err(e) = client.session_extension_add(&session_id, &extension).await {
-                error.set(Some(format!(
-                    "{display_name} is configured, but would not start: {e}\n\n\
-                     The usual cause is a credential that was mistyped or has \
-                     expired. Re-enter it above to overwrite it."
-                )));
-                busy.set(false);
-                refresh_extensions(&ctx).await;
-                return;
-            }
+        // 3. The handshake. Starting the MCP server is what proves the
+        //    credential, and it needs a session — so when no chat is open one
+        //    is created for this and thrown away. Skipping it on a fresh
+        //    install is how a mistyped token gets a "connected" toast: a
+        //    `${VAR}` that goose cannot resolve is left LITERAL in the header
+        //    rather than erroring, and only turns into a 401 later.
+        if let Err(e) = client
+            .verify_extension_starts(session_id.as_deref(), &cwd, &extension)
+            .await
+        {
+            error.set(Some(format!(
+                "{display_name} is configured, but would not start: {e}\n\n\
+                 The usual cause is a credential that was mistyped or has \
+                 expired. Re-enter it above to overwrite it."
+            )));
+            busy.set(false);
+            refresh_extensions(&ctx).await;
+            return;
         }
 
         busy.set(false);
@@ -352,22 +358,17 @@ pub(crate) fn add_from_catalog(ctx: &AppCtx, index: usize, values: Vec<String>) 
     });
 }
 
-/// Switch off an extension we have just added and do not trust. Returns
-/// whether it is definitely off.
-async fn quarantine(client: &goose_acp_client::AcpClient, name: &str) -> bool {
-    let Ok(listed) = client.config_extensions_list().await else {
-        return false;
-    };
-    let Some(key) = listed
-        .extensions
-        .iter()
-        .find(|e| e.extension.name() == name)
-        .and_then(|e| e.config_key.clone())
-    else {
-        return false;
-    };
-    client
-        .config_extension_set_enabled(&key, false)
-        .await
-        .is_ok()
+/// Where a throwaway handshake session should be rooted.
+///
+/// The configured working directory when it is usable, and `/` otherwise —
+/// the session exists for as long as it takes to start one MCP server, and
+/// nothing runs in it, so any path the server can open will do. Falling back
+/// beats refusing to verify the credential because Settings is half filled in.
+fn handshake_cwd(ctx: &AppCtx) -> String {
+    let configured = ctx.settings.peek().working_dir.trim().to_string();
+    if configured.starts_with('/') {
+        configured
+    } else {
+        "/".to_string()
+    }
 }

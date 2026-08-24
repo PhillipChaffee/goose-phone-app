@@ -36,7 +36,20 @@ pub enum AcpError {
     Closed,
     #[error("timed out")]
     Timeout,
-    #[error("{message}")]
+    /// A JSON-RPC error object from the agent.
+    ///
+    /// The reason a human can act on lives in `data`, not in `message`. goose
+    /// builds its errors with `Error::internal_error().data(e.to_string())`
+    /// and `Error::invalid_params().data(...)`, so `message` is whatever the
+    /// JSON-RPC code is canonically called — "Internal error", "Invalid
+    /// params" — and every sentence worth reading is in `data`: "Extension
+    /// '{}' not found", "SSE is unsupported, migrate to `streamable_http`", the
+    /// envKeys-vs-inline-env explanation, an MCP server's startup failure.
+    /// goose's own desktop client reads `data` first for exactly this reason.
+    ///
+    /// So [`Display`](std::fmt::Display) renders a string `data` in preference
+    /// to `message`, and falls back to `message` for an agent that sends none.
+    #[error("{}", rpc_reason(.message, .data.as_ref()))]
     Rpc {
         code: i64,
         message: String,
@@ -50,6 +63,16 @@ pub enum AcpError {
     /// [`AcpClient::add_extension_verified`].
     #[error("{0}")]
     Allowlist(String),
+}
+
+/// The readable half of a JSON-RPC error: `data` when it carries a non-blank
+/// string, otherwise the canned `message`. A non-string `data` (an object, a
+/// number) is not something to show on a phone, so it falls back too.
+fn rpc_reason<'a>(message: &'a str, data: Option<&'a Value>) -> &'a str {
+    data.and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+        .unwrap_or(message)
 }
 
 /// How to reach the server.
@@ -564,14 +587,23 @@ impl AcpClient {
     /// Anything else is [`AcpError::Allowlist`] — a hard error, never a
     /// warning, because failing open here is the security bug.
     ///
-    /// The extension is still persisted when this fails; the caller should
-    /// surface the error and leave it disabled or remove it.
+    /// The order matters as much as the check. The extension is **always**
+    /// added switched off, whatever `enabled` asks for, and only switched on
+    /// after the read-back matches. Adding it enabled and switching it off on
+    /// failure would leave it live and unrestricted for a round trip — a
+    /// window that need not exist, and one that stays open forever if the
+    /// switch-off call is the thing that fails.
+    ///
+    /// The extension stays persisted-and-disabled when this fails; the caller
+    /// should surface the error and offer to remove it.
     ///
     /// # Errors
     ///
     /// [`AcpError::Allowlist`] if the allowlist is empty going out, or is
-    /// missing, empty or different coming back. Otherwise as
-    /// [`Self::config_extension_add`].
+    /// missing, empty or different coming back; [`AcpError::Config`] if the
+    /// server stored it without a `config_key`, leaving nothing to address the
+    /// switch-on with. Otherwise as [`Self::config_extension_add`] — and every
+    /// one of those leaves it disabled.
     pub async fn add_extension_verified(
         &self,
         extension: &GooseExtension,
@@ -590,7 +622,9 @@ impl AcpClient {
             )));
         }
 
-        self.config_extension_add(extension, enabled).await?;
+        // Disabled, always. See the note above: an unrestricted extension
+        // must never be live, not even for the length of the read-back.
+        self.config_extension_add(extension, false).await?;
 
         let listed = self.config_extensions_list().await?;
         let Some(entry) = listed
@@ -627,7 +661,21 @@ impl AcpClient {
                 fmt_list(&extra)
             )));
         }
-        Ok(entry)
+
+        if !enabled {
+            return Ok(entry);
+        }
+        let Some(key) = entry.config_key.clone() else {
+            return Err(AcpError::Config(format!(
+                "`{name}` was stored without a config key, so there is nothing to \
+                 switch it on with. It is configured but disabled."
+            )));
+        };
+        self.config_extension_set_enabled(&key, true).await?;
+        Ok(GooseExtensionEntry {
+            enabled: true,
+            ..entry
+        })
     }
 
     /// Switch a configured extension on or off. `config_key` is the value
@@ -679,6 +727,45 @@ impl AcpClient {
         )
         .await
         .map(|_| ())
+    }
+
+    /// Prove an extension actually starts, whether or not a session is open.
+    ///
+    /// [`Self::session_extension_add`] is the only honest credential check
+    /// there is, and it needs a session. On a fresh install there is none —
+    /// connecting a service does not open a chat — so this creates a throwaway
+    /// one, hand shakes in it, and deletes it again. Skipping the check
+    /// instead would report "connected" for a mistyped credential, and for a
+    /// `${VAR}` bearer header goose leaves an unknown variable LITERAL rather
+    /// than erroring, so the failure would not surface until a 401 mid-task.
+    ///
+    /// The throwaway session is deleted whether the handshake passed or
+    /// failed, and its deletion is best-effort: a session left behind is
+    /// clutter, while the handshake's verdict is the answer the caller asked
+    /// for.
+    ///
+    /// `cwd` must be an absolute path on the server; it is only ever used for
+    /// the throwaway session.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::session_extension_add`], plus [`Self::session_new`]'s errors
+    /// when there is no session to borrow and one cannot be created.
+    pub async fn verify_extension_starts(
+        &self,
+        session_id: Option<&str>,
+        cwd: &str,
+        extension: &GooseExtension,
+    ) -> Result<(), AcpError> {
+        if let Some(session_id) = session_id {
+            return self.session_extension_add(session_id, extension).await;
+        }
+        let session = self.session_new(cwd).await?;
+        let outcome = self
+            .session_extension_add(&session.session_id, extension)
+            .await;
+        let _ = self.session_delete(&session.session_id).await;
+        outcome
     }
 
     /// Write one credential into goose's secret store, where `envKeys` and
@@ -1077,6 +1164,52 @@ mod tests {
         );
         assert!(normalize_base_url("").is_err());
         assert!(normalize_base_url("ftp://x").is_err());
+    }
+
+    fn rpc(message: &str, data: Option<Value>) -> AcpError {
+        AcpError::Rpc {
+            code: -32603,
+            message: message.to_string(),
+            data,
+        }
+    }
+
+    /// goose puts the reason in `data` and leaves `message` as the canned
+    /// JSON-RPC text, so rendering `message` shows every failure as "Internal
+    /// error". The reason has to win.
+    #[test]
+    fn an_rpc_error_prefers_the_reason_in_data() {
+        assert_eq!(
+            rpc(
+                "Internal error",
+                Some(json!("failed to start extension `mail-imap`: missing env")),
+            )
+            .to_string(),
+            "failed to start extension `mail-imap`: missing env"
+        );
+        assert_eq!(
+            rpc(
+                "Invalid params",
+                Some(json!("Extension 'mail-imap' not found")),
+            )
+            .to_string(),
+            "Extension 'mail-imap' not found"
+        );
+    }
+
+    /// Nothing usable in `data` — absent, blank, or not a string at all —
+    /// falls back to `message` rather than to an empty error.
+    #[test]
+    fn an_rpc_error_falls_back_to_message() {
+        assert_eq!(rpc("Internal error", None).to_string(), "Internal error");
+        assert_eq!(
+            rpc("Internal error", Some(json!("   "))).to_string(),
+            "Internal error"
+        );
+        assert_eq!(
+            rpc("Internal error", Some(json!({"reason": "structured"}))).to_string(),
+            "Internal error"
+        );
     }
 
     #[test]

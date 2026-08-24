@@ -338,9 +338,7 @@ async fn serve_ws(ws: Ws, state: Shared) {
                 let response = handle_request(m, &params, &state, &out_tx);
                 let frame = match response {
                     Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
-                    Err((code, msg)) => {
-                        json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":msg}})
-                    }
+                    Err((code, reason)) => error_frame(Some(&id), code, &reason),
                 };
                 let _ = out_tx.send(Message::Text(frame.to_string().into()));
 
@@ -365,6 +363,35 @@ async fn serve_ws(ws: Ws, state: Shared) {
         }
     }
     writer.abort();
+}
+
+/// The canned JSON-RPC text real goose leaves in `message`.
+///
+/// goose never writes a specific reason there. Every error it raises is
+/// `Error::internal_error().data(e.to_string())` or
+/// `Error::invalid_params().data(...)`, so `message` is only ever the name of
+/// the code and `data` carries the sentence a person can act on. The mock
+/// reproduces that split: a mock that put the reason in `message` would let a
+/// client that ignores `data` pass, and then show "Internal error" for every
+/// failure against the real server.
+const fn canned(code: i64) -> &'static str {
+    match code {
+        -32700 => "Parse error",
+        -32600 => "Invalid Request",
+        -32601 => "Method not found",
+        -32602 => "Invalid params",
+        -32002 => "Session not found",
+        _ => "Internal error",
+    }
+}
+
+/// A JSON-RPC error frame in goose's shape: canned `message`, reason in
+/// `data`.
+fn error_frame(id: Option<&Value>, code: i64, reason: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0", "id": id,
+        "error": {"code": code, "message": canned(code), "data": reason},
+    })
 }
 
 fn notify(out: &mpsc::UnboundedSender<Message>, method: &str, params: &Value) {
@@ -552,6 +579,18 @@ fn set_extension_enabled(params: &Value, state: &Shared) -> Result<Value, (i64, 
 /// prove a credential without ever reading one back.
 fn add_session_extension(params: &Value, state: &Shared) -> Result<Value, (i64, String)> {
     let extension = params.get("extension").cloned().unwrap_or(Value::Null);
+
+    // The handshake needs a live session, which is why the app makes a
+    // throwaway one when no chat is open. An unknown id is an error here, as
+    // it is on the real server — otherwise skipping the session would look
+    // like a passing credential check.
+    let sid = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !state.lock().unwrap().sessions.contains_key(sid) {
+        return Err((-32002, format!("session not found: {sid}")));
+    }
 
     // Inline env values are refused at the session level by the real server,
     // with this wording.
@@ -990,8 +1029,11 @@ async fn run_turn(
         .to_string();
 
     if !state.lock().unwrap().sessions.contains_key(&sid) {
-        let frame = json!({"jsonrpc":"2.0","id":request_id,
-            "error":{"code":-32002,"message":format!("session not found: {sid}")}});
+        let frame = error_frame(
+            Some(&request_id),
+            -32002,
+            &format!("session not found: {sid}"),
+        );
         let _ = out.send(Message::Text(frame.to_string().into()));
         return;
     }
@@ -1152,6 +1194,16 @@ mod tests {
         )
     }
 
+    /// A live session for the handshake to run in, as `session/new` would
+    /// have left behind.
+    fn open_session(state: &Shared, sid: &str) {
+        state
+            .lock()
+            .unwrap()
+            .sessions
+            .insert(sid.to_string(), SessionData::default());
+    }
+
     fn listed(state: &Shared) -> Value {
         extension_request(
             "_goose/unstable/config/extensions/list",
@@ -1198,6 +1250,7 @@ mod tests {
     #[test]
     fn a_session_add_fails_until_the_secret_is_stored() {
         let state: Shared = Arc::default();
+        open_session(&state, "20260821_1");
         let extension = serde_json::to_value(mail()).unwrap();
         let params = json!({"sessionId": "20260821_1", "extension": extension});
 
@@ -1224,6 +1277,7 @@ mod tests {
     #[test]
     fn a_non_string_secret_is_skipped_and_the_extension_will_not_start() {
         let state: Shared = Arc::default();
+        open_session(&state, "s");
         extension_request(
             "_goose/unstable/config/upsert",
             &json!({"key": "MCP_EMAIL_SERVER_PASSWORD", "value": 12_345_678, "isSecret": true}),
@@ -1238,6 +1292,35 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.1.contains("missing env"), "got: {}", err.1);
+    }
+
+    /// The handshake is worth nothing without a session to run it in, so an
+    /// unknown session id must not look like a passing credential check.
+    #[test]
+    fn a_session_add_needs_a_live_session() {
+        let state: Shared = Arc::default();
+        let err = extension_request(
+            "_goose/unstable/session/extensions/add",
+            &json!({"sessionId": "never-opened",
+                    "extension": serde_json::to_value(mail()).unwrap()}),
+            &state,
+        )
+        .unwrap_err();
+        assert_eq!(err.0, -32002);
+        assert!(err.1.contains("session not found"), "got: {}", err.1);
+    }
+
+    /// Every error the mock raises carries its reason in `data`, because that
+    /// is the only place real goose puts one.
+    #[test]
+    fn an_error_frame_puts_the_reason_in_data() {
+        let frame = error_frame(Some(&json!(7)), -32602, "Extension 'x' not found");
+        assert_eq!(frame["error"]["message"], json!("Invalid params"));
+        assert_eq!(frame["error"]["data"], json!("Extension 'x' not found"));
+        assert_eq!(
+            error_frame(None, -32603, "boom")["error"]["message"],
+            json!("Internal error")
+        );
     }
 
     #[test]
