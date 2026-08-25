@@ -42,6 +42,8 @@ LABELS = {
     "code-chat": "Code agent transcript",
     "code-diff": "Code review",
     "code-pulls": "Pull requests",
+    "extensions": "Extensions",
+    "extensions-detail": "Extension detail",
     "settings": "Settings",
 }
 

@@ -391,6 +391,15 @@ pub(crate) fn use_pull_to_refresh() {
                     }
                     "diff" => crate::code::load_code_diff(&ctx),
                     "pulls" => crate::code::refresh_pulls(&ctx),
+                    // The extensions list has no refresh button on purpose
+                    // (`views/extensions.rs` says why), so this arm is the
+                    // only way back to the server that a reader has.
+                    // `refresh` drives both the list and the warnings through
+                    // `load_remote`, so `loading` toggles and the spinner
+                    // clears itself.
+                    "extensions" => {
+                        spawn_forever(async move { crate::extensions::refresh(&ctx).await });
+                    }
                     _ => {}
                 }
             }
