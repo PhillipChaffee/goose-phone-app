@@ -3391,33 +3391,33 @@ body.away-from-bottom .scroll-bottom {
  * nothing beside it. Both are 1em icons, so the square is stated here rather
  * than through font-size on the button: --text-xs would draw them at 12px
  * beside 12px text — a mark, not a checkbox. */
+/* The box itself. --text-secondary, not --border-secondary: the hairline the
+ * pill uses reads as an edge, and this is a control. The audit measured that
+ * reflex at 1.42:1 against the head's own surface, where a graphical object
+ * needs 3. While it is empty this border is the only thing saying "you can
+ * check this", so it takes text weight rather than border weight. */
 .diff-seen .cbox {
   position: relative;
   display: inline-flex;
   flex-shrink: 0;
+  box-sizing: border-box;
   width: 18px;
   height: 18px;
+  border: 2px solid var(--text-secondary);
+  /* One step in from the pill it sits on, per the tiered-rounding rule. */
+  border-radius: 5px;
 }
 
 .diff-seen .cbox .icon {
   position: absolute;
-  inset: 0;
+  /* Back out the border so the tick fills the box rather than the box's
+   * content area, which the 2px edge would otherwise inset it into. */
+  inset: -2px;
   width: 18px;
   height: 18px;
-}
-
-/* Unchecked is an empty box. The tick is hidden rather than absent so the box
- * never reflows — and because a control that shows a checkmark whether or not
- * it is checked is exactly what this replaced. */
-.diff-seen .cbox .icon:last-child {
-  opacity: 0;
-}
-
-/* --border-secondary, the same hairline the pill itself uses: an empty box is
- * a border, not a mark, and it should not shout louder than the pill holding
- * it. Defined in both themes (#cbd1d6 light, #525b68 dark). */
-.diff-seen .cbox .icon:first-child {
-  color: var(--border-secondary);
+  /* Heavier than the app's 2: this one is drawn at 18px inside a filled box
+   * rather than at its natural size on a flat surface. */
+  stroke-width: 3;
 }
 
 /* Filled, not tinted, and that is what lets the label keep text contrast.
@@ -3435,15 +3435,10 @@ body.away-from-bottom .scroll-bottom {
   color: var(--text-primary);
 }
 
-.diff-seen[aria-pressed="true"] .cbox .icon:first-child {
-  color: var(--bg-success);
-  fill: var(--bg-success);
-}
-
-.diff-seen[aria-pressed="true"] .cbox .icon:last-child {
-  opacity: 1;
+.diff-seen[aria-pressed="true"] .cbox {
+  background: var(--bg-success);
+  border-color: var(--bg-success);
   color: var(--text-inverse);
-  stroke-width: 3;
 }
 
 /* The code surface, edge to edge: the width is the whole point of this

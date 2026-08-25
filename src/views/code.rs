@@ -1122,9 +1122,16 @@ fn render_diff_file(ctx: &AppCtx, state: &DiffState, file: &DiffFile, wrap: bool
                 // tick that is present either way is what this replaced — it
                 // read as decoration rather than as a control with a state.
                 //
-                // The box and the tick are two overlaid icons rather than one
-                // combined path, so the tick stays the same glyph the rest of
-                // the app uses. .diff-seen shows and hides the tick.
+                // The box is drawn by CSS and only the tick is an icon. Drawing
+                // the box as an SVG too put its fill somewhere the contrast
+                // audit cannot follow — it walks up for the first opaque
+                // background, and an SVG fill is not one, so it compared the
+                // white tick against the head behind it and called 3.48:1
+                // 1.08:1. A CSS background is a background, and measures.
+                //
+                // The tick is absent rather than transparent when unchecked:
+                // an element held at opacity 0 is still measured, and it has
+                // nothing to be measured against.
                 //
                 // The word is a <span> rather than a bare text node because
                 // the pill is a flex container: a bare node becomes an
@@ -1140,8 +1147,9 @@ fn render_diff_file(ctx: &AppCtx, state: &DiffState, file: &DiffFile, wrap: bool
                         toggle_diff_seen(&ctx, &path, fingerprint);
                     },
                     span { class: "cbox",
-                        Icon { name: "square" }
-                        Icon { name: "check" }
+                        if seen {
+                            Icon { name: "check" }
+                        }
                     }
                     span { "Viewed" }
                 }
