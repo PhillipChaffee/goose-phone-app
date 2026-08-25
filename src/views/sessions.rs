@@ -58,11 +58,16 @@ pub fn SessionsView() -> Element {
                                         span { class: "session-age", "{age}" }
                                     }
                                 }
-                                div { class: "session-meta",
-                                    if let Some(count) = info.message_count() {
+                                // Conditional outside the wrapper, not inside
+                                // it: `message_count()` is an Option, and a
+                                // server that omits `messageCount` would
+                                // otherwise leave an empty .session-meta whose
+                                // `margin-top` still opens a gap above the
+                                // quote.
+                                if let Some(count) = info.message_count() {
+                                    div { class: "session-meta",
                                         span { "{count} msgs" }
                                     }
-                                    span { "{info.session_id}" }
                                 }
                                 if let Some(snippet) = info.last_message_snippet() {
                                     div { class: "session-quote", "{snippet}" }

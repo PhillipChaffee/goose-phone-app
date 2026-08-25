@@ -20,7 +20,16 @@
 //!
 //! The two tabs share the grammar, not the list. Each backend contributes
 //! exactly what it can actually do, so a shorter list reads as "this backend
-//! offers less", never as "the app forgot something".
+//! offers less", never as "the app forgot something". What they must not
+//! differ in is presentation: both end up **Provider / Model / Thinking
+//! effort / Context length**, in that order, with the notes written in one
+//! voice — the two sheets used to be built by unrelated code and read like
+//! two products.
+//!
+//! Mode is the exception, on both. It left the sheet for a chip of its own in
+//! the composer row and [`ChoicePickerSheet`], because it is the setting you
+//! change mid-conversation rather than the one you set and forget — and every
+//! reference app puts it exactly there.
 
 use dioxus::prelude::*;
 
@@ -31,6 +40,14 @@ use crate::icons::Icon;
 pub(crate) struct SettingChoice {
     pub value: String,
     pub label: String,
+    /// One line under the label saying what picking this does. Both backends
+    /// send one for their modes and for nothing else, which is why it is an
+    /// option on the choice rather than a second kind of list.
+    pub note: Option<String>,
+    /// A leading icon from [`crate::icons`]. A mode is a way of working, and
+    /// a column of glyphs is what lets you find the one you want without
+    /// reading four descriptions.
+    pub icon: Option<String>,
 }
 
 impl SettingChoice {
@@ -38,7 +55,46 @@ impl SettingChoice {
         Self {
             value: value.into(),
             label: label.into(),
+            note: None,
+            icon: None,
         }
+    }
+
+    /// What this value does, in the backend's own words where it sends any.
+    pub(crate) fn with_note(mut self, note: Option<String>) -> Self {
+        self.note = note.filter(|n| !n.trim().is_empty());
+        self
+    }
+
+    pub(crate) fn with_icon(mut self, icon: impl Into<String>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+}
+
+/// Which icon a mode wears, from its id or its name.
+///
+/// Both backends name their modes themselves and neither sends an icon, so
+/// this reads the name — goose ships `auto` / `approve` / `chat`, `OpenCode`
+/// ships `build` / `plan` and whatever the repository adds. Matched on
+/// substrings rather than on the exact word so a `plan-only` or a
+/// `smart_approve` still lands somewhere sensible, and anything unrecognised
+/// gets the bolt, which is the generic "a mode" mark rather than a claim
+/// about what it does.
+pub(crate) fn mode_icon(id: &str) -> &'static str {
+    let id = id.to_ascii_lowercase();
+    if id.contains("plan") {
+        "list"
+    } else if id.contains("chat") {
+        "message"
+    } else if id.contains("approve") || id.contains("ask") {
+        "shield-check"
+    } else if id.contains("build") || id.contains("edit") || id.contains("write") {
+        "wrench"
+    } else if id.contains("explore") || id.contains("search") || id.contains("research") {
+        "search"
+    } else {
+        "bolt"
     }
 }
 
@@ -133,6 +189,39 @@ pub(crate) fn choice_label(name: &str, value: &str) -> String {
     name.to_owned()
 }
 
+/// What the composer chip says about thinking effort, after the model name —
+/// or `None` when there is nothing worth saying.
+///
+/// A default is not worth saying. The chip is for what is true and notable
+/// about the next message, and every session has a default; spelling one out
+/// as "Default" turns the one place effort is visible at a glance into a place
+/// it is usually noise. Both backends have their own way of writing it down
+/// and both are filtered here rather than at each call site: `OpenCode`
+/// records the literal string `default` on a session whose turn asked for no
+/// variant (see `SessionModel::effort`), while the app carries `None` for the
+/// same state and goose sends no value at all until one is set.
+///
+/// The two long tiers are shortened, because the chip has nowhere to put
+/// them. On the goose composer at 360pt the label is 120px and "Claude Sonnet
+/// 5" wants 94 of it, so a six-letter tier standing beside it took the name
+/// down to "Claude…" — the chip stopped answering the one question it exists
+/// to answer, in order to answer the second one. `medium`, which goose
+/// serves, and `minimal`, which `OpenCode` does, are the only tiers either
+/// backend has that are long enough to do that, and neither short form is
+/// ambiguous next to the `Max` already on the chip. The sheet the chip opens
+/// spells every tier out in full, and `.chip-effort` caps anything a backend
+/// sends that is not on either ladder.
+pub(crate) fn chip_effort(current: Option<&str>) -> Option<String> {
+    let raw = current
+        .map(str::trim)
+        .filter(|v| !v.is_empty() && *v != "default")?;
+    Some(match raw.to_ascii_lowercase().as_str() {
+        "minimal" => "Min".to_owned(),
+        "medium" => "Med".to_owned(),
+        _ => choice_label(raw, raw),
+    })
+}
+
 fn humanize(raw: &str) -> String {
     let mut words = raw.replace('_', " ");
     if let Some(first) = words.get_mut(..1) {
@@ -159,6 +248,10 @@ pub(crate) fn SessionSettingsSheet(
     let body = match drilled {
         Some(row) => {
             let id = row.id.clone();
+            let list = choice_list(&row.choices, row.current.as_deref(), move |value| {
+                onchoose.call((id.clone(), value));
+                open_row.set(None);
+            });
             rsx! {
                 div { class: "sheet-head",
                     button {
@@ -169,29 +262,7 @@ pub(crate) fn SessionSettingsSheet(
                     }
                     h2 { "{row.name}" }
                 }
-                div { class: "choice-list",
-                    for choice in row.choices.iter() {
-                        button {
-                            key: "{choice.value}",
-                            class: if row.current.as_deref() == Some(choice.value.as_str()) {
-                                "choice selected"
-                            } else {
-                                "choice"
-                            },
-                            onclick: {
-                                let (id, value) = (id.clone(), choice.value.clone());
-                                move |_| {
-                                    onchoose.call((id.clone(), value.clone()));
-                                    open_row.set(None);
-                                }
-                            },
-                            span { class: "choice-name", "{choice.label}" }
-                            if row.current.as_deref() == Some(choice.value.as_str()) {
-                                Icon { name: "check" }
-                            }
-                        }
-                    }
-                }
+                {list}
             }
         }
         None => rsx! {
@@ -216,6 +287,159 @@ pub(crate) fn SessionSettingsSheet(
                 {body}
             }
         }
+    }
+}
+
+/// A list long enough that finding is faster than scrolling gets a filter.
+/// Below this the field would be a control that does nothing (rule 11) and a
+/// row of chrome above a five-item list.
+const SEARCH_AT: usize = 8;
+
+/// The choices whose label, value or note contains `needle`, case-folded.
+///
+/// A free fn so it can be tested without a renderer. The note is searched as
+/// well as the name, which is what makes a repo findable by its owner.
+fn matching(choices: &[SettingChoice], needle: &str) -> Vec<SettingChoice> {
+    if needle.is_empty() {
+        return choices.to_vec();
+    }
+    let needle = needle.to_ascii_lowercase();
+    let hit = |s: &str| s.to_ascii_lowercase().contains(&needle);
+    choices
+        .iter()
+        .filter(|c| hit(&c.label) || hit(&c.value) || c.note.as_deref().is_some_and(hit))
+        .cloned()
+        .collect()
+}
+
+/// A sheet that is one picker and nothing else — what the composer's mode
+/// chip opens, and what each of the new-session screen's four pills opens.
+///
+/// Mode is the one setting with a chip of its own, because it is the one you
+/// change mid-conversation: the rest of the sheet is what the session runs
+/// on, and this is how it behaves while it runs. It is still the same list of
+/// choices a settings row drills into — literally so, through
+/// [`choice_list`] — so learning one teaches the other.
+#[component]
+pub(crate) fn ChoicePickerSheet(
+    title: String,
+    /// Named in the subtitle, exactly as the settings sheet names it.
+    backend: String,
+    /// Replaces the "{backend} · applies from your next message" line where
+    /// that copy is not true. The new-session screen has no next message; it
+    /// has a first one, and saying otherwise about a session that does not
+    /// exist yet is the kind of borrowed sentence rule 8 is about.
+    subtitle: Option<String>,
+    /// One line about the LIST rather than about a choice in it — today, the
+    /// free models a private repo is not being offered. Same sentence the
+    /// settings sheet's Model row carries, from the same helper.
+    note: Option<String>,
+    choices: Vec<SettingChoice>,
+    current: Option<String>,
+    /// Stands in for the list when there is nothing in it yet.
+    empty: String,
+    onchoose: EventHandler<String>,
+    onclose: EventHandler<()>,
+) -> Element {
+    let mut query = use_signal(String::new);
+    let searchable = choices.len() > SEARCH_AT;
+    let shown = matching(&choices, &query());
+    let subtitle =
+        subtitle.unwrap_or_else(|| format!("{backend} · applies from your next message"));
+    let list = choice_list(&shown, current.as_deref(), move |value| {
+        onchoose.call(value);
+    });
+    rsx! {
+        div { class: "modal-backdrop", onclick: move |_| onclose.call(()),
+            div {
+                // `picker` as well as `sheet`, for the same reason the
+                // overflow menu carries `menu`: the capture harness keys a
+                // state off the DOM, and a choice list inside a sheet is
+                // exactly what the settings sheet looks like once you have
+                // drilled into a row. Without this they file as one state and
+                // whichever was captured last wins.
+                class: "modal sheet picker",
+                onclick: move |e: Event<MouseData>| e.stop_propagation(),
+                h2 { "{title}" }
+                p { class: "modal-session", "{subtitle}" }
+                if let Some(note) = note {
+                    p { class: "hint", "{note}" }
+                }
+                if shown.is_empty() {
+                    // Two different emptinesses, and conflating them is how a
+                    // search that matched nothing came out reading like a
+                    // server that offered nothing.
+                    p { class: "empty",
+                        if choices.is_empty() { "{empty}" } else { "Nothing matches “{query}”." }
+                    }
+                }
+                {list}
+                // At the bottom, where a thumb is and where it stays put as
+                // the list moves under it — which is where the reference puts
+                // it, and what costs the sheet its single scrollbox (see
+                // .modal.sheet:has(.sheet-search) in main.css).
+                if searchable {
+                    div { class: "sheet-search",
+                        Icon { name: "search" }
+                        input {
+                            class: "field",
+                            r#type: "text",
+                            placeholder: "Search",
+                            autocapitalize: "off",
+                            autocomplete: "off",
+                            spellcheck: "false",
+                            value: "{query}",
+                            oninput: move |e| query.set(e.value()),
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The list of values a setting can take: name, what it does, and a check on
+/// the one in force. Shared by the settings sheet's drill-down and the mode
+/// picker so the two cannot drift apart.
+fn choice_list<F: FnMut(String) + Clone + 'static>(
+    choices: &[SettingChoice],
+    current: Option<&str>,
+    onpick: F,
+) -> Element {
+    let rows = choices.iter().map(|choice| {
+        let selected = current == Some(choice.value.as_str());
+        let (label, note, icon) = (
+            choice.label.clone(),
+            choice.note.clone(),
+            choice.icon.clone(),
+        );
+        let value = choice.value.clone();
+        let mut onpick = onpick.clone();
+        rsx! {
+            button {
+                key: "{value}",
+                class: if selected { "choice selected" } else { "choice" },
+                onclick: move |_| onpick(value.clone()),
+                if let Some(icon) = icon {
+                    // Wrapped rather than a bare Icon: the check beside it is
+                    // painted with the success colour by a direct-child rule,
+                    // and a leading mark is not a statement about state.
+                    span { class: "choice-lead", Icon { name: "{icon}" } }
+                }
+                span { class: "choice-main",
+                    span { class: "choice-name", "{label}" }
+                    if let Some(note) = note {
+                        span { class: "choice-note", "{note}" }
+                    }
+                }
+                if selected {
+                    Icon { name: "check" }
+                }
+            }
+        }
+    });
+    rsx! {
+        div { class: "choice-list", {rows} }
     }
 }
 
@@ -299,6 +523,120 @@ mod tests {
     fn a_current_value_outside_the_choices_still_shows() {
         let row = SettingRow::select("model", "Model", Some("retired_model"), Vec::new(), None);
         assert_eq!(row.value, "Retired model");
+    }
+
+    /// Every mode this maps has to name an icon that exists, or the chip
+    /// renders an empty box — `Icon` returns nothing for a name it does not
+    /// know, and a typo here would be silent.
+    #[test]
+    fn every_mode_icon_is_a_real_icon() {
+        for mode in [
+            "auto",
+            "approve",
+            "smart_approve",
+            "chat",
+            "build",
+            "plan",
+            "general",
+            "explore",
+            "",
+            "something-upstream-invented",
+        ] {
+            let name = mode_icon(mode);
+            assert!(
+                crate::icons::path_for(name).is_some(),
+                "mode {mode} asks for a missing icon: {name}"
+            );
+        }
+    }
+
+    /// Every spelling of "no tier was asked for" leaves the chip saying the
+    /// model name alone.
+    #[test]
+    fn a_default_effort_is_not_worth_a_chip() {
+        assert_eq!(chip_effort(None), None);
+        assert_eq!(chip_effort(Some("")), None);
+        assert_eq!(chip_effort(Some("   ")), None);
+        assert_eq!(chip_effort(Some("default")), None);
+    }
+
+    /// A tier the reader chose is exactly what the chip is for, and it arrives
+    /// as a backend enum rather than as UI copy.
+    #[test]
+    fn a_chosen_effort_reaches_the_chip_as_copy() {
+        assert_eq!(chip_effort(Some("max")), Some("Max".to_owned()));
+        assert_eq!(chip_effort(Some("xhigh")), Some("Xhigh".to_owned()));
+        assert_eq!(chip_effort(Some("off")), Some("Off".to_owned()));
+    }
+
+    /// No tier either backend serves is long enough to crowd the model name
+    /// off the chip. Five characters is what `.chip-effort` gives one before
+    /// it starts clipping (assets/main.css), and the goose row at 360pt has
+    /// only 120px of label to divide between the two.
+    #[test]
+    fn every_tier_a_backend_serves_fits_the_chip() {
+        assert_eq!(chip_effort(Some("medium")), Some("Med".to_owned()));
+        assert_eq!(chip_effort(Some("minimal")), Some("Min".to_owned()));
+        // goose's ladder, then OpenCode's; `off` and `none` reach the chip
+        // only when a reader picked them from a list that offered something
+        // else, which is a choice worth stating.
+        for tier in [
+            "off", "low", "medium", "high", "max", "none", "minimal", "xhigh",
+        ] {
+            let shown = chip_effort(Some(tier)).unwrap_or_default();
+            assert!(
+                shown.chars().count() <= 5,
+                "{tier} reaches the chip as {shown}"
+            );
+        }
+    }
+
+    /// A mode nobody has heard of still gets a mark, so the picker never has
+    /// a row that is text where its neighbours have glyphs.
+    #[test]
+    fn an_unknown_mode_falls_back_to_the_bolt() {
+        assert_eq!(mode_icon("auto"), "bolt");
+        assert_eq!(mode_icon("wander"), "bolt");
+        assert_eq!(mode_icon("Plan"), "list");
+        assert_eq!(mode_icon("smart_approve"), "shield-check");
+    }
+
+    /// A backend that sends no description, or an empty one, must not leave a
+    /// blank line under the name.
+    #[test]
+    fn an_empty_description_is_not_a_note() {
+        assert_eq!(
+            SettingChoice::new("auto", "Auto")
+                .with_note(Some("   ".to_owned()))
+                .note,
+            None
+        );
+        assert_eq!(
+            SettingChoice::new("auto", "Auto").with_note(None).note,
+            None
+        );
+    }
+
+    /// The filter folds case and reaches the note, which is what makes a repo
+    /// findable by its owner rather than only by its bare name.
+    #[test]
+    fn the_filter_folds_case_and_searches_the_note() {
+        let choices = vec![
+            SettingChoice::new("PhillipChaffee/personal-ai-setup", "personal-ai-setup")
+                .with_note(Some("PhillipChaffee".to_owned())),
+            SettingChoice::new("jaegertracing/artwork", "artwork")
+                .with_note(Some("jaegertracing".to_owned())),
+        ];
+        let by_owner = matching(&choices, "JAEGER");
+        assert_eq!(by_owner.len(), 1);
+        assert_eq!(by_owner[0].label, "artwork");
+        assert_eq!(matching(&choices, "SETUP").len(), 1);
+        assert_eq!(
+            matching(&choices, "").len(),
+            2,
+            "an empty needle matches all"
+        );
+        assert!(matching(&choices, "nothing-like-this").is_empty());
     }
 
     #[test]

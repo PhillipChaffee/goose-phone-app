@@ -28,7 +28,7 @@
 
 use std::time::Duration;
 
-use opencode_client::{ChatMeta, CodeClient, CodeConfig, CodeEvent};
+use opencode_client::{ChatMeta, CodeClient, CodeConfig, CodeEvent, PromptPart};
 use tokio::sync::mpsc::Receiver;
 
 fn env(name: &str) -> String {
@@ -184,7 +184,12 @@ async fn main() {
         .first()
         .map_or_else(|| "testrepo".into(), |r| r.name.clone());
 
-    let chat = match client.create_chat(&repo, "smoke: push and PR", None).await {
+    // No base branch: the smoke run is about the lifecycle, and cutting from
+    // the repo's default HEAD is what every chat did before the picker.
+    let chat = match client
+        .create_chat(&repo, "smoke: push and PR", None, None)
+        .await
+    {
         Ok(c) => c,
         Err(e) => {
             println!("FAIL  create chat — {e}");
@@ -203,7 +208,8 @@ async fn main() {
         .prompt_async(
             &chat.id,
             &session.id,
-            "push the branch and open a pull request",
+            &[PromptPart::text("push the branch and open a pull request")],
+            None,
             None,
             None,
         )
