@@ -401,6 +401,15 @@ pub(crate) fn use_pull_to_refresh() {
                         spawn_forever(async move { crate::extensions::refresh(&ctx).await });
                     }
                     "skills" => crate::skills::refresh(&ctx),
+                    // ---- one arm per feature that owns a list ----
+                    //
+                    // A feature's scroller sets `data-refresh` to its own
+                    // name and claims that name here. The gesture and the
+                    // lists it serves were written on different branches:
+                    // the name is the whole contract between them, and an
+                    // unclaimed one is a pull that spins and fetches
+                    // nothing.
+                    "recipes" => crate::recipes::refresh(&ctx),
                     _ => {}
                 }
             }

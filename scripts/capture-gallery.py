@@ -46,6 +46,8 @@ LABELS = {
     "extensions-detail": "Extension detail",
     "skills": "Skills",
     "skill": "Skill detail",
+    "recipes-list": "Recipes",
+    "recipes-detail": "Recipe detail",
     "settings": "Settings",
 }
 

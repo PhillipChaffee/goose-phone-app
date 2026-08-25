@@ -149,7 +149,34 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         },
         key: |ctx| ((ctx.tab)() == Tab::Code).then(|| code_key((ctx.code_screen)())),
     },
-    // recipes — PR 3 replaces this line
+    Destination {
+        id: "recipes",
+        label: "Recipes",
+        icon: "book",
+        group: Group::Library,
+        // Recipes owns `recipes.screen` outright, so — like Code — the
+        // drawer leaves it wherever it was left.
+        go: |ctx| {
+            let mut tab = ctx.tab;
+            tab.set(Tab::Recipes);
+        },
+        at_root: |ctx| {
+            (ctx.tab)() == Tab::Recipes && (ctx.recipes.screen)() == crate::recipes::Screen::List
+        },
+        view: |ctx| match (ctx.recipes.screen)() {
+            crate::recipes::Screen::List => rsx! { views::recipes::RecipesView {} },
+            crate::recipes::Screen::Detail => rsx! { views::recipes::RecipeDetailView {} },
+        },
+        // Spelled inline rather than as a `recipes_key` beside `code_key`:
+        // one destination is one hunk, and five branches each adding a
+        // free function to the bottom of this file is five overlapping ones.
+        key: |ctx| {
+            ((ctx.tab)() == Tab::Recipes).then(|| match (ctx.recipes.screen)() {
+                crate::recipes::Screen::List => "recipes-list",
+                crate::recipes::Screen::Detail => "recipes-detail",
+            })
+        },
+    },
     Destination {
         id: "skills",
         label: "Skills",

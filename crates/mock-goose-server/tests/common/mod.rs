@@ -56,12 +56,23 @@ impl Drop for Server {
 
 /// Start the mock on an ephemeral port and connect a real [`AcpClient`] to it.
 pub(crate) async fn spawn_mock() -> (Server, AcpClient) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mock-goose-server"))
-        .arg("0")
-        .env("MOCK_SECRET", SECRET)
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
+    spawn_mock_with(&[]).await
+}
+
+/// The same, with the fixture switches set.
+///
+/// They are read once at startup — that is what makes the banner able to
+/// describe them — so a test that wants `MOCK_NO_SCHEDULER` or a fixture set
+/// other than `full` spawns its own server rather than asking a running one to
+/// change its mind. Every server here is its own process on its own port, so
+/// two such tests do not see each other.
+pub(crate) async fn spawn_mock_with(env: &[(&str, &str)]) -> (Server, AcpClient) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mock-goose-server"));
+    command.arg("0").env("MOCK_SECRET", SECRET);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let mut child = command.stdout(Stdio::piped()).spawn().unwrap();
 
     // The banner is written after `bind`, so having read it is proof the
     // listener is up: no polling, no sleep-and-hope.

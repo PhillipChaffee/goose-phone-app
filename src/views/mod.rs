@@ -6,7 +6,7 @@ pub(crate) mod chrome;
 
 pub(crate) mod code;
 
-// recipes — PR 3 replaces this line
+pub(crate) mod recipes;
 
 pub(crate) mod skills;
 

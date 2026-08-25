@@ -16,6 +16,8 @@ mod attach;
 
 mod code;
 
+mod cron;
+
 mod css;
 
 mod diff;
@@ -33,6 +35,7 @@ mod markdown;
 
 mod nav;
 
+mod recipes;
 mod skills;
 
 mod state;

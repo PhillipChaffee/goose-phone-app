@@ -37,7 +37,7 @@ pub(crate) enum Screen {
 pub(crate) enum Tab {
     Home,
     Code,
-    // recipes — PR 3 replaces this line
+    Recipes,
     Skills,
     // scheduler — PR 5 replaces this line
     Extensions,
@@ -462,8 +462,7 @@ pub(crate) struct AppCtx {
     // A feature's state is a struct it defines and this holds, rather than a
     // handful of loose signals: five branches adding five fields to one
     // struct merge, five branches adding thirty do not.
-
-    // recipes — PR 3 replaces this line
+    pub recipes: crate::recipes::Ctx,
     pub skills: crate::skills::Ctx,
     // scheduler — PR 5 replaces this line
     pub extensions: crate::extensions::Ctx,
@@ -527,6 +526,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         // literal does not — so a sibling branch adding its own field lands
         // in this same hunk and resolves by keeping both lines.
         skills: crate::skills::use_ctx(),
+        recipes: crate::recipes::use_recipes(),
     };
     use_context_provider(|| ctx);
     ctx

@@ -41,6 +41,15 @@
 //! `skip_serializing_if`-ed away: the `null` it serializes beside the key in
 //! `extra` is the evidence. Test fixtures are therefore complete server
 //! responses, not minimal ones.
+//!
+//! The single exception is an `Option` here whose goose-side field is *not* an
+//! `Option` — [`Recipe::version`] today. goose's `#[serde(default)]` fires on a
+//! missing key and never on an explicit `null`, so sending the `null` would
+//! turn a body this crate is handing back into a `-32602`. Such a field carries
+//! `skip_serializing_if` and says on its own line why, and its spelling is
+//! pinned by a test that reads the value out of a fixture instead.
+
+mod recipes;
 
 // One `mod` + `pub use` pair per feature area, each on its own hunk so the
 // branches that add the other four never touch this one's lines. Everything
@@ -63,6 +72,11 @@ use std::sync::{MutexGuard, PoisonError};
 use std::time::Duration;
 
 use serde_json::Value;
+
+pub use recipes::{
+    Recipe, RecipeInputType, RecipeListEntry, RecipeListResponse, RecipeParameter,
+    RecipeRequirement, RecipeSettings,
+};
 
 use crate::client::AcpClient;
 use crate::error::{string_data, AcpError, Feature};
