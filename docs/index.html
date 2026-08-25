@@ -1,0 +1,896 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Goose Mobile — your own AI agents, on your phone</title>
+<meta name="description" content="A Rust app (Dioxus) that puts a goose agent and containerised OpenCode code agents on your phone, over your own Tailscale network. One codebase for iOS, Android and desktop.">
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://phillipchaffee.github.io/goose-phone-app/">
+
+<!-- Sharing. Slack and iMessage fall back to <title> + description, but
+     Discord, X, Mastodon and LinkedIn unfurl nothing without these, which
+     for a project whose argument is visual is the wrong first impression.
+     The card is images/og-card.png — drawn at 1200x630 in these same tokens
+     by scripts/make-og-card.js, because no screenshot in images/ is that
+     shape. Absolute URLs: a scraper does not resolve relative ones. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Goose Mobile">
+<meta property="og:title" content="Goose Mobile — your own AI agents, on your phone">
+<meta property="og:description" content="A Rust app (Dioxus) that puts a goose agent and containerised OpenCode code agents on your phone, over your own Tailscale network. One codebase for iOS, Android and desktop.">
+<meta property="og:url" content="https://phillipchaffee.github.io/goose-phone-app/">
+<meta property="og:image" content="https://phillipchaffee.github.io/goose-phone-app/images/og-card.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Goose Mobile — your own AI agents, on your phone. A Rust client for a goose server and for containerised code agents, over your own Tailscale network. iOS, Android, desktop.">
+<meta name="twitter:card" content="summary_large_image">
+
+<!-- Inline, so the page stays one file and Pages is not asked for a
+     /favicon.ico it does not have. The glyph is the app's own message icon,
+     copied from the markup in docs/gallery-states.json. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%233f434b'/%3E%3Cpath d='M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.9-.9L3 21l1.9-5.1A8.4 8.4 0 0 1 4 11.5 8.4 8.4 0 0 1 12.5 3 8.4 8.4 0 0 1 21 11.5z' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' transform='translate(12 12) scale(0.72) translate(-12 -12)'/%3E%3C/svg%3E">
+<style>
+/* This page is styled from the app's own design system — assets/main.css.
+ * The tokens below are copied from it, both themes, so the site and the app
+ * agree; the rules they serve are written down in docs/design.md.
+ *
+ *   prose is serif, the interface is sans        (rule 1)
+ *   chrome floats, content passes under it       (rules 2, 3)
+ *   rounding is tiered and nothing is square     (rule 4)
+ *   borders separate, shadows float              (rule 5)
+ *   anything that fills is a tint, not a slab    (rule 7)
+ *   controls are sized for thumbs                (rule 9)
+ *
+ * No build step, no framework, no external font, no script, no tracker.
+ */
+
+/* ── tokens: light ──────────────────────────────────────────────────── */
+:root {
+  color-scheme: light dark;
+
+  --bg-primary: #ffffff;
+  --bg-secondary: #f4f6f7;
+  --bg-inverse: #000000;
+  --bg-success: #4a9b34;
+
+  --text-primary: #3f434b;
+  --text-secondary: #6f6f6f;
+  --text-inverse: #ffffff;
+  --text-info: #2563c9;
+
+  --border-primary: #e3e6ea;
+  --border-secondary: #cbd1d6;
+
+  --tool-surface: #f4f6f7;
+
+  /* Code slabs stay this dark in both themes, exactly as in the app. */
+  --code-bg: #282c34;
+  --code-fg: #e6e6e6;
+  --code-muted: #a7b0b9;
+
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-serif: ui-serif, "New York", Charter, Georgia, serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --glass-tint: 78%;
+  --glass-blur: blur(20px) saturate(180%);
+  --scrim-fade: 24px;
+  --edge: 16px;
+}
+
+/* ── tokens: dark ───────────────────────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-primary: #22252a;
+    --bg-secondary: #3f434b;
+    --bg-inverse: #cbd1d6;
+    --bg-success: #a3d795;
+
+    --text-primary: #ffffff;
+    --text-secondary: #b8b8b8;
+    --text-inverse: #000000;
+    --text-info: #7cacff;
+
+    --border-primary: #3f434b;
+    --border-secondary: #525b68;
+
+    --tool-surface: #33373e;
+
+    --glass-tint: 86%;
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.2);
+  }
+}
+
+/* ── base ───────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+/* The chrome floats over the page, so an anchor jump has to stop below it —
+   otherwise the heading you asked for lands underneath the bar. */
+html { scroll-padding-top: 76px; }
+
+body, h1, h2, h3, p, ul, ol, li, figure, figcaption, dl, dd, pre { margin: 0; padding: 0; }
+ul, ol { list-style: none; }
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow-wrap: break-word;
+}
+
+/* Rule 1: the reading voice is the system serif; anything you operate stays
+   in the sans stack, and code stays monospace. */
+p, li, dd, blockquote { font-family: var(--font-serif); }
+h1, h2, h3 { font-family: var(--font-serif); font-weight: 600; line-height: 1.25; }
+h1 { font-size: clamp(2rem, 8vw, 3rem); letter-spacing: -0.01em; }
+h2 { font-size: clamp(1.375rem, 5vw, 1.75rem); }
+h3 { font-size: 1.125rem; }
+
+a { color: var(--text-info); text-decoration: underline; text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+
+:focus-visible {
+  outline: 2px solid var(--text-info);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+code, kbd, samp { font-family: var(--font-mono); font-size: 0.9em; }
+p code, li code, dd code, td code {
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+pre {
+  /* Soft-wrap rather than scroll sideways — the same default the app's diff
+     screen takes, and on a 402px page a scrolled line is a hidden one. */
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  overflow-x: auto;
+  max-width: 100%;
+  min-width: 0;
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--code-bg);
+  color: var(--code-fg);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  -webkit-overflow-scrolling: touch;
+}
+/* A slab is already a code voice: the inline treatment must not follow it in,
+   or the comment inside a <pre> lands on a pale chip and measures 2:1. */
+pre code {
+  padding: 0;
+  background: none;
+  color: inherit;
+  font-size: inherit;
+  border-radius: 0;
+}
+pre .c { color: var(--code-muted); }
+
+.wrap { width: 100%; max-width: 60rem; margin: 0 auto; padding: 0 var(--edge); }
+
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  padding: 12px 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  z-index: 40;
+}
+.skip:focus { left: var(--edge); top: 8px; }
+
+/* ── floating chrome (rules 2 and 3) ────────────────────────────────── */
+/* No bar bolted to the top edge: an inset capsule with the page passing
+   underneath, and a scrim that fades out BELOW the capsule so nothing thins
+   the material where the text sits. */
+.chrome { position: sticky; top: 0; z-index: 20; padding: 8px 0; }
+.chrome::before {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: calc(100% + var(--scrim-fade));
+  background: color-mix(in srgb, var(--bg-primary) var(--glass-tint), transparent);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--scrim-fade)), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--scrim-fade)), transparent);
+  pointer-events: none;
+}
+.bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 52px;
+  padding: 4px 6px 4px 16px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-primary) var(--glass-tint), transparent);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-md);
+}
+/* Rule 9: a control is sized for a thumb — 44px, the HIG's number — and that
+   applies to a text link in the bar as much as to a round icon button. */
+.brand {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-family: var(--font-serif);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-decoration: none;
+}
+.brand:hover { text-decoration: underline; text-underline-offset: 3px; }
+.bar nav ul { display: flex; align-items: center; gap: 2px; }
+/* Rule 11, applied to a nav: at phone width three destinations wrap the pill
+   onto two lines, so only the one that leaves the page survives. */
+.bar nav li.wide { display: none; }
+@media (min-width: 560px) { .bar nav li.wide { display: block; } }
+.bar nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: var(--radius-full);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-decoration: none;
+}
+.bar nav a:hover { background: var(--bg-secondary); }
+
+/* Where the blur is genuinely absent, ask for the preference rather than
+   permanently thickening the pane for everyone — same rule as the app. */
+@media (prefers-reduced-transparency: reduce) {
+  .chrome::before, .bar { background: var(--bg-primary); }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .chrome::before, .bar { background: var(--bg-primary); }
+}
+/* The tint has to be guarded on its own axis, not on the blur's. color-mix
+   is much newer than backdrop-filter — Safari shipped the blur in 9 and the
+   colour function in 16.2 — so iOS 15, iOS 16.0–16.1, Chrome 76–110 and
+   Firefox 103–112 all pass the query above and still cannot compute this
+   value. And it cannot be caught by declaring an opaque background first:
+   the value holds a var(), which makes it valid at parse time, so it wins
+   the cascade and only fails later, at computed-value time, where the
+   fallback is the property's initial value — transparent. That would leave
+   the capsule invisible with the blur still on, i.e. the wordmark sitting on
+   whatever is scrolling underneath it. So: ask about color-mix itself, in a
+   condition with no var() in it for the browser to choke on. */
+@supports not (background: color-mix(in srgb, #ffffff 78%, transparent)) {
+  .chrome::before, .bar { background: var(--bg-primary); }
+}
+
+/* ── hero ───────────────────────────────────────────────────────────── */
+/* The horizontal value has to be restated. .wrap and .hero are both single
+   class selectors, so this shorthand wins on the one element carrying both,
+   and `24px 0 8px` would zero the gutter — putting the headline and the
+   primary button hard against the screen edge while the capsule above them
+   and every section below stayed inset at --edge. */
+.hero { padding: 24px var(--edge) 8px; }
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.dot {
+  width: 8px; height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-success);
+}
+.lede {
+  max-width: 30ch;
+  margin-top: 14px;
+  font-size: clamp(1.125rem, 4.4vw, 1.375rem);
+  line-height: 1.45;
+}
+@media (min-width: 720px) { .lede { max-width: 46ch; } }
+.sub { max-width: 62ch; margin-top: 14px; color: var(--text-secondary); }
+
+.actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  text-decoration: none;
+}
+.btn.primary { background: var(--bg-inverse); color: var(--text-inverse); }
+.btn.primary:hover { opacity: 0.9; text-decoration: none; }
+.btn.secondary {
+  background: var(--bg-secondary);
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+}
+.btn.secondary:hover { border-color: var(--border-secondary); text-decoration: none; }
+
+/* ── sections ───────────────────────────────────────────────────────── */
+section { padding: 34px 0; }
+section > .wrap > h2 { margin-bottom: 6px; }
+.section-note { max-width: 62ch; margin-bottom: 20px; color: var(--text-secondary); }
+
+/* Rule 5: in normal flow, a hairline and no shadow. */
+.card {
+  padding: 18px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  background: var(--bg-primary);
+}
+.card h3 { margin-bottom: 8px; }
+.card p + p { margin-top: 10px; }
+.card .meta { margin-top: 12px; }
+
+/* A grid or flex item defaults to min-width:auto, so one <pre> of shell wider
+   than the phone drags its whole column past the viewport edge. */
+.grid > *, .features > div, .steps > li, .card { min-width: 0; }
+
+.grid { display: grid; gap: 12px; }
+@media (min-width: 720px) {
+  .grid.two { grid-template-columns: 1fr 1fr; }
+  .grid.three { grid-template-columns: repeat(3, 1fr); }
+}
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  color: var(--text-primary);
+}
+
+/* Feature list: a sans label, then the sentence that says what it is. */
+.features { display: grid; gap: 14px; }
+@media (min-width: 720px) { .features { grid-template-columns: 1fr 1fr; gap: 14px 28px; } }
+.features > div {
+  padding-left: 14px;
+  border-left: 3px solid var(--border-secondary);
+}
+.features dt {
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.features dd { margin-top: 4px; }
+
+.plain { display: grid; gap: 10px; max-width: 62ch; }
+.plain li { padding-left: 18px; text-indent: -18px; }
+.plain li::before { content: "— "; color: var(--text-secondary); }
+
+/* ── screenshots ────────────────────────────────────────────────────── */
+.shots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  /* A phone screen is 1:2.2, so four of them at full column width become the
+     tallest thing on the page. Capped, they stay a strip. */
+  max-width: 44rem;
+  margin: 0;
+}
+.shots figure { margin: 0; }
+.shots img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  background: var(--bg-secondary);
+}
+.shots figcaption {
+  margin-top: 8px;
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+.shot-note { max-width: 62ch; margin-top: 16px; font-size: 0.9375rem; color: var(--text-secondary); }
+
+/* A target card: the command is the content, so it takes the inset radius and
+   sits one step off the card's own surface (rule 4). */
+.target > code {
+  display: block;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  font-size: 0.8125rem;
+  overflow-x: auto;
+}
+.target .meta {
+  margin-top: 10px;
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+/* ── steps ──────────────────────────────────────────────────────────── */
+.steps { display: grid; gap: 14px; counter-reset: step; }
+.steps > li { counter-increment: step; }
+.steps h3 { display: flex; align-items: baseline; gap: 10px; }
+.steps h3::before {
+  content: counter(step);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px; height: 26px;
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.steps p { margin: 8px 0 10px; }
+
+/* ── footer ─────────────────────────────────────────────────────────── */
+footer { padding: 28px 0 40px; border-top: 1px solid var(--border-primary); }
+footer p { font-size: 0.9375rem; color: var(--text-secondary); }
+footer p + p { margin-top: 8px; }
+footer ul { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 14px; }
+footer ul a { display: inline-flex; align-items: center; min-height: 44px; font-size: 0.9375rem; }
+</style>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="chrome">
+  <div class="wrap">
+    <div class="bar">
+      <a class="brand" href="#main">Goose Mobile</a>
+      <nav aria-label="Primary">
+        <ul>
+          <li class="wide"><a href="#what">What it does</a></li>
+          <li class="wide"><a href="#start">Start</a></li>
+          <li><a href="https://github.com/PhillipChaffee/goose-phone-app">GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+  <div class="wrap hero">
+    <p class="eyebrow"><span class="dot" aria-hidden="true"></span> Rust · Dioxus 0.7 · MIT</p>
+    <h1>Your own AI agents, on your phone</h1>
+    <p class="lede">
+      Goose Mobile is a client for agents that run on <em>your</em> machine — reached
+      privately over Tailscale, with no hosted service in between.
+    </p>
+    <p class="sub">
+      It speaks to two kinds of backend: a <strong>goose</strong> server over the Agent
+      Client Protocol, and <strong>code agents</strong> — one OpenCode container per chat
+      — over HTTP and SSE. One Rust codebase, built with Dioxus, runs on iPhone, on
+      Android, and on the desktop.
+    </p>
+    <p class="actions">
+      <a class="btn primary" href="https://github.com/PhillipChaffee/goose-phone-app">View on GitHub</a>
+      <a class="btn secondary" href="#start">Set it up</a>
+    </p>
+  </div>
+
+  <section id="shots" aria-label="Screenshots">
+    <div class="wrap">
+      <div class="shots">
+        <figure>
+          <img src="images/new-session.png" width="603" height="1311" loading="lazy" decoding="async"
+               alt="The new-session screen: a close button, a placeholder reading “Start a task in testrepo on branch main…”, and above the keyboard two rows of pills — the repository and the base branch on one, an attach button, a Model chip marked with an amber dot because nothing is chosen yet, and a Build mode chip on the other.">
+          <figcaption>A session starts by writing the task</figcaption>
+        </figure>
+        <figure>
+          <img src="images/code-list.png" width="603" height="1311" loading="lazy" decoding="async"
+               alt="The Code screen: one session card, “Tidy the changelog”, carrying an amber dot on its tile, a status reading “waiting on you”, its repository and branch, and an inset panel — “Approve or deny Run: git push origin HEAD” — with Deny and Approve buttons inside the card. A New session button floats at the bottom right.">
+          <figcaption>A chat waiting on you, answered from the list</figcaption>
+        </figure>
+        <figure>
+          <img src="images/pull-requests.png" width="603" height="1311" loading="lazy" decoding="async"
+               alt="The Pull requests screen for one chat’s branch: five cards. #12 is open with checks passing and offers a Merge button; #11 is open with checks failing and says why merging is not offered; #10 is waiting on GitHub to work out whether it can merge; #9 is a draft; #8 is already merged.">
+          <figcaption>Every pull request off this chat’s branch</figcaption>
+        </figure>
+        <figure>
+          <img src="images/diff-review.png" width="603" height="1311" loading="lazy" decoding="async"
+               alt="The Review screen: a header reading “5 files · +10 −7”, a progress line “3 of 5 files reviewed” with a Mark all button, then one line per file holding its path, its +N −M counts and a Viewed checkbox. Three are checked and folded; src/table.rs is open, its code running the full width of the screen with red removed lines and green added ones.">
+          <figcaption>The session’s changes, one file at a time</figcaption>
+        </figure>
+        <figure>
+          <img src="images/code-chat.png" width="603" height="1311" loading="lazy" decoding="async"
+               alt="A code-agent chat: the title bar carries a new-chat button and an overflow menu; the transcript shows two tasks, a git push tool card and the agent’s replies; a row of Diff (+10 −7) and Pull requests (5) chips sits above the composer, which holds an attach button and chips naming the model (DeepSeek V4 Flash) and the mode (Build) on one line with the send button.">
+          <figcaption>A code agent, mid-task</figcaption>
+        </figure>
+      </div>
+      <!-- The style gallery is linked to its file on GitHub rather than to
+           style-gallery.html here, and it is deliberate. Its frames load
+           ../assets/main.css, which sits outside this folder — so when Pages
+           publishes /docs as the site root that stylesheet 404s and every
+           frame renders unstyled (measured, not assumed). If the site is ever
+           published from the repository root instead, point the three gallery
+           links (here, in "How it is kept honest", and in the footer) at
+           style-gallery.html and the live artefact works. -->
+      <p class="shot-note">
+        The running app, not mock-ups: all five are captures off an iPhone 17 Pro
+        simulator, taken from the build these pages were written against. They are
+        light mode; the app follows the system and has a dark set of the same tokens.
+      </p>
+      <p class="shot-note">
+        For markup that cannot drift there is the
+        <a href="https://github.com/PhillipChaffee/goose-phone-app/blob/main/docs/style-gallery.html">style gallery</a>:
+        twenty-seven states dumped out of the app's own DOM, including every one shown
+        here. That is what <code>docs/audit.js</code> reads, so a screen only escapes
+        being checked for contrast, overflow and tap-target size if nobody ever drove
+        the app to it.
+      </p>
+    </div>
+  </section>
+
+  <section id="backends" aria-labelledby="backends-h">
+    <div class="wrap">
+      <h2 id="backends-h">Two backends, one app</h2>
+      <p class="section-note">
+        Each has its own protocol library in the workspace, UI-independent and reusable.
+      </p>
+      <div class="grid two">
+        <div class="card">
+          <h3>goose, over a WebSocket</h3>
+          <p>
+            <a href="https://github.com/aaif-goose/goose">goose</a> ≥ 1.42 exposes one API:
+            the <a href="https://agentclientprotocol.com">Agent Client Protocol</a>, JSON-RPC 2.0
+            served by <code>goose serve</code> at <code>/acp</code>. The app speaks it over a
+            WebSocket — the same transport the official goose desktop app uses.
+          </p>
+          <p>
+            <code>crates/goose-acp-client</code> is that half: tokio, tungstenite and rustls,
+            with no UI framework anywhere in it, so it builds unchanged for iOS, Android and
+            desktop.
+          </p>
+          <p class="chips meta">
+            <span class="chip">JSON-RPC 2.0</span>
+            <span class="chip">WebSocket</span>
+            <span class="chip">rustls</span>
+          </p>
+        </div>
+        <div class="card">
+          <h3>Code agents, over HTTP and SSE</h3>
+          <p>
+            A code chat is its own <a href="https://opencode.ai">OpenCode</a> container on your
+            server, behind a session manager that wakes a stopped one on the next request. One
+            base URL carries both layers: <code>/api/…</code> for chat lifecycle,
+            <code>/chat/&lt;id&gt;/…</code> for that chat's own OpenCode HTTP API, with its
+            event stream on SSE.
+          </p>
+          <p>
+            Opened chats are cached on the device, so a sleeping chat's transcript is on screen
+            while its container boots. The client is <code>crates/opencode-client</code>
+            (reqwest + rustls); the server side is the code-agent manager from
+            <a href="https://github.com/PhillipChaffee/personal-ai-setup">personal-ai-setup</a>.
+          </p>
+          <p class="chips meta">
+            <span class="chip">HTTP</span>
+            <span class="chip">SSE</span>
+            <span class="chip">one container per chat</span>
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="what" aria-labelledby="what-h">
+    <div class="wrap">
+      <h2 id="what-h">What it does</h2>
+      <p class="section-note">
+        Everything here works against both backends unless it says otherwise.
+      </p>
+      <dl class="features">
+        <div>
+          <dt>Streaming transcript</dt>
+          <dd>
+            Replies stream in as markdown — code blocks, tables, lists — with the agent's
+            reasoning in a collapsible <em>Thinking</em> section.
+          </dd>
+        </div>
+        <div>
+          <dt>Tool output that folds</dt>
+          <dd>
+            Each tool call is a card with live status and its output. A run of two or more
+            settled calls collapses to one line you can open — unless something in it failed or
+            is still running, which is exactly when you want to see it.
+          </dd>
+        </div>
+        <div>
+          <dt>Permission prompts</dt>
+          <dd>
+            The agent's permission asks queue up and you answer them from the phone: goose
+            renders whichever options its server sent, a code agent gets once, always, or
+            reject. A code agent blocked on one says so on the list and can be answered
+            without opening it — the manager aggregates pending asks across running
+            containers, so a sleeping chat is never woken just to be polled.
+          </dd>
+        </div>
+        <div>
+          <dt>Diff review</dt>
+          <dd>
+            A code chat's cumulative diff, one line per file holding its path, its counts
+            and a Viewed checkbox, with the code running the full width of the screen and
+            a wrap toggle for long lines. OpenCode returns whole-file patches, so the
+            re-hunking that makes them readable at 402px happens on the device.
+          </dd>
+        </div>
+        <div>
+          <dt>Model, effort and mode, per session</dt>
+          <dd>
+            Two chips on the composer, on one line with the send button. One opens a sheet
+            holding whatever that backend can actually change — provider, model, thinking
+            effort; the other picks the mode a turn runs in, goose's own or an OpenCode
+            agent. Both state a resolved value rather than naming themselves, so a chip is
+            never a question. What cannot change, like the context window, is stated as a
+            fact rather than offered as a control that does nothing.
+          </dd>
+        </div>
+        <div>
+          <dt>Starting a code session</dt>
+          <dd>
+            A composer, not a form: you write the task, and the placeholder names what it
+            will run against. The repository, the base branch to cut from, the model and
+            the mode are pills above the keyboard, each opening a sheet that filters once
+            the list is long enough to need it. The model is required — a session that
+            began without one had nothing to report afterwards, which is why the chips
+            used to name themselves.
+          </dd>
+        </div>
+        <div>
+          <dt>Pull requests</dt>
+          <dd>
+            A code chat's branch gets its own screen: the pull requests open off it, each
+            with its state and check status, and merged from the phone when
+            GitHub says it can be. When it cannot — a draft, failing checks, a conflict —
+            the row says which, instead of showing a button that would fail.
+          </dd>
+        </div>
+        <div>
+          <dt>Attachments</dt>
+          <dd>
+            Send a photo, a screenshot or a file with a message, on either backend. The
+            picker is the system's own — photo library, camera, Files — and images are
+            downscaled on the device, so a 12-megapixel capture does not become a
+            multi-megabyte request over the tailnet. Anything too large, or of a type the
+            agent cannot read, is refused by name rather than dropped.
+          </dd>
+        </div>
+        <div>
+          <dt>Sessions</dt>
+          <dd>
+            Browse, resume and delete server-side sessions. Swipe a row left for its delete
+            tray; the confirm is a sheet. Pull a list down to refresh it — there is no
+            refresh button on any screen. History replays through the same renderer as live
+            output, so a resumed chat looks identical.
+          </dd>
+        </div>
+        <div>
+          <dt>Built for a flaky network</dt>
+          <dd>
+            Stop cancels a running turn, and dropped connections reconnect and replay history.
+            On the goose socket a 30-second keepalive that gives up after two unanswered pings
+            catches the half-open connection you get from switching networks — the classic
+            “connected, but nothing happens”.
+          </dd>
+        </div>
+        <div>
+          <dt>Light and dark</dt>
+          <dd>
+            Both themes follow the system, and both are checked by the same tool:
+            <code>docs/audit.js</code> walks every captured screen in each of them and exits
+            non-zero on a contrast or geometry finding.
+          </dd>
+        </div>
+      </dl>
+    </div>
+  </section>
+
+  <section id="private" aria-labelledby="private-h">
+    <div class="wrap">
+      <h2 id="private-h">Private by construction</h2>
+      <p class="section-note">
+        There is no account, no relay and no service of ours in the path. The app talks to the
+        one server you point it at.
+      </p>
+      <ul class="plain">
+        <li>
+          Reachability is <a href="https://tailscale.com">Tailscale</a>'s job.
+          <code>tailscale serve</code> publishes the machine on your tailnet with a real
+          Let's Encrypt certificate while goose stays bound to localhost, so nothing is exposed
+          to the public internet.
+        </li>
+        <li>
+          The goose plane authenticates with a shared secret; the code plane with a password
+          over TLS. Both are stored in the app-private data directory and sent only to the
+          server you configured.
+        </li>
+        <li>
+          For <code>goose serve --tls</code>'s self-signed certificate, the app pins the
+          SHA-256 fingerprint goose prints — the same scheme the goose desktop app uses.
+        </li>
+        <li>
+          Permission prompts are the last line of defence, which is the argument for leaving
+          the agent in an approval mode when you reach it from a phone.
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="targets" aria-labelledby="targets-h">
+    <div class="wrap">
+      <h2 id="targets-h">One codebase, three targets</h2>
+      <p class="section-note">
+        Desktop is not an afterthought: it is the default cargo feature and the development
+        loop.
+      </p>
+      <div class="grid three">
+        <div class="card target">
+          <h3>Desktop</h3>
+          <code>dx serve --desktop</code>
+          <p class="meta"><code>desktop</code> is the default cargo feature, and the loop the app is developed in.</p>
+        </div>
+        <div class="card target">
+          <h3>iPhone</h3>
+          <code>dx serve --ios --device</code>
+          <p class="meta"><code>dx bundle --ios --release --codesign</code> makes a signed build.</p>
+        </div>
+        <div class="card target">
+          <h3>Android</h3>
+          <code>dx serve --android --device</code>
+          <p class="meta"><code>dx bundle --android</code> makes an .aab; minSdk 24.</p>
+        </div>
+      </div>
+      <p class="section-note" style="margin-top:16px">
+        Networking is pure Rust, so iOS App Transport Security does not intercept it and plain
+        HTTP over the tailnet works without an exception. Signing is the fiddly part of a
+        device install; the
+        <a href="https://github.com/PhillipChaffee/goose-phone-app/blob/main/docs/iphone-setup.md">iPhone walkthrough</a>
+        covers it end to end.
+      </p>
+    </div>
+  </section>
+
+  <section id="start" aria-labelledby="start-h">
+    <div class="wrap">
+      <h2 id="start-h">Start</h2>
+      <p class="section-note">
+        The short version. The
+        <a href="https://github.com/PhillipChaffee/goose-phone-app#quick-start">README</a>
+        has the whole thing, including the code-agent side.
+      </p>
+      <ol class="steps">
+        <li>
+          <h3>Run goose as a server</h3>
+          <p>On any always-on Linux or macOS box, with an AI provider already configured.</p>
+<pre><code>GOOSE_SERVER__SECRET_KEY='pick-a-long-random-secret' \
+  goose serve --platform desktop --enable-scheduler \
+  --host 127.0.0.1 --port 3284</code></pre>
+        </li>
+        <li>
+          <h3>Put it on your tailnet</h3>
+          <p>With MagicDNS and HTTPS Certificates on, this gives you a real certificate on the tailnet name.</p>
+<pre><code>sudo tailscale serve --bg 3284
+./scripts/check-server.sh   <span class="c"># verifies the shape the app needs</span></code></pre>
+        </li>
+        <li>
+          <h3>Build and connect</h3>
+          <p>Try it on your computer first; the settings screen takes the server URL, the secret and a working directory.</p>
+<pre><code>curl -sSL https://dioxus.dev/install.sh | bash
+dx serve --desktop</code></pre>
+        </li>
+      </ol>
+      <div class="card" style="margin-top:20px">
+        <h3>No server? No API key?</h3>
+        <p>
+          The workspace ships a protocol-faithful fake goose server — <code>/status</code>,
+          <code>/acp</code> and the four permission options the real one routes — so the
+          whole goose side can be exercised without either. The Code screens are the
+          exception: they need the code-agent manager.
+        </p>
+<pre style="margin-top:12px"><code>cargo run -p mock-goose-server   <span class="c"># 127.0.0.1:3285, secret "mock-secret"</span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="craft" aria-labelledby="craft-h">
+    <div class="wrap">
+      <h2 id="craft-h">How it is kept honest</h2>
+      <p class="section-note">
+        The look on this page is the app's own design system, tokens and all.
+      </p>
+      <div class="grid three">
+        <div class="card">
+          <h3>A written design language</h3>
+          <p>
+            <code>assets/main.css</code> is the whole system — semantic tokens in both themes,
+            tiered rounding, borders that separate and shadows that float.
+            <a href="https://github.com/PhillipChaffee/goose-phone-app/blob/main/docs/design.md">docs/design.md</a>
+            records each rule and the measurement behind it.
+          </p>
+        </div>
+        <div class="card">
+          <h3>A gallery it cannot fake</h3>
+          <p>
+            <a href="https://github.com/PhillipChaffee/goose-phone-app/blob/main/docs/style-gallery.html">The
+            style gallery</a> is captured out of the running app's DOM by a script, not written
+            by hand: seventeen states, each in a 402×874 frame linking the app's live
+            stylesheet. Open it from a checkout and all seventeen are there, with no build and
+            no device. A run replaces the set, so a screen that stops existing stops being
+            audited — and one never driven to, like the permission sheet, was never in it.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Checks that fail loudly</h3>
+          <p>
+            <code>docs/audit.js</code> walks every captured state in both themes for contrast
+            (4.5:1 text, 3:1 icons), overflow, clipped text, square corners and undersized tap
+            targets, and exits non-zero. CI adds rustfmt, clippy's pedantic and nursery groups
+            as errors, the test suite and coverage; <code>unsafe_code</code> is forbidden
+            workspace-wide.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <ul>
+      <li><a href="https://github.com/PhillipChaffee/goose-phone-app">Repository</a></li>
+      <li><a href="https://github.com/PhillipChaffee/goose-phone-app/blob/main/README.md">README</a></li>
+      <li><a href="https://github.com/PhillipChaffee/goose-phone-app/blob/main/docs/design.md">Design guide</a></li>
+      <li><a href="https://github.com/PhillipChaffee/goose-phone-app/blob/main/docs/iphone-setup.md">iPhone setup</a></li>
+      <li><a href="https://github.com/PhillipChaffee/goose-phone-app/blob/main/docs/style-gallery.html">Style gallery</a></li>
+    </ul>
+    <p>MIT licensed. A personal project — not affiliated with the goose or OpenCode projects.</p>
+    <p>Built with Rust and Dioxus by Phillip Chaffee.</p>
+  </div>
+</footer>
+
+</body>
+</html>

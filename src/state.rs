@@ -127,6 +127,16 @@ impl ConnState {
 pub(crate) enum ChatItem {
     User {
         text: String,
+        /// Files sent with this message. A field rather than an item of its
+        /// own, so an attachment cannot shift the indices `marks` and
+        /// `CodeChatState::part_index` hold into `items` — and because one
+        /// message with three photos is one turn, not four.
+        ///
+        /// `serde(default)` is load-bearing the same way it is on `Settings`:
+        /// a transcript cached by an older build has no such field, and a
+        /// parse failure would take the whole cache down with it.
+        #[serde(default)]
+        attachments: Vec<crate::attach::Attachment>,
     },
     Assistant {
         message_id: Option<String>,
@@ -160,6 +170,12 @@ pub(crate) struct ChatState {
     pub last_at: i64,
     pub running: bool,
     pub loading: bool,
+    /// What the transcript knew about its attachments before a replay
+    /// cleared it, waiting for the replay to bring them back so it can hand
+    /// each one its name and its picture again. See
+    /// `crate::attach::sent_attachments` for why goose needs this and the
+    /// Code tab does not.
+    pub attach_replay: Vec<crate::attach::Attachment>,
 }
 
 /// Context-window usage: (tokens used, context limit).
@@ -332,6 +348,21 @@ pub(crate) struct AppCtx {
     /// only works if the draft outlives the screen that shows it.
     pub chat_draft: Signal<String>,
     pub toast: Signal<Option<String>>,
+    /// Files picked in the goose composer and not yet sent.
+    ///
+    /// On the context rather than in the view because the picker is one
+    /// document-level listener installed at the app root (`src/attach.rs`
+    /// says why the gesture has to live there), and it has to be able to hand
+    /// what it read to a composer it does not own.
+    pub attachments: Signal<Vec<crate::attach::PendingAttachment>>,
+    /// The picks the browser is still reading. Held so the tray can say so:
+    /// resizing three photos takes seconds, and a composer that just sits
+    /// there is indistinguishable from one that lost the pick.
+    ///
+    /// A list, and each entry naming its own pick and conversation, because
+    /// two reads can overlap and either can outlive the chat it was started
+    /// in — see `crate::attach::Pick`.
+    pub attach_reading: Signal<Vec<crate::attach::Pick>>,
 
     // ---- Code tab (per-chat OpenCode containers on the brain; src/code.rs) ----
     pub tab: Signal<Tab>,
@@ -345,26 +376,85 @@ pub(crate) struct AppCtx {
     pub code_chats_loading: Signal<bool>,
     pub code_repos: Signal<Vec<opencode_client::RepoEntry>>,
     /// The chat servers' model catalogue — names, context windows and
-    /// thinking-effort tiers. Fetched once, on the first open of the session
-    /// settings sheet; nothing else needs it.
+    /// thinking-effort tiers. Fetched once, on the first open of a picker that
+    /// needs it, and kept for the app's whole run. The new-session screen has
+    /// no chat of its own, so it borrows a running one to ask
+    /// (`crate::code::catalogue_donor`).
     pub code_models: Signal<Vec<opencode_client::ModelInfo>>,
     pub code_models_loading: Signal<bool>,
+    /// The open chat's agents — what the composer's mode chip picks between,
+    /// and what its label is resolved out of.
+    ///
+    /// Fetched quietly as part of opening a chat, because a chip that names
+    /// the mode has to be told what the modes are; the tap on the chip is a
+    /// loud retry for the case where that failed. Dropped when another chat is
+    /// opened, because a repository can define agents of its own.
+    pub code_agents: Signal<Vec<opencode_client::Agent>>,
+    /// The id of the chat whose container answered `code_agents`, or empty.
+    ///
+    /// The list is a *repository's* as much as a server's, so "some list is
+    /// already here" is not the same question as "the right list is here". The
+    /// new-session screen is where the difference shows: it borrows a
+    /// container to ask, and without this it would keep showing the agents of
+    /// whichever chat was last opened however many times its repo pill moved.
+    pub code_agents_from: Signal<String>,
+    pub code_agents_loading: Signal<bool>,
+    /// The branches of the repo the new-session screen is pointed at.
+    /// Answered by the manager from GitHub with its own credential, so it
+    /// wakes no container — the same plane `code_pulls` is fetched on.
+    pub code_branches: Signal<crate::code::BranchList>,
     pub code_chat: Signal<crate::code::CodeChatState>,
     /// Pending permission asks from code chats, tagged by chat id. A separate
     /// queue from `permission` by construction: goose and `OpenCode` ids can
     /// never collide or be cross-answered.
+    ///
+    /// The open chat's asks arrive on its event stream; every other chat's
+    /// come from the manager's aggregate over running containers
+    /// (`crate::code::refresh_code_permissions`).
     pub code_permissions: Signal<Vec<(String, opencode_client::CodePermission)>>,
+    /// `(chat id, permission id)` answered on this device, kept until the
+    /// server stops reporting them as pending.
+    ///
+    /// The aggregate is a snapshot: one taken a moment before a reply landed
+    /// still lists the ask, and merging it would put the panel back under the
+    /// thumb that just dismissed it. A tombstone that clears itself when the
+    /// server agrees is the smallest thing that cannot get stuck — and a
+    /// reply that *fails* removes its own, so an ask still blocking the agent
+    /// comes back rather than being hidden by a lie.
+    pub code_answered: Signal<HashSet<(String, String)>>,
     /// On-device transcript cache — instant open while a chat's container
     /// wakes, read-only offline. Server history stays authoritative.
     pub code_cache: Signal<crate::code::CodeCache>,
-    /// Bumped whenever a different code chat is opened; stale SSE pumps and
-    /// poll loops observe the change and exit.
+    /// Bumped whenever a different code chat is opened; stale SSE pumps
+    /// observe the change and exit.
+    ///
+    /// Not the list poll's business, and it used to be: reading this on the
+    /// ten-second tick meant the first tap on any row retired the loop that
+    /// carries the pending-ask aggregate, and nothing ever started another.
+    /// The poll has `code_poll` for that.
     pub code_epoch: Signal<u64>,
+    /// Generation of the chat-list poll loop. A loop retires when a newer one
+    /// takes its place, and for no other reason.
+    pub code_poll: Signal<u64>,
+    /// The chat whose SSE stream is pumping events into the app, if any.
+    ///
+    /// Which is not the same question as "which chat is open": `code_chat`
+    /// keeps its chat id after you back out to the list, and a stream can die
+    /// for good while it does. This says who is genuinely speaking for a
+    /// chat, and so who the manager's aggregate must not overrule — and, the
+    /// moment the stream ends, must take back over
+    /// (`crate::code::merge_permission_report`).
+    pub code_stream: Signal<Option<String>>,
     /// The review screen's state for the open chat. Deliberately not a field
     /// on `CodeChatState`: the chat screen clones its whole state on every
     /// keystroke, and parsed whole-file patches are the largest thing this
     /// tab holds.
     pub code_diff: Signal<crate::code::DiffState>,
+    /// The pull-request screen's state for the open chat: what this chat's
+    /// branch has open on GitHub. Fetched on chat open — the route is the
+    /// manager's own GitHub call and never reaches the container, so unlike
+    /// the diff it costs nothing and does not wait for a wake.
+    pub code_pulls: Signal<crate::code::PullsState>,
     /// Review screen: soft-wrap long code lines (the default) or scroll them
     /// horizontally. One switch for the whole screen rather than one per
     /// file, so flipping it does not leave a handful of independent scroll
@@ -379,6 +469,20 @@ pub(crate) struct AppCtx {
     /// check what the agent actually changed, come back and send — was the
     /// one that silently lost what you had written.
     pub code_draft: Signal<String>,
+    /// Files picked in the code composer and not yet sent. Separate from
+    /// `attachments` for the same reason `code_draft` is separate from the
+    /// goose draft: they are different conversations.
+    pub code_attachments: Signal<Vec<crate::attach::PendingAttachment>>,
+    /// Files picked on the new-session composer and not yet sent.
+    ///
+    /// Its own tray for the same reason it has its own conversation key
+    /// (`crate::code::NEW_CONVERSATION`): the session it belongs to does not
+    /// exist yet, and `code_attachments` belongs to whichever chat was last
+    /// opened. Sharing one Vec put a photo picked in that chat into the tray
+    /// of a new session pointed at a different repo — and, sent, into its
+    /// first prompt. `conversation_key` only ever gated the *arrival* of a
+    /// pick; what a tray already holds needed the same line drawn through it.
+    pub new_attachments: Signal<Vec<crate::attach::PendingAttachment>>,
     // ---- one field per feature, each a Copy struct from its own module ----
     //
     // A feature's state is a struct it defines and this holds, rather than a
@@ -422,6 +526,8 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         config_options: use_signal(Vec::new),
         chat_draft: use_signal(String::new),
         toast: use_signal(|| None),
+        attachments: use_signal(Vec::new),
+        attach_reading: use_signal(Vec::new),
         tab: use_signal(|| Tab::Home),
         drawer_open: use_signal(|| false),
         code_screen: use_signal(|| crate::code::CodeScreen::List),
@@ -432,13 +538,23 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_repos: use_signal(Vec::new),
         code_models: use_signal(Vec::new),
         code_models_loading: use_signal(|| false),
+        code_agents: use_signal(Vec::new),
+        code_agents_from: use_signal(String::new),
+        code_agents_loading: use_signal(|| false),
+        code_branches: use_signal(crate::code::BranchList::default),
         code_chat: use_signal(crate::code::CodeChatState::default),
         code_permissions: use_signal(Vec::new),
+        code_answered: use_signal(HashSet::new),
         code_cache,
         code_epoch: use_signal(|| 0),
+        code_poll: use_signal(|| 0),
+        code_stream: use_signal(|| None),
         code_diff: use_signal(crate::code::DiffState::default),
+        code_pulls: use_signal(crate::code::PullsState::default),
         code_diff_wrap: use_signal(|| true),
         code_draft: use_signal(String::new),
+        code_attachments: use_signal(Vec::new),
+        new_attachments: use_signal(Vec::new),
     };
     use_context_provider(|| ctx);
     ctx
@@ -613,6 +729,8 @@ async fn reload_chat(ctx: &AppCtx, session_id: String, cwd: String) {
     let mut chat = ctx.chat;
     {
         let mut c = chat.write();
+        let carry = crate::attach::sent_attachments(&c.items);
+        c.attach_replay = carry;
         c.items.clear();
         c.loading = true;
     }
@@ -701,6 +819,15 @@ enum ChunkKind {
 }
 
 fn push_chunk(chat: &mut Signal<ChatState>, chunk: MessageChunk, kind: ChunkKind) {
+    // A user chunk that is not text is a file they attached, and it belongs
+    // beside the message rather than inside it as "[image: image/jpeg]",
+    // which is all `text_repr` could ever say about it. Agent chunks keep the
+    // placeholder: an image the agent sends is not an attachment on a turn
+    // the reader made.
+    if matches!(kind, ChunkKind::User) && chunk.content.is_attachment() {
+        push_user_attachment(chat, &chunk.content);
+        return;
+    }
     let text = chunk.content.text_repr();
     if text.is_empty() {
         return;
@@ -730,7 +857,7 @@ fn push_chunk(chat: &mut Signal<ChatState>, chunk: MessageChunk, kind: ChunkKind
             last.push_str(&text);
             return;
         }
-        (ChunkKind::User, Some(ChatItem::User { text: last })) if message_id.is_none() => {
+        (ChunkKind::User, Some(ChatItem::User { text: last, .. })) if message_id.is_none() => {
             last.push_str(&text);
             return;
         }
@@ -745,9 +872,40 @@ fn push_chunk(chat: &mut Signal<ChatState>, chunk: MessageChunk, kind: ChunkKind
     } = &mut *c;
     mark_gap(items.len(), marks, last_at);
     items.push(match kind {
-        ChunkKind::User => ChatItem::User { text },
+        ChunkKind::User => ChatItem::User {
+            text,
+            attachments: Vec::new(),
+        },
         ChunkKind::Assistant => ChatItem::Assistant { message_id, text },
         ChunkKind::Thought => ChatItem::Thought { message_id, text },
+    });
+}
+
+/// Hang a replayed attachment off the user's turn.
+///
+/// goose sends the message's blocks as separate chunks, and the text one
+/// arrives first, so the bubble is normally already there. When it is not —
+/// a message that is nothing but a photo — the attachment opens one.
+fn push_user_attachment(chat: &mut Signal<ChatState>, block: &goose_acp_client::ContentBlock) {
+    let mut record = crate::attach::from_content_block(block);
+    let mut c = chat.write();
+    // A replayed image is bytes and a mime type and nothing else, so this is
+    // where a photo this phone sent gets its name and its thumbnail back.
+    crate::attach::adopt_sent(&mut c.attach_replay, &mut record);
+    if let Some(ChatItem::User { attachments, .. }) = c.items.last_mut() {
+        attachments.push(record);
+        return;
+    }
+    let ChatState {
+        items,
+        marks,
+        last_at,
+        ..
+    } = &mut *c;
+    mark_gap(items.len(), marks, last_at);
+    items.push(ChatItem::User {
+        text: String::new(),
+        attachments: vec![record],
     });
 }
 
@@ -1004,6 +1162,23 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
     let cwd = info.cwd.clone().unwrap_or_else(|| "/".to_string());
     let running = ctx.running_sessions.peek().contains(&info.session_id);
 
+    // An attachment belongs to the message it was picked for. The draft is
+    // component-local and dies with the screen; the tray lives on the context
+    // (the picker has to be able to reach it from the app root), so it has to
+    // be told.
+    ctx.attachments.clone().set(Vec::new());
+    // Walking out of a chat and back into it replays it from scratch, and the
+    // replay cannot say what a photo was called or what it looked like. Only
+    // from the same session: two conversations' attachments have nothing to
+    // say about each other.
+    let carry = {
+        let current = ctx.chat.peek();
+        if current.session_id.as_deref() == Some(info.session_id.as_str()) {
+            crate::attach::sent_attachments(&current.items)
+        } else {
+            Vec::new()
+        }
+    };
     chat.set(ChatState {
         marks: Vec::new(),
         last_at: 0,
@@ -1013,6 +1188,7 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
         items: Vec::new(),
         running,
         loading: true,
+        attach_replay: carry,
     });
     usage.set(None);
     screen.set(Screen::Chat);
@@ -1077,6 +1253,7 @@ pub(crate) fn new_session_with(ctx: &AppCtx, meta: Value) {
                 let mut screen = ctx.screen;
                 let mut usage = ctx.usage;
                 ctx.config_options.clone().set(resp.config_options);
+                ctx.attachments.clone().set(Vec::new());
                 chat.set(ChatState {
                     marks: Vec::new(),
                     last_at: 0,
@@ -1086,6 +1263,7 @@ pub(crate) fn new_session_with(ctx: &AppCtx, meta: Value) {
                     items: Vec::new(),
                     running: false,
                     loading: false,
+                    attach_replay: Vec::new(),
                 });
                 usage.set(None);
                 screen.set(Screen::Chat);
@@ -1095,9 +1273,21 @@ pub(crate) fn new_session_with(ctx: &AppCtx, meta: Value) {
     });
 }
 
-/// Send the user's message and run the agent turn. Returns false (leaving the
-/// caller's draft untouched) if the message could not be submitted.
-pub(crate) fn send_prompt(ctx: &AppCtx, text: String) -> bool {
+/// Send the user's message, with whatever they attached to it, and run the
+/// agent turn. Returns false (leaving the caller's draft and attachments
+/// untouched) if the message could not be handed to the transport at all.
+///
+/// True does not mean delivered — the request is answered on a task of its
+/// own — so a send that fails on the wire puts the files back in the tray
+/// itself, which is the only place they can come back to.
+///
+/// `files` is passed in rather than read off the context so that a message
+/// the *app* composes carries nothing: the caller decides.
+pub(crate) fn send_prompt(
+    ctx: &AppCtx,
+    text: String,
+    files: &[crate::attach::PendingAttachment],
+) -> bool {
     let mut chat = ctx.chat;
     let Some(session_id) = chat.peek().session_id.clone() else {
         return false;
@@ -1106,6 +1296,10 @@ pub(crate) fn send_prompt(ctx: &AppCtx, text: String) -> bool {
         show_toast(ctx, "Not connected — reconnect in Settings");
         return false;
     };
+    let blocks = crate::attach::goose_blocks(&text, files);
+    if blocks.is_empty() {
+        return false;
+    }
     {
         let mut c = chat.write();
         let ChatState {
@@ -1115,15 +1309,22 @@ pub(crate) fn send_prompt(ctx: &AppCtx, text: String) -> bool {
             ..
         } = &mut *c;
         mark_gap(items.len(), marks, last_at);
-        items.push(ChatItem::User { text: text.clone() });
+        items.push(ChatItem::User {
+            text,
+            attachments: crate::attach::records(files),
+        });
         c.running = true;
     }
     let mut running_sessions = ctx.running_sessions;
     running_sessions.write().insert(session_id.clone());
 
+    // Held for the length of the request, so a failure has something to give
+    // back. It costs a second copy of the payload while the turn runs, which
+    // is the price of not making a lost connection eat the photo.
+    let carried = files.to_vec();
     let ctx = *ctx;
     spawn_forever(async move {
-        let result = client.prompt(&session_id, &text).await;
+        let result = client.prompt(&session_id, &blocks).await;
 
         let mut running_sessions = ctx.running_sessions;
         running_sessions.write().remove(&session_id);
@@ -1142,7 +1343,24 @@ pub(crate) fn send_prompt(ctx: &AppCtx, text: String) -> bool {
                 "refusal" => show_toast(&ctx, "The agent declined to continue"),
                 other => show_toast(&ctx, format!("Turn ended: {other}")),
             },
-            Err(e) => show_toast(&ctx, format!("Prompt failed: {e}")),
+            Err(e) => {
+                // The transport can also die mid-turn, in which case the
+                // message did arrive and these chips reappear next to a
+                // bubble that already shows them. That is a thing the reader
+                // can see and undo; a photo that is simply gone is not.
+                //
+                // Named with the session it was sent in, for the same reason
+                // `running` is guarded on it three lines up: this answers long
+                // after the send, and the tray it empties into is the one on
+                // screen now.
+                let note = crate::attach::return_to_tray(
+                    &ctx,
+                    crate::attach::AttachTarget::Goose,
+                    &session_id,
+                    carried,
+                );
+                show_toast(&ctx, format!("Prompt failed: {e}{note}"));
+            }
         }
     });
     true

@@ -86,9 +86,16 @@ pub fn SessionsView() -> Element {
                             let info = info.clone();
                             move |()| open_session(&ctx, info.clone())
                         }),
-                        div { class: "session-meta",
-                            for part in session_meta(&info) {
-                                span { key: "{part}", "{part}" }
+                        // The `if let` is outside the wrapper, not inside it:
+                        // both halves of the line are optional, and a server
+                        // that omits `messageCount` on an ordinary chat would
+                        // otherwise leave an empty .session-meta whose
+                        // `margin-top` still opens a gap above the quote.
+                        if let Some(parts) = session_meta(&info) {
+                            div { class: "session-meta",
+                                for part in parts {
+                                    span { key: "{part}", "{part}" }
+                                }
                             }
                         }
                         if let Some(snippet) = info.last_message_snippet() {
@@ -180,7 +187,12 @@ const fn session_icon(kind: Option<SessionKind>) -> &'static str {
 /// else to say. Now it has: what kind of session this is, on the two kinds
 /// where that is not obvious. An ordinary chat gets no word, because a label
 /// every row carries is a label that distinguishes nothing.
-fn session_meta(info: &SessionInfo) -> Vec<String> {
+///
+/// `None`, not an empty `Vec`, when there is nothing to say — an ordinary chat
+/// from a server that omits `messageCount` has neither half. The caller wants
+/// that to mean *no wrapper at all*, because `.session-meta` keeps its
+/// `margin-top` when it is empty and opens a gap above the quote.
+fn session_meta(info: &SessionInfo) -> Option<Vec<String>> {
     let mut parts = Vec::new();
     if let Some(count) = info.message_count() {
         parts.push(format!("{count} msgs"));
@@ -188,7 +200,7 @@ fn session_meta(info: &SessionInfo) -> Vec<String> {
     if let Some(label) = info.kind_label() {
         parts.push(label.to_owned());
     }
-    parts
+    (!parts.is_empty()).then_some(parts)
 }
 
 /// What an empty list says, or `None` when it is not empty.
@@ -245,22 +257,44 @@ mod tests {
     fn the_meta_line_never_prints_an_identifier() {
         let info = session(Some("scheduled"), 12);
         let parts = session_meta(&info);
-        assert_eq!(parts, vec!["12 msgs".to_owned(), "Scheduled".to_owned()]);
+        assert_eq!(
+            parts,
+            Some(vec!["12 msgs".to_owned(), "Scheduled".to_owned()])
+        );
         assert!(
-            !parts.iter().any(|part| part.contains(&info.session_id)),
+            !parts
+                .into_iter()
+                .flatten()
+                .any(|part| part.contains(&info.session_id)),
             "the uuid is back"
         );
     }
 
     #[test]
     fn only_the_unusual_kinds_are_named() {
-        assert_eq!(session_meta(&session(Some("user"), 3)), vec!["3 msgs"]);
+        assert_eq!(
+            session_meta(&session(Some("user"), 3)),
+            Some(vec!["3 msgs".to_owned()])
+        );
         assert_eq!(
             session_meta(&session(Some("acp"), 3)),
-            vec!["3 msgs".to_owned(), "Agent".to_owned()]
+            Some(vec!["3 msgs".to_owned(), "Agent".to_owned()])
         );
         // A goose old enough not to send the type still lists.
-        assert_eq!(session_meta(&session(None, 3)), vec!["3 msgs"]);
+        assert_eq!(
+            session_meta(&session(None, 3)),
+            Some(vec!["3 msgs".to_owned()])
+        );
+    }
+
+    /// An empty `.session-meta` still carries its `margin-top`, so a row with
+    /// nothing to put on the line must render no wrapper rather than an empty
+    /// one.
+    #[test]
+    fn a_row_with_nothing_to_say_gets_no_line() {
+        let mut bare = session(None, 0);
+        bare.meta = None;
+        assert_eq!(session_meta(&bare), None);
     }
 
     #[test]

@@ -1,3 +1,5 @@
+pub(crate) mod attach;
+
 pub(crate) mod chat;
 
 pub(crate) mod chrome;
@@ -68,6 +70,74 @@ pub fn SwipeDelete(on_delete: EventHandler<()>) -> Element {
     }
 }
 
+/// The way back to the bottom of a transcript you have read up from.
+///
+/// Rendered on every chat screen; whether it is *visible* is decided in JS
+/// (`crate::viewport`), because the alternative is an `onscroll` handler in
+/// Rust and a blocking round trip on every frame of every scroll. Rust owns
+/// that the button exists and what a tap does, and nothing else about it.
+///
+/// The slot around it has no height and sits between the transcript and
+/// everything below it, so the button hangs above whatever comes next and
+/// moves with it. It has to: the composer grows with the draft, and the whole
+/// shell tracks the visual viewport when the keyboard opens, so anything
+/// placed against the bottom of the screen ends up behind one or the other.
+#[component]
+pub fn ScrollToBottom(scroller: &'static str) -> Element {
+    rsx! {
+        div { class: "scroll-bottom-slot",
+            button {
+                class: "scroll-bottom",
+                title: "Jump to the latest",
+                onclick: move |_| crate::viewport::scroll_to_bottom(scroller),
+                Icon { name: "arrow-down" }
+            }
+        }
+    }
+}
+
+/// The confirmation a swipe earns, as a sheet rather than a row in the card.
+/// Say it plainly, then Cancel and the thing itself.
+///
+/// One component rather than one per action, because the difference between
+/// confirming a delete and confirming a merge is two strings and which colour
+/// the second button takes — and a copy of the modal per action is a copy of
+/// the modal per action to keep in step.
+#[component]
+pub fn Confirm(
+    title: String,
+    body: String,
+    /// The word on the button that does it. Never "OK": the label is the last
+    /// chance to say what is about to happen.
+    confirm_label: String,
+    /// Destructive, and coloured as such (rule 7 — a control the user presses
+    /// is what earns a saturated fill).
+    danger: bool,
+    on_confirm: EventHandler<()>,
+    on_cancel: EventHandler<()>,
+) -> Element {
+    rsx! {
+        div { class: "modal-backdrop",
+            div { class: "modal",
+                h2 { "{title}" }
+                p { class: "modal-body", "{body}" }
+                div { class: "modal-actions",
+                    button {
+                        class: "btn secondary",
+                        onclick: move |_| on_cancel.call(()),
+                        "Cancel"
+                    }
+                    button {
+                        class: if danger { "btn danger" } else { "btn primary" },
+                        onclick: move |_| on_confirm.call(()),
+                        "{confirm_label}"
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The confirmation a swipe earns, as a sheet rather than a row in the card.
 ///
 /// Both planes delete for good: goose's `session/delete` is not a soft
@@ -89,23 +159,13 @@ pub fn ConfirmDelete(
     on_cancel: EventHandler<()>,
 ) -> Element {
     rsx! {
-        div { class: "modal-backdrop",
-            div { class: "modal",
-                h2 { "{title}" }
-                p { class: "modal-body", "{body}" }
-                div { class: "modal-actions",
-                    button {
-                        class: "btn secondary",
-                        onclick: move |_| on_cancel.call(()),
-                        "Cancel"
-                    }
-                    button {
-                        class: "btn danger",
-                        onclick: move |_| on_confirm.call(()),
-                        "{confirm_label}"
-                    }
-                }
-            }
+        Confirm {
+            title,
+            body,
+            confirm_label,
+            danger: true,
+            on_confirm,
+            on_cancel,
         }
     }
 }
@@ -146,10 +206,9 @@ pub fn RenameSheet(
                 // `rename` alongside `sheet` for the reason `OverflowSheet`
                 // carries `menu`: two panes that both answer to `.modal.sheet`
                 // file under one gallery state, and whichever was captured
-                // last wins. The class is here and the stylesheet already uses
-                // it; the branch that reads it is one line in `domdump.rs`'s
-                // suffix ladder, and until that lands this pane and the
-                // settings sheet share the `-sheet` key.
+                // last wins. The class is here, the stylesheet uses it, and
+                // `domdump.rs`'s suffix ladder reads it — above the generic
+                // `.modal.sheet`, which this pane would otherwise answer to.
                 class: "modal sheet rename",
                 onclick: move |e: Event<MouseData>| e.stop_propagation(),
                 h2 { "{heading}" }
