@@ -2,9 +2,9 @@
 //! one.
 //!
 //! State and the calls that change it. The rendering is
-//! `src/views/recipes.rs`, the split `connect.rs`/`views/connect.rs`
-//! established: everything here is testable without a Dioxus runtime, and
-//! nothing here writes markup.
+//! `src/views/recipes.rs`, the split `code.rs`/`views/code.rs` established:
+//! everything here is testable without a Dioxus runtime, and nothing here
+//! writes markup.
 //!
 //! The screen this feature exists for is two taps — open a recipe, press Run —
 //! and the two rules that shape it are both about not firing an agent by
@@ -233,11 +233,15 @@ fn apply_schedule(ctx: &AppCtx, id: &str, cron: Option<&str>) {
 /// stores it, template markers and all, and the reader gets to read it before
 /// an agent acts on it. Auto-sending would make the second tap of a two-tap
 /// flow the point of no return.
+/// Set unconditionally, not only when there is a prompt. The draft lives on
+/// the context so this function can reach it, which also means it holds
+/// whatever was last typed anywhere — and a recipe with no prompt of its own
+/// would otherwise open its session with a stranger's half-written message
+/// already in the composer, looking exactly like something the recipe put
+/// there. A recipe with no prompt means an empty composer.
 pub(crate) fn run(ctx: &AppCtx, entry: &RecipeListEntry) {
     let mut draft = ctx.chat_draft;
-    if let Some(prompt) = entry.recipe.prompt.as_deref() {
-        draft.set(prompt.to_owned());
-    }
+    draft.set(entry.recipe.prompt.clone().unwrap_or_default());
     new_session_with(ctx, run_meta(&entry.id));
     // The chat lives in the Home stack, so the drawer's destination has to
     // change with it. `new_session_with` navigates that stack on success and
