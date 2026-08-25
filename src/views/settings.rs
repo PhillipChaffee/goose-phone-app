@@ -2,10 +2,10 @@ use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use goose_acp_client::{probe, ProbeOutcome};
 
-use crate::icons::Icon;
 use crate::state::{
     disconnect, establish, refresh_sessions, show_toast, use_app_ctx, ConnState, Screen, Settings,
 };
+use crate::views::chrome::TopBar;
 
 #[component]
 pub fn SettingsView() -> Element {
@@ -73,22 +73,12 @@ pub fn SettingsView() -> Element {
     };
 
     rsx! {
-        header { class: "topbar",
-            // Always present. Settings is a drawer destination, not a pushed
-            // screen, and the back chevron it replaces only rendered when
-            // connected — which left a disconnected user with no way off this
-            // screen once the tab bar went away.
-            button {
-                class: "icon-btn menu",
-                onclick: move |_| {
-                    let mut open = ctx.drawer_open;
-                    open.set(true);
-                },
-                Icon { name: "menu" }
-            }
-            h1 { class: "title", "Settings" }
-
-        }
+        // No `on_back`: Settings is a drawer destination, not a pushed
+        // screen, so TopBar gives it the hamburger. The back chevron it
+        // replaces rendered only when connected, which left a disconnected
+        // user with no way off this screen once the tab bar went away — the
+        // component is where that stops being a per-screen decision.
+        TopBar { title: "Settings" }
         main { class: "scroll settings",
             section { class: "card",
                 h2 { "Server" }

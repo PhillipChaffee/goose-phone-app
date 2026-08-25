@@ -8,6 +8,12 @@
 //!   - a **fact**: name, value, and the reason it is a fact, with no chevron
 //!     and no press state.
 //!
+//! There is a third shape, and it is deliberately rare: a row that opens
+//! something of its own rather than a list of values ([`SettingRow::action`],
+//! today the chat's title). It wears the control's clothes because it is one
+//! — name, value, chevron, pressable — and the sheet does not know what it
+//! opens, only that the caller asked to be told.
+//!
 //! Which one a setting gets is decided by whether choosing would change
 //! anything — [`SettingRow::select`] downgrades itself to a fact when there
 //! is one value or none. That is design rule 11 made mechanical: nothing
@@ -112,6 +118,11 @@ pub(crate) struct SettingRow {
     /// Empty means this row is a fact, not a control.
     pub choices: Vec<SettingChoice>,
     pub current: Option<String>,
+    /// This row hands itself back to the caller instead of drilling into a
+    /// value list. Kept separate from `choices` so that drilling in stays
+    /// impossible for it: a sheet that pushed an empty choice list would be a
+    /// dead end with a back button.
+    pub action: bool,
 }
 
 impl SettingRow {
@@ -148,6 +159,29 @@ impl SettingRow {
                 Vec::new()
             },
             current: current.map(str::to_owned),
+            action: false,
+        }
+    }
+
+    /// A row that opens something of the caller's rather than a value list.
+    ///
+    /// It is here for the one thing about a session that is typed rather than
+    /// chosen: its title. That belongs in this sheet and not only in the list,
+    /// because the moment you notice goose named the chat wrong is while you
+    /// are reading the chat.
+    pub(crate) fn action(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            value: value.into(),
+            note: None,
+            choices: Vec::new(),
+            current: None,
+            action: true,
         }
     }
 
@@ -165,10 +199,18 @@ impl SettingRow {
             note: Some(note.into()),
             choices: Vec::new(),
             current: None,
+            action: false,
         }
     }
 
+    /// Pressable, and something happens. Both shapes that are: the one that
+    /// pushes a value list, and the one that calls the caller back.
     const fn is_control(&self) -> bool {
+        !self.choices.is_empty() || self.action
+    }
+
+    /// Pressable *and* it has values of its own to push.
+    const fn drills(&self) -> bool {
         !self.choices.is_empty()
     }
 }
@@ -238,12 +280,17 @@ pub(crate) fn SessionSettingsSheet(
     backend: String,
     rows: Vec<SettingRow>,
     onchoose: EventHandler<(String, String)>,
+    /// Told which [`SettingRow::action`] row was pressed. Optional because a
+    /// sheet made only of settings has nothing to hand back, and the tab that
+    /// has none should not have to pass an empty handler.
+    #[props(default)]
+    onaction: Option<EventHandler<String>>,
     onclose: EventHandler<()>,
 ) -> Element {
     let mut open_row = use_signal(|| None::<String>);
     let drilled = open_row()
         .and_then(|id| rows.iter().find(|r| r.id == id).cloned())
-        .filter(SettingRow::is_control);
+        .filter(SettingRow::drills);
 
     let body = match drilled {
         Some(row) => {
@@ -273,7 +320,7 @@ pub(crate) fn SessionSettingsSheet(
             }
             div { class: "setting-list",
                 for row in rows.iter() {
-                    {render_row(row, open_row)}
+                    {render_row(row, open_row, onaction)}
                 }
             }
         },
@@ -443,8 +490,12 @@ fn choice_list<F: FnMut(String) + Clone + 'static>(
     }
 }
 
-/// One row, in whichever of the two shapes it earned.
-fn render_row(row: &SettingRow, mut open_row: Signal<Option<String>>) -> Element {
+/// One row, in whichever of the three shapes it earned.
+fn render_row(
+    row: &SettingRow,
+    mut open_row: Signal<Option<String>>,
+    onaction: Option<EventHandler<String>>,
+) -> Element {
     let key = row.id.clone();
     let name = row.name.clone();
     let value = row.value.clone();
@@ -454,13 +505,21 @@ fn render_row(row: &SettingRow, mut open_row: Signal<Option<String>>) -> Element
     // actually change — including the one warning that free models are being
     // withheld from a private repo, which exists precisely for a row that is
     // still pickable.
-    if row.is_control() {
+    let handler = onaction.filter(|_| row.action);
+    // A control needs somewhere for the press to go: a value list to push, or
+    // a caller waiting to be told which row it was. An action row on a sheet
+    // that passed no handler is a chevron that does nothing, so it renders as
+    // the fact it has effectively become.
+    if row.is_control() && (row.drills() || handler.is_some()) {
         let id = row.id.clone();
         return rsx! {
             button {
                 key: "{key}",
                 class: "setting-row",
-                onclick: move |_| open_row.set(Some(id.clone())),
+                onclick: move |_| match handler {
+                    Some(onaction) => onaction.call(id.clone()),
+                    None => open_row.set(Some(id.clone())),
+                },
                 span { class: "setting-main",
                     span { class: "setting-name", "{name}" }
                     span { class: "setting-value", "{value}" }
@@ -500,6 +559,17 @@ mod tests {
         );
         assert!(!row.is_control());
         assert_eq!(row.value, "Off");
+    }
+
+    /// The third shape is pressable and has nothing to push, so drilling into
+    /// it must be impossible rather than merely unlikely — an empty choice
+    /// list is a dead end with a back button on it.
+    #[test]
+    fn an_action_row_is_pressable_but_never_drills() {
+        let row = SettingRow::action("title", "Title", "Deploy the thing");
+        assert!(row.is_control());
+        assert!(!row.drills());
+        assert_eq!(row.value, "Deploy the thing");
     }
 
     #[test]

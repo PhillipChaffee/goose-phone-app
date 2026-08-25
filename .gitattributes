@@ -1,0 +1,11 @@
+# The gallery is generated, not written: scripts/capture-gallery.py drives the
+# running app and REPLACES both files wholesale. Two branches that each
+# re-captured therefore have no meaningful three-way merge — line-level
+# resolution would interleave two different capture runs into a document that
+# never existed and that docs/audit.js would happily pass. `-merge` makes git
+# stop and say so instead, and the resolution is always the same: re-capture.
+#
+# `-diff linguist-generated=true` keeps a 400KB machine-written blob out of
+# review diffs, where it is noise around whatever the change actually was.
+docs/gallery-states.json -merge -diff linguist-generated=true
+docs/style-gallery.html  -merge -diff linguist-generated=true

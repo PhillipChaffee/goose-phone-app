@@ -589,8 +589,18 @@ pre {
   --topbar-reserve: calc(var(--edge) + 44px + 8px);
 }
 
-/* Two, plus the pill's own padding, at the trailing edge. */
-.topbar:has(.topbar-actions) {
+/* Two, plus the pill's own padding, at the trailing edge.
+ *
+ * `:not(:empty)` is load-bearing, because `TopBar` renders the pill on every
+ * screen and lets CSS hide the ones with nothing in them: the bar on Chats,
+ * on Settings and on every future screen with no trailing control carries an
+ * empty `.topbar-actions`, and a bare `:has(.topbar-actions)` widened the
+ * reserve for two buttons that are not there — about 100px off a centred
+ * title, which shrinks from both ends. `:empty` is the same matcher the
+ * `display: none` below already relies on and it holds here: Dioxus renders an
+ * absent child as an HTML comment, and a comment does not stop an element
+ * being empty. */
+.topbar:has(.topbar-actions:not(:empty)) {
   --topbar-reserve: calc(var(--edge) + 2 * 44px + 6px + 8px);
 }
 
@@ -3897,4 +3907,45 @@ body.away-from-bottom .scroll-bottom {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ── drawer, at seven destinations ──────────────────────────────────── */
+
+/* Appended as its own section rather than merged into the drawer block
+ * above. Five branches are editing this file at once, and an append is the
+ * one edit that cannot collide with another; `.drawer-nav` and
+ * `.drawer-group` are self-contained, so the cascade does not care where
+ * they sit. */
+
+/* The drawer holds three destinations today and seven by the end of this
+ * program. Nothing here ever set an overflow, so at the accessibility text
+ * sizes the last items were painted past the bottom edge with no way to
+ * reach them. `min-height: 0` is the load-bearing half: a flex item's
+ * automatic minimum size is its content, so without it the nav refuses to
+ * shrink below its seven rows and there is nothing to scroll. */
+.drawer-nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* The panel floats over a page that scrolls. Without this, a flick past
+   * the end of the destination list carries the screen behind it instead. */
+  overscroll-behavior: contain;
+}
+
+/* A section header, not a destination — and deliberately NOT .drawer-item:
+ * docs/audit.js keys both its COLLAPSED check and its 44px tap check off
+ * that class, and a label is neither tappable nor 44px tall.
+ *
+ * Secondary, not tertiary. This is normal-weight text, which the audit holds
+ * to 4.5:1, and tertiary measures 2.20:1 in light (see the Deviations
+ * section of docs/design.md). Tertiary stays for dots and rules, which are
+ * non-text and only need 3:1. */
+.drawer-group {
+  margin: 16px 12px 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: var(--lh-xs);
+  text-transform: uppercase;
 }

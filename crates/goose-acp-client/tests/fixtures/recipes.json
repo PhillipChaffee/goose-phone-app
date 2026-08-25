@@ -1,0 +1,142 @@
+{
+  "recipes": [
+    {
+      "id": "9f2c41ab6d3e0517",
+      "recipe": {
+        "version": "1.0.0",
+        "title": "Quarterly dependency, licence and security audit across every workspace crate",
+        "description": "Walks every crate in the workspace, resolves the full transitive dependency graph, flags anything with a published advisory or a licence outside the approved set, and writes the findings up as a single markdown report with one section per crate and a short remediation note against each finding.",
+        "instructions": "Work crate by crate in workspace order. For each one run `cargo tree -e normal`, then `cargo audit --json`, then read the licence field of every direct dependency. Do not open a pull request; the report is the deliverable.",
+        "prompt": null,
+        "parameters": null,
+        "settings": null
+      },
+      "file_path": "/home/me/.config/goose/recipes/quarterly-dependency-and-security-audit.yaml",
+      "last_modified": "2026-08-23T18:42:11.508233+00:00",
+      "schedule_cron": null,
+      "slash_command": null
+    },
+    {
+      "id": "3b7d09e4c1f8a260",
+      "recipe": {
+        "version": "1.0.0",
+        "title": "Morning standup",
+        "description": "Summarises yesterday's commits and open review requests.",
+        "instructions": null,
+        "prompt": "Summarise what landed on main since yesterday morning, then list the pull requests waiting on me.",
+        "parameters": null,
+        "settings": {
+          "goose_provider": "anthropic",
+          "goose_model": "claude-sonnet-4-5",
+          "temperature": 0.2,
+          "max_turns": 12
+        }
+      },
+      "file_path": "/home/me/.config/goose/recipes/morning-standup.yaml",
+      "last_modified": "2026-08-22T07:05:44.120911+00:00",
+      "schedule_cron": "30 8 * * 1-5",
+      "slash_command": "standup"
+    },
+    {
+      "id": "c05e8a17b2934dd6",
+      "recipe": {
+        "version": "1.0.0",
+        "title": "Draft release notes",
+        "description": "Turns the commit range since the last tag into release notes.",
+        "instructions": "Group the changes by area and lead with anything that changes behaviour.",
+        "prompt": "Draft the release notes for {{ version }} on the {{ channel }} channel.",
+        "parameters": [
+          {
+            "key": "version",
+            "input_type": "string",
+            "requirement": "required",
+            "description": "The version being released, e.g. 1.4.0.",
+            "default": null,
+            "options": null
+          },
+          {
+            "key": "channel",
+            "input_type": "select",
+            "requirement": "optional",
+            "description": "Which release channel the notes are for.",
+            "default": "stable",
+            "options": ["stable", "beta", "nightly"]
+          },
+          {
+            "key": "notify_team",
+            "input_type": "boolean",
+            "requirement": "user_prompt",
+            "description": "Post the notes to the team channel when they are ready.",
+            "default": "false",
+            "options": null
+          }
+        ],
+        "settings": null
+      },
+      "file_path": "/home/me/.config/goose/recipes/release-notes.yaml",
+      "last_modified": "2026-08-19T15:31:02.884517+00:00",
+      "schedule_cron": null,
+      "slash_command": null
+    },
+    {
+      "id": "7a1f4c92e08b35de",
+      "recipe": {
+        "version": "1.0.0",
+        "title": "Nightly green build",
+        "description": "Runs the full gate and retries the flaky parts before reporting.",
+        "instructions": "Run the lint, test and format gates in that order.",
+        "prompt": "Run the full gate on {{ branch }} and report what failed.",
+        "parameters": [
+          {
+            "key": "branch",
+            "input_type": "string",
+            "requirement": "optional",
+            "description": "Branch to run the gate on.",
+            "default": "main",
+            "options": null
+          }
+        ],
+        "settings": null,
+        "extensions": [
+          {
+            "type": "stdio",
+            "name": "github",
+            "description": "GitHub CLI wrapper",
+            "cmd": "uvx",
+            "args": ["mcp-github"],
+            "env_keys": ["GITHUB_TOKEN"],
+            "timeout": 300
+          }
+        ],
+        "sub_recipes": [
+          {
+            "name": "lint",
+            "path": "/home/me/.config/goose/recipes/lint.yaml",
+            "values": { "strict": "true" },
+            "sequential_when_repeated": true,
+            "description": "Clippy with the workspace lint table."
+          }
+        ],
+        "retry": {
+          "max_retries": 2,
+          "checks": [{ "type": "shell", "command": "cargo test --workspace" }],
+          "on_failure": "cargo clean",
+          "timeout_seconds": 900,
+          "on_failure_timeout_seconds": 120
+        },
+        "activities": ["Run the gate", "Summarise failures"],
+        "author": { "contact": "platform-team@example.com" },
+        "response": {
+          "json_schema": {
+            "type": "object",
+            "properties": { "failed": { "type": "array", "items": { "type": "string" } } }
+          }
+        }
+      },
+      "file_path": "/home/me/.config/goose/recipes/nightly-green-build.yaml",
+      "last_modified": "2026-08-11T09:12:37.402118+00:00",
+      "schedule_cron": "0 3 * * *",
+      "slash_command": null
+    }
+  ]
+}

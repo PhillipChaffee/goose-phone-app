@@ -31,7 +31,9 @@ ROOT = Path(__file__).resolve().parent.parent
 GALLERY = ROOT / "docs" / "style-gallery.html"
 STORE = ROOT / "docs" / "gallery-states.json"
 
-# key -> the label the gallery shows. Keys come from src/app.rs.
+# key -> the label the gallery shows. Keys come from `Destination::key` in
+# src/nav.rs — the same table the app navigates by, so a screen that is not in
+# it is a screen the gallery never sees.
 LABELS = {
     "chats": "Chats",
     "chat": "Chat transcript",
@@ -40,6 +42,12 @@ LABELS = {
     "code-chat": "Code agent transcript",
     "code-diff": "Code review",
     "code-pulls": "Pull requests",
+    "extensions": "Extensions",
+    "extensions-detail": "Extension detail",
+    "skills": "Skills",
+    "skill": "Skill detail",
+    "recipes-list": "Recipes",
+    "recipes-detail": "Recipe detail",
     "settings": "Settings",
 }
 

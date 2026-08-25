@@ -1,8 +1,26 @@
 pub(crate) mod attach;
+
 pub(crate) mod chat;
+
+pub(crate) mod chrome;
+
 pub(crate) mod code;
+
+pub(crate) mod recipes;
+
+pub(crate) mod skills;
+
+// scheduler — PR 5 replaces this line
+
+pub(crate) mod extensions;
+
+// Session history (PR 7) adds no module: it is `sessions` growing kinds,
+// rename and search.
+
 pub(crate) mod session_settings;
+
 pub(crate) mod sessions;
+
 pub(crate) mod settings;
 
 use dioxus::prelude::*;
@@ -131,6 +149,12 @@ pub fn Confirm(
 pub fn ConfirmDelete(
     title: String,
     body: String,
+    /// The word on the button that does it. "Delete" is right for a list row
+    /// and wrong for the things that are not deletions — killing a running
+    /// job stops it, it does not remove it — and a confirmation whose button
+    /// does not name the act is a confirmation of nothing in particular.
+    #[props(default = "Delete".to_owned())]
+    confirm_label: String,
     on_confirm: EventHandler<()>,
     on_cancel: EventHandler<()>,
 ) -> Element {
@@ -138,10 +162,87 @@ pub fn ConfirmDelete(
         Confirm {
             title,
             body,
-            confirm_label: "Delete",
+            confirm_label,
             danger: true,
             on_confirm,
             on_cancel,
+        }
+    }
+}
+
+/// Correcting a name, as a sheet with one field in it.
+///
+/// A sheet at the view's root and never inside a bar, for the reason written
+/// on [`OverflowSheet`]: the bar's controls carry `backdrop-filter`, which
+/// makes them the containing block for every `position: fixed` descendant.
+///
+/// It saves on the button and never on a keystroke. That is the app's standing
+/// convention for anything that writes to the server — `SearchField` is the
+/// single exemption, and it is exempt because it writes nothing.
+#[component]
+pub fn RenameSheet(
+    heading: String,
+    /// What the name is now. Shown ready to be edited rather than as a
+    /// placeholder: most renames are a correction to the existing title, not
+    /// a replacement for it.
+    value: String,
+    on_save: EventHandler<String>,
+    on_cancel: EventHandler<()>,
+) -> Element {
+    let mut draft = use_signal(|| value);
+    let text = draft();
+    // A blank title is not a rename, it is a session with no name — and goose
+    // would take it.
+    let ready = !text.trim().is_empty();
+    let save = move |()| {
+        if ready {
+            on_save.call(draft.peek().trim().to_owned());
+        }
+    };
+
+    rsx! {
+        div { class: "modal-backdrop", onclick: move |_| on_cancel.call(()),
+            div {
+                // `rename` alongside `sheet` for the reason `OverflowSheet`
+                // carries `menu`: two panes that both answer to `.modal.sheet`
+                // file under one gallery state, and whichever was captured
+                // last wins. The class is here, the stylesheet uses it, and
+                // `domdump.rs`'s suffix ladder reads it — above the generic
+                // `.modal.sheet`, which this pane would otherwise answer to.
+                class: "modal sheet rename",
+                onclick: move |e: Event<MouseData>| e.stop_propagation(),
+                h2 { "{heading}" }
+                label { class: "field-label", "Title" }
+                input {
+                    class: "field",
+                    r#type: "text",
+                    placeholder: "What this chat is about",
+                    autocomplete: "off",
+                    value: "{text}",
+                    oninput: move |e| draft.set(e.value()),
+                    // The keyboard's return key is an explicit action like any
+                    // other button, and it is the one under the thumb.
+                    onkeydown: move |e: Event<KeyboardData>| {
+                        if e.key() == Key::Enter {
+                            e.prevent_default();
+                            save(());
+                        }
+                    },
+                }
+                div { class: "modal-actions",
+                    button {
+                        class: "btn secondary",
+                        onclick: move |_| on_cancel.call(()),
+                        "Cancel"
+                    }
+                    button {
+                        class: "btn primary",
+                        disabled: !ready,
+                        onclick: move |_| save(()),
+                        "Save"
+                    }
+                }
+            }
         }
     }
 }

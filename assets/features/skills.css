@@ -1,0 +1,29 @@
+/* ── skills ─────────────────────────────────────────────────────────────
+ *
+ * Two rules and a separator. Everything else on these screens is main.css
+ * doing its job: the rows are `.session-*`, the facts are the settings
+ * sheet's `.setting-row.fact`, and the document is `.md`.
+ */
+
+/* The facts sit above a whole document, so they need a floor. A hairline
+ * rather than a card: the panel is not a different kind of thing from the
+ * prose under it, it is the same page's first paragraph (rule 5). */
+.skill-facts {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+/* A skill's path is one unbroken 60-character token, and the note it lives in
+ * is a flex item that will happily grow to hold it — pushing the whole screen
+ * into a horizontal scroll. `anywhere` is right rather than `break-word`
+ * because there is nothing to preserve: a path broken mid-segment is still a
+ * path, and the alternative is not seeing the end of it at all. */
+.skill-facts .setting-note {
+  overflow-wrap: anywhere;
+}
+
+/* The document begins here, and it is prose: the same air a paragraph gets
+ * after a rule, not the 2px gap a settings list uses between rows. */
+.skill-body {
+  margin-top: 16px;
+}

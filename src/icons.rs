@@ -62,6 +62,18 @@ pub(crate) fn path_for(name: &str) -> Option<&'static str> {
         // Two commits and the cut between them — the base-branch pill. Same
         // circle idiom as "pull-request" above, so the two read as a family.
         "git-branch" => "M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9",
+        // Appended for the recipes/skills/scheduler/extensions screens, in
+        // the order they were needed rather than sorted into the set above —
+        // a re-sort is a diff over every line for the sake of alphabetical
+        // order nobody reads.
+        "book" => "M4 4.5A1.5 1.5 0 0 1 5.5 3H19v14H5.5A1.5 1.5 0 0 0 4 18.5zM4 18.5A1.5 1.5 0 0 0 5.5 20H19v-3",
+        "clock" => "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3.5 2",
+        "play" => "M8 5.5v13l11-6.5z",
+        "pause" => "M9 5v14M15 5v14",
+        // Four strokes crossing at their midpoints: the "this was generated"
+        // mark, at a size where a literal star would be a blob.
+        "sparkle" => "M12 3v6M12 15v6M3 12h6M15 12h6M6.5 6.5 9 9M15 15l2.5 2.5M17.5 6.5 15 9M9 15l-2.5 2.5",
+        "archive" => "M3 5h18v4H3zM5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M9.5 13h5",
         _ => return None,
     })
 }

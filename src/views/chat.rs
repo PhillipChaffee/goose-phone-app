@@ -15,7 +15,9 @@ use crate::views::session_settings::{
     chip_effort, choice_label, mode_icon, ChoicePickerSheet, SessionSettingsSheet, SettingChoice,
     SettingRow,
 };
-use crate::views::{ConfirmDelete, MenuItem, OverflowButton, OverflowSheet, ScrollToBottom};
+use crate::views::{
+    ConfirmDelete, MenuItem, OverflowButton, OverflowSheet, RenameSheet, ScrollToBottom,
+};
 
 /// The transcript's scroller, named so the pin and the scroll-to-bottom
 /// button address the same element.
@@ -26,7 +28,9 @@ pub fn ChatView() -> Element {
     let ctx = use_app_ctx();
     let chat = (ctx.chat)();
     let usage = (ctx.usage)();
-    let mut draft = use_signal(String::new);
+    // Not a `use_signal`: the draft outlives this screen (see
+    // `AppCtx::chat_draft`).
+    let mut draft = ctx.chat_draft;
 
     // Keep the transcript pinned to the bottom as content streams in. The
     // chat signal is read INSIDE the effect so it re-runs on every change.
@@ -63,7 +67,10 @@ pub fn ChatView() -> Element {
         .find(|o| o.config_id == "thinking_effort")
         .filter(|o| o.is_adjustable())
         .and_then(|o| chip_effort(o.current_value.as_deref()));
-    let rows = goose_setting_rows(&config, usage);
+    // Only a session that exists can be renamed, and a chat that has not been
+    // opened yet has no title worth correcting either.
+    let named = chat.session_id.is_some().then_some(chat.title.as_str());
+    let rows = goose_setting_rows(&config, usage, named);
     // A goose that stops offering a mode simply has no mode chip: this is
     // `None` and everything below skips it, rather than the chip appearing
     // with nothing behind it.
@@ -71,6 +78,7 @@ pub fn ChatView() -> Element {
     let mut sheet = use_signal(|| false);
     let mut mode_sheet = use_signal(|| false);
     let mut confirm_delete = use_signal(|| false);
+    let mut rename = use_signal(|| false);
     let mut menu = use_signal(|| false);
 
     let mut submit = move || {
@@ -231,7 +239,32 @@ pub fn ChatView() -> Element {
                 onchoose: move |(config_id, value): (String, String)| {
                     crate::state::set_config_option(&ctx, &config_id, &value);
                 },
+                onaction: move |_| {
+                    // The only action row this sheet has. It swaps one sheet
+                    // for another rather than nesting them: the rename field
+                    // is a screen's worth of keyboard, and the settings sheet
+                    // underneath it would be a backdrop nobody can reach.
+                    sheet.set(false);
+                    rename.set(true);
+                },
                 onclose: move |()| sheet.set(false),
+            }
+        }
+
+        if rename() {
+            RenameSheet {
+                heading: "Rename chat",
+                value: chat.title.clone(),
+                on_cancel: move |()| rename.set(false),
+                on_save: move |title: String| {
+                    rename.set(false);
+                    let Some(session_id) = ctx.chat.peek().session_id.clone() else {
+                        return;
+                    };
+                    spawn_forever(async move {
+                        crate::state::rename_session(&ctx, &session_id, &title).await;
+                    });
+                },
             }
         }
 
@@ -332,9 +365,14 @@ fn mode_choices(option: &ConfigOption) -> Vec<SettingChoice> {
         .collect()
 }
 
-/// The goose tab's rows: every option the agent offers apart from mode, plus
-/// the one fact about the session that is worth stating and cannot be
-/// changed.
+/// The goose tab's rows: the session's name, every option the agent offers
+/// apart from mode, and the one fact about it that is worth stating and
+/// cannot be changed.
+///
+/// The title leads because it is the only row that is about *this* session
+/// rather than about how the agent will answer in it — and because goose named
+/// it from the first message, which is a guess made before the conversation
+/// happened. The place you notice the guess was wrong is here, reading it.
 ///
 /// Context length is that fact. `session/set_config_option` routes exactly
 /// four ids — provider, mode, model, `thinking_effort` — and rejects anything
@@ -344,33 +382,38 @@ fn mode_choices(option: &ConfigOption) -> Vec<SettingChoice> {
 /// it as unknown before the first turn has produced one, because a row that
 /// appears partway through a conversation reads as the app having found
 /// something rather than as the agent having said it.
-fn goose_setting_rows(config: &[ConfigOption], usage: Option<Usage>) -> Vec<SettingRow> {
-    // A session whose config has not arrived and that has not run a turn has
-    // nothing to report. Returning no rows is what keeps the chip off the
-    // composer entirely, rather than offering a sheet holding one dash.
-    if config.is_empty() && usage.is_none() {
+fn goose_setting_rows(
+    config: &[ConfigOption],
+    usage: Option<Usage>,
+    title: Option<&str>,
+) -> Vec<SettingRow> {
+    // A session whose config has not arrived, that has not run a turn and
+    // that has no name yet has nothing to report. Returning no rows is what
+    // keeps the chip off the composer entirely, rather than offering a sheet
+    // holding one dash.
+    if config.is_empty() && usage.is_none() && title.is_none() {
         return Vec::new();
     }
-    let mut rows: Vec<SettingRow> = config
-        .iter()
-        .filter(|option| !is_mode_chip(option))
-        .map(|option| {
-            SettingRow::select(
-                &option.config_id,
-                &option.name,
-                option.current_value.as_deref(),
-                option
-                    .options
-                    .iter()
-                    .map(|c| {
-                        SettingChoice::new(&c.value, choice_label(&c.name, &c.value))
-                            .with_note(c.description.clone())
-                    })
-                    .collect(),
-                option.description.clone(),
-            )
-        })
+    let mut rows: Vec<SettingRow> = title
+        .map(|title| SettingRow::action("title", "Title", title))
+        .into_iter()
         .collect();
+    rows.extend(config.iter().filter(|o| !is_mode_chip(o)).map(|option| {
+        SettingRow::select(
+            &option.config_id,
+            &option.name,
+            option.current_value.as_deref(),
+            option
+                .options
+                .iter()
+                .map(|c| {
+                    SettingChoice::new(&c.value, choice_label(&c.name, &c.value))
+                        .with_note(c.description.clone())
+                })
+                .collect(),
+            option.description.clone(),
+        )
+    }));
     rows.push(match usage {
         Some((_, limit)) => SettingRow::fact(
             "context_length",
@@ -816,7 +859,7 @@ mod tests {
     }
 
     fn row_ids(config: &[ConfigOption]) -> Vec<String> {
-        goose_setting_rows(config, None)
+        goose_setting_rows(config, None, None)
             .into_iter()
             .map(|r| r.id)
             .collect()
@@ -875,21 +918,47 @@ mod tests {
     #[test]
     fn context_length_is_stated_before_the_agent_has_reported_one() {
         let config = [option("model", Some("model"), &["opus", "sonnet"])];
-        let rows = goose_setting_rows(&config, None);
+        let rows = goose_setting_rows(&config, None, None);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[1].value, "—");
         assert_eq!(
-            goose_setting_rows(&config, Some((1_000, 200_000)))[1].value,
+            goose_setting_rows(&config, Some((1_000, 200_000)), None)[1].value,
             "200k tokens"
         );
     }
 
-    /// Nothing to report is nothing to open: with no config and no turn yet,
-    /// the sheet has no rows and the composer has no chip.
+    /// Nothing to report is nothing to open: with no config, no turn yet and
+    /// no session to name, the sheet has no rows and the composer has no chip.
     #[test]
     fn a_session_with_nothing_to_report_has_no_rows() {
-        assert!(goose_setting_rows(&[], None).is_empty());
-        assert_eq!(goose_setting_rows(&[], Some((1_000, 200_000))).len(), 1);
+        assert!(goose_setting_rows(&[], None, None).is_empty());
+        assert_eq!(
+            goose_setting_rows(&[], Some((1_000, 200_000)), None).len(),
+            1
+        );
+    }
+
+    /// A name is something to report. The title leads, and it is the one row
+    /// that hands itself back to the caller instead of drilling into values.
+    #[test]
+    fn a_named_session_leads_with_the_row_that_renames_it() {
+        let config = [option("model", Some("model"), &["opus", "sonnet"])];
+        let rows = goose_setting_rows(&config, None, Some("Deploy the thing"));
+        assert_eq!(
+            rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["title", "model", "context_length"]
+        );
+        assert_eq!(rows[0].value, "Deploy the thing");
+        assert!(rows[0].action);
+        // A chat that has not been opened has no title, and no row for one.
+        assert!(!row_ids(&config).contains(&"title".to_owned()));
+        // The name alone is enough to open the sheet on a session that has
+        // told the app nothing else yet.
+        assert_eq!(
+            goose_setting_rows(&[], None, Some("Standup")).len(),
+            2,
+            "the title and the unknown context length"
+        );
     }
 
     /// The picker's rows carry the agent's own words, and a mark each.

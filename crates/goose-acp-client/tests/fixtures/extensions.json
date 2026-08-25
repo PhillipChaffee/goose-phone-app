@@ -1,0 +1,77 @@
+{
+  "extensions": [
+    {
+      "extension": {
+        "type": "mcp",
+        "server": {
+          "name": "mail-imap",
+          "command": "uvx",
+          "args": ["mcp-email-server@1.4.2", "stdio"],
+          "env": [],
+          "_meta": { "goose": { "source": "config.yaml" } }
+        },
+        "envKeys": ["MCP_EMAIL_SERVER_PASSWORD"],
+        "description": "IMAP/SMTP mail via a provider app password",
+        "timeout": 300,
+        "socket": "/run/user/1000/mail-imap.sock",
+        "bundled": false,
+        "available_tools": ["list_mailboxes", "list_emails_metadata", "get_emails_content"]
+      },
+      "enabled": true,
+      "configKey": "mail-imap"
+    },
+    {
+      "extension": {
+        "type": "mcp",
+        "server": {
+          "type": "http",
+          "name": "todoist",
+          "url": "https://ai.todoist.net/mcp",
+          "headers": [
+            {
+              "name": "Authorization",
+              "value": "Bearer ${TODOIST_API_KEY}",
+              "_meta": { "goose": { "substituted": true } }
+            }
+          ]
+        },
+        "envKeys": ["TODOIST_API_KEY"],
+        "description": "Todoist tasks",
+        "timeout": 300,
+        "bundled": false,
+        "available_tools": ["find-tasks"],
+        "clientId": "goose-desktop",
+        "clientSecretKey": "TODOIST_OAUTH_SECRET",
+        "scopes": ["data:read"]
+      },
+      "enabled": false,
+      "configKey": "todoist"
+    },
+    {
+      "extension": {
+        "type": "builtin",
+        "name": "developer",
+        "description": "Shell and file editing",
+        "display_name": "Developer",
+        "timeout": 300,
+        "bundled": true,
+        "available_tools": ["shell", "text_editor"]
+      },
+      "enabled": true,
+      "configKey": "developer"
+    },
+    {
+      "extension": {
+        "type": "platform",
+        "name": "memory",
+        "description": "Long-term memory",
+        "display_name": "Memory",
+        "bundled": true,
+        "available_tools": ["remember_memory"]
+      },
+      "enabled": true,
+      "configKey": "memory"
+    }
+  ],
+  "warnings": ["skipping extension `legacy-sse`: SSE is unsupported, migrate to streamable_http"]
+}

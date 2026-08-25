@@ -391,6 +391,25 @@ pub(crate) fn use_pull_to_refresh() {
                     }
                     "diff" => crate::code::load_code_diff(&ctx),
                     "pulls" => crate::code::refresh_pulls(&ctx),
+                    // The extensions list has no refresh button on purpose
+                    // (`views/extensions.rs` says why), so this arm is the
+                    // only way back to the server that a reader has.
+                    // `refresh` drives both the list and the warnings through
+                    // `load_remote`, so `loading` toggles and the spinner
+                    // clears itself.
+                    "extensions" => {
+                        spawn_forever(async move { crate::extensions::refresh(&ctx).await });
+                    }
+                    "skills" => crate::skills::refresh(&ctx),
+                    // ---- one arm per feature that owns a list ----
+                    //
+                    // A feature's scroller sets `data-refresh` to its own
+                    // name and claims that name here. The gesture and the
+                    // lists it serves were written on different branches:
+                    // the name is the whole contract between them, and an
+                    // unclaimed one is a pull that spins and fetches
+                    // nothing.
+                    "recipes" => crate::recipes::refresh(&ctx),
                     _ => {}
                 }
             }
@@ -437,5 +456,55 @@ mod tests {
         );
         let script = pin_script("chat-scroll");
         assert!(script.contains("window.__tbWatch(el)"), "{script}");
+    }
+
+    /// A scroller names its own refresh in `data-refresh` and the JS sends
+    /// that string back verbatim, so the name is a contract between a view
+    /// and the `match` in `use_pull_to_refresh` — and nothing else enforces
+    /// it. A view whose name has no arm still gets the whole gesture: the
+    /// spinner arms, drops, and the list is never re-fetched. No compiler
+    /// error, no clippy warning, because the fallthrough arm is legitimately
+    /// there for the scrollers that set no name at all.
+    ///
+    /// This lives on the shared scaffolding rather than on the branch that
+    /// first tripped over it, because the gesture and the lists it serves are
+    /// written on different branches: every feature that arrives with a list
+    /// of its own has to claim its name here, and only a test on the base can
+    /// tell all of them so.
+    #[test]
+    fn every_scroller_that_names_a_refresh_has_an_arm_that_answers_to_it() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/views");
+        let read = std::fs::read_dir(&dir);
+        assert!(read.is_ok(), "cannot read {}", dir.display());
+
+        // The arms live in this file, so it is its own fixture — matching on
+        // the source beats a hand-kept list that would go stale exactly when
+        // someone adds a destination and forgets this test exists.
+        let dispatch = include_str!("viewport.rs");
+        let mut found = 0;
+        for entry in read.into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).unwrap_or_default();
+            for tail in source.split("\"data-refresh\": \"").skip(1) {
+                let Some(name) = tail.split('"').next() else {
+                    continue;
+                };
+                found += 1;
+                assert!(
+                    dispatch.contains(&format!("\"{name}\" =>")),
+                    "{} emits data-refresh=\"{name}\" but use_pull_to_refresh \
+                     has no arm for it, so pulling that list does nothing",
+                    path.display(),
+                );
+            }
+        }
+        // A scan that silently matches nothing would pass forever. Four is
+        // what this branch alone guarantees — chats, and the three code
+        // screens — so a feature branch adding a fifth does not have to move
+        // the floor to stay honest.
+        assert!(found >= 4, "only found {found} data-refresh scrollers");
     }
 }

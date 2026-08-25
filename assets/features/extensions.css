@@ -1,0 +1,37 @@
+/* Extensions — everything else on these screens is `main.css`'s. */
+
+/* The row's state line. Not `.session-meta`, which is mono because it carries
+ * ids and timestamps; this line is copy ("On · Local command") and reads as
+ * debug output in a monospace face. Wrapping is the point: the tool summary
+ * is server text of any length, and a line that cannot wrap can only clip. */
+.ext-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  overflow-wrap: anywhere;
+}
+
+.ext-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* An extension with no allowlist may call every tool its MCP server
+ * publishes. That is the failure this screen exists to surface, so it is
+ * painted as one rather than left as a reassuring blank. */
+.ext-tools.unrestricted {
+  color: var(--text-danger);
+}
+
+/* A command line and a URL are read character by character. The ellipsis and
+ * the clipping come from `.setting-value`, which this only re-faces. */
+.ext-mono {
+  font-family: var(--font-mono);
+}

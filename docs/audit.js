@@ -41,7 +41,19 @@ const path = require('path');
 const { chromium } = require('playwright');
 
 const STATES = path.join(__dirname, 'gallery-states.json');
-const CSS = path.join(__dirname, '..', 'assets', 'main.css');
+// Every stylesheet the app embeds, in the order src/css.rs concatenates them:
+// assets/main.css is the design system and comes first, and a feature brings
+// assets/features/<name>.css of its own. Linking main.css alone would rebuild
+// every feature screen unstyled and then measure the result, which passes.
+const ASSETS = path.join(__dirname, '..', 'assets');
+const FEATURE_CSS = path.join(ASSETS, 'features');
+const STYLESHEETS = [
+  path.join(ASSETS, 'main.css'),
+  ...(fs.existsSync(FEATURE_CSS)
+    ? fs.readdirSync(FEATURE_CSS).filter((f) => f.endsWith('.css')).sort()
+      .map((f) => path.join(FEATURE_CSS, f))
+    : []),
+];
 
 // ── stress ──────────────────────────────────────────────────────────────
 // A captured state only ever shows the one string the app happened to be
@@ -74,10 +86,29 @@ const LONGEST = {
   '.session-title': 'Refactor the transcript folding so streamed parts land in order',
   '.session-ask-title': 'Approve or deny curl -sSL https://raw.githubusercontent.com/example/really-long-org-name/main/scripts/install.sh',
   '.topbar > .title': 'Refactor the transcript folding so streamed parts land in order',
+  // A two-line title is a different geometry from a one-line one — it is the
+  // `.titlegroup` that is centred and clipped, not the `h1` — and every
+  // screen that uses one puts *server* text in it: an extension's package
+  // name, a skill's name, a recipe's title. Stressing only `.topbar > .title`
+  // left the shape that actually carries the long strings unchecked.
+  '.titlegroup > .title': 'Refactor the transcript folding so streamed parts land in order',
+  // Every settings-shaped row on every screen puts server text here — a model
+  // name, an MCP command line, a cron sentence read back as English — and
+  // none of it was being stressed.
+  '.setting-value': 'npx -y @modelcontextprotocol/server-filesystem /srv/goose/workspaces/current',
+  // The leaf, not the wrapper: .session-meta is a div of spans, and the swap
+  // below refuses to write into anything with an element child — so keying
+  // this on the wrapper would look like a stress case and test nothing.
+  '.session-meta > span': 'Every weekday at 09:00 America/Los_Angeles · 20250823_140512_9f3ab2',
 };
 
+// The class a selector is worth looking for in the captured markup: the last
+// *class* in it, since a leaf may be a bare tag (`.session-meta > span`) and
+// `span` is in every state ever captured.
+const anchorClass = (sel) => sel.split(/[\s>]+/).filter((part) => part.startsWith('.')).pop().slice(1);
+
 const stressed = (states) => states.flatMap((state) => {
-  const hits = Object.entries(LONGEST).filter(([sel]) => state.body.includes(sel.split(' > ').pop().slice(1)));
+  const hits = Object.entries(LONGEST).filter(([sel]) => state.body.includes(anchorClass(sel)));
   if (!hits.length) return [];
   return [{
     label: `${state.label} (long text)`,
@@ -315,7 +346,7 @@ const CONTRAST = () => {
   // A row that renders nothing renders no line box, so it measures zero and
   // disappears. That is how every blank line in a diff silently vanished,
   // closing up the gaps the author put there.
-  for (const el of document.querySelectorAll('.diff-line, .setting-row, .drawer-item')) {
+  for (const el of document.querySelectorAll('.diff-line, .setting-row, .drawer-item, .session-item')) {
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') continue;
     if (el.getBoundingClientRect().height < 1) {
@@ -381,7 +412,7 @@ const CONTRAST = () => {
       const file = path.join(tmp, `state-${i}.html`);
       fs.writeFileSync(file,
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-        + `<link rel="stylesheet" href="${CSS}">`
+        + STYLESHEETS.map((href) => `<link rel="stylesheet" href="${href}">`).join('')
         + `</head><body>${state.body}</body></html>`);
       await page.goto(`file://${file}`, { waitUntil: 'load' });
       if (state.swap) {

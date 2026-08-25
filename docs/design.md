@@ -598,7 +598,8 @@ The chip and thumbnail styling itself is **provisional**: it is deliberately
 plain, and confined to the `.attach-*` block in the stylesheet and to
 `src/views/attach.rs`, so replacing it against a reference screenshot is a
 local change.
-### 12. A list only reports what its backend can be asked
+
+### 13. A list only reports what its backend can be asked
 
 The Code list marks a chat that is blocked on a permission: a dot on its tile,
 and the ask itself inset in the card with `Approve` and `Deny` in it. The Chats

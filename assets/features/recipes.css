@@ -1,0 +1,19 @@
+
+/* ── recipes ────────────────────────────────────────────────────────── */
+
+/* The line under a recipe's title is a sentence — "Runs every weekday at
+ * 9:00 AM" — where .session-meta was built for ids and counts and sets them
+ * in the mono face. A humanised schedule in monospace reads as the cron
+ * string it exists to replace. */
+.recipe-meta {
+  font-family: var(--font-sans);
+  align-items: baseline;
+}
+
+/* A recipe's own words are prose on the page, in the reading voice, with no
+ * panel around them (design rules 1 and 6) — the same treatment an agent
+ * reply gets, because instructions and a prompt are the same kind of text.
+ * The margin is the only thing they need that .md does not already give. */
+.recipe-prose {
+  margin-bottom: 16px;
+}
