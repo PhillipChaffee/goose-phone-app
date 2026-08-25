@@ -25,7 +25,7 @@ loop the app is developed in.
 
 <sub>The running app, not mock-ups: captures off an iPhone 17 Pro simulator
 (`scripts/shoot-simulator.sh <name>`). For markup that cannot drift there is
-[`docs/style-gallery.html`](docs/style-gallery.html): twenty-one screen states
+[`docs/style-gallery.html`](docs/style-gallery.html): twenty-seven screen states
 dumped out of the app's own DOM, which is also what `docs/audit.js` reads.</sub>
 
 ## Features
@@ -34,7 +34,8 @@ dumped out of the app's own DOM, which is also what `docs/audit.js` reads.</sub>
 - **Tool visibility and control** — every tool call appears as a card with live status and output, and the agent's permission requests become an approval sheet: allow once, always allow, or reject. A run of two or more settled calls folds to one line, and stays open when anything in it failed or is still running. A code agent blocked on a permission says so on the list, and can be answered from there.
 - **Sessions** — browse, resume, and delete your server-side sessions; swipe a row left for its delete tray. History replays through the same rendering path as live output, so a resumed chat looks identical.
 - **Attachments** — send a photo, a screenshot or a file with your message, on either tab. The picker is iOS's own (photo library, camera, Files); images are downscaled on the phone so a 12-megapixel camera file does not become a multi-megabyte request over the tailnet, and anything too large or of a type neither agent can read is refused by name rather than dropped.
-- **Model, effort and mode, per session** — two chips on the composer. One opens a sheet holding whatever that backend can actually change (provider, model, thinking effort); the other picks the mode a turn runs in — goose's own, or an OpenCode agent. What cannot change — the context window on either — is stated as a fact instead of being offered as a control that does nothing.
+- **Model, effort and mode, per session** — two chips on the composer, on one line with the send button. One opens a sheet holding whatever that backend can actually change (provider, model, thinking effort); the other picks the mode a turn runs in — goose's own, or an OpenCode agent. Both state a resolved value rather than naming themselves. What cannot change — the context window on either — is stated as a fact instead of being offered as a control that does nothing.
+- **Starting a code session** — a composer, not a form: you write the task and the placeholder names what it will run against. Repository, base branch, model and mode are pills above the keyboard, each opening a sheet that filters once the list is long enough to need it. The model is required.
 - **Pull requests** — the work a code agent has pushed, listed with its state and check status, and mergeable from the phone when GitHub says it can be.
 - **Built for a phone on a flaky network** — Stop cancels a running turn, dropped connections reconnect automatically and replay history, and half-open sockets (the classic "connected but nothing happens" after switching networks) are detected and recovered.
 - **Private by default** — reaches your server over your tailnet, authenticated with a shared secret, with optional certificate pinning.

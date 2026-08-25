@@ -516,8 +516,13 @@ footer ul a { display: inline-flex; align-items: center; min-height: 44px; font-
     <div class="wrap">
       <div class="shots">
         <figure>
+          <img src="images/new-session.png" width="603" height="1311" loading="lazy" decoding="async"
+               alt="The new-session screen: a close button, a placeholder reading “Start a task in testrepo on branch main…”, and above the keyboard two rows of pills — the repository and the base branch on one, an attach button, a Model chip marked with an amber dot because nothing is chosen yet, and a Build mode chip on the other.">
+          <figcaption>A session starts by writing the task</figcaption>
+        </figure>
+        <figure>
           <img src="images/code-list.png" width="603" height="1311" loading="lazy" decoding="async"
-               alt="The Code screen: two rounded session cards. The first, “Blocked on a push”, carries an amber dot on its tile, a status reading “waiting on you”, and an inset panel — “Approve or deny Run: git push origin HEAD” — with Deny and Approve buttons inside the card. The second, “Attachments”, is idle. A New session button floats at the bottom right.">
+               alt="The Code screen: one session card, “Tidy the changelog”, carrying an amber dot on its tile, a status reading “waiting on you”, its repository and branch, and an inset panel — “Approve or deny Run: git push origin HEAD” — with Deny and Approve buttons inside the card. A New session button floats at the bottom right.">
           <figcaption>A chat waiting on you, answered from the list</figcaption>
         </figure>
         <figure>
@@ -527,12 +532,12 @@ footer ul a { display: inline-flex; align-items: center; min-height: 44px; font-
         </figure>
         <figure>
           <img src="images/diff-review.png" width="603" height="1311" loading="lazy" decoding="async"
-               alt="The Review screen: a header reading “5 files · +10 −7”, a progress line “0 of 5 files reviewed” with a Mark all button, then per-file cards. Cargo.toml is expanded, showing a dark code block with red removed lines and green added ones, and a check circle to mark the file read.">
+               alt="The Review screen: a header reading “5 files · +10 −7”, a progress line “3 of 5 files reviewed” with a Mark all button, then one line per file holding its path, its +N −M counts and a Viewed checkbox. Three are checked and folded; src/table.rs is open, its code running the full width of the screen with red removed lines and green added ones.">
           <figcaption>The session’s changes, one file at a time</figcaption>
         </figure>
         <figure>
           <img src="images/code-chat.png" width="603" height="1311" loading="lazy" decoding="async"
-               alt="A code-agent chat: the title bar carries a new-chat button and an overflow menu, the transcript shows a message with a file attached to it and the agent’s reply, and below it a row of Diff (+10 −7) and Pull requests (5) chips sits above the composer, which holds an attach button, a model chip and a mode chip.">
+               alt="A code-agent chat: the title bar carries a new-chat button and an overflow menu; the transcript shows two tasks, a git push tool card and the agent’s replies; a row of Diff (+10 −7) and Pull requests (5) chips sits above the composer, which holds an attach button and chips naming the model (DeepSeek V4 Flash) and the mode (Build) on one line with the send button.">
           <figcaption>A code agent, mid-task</figcaption>
         </figure>
       </div>
@@ -545,14 +550,14 @@ footer ul a { display: inline-flex; align-items: center; min-height: 44px; font-
            links (here, in "How it is kept honest", and in the footer) at
            style-gallery.html and the live artefact works. -->
       <p class="shot-note">
-        The running app, not mock-ups: all four are captures off an iPhone 17 Pro
+        The running app, not mock-ups: all five are captures off an iPhone 17 Pro
         simulator, taken from the build these pages were written against. They are
         light mode; the app follows the system and has a dark set of the same tokens.
       </p>
       <p class="shot-note">
         For markup that cannot drift there is the
         <a href="https://github.com/PhillipChaffee/goose-phone-app/blob/main/docs/style-gallery.html">style gallery</a>:
-        twenty-one states dumped out of the app's own DOM, including every one shown
+        twenty-seven states dumped out of the app's own DOM, including every one shown
         here. That is what <code>docs/audit.js</code> reads, so a screen only escapes
         being checked for contrast, overflow and tap-target size if nobody ever drove
         the app to it.
@@ -646,19 +651,32 @@ footer ul a { display: inline-flex; align-items: center; min-height: 44px; font-
         <div>
           <dt>Diff review</dt>
           <dd>
-            A code chat's cumulative diff, one collapsible card per file, with per-file
-            reviewed marks and a wrap toggle. OpenCode returns whole-file patches, so the
+            A code chat's cumulative diff, one line per file holding its path, its counts
+            and a Viewed checkbox, with the code running the full width of the screen and
+            a wrap toggle for long lines. OpenCode returns whole-file patches, so the
             re-hunking that makes them readable at 402px happens on the device.
           </dd>
         </div>
         <div>
           <dt>Model, effort and mode, per session</dt>
           <dd>
-            Two chips on the composer. One opens a sheet holding whatever that backend can
-            actually change — provider, model, thinking effort; the other picks the mode a
-            turn runs in, goose's own or an OpenCode agent. What cannot change, like the
-            context window, is stated as a fact rather than offered as a control that does
-            nothing.
+            Two chips on the composer, on one line with the send button. One opens a sheet
+            holding whatever that backend can actually change — provider, model, thinking
+            effort; the other picks the mode a turn runs in, goose's own or an OpenCode
+            agent. Both state a resolved value rather than naming themselves, so a chip is
+            never a question. What cannot change, like the context window, is stated as a
+            fact rather than offered as a control that does nothing.
+          </dd>
+        </div>
+        <div>
+          <dt>Starting a code session</dt>
+          <dd>
+            A composer, not a form: you write the task, and the placeholder names what it
+            will run against. The repository, the base branch to cut from, the model and
+            the mode are pills above the keyboard, each opening a sheet that filters once
+            the list is long enough to need it. The model is required — a session that
+            began without one had nothing to report afterwards, which is why the chips
+            used to name themselves.
           </dd>
         </div>
         <div>
