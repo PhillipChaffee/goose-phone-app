@@ -379,9 +379,86 @@ pre {
  * title readable is the scroll-edge scrim further down this file. */
 .glass,
 .topbar > .icon-btn,
-.topbar-actions {
+.topbar-actions,
+.ptr {
   background: var(--bg-primary);
   box-shadow: var(--shadow-md);
+}
+
+/* The pull-to-refresh indicator.
+ *
+ * It rides above the chrome scrim and travels down on its own rather than
+ * pushing the list: iOS already applies elastic overscroll to the scroller, so
+ * moving the content too would double the motion and leave the swipe rows
+ * somewhere their gesture handler does not expect them. Fixed rather than
+ * absolute because the pull is a property of the screen, not of whichever
+ * list is mounted.
+ *
+ * --ptr-y is written by the gesture (src/viewport.rs); everything else here
+ * follows from it. */
+.ptr {
+  position: fixed;
+  top: calc(var(--safe-top) + var(--chrome-gap));
+  left: 50%;
+  z-index: var(--z-chrome);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, calc(var(--ptr-y, 0px) - 44px));
+  transition: opacity 140ms ease, transform 180ms ease;
+}
+
+.ptr.on {
+  opacity: 1;
+}
+
+/* Released without reaching the threshold, the indicator should snap back
+   rather than glide, so a half-pull does not read as a refresh that failed. */
+.ptr:not(.on) {
+  transition: opacity 100ms ease, transform 100ms ease;
+}
+
+.ptr svg {
+  width: 18px;
+  height: 18px;
+  transition: transform 180ms ease;
+}
+
+/* Armed: the icon turns to say the gesture has been recognised, so you know
+   it will fire before you let go rather than after. */
+.ptr.armed {
+  color: var(--text-primary);
+}
+
+.ptr.armed svg {
+  transform: rotate(180deg);
+}
+
+.ptr.run svg {
+  animation: ptr-spin 900ms linear infinite;
+}
+
+@keyframes ptr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ptr,
+  .ptr svg {
+    transition: none;
+  }
+
+  .ptr.run svg {
+    animation-duration: 2400ms;
+  }
 }
 
 /* Controls inside the group pill share its material rather than stacking a
@@ -494,12 +571,29 @@ pre {
 /* The title centres on the screen's centre line. It is out of flow because
  * the leading and trailing control groups are different widths on every
  * screen, and centring "between them" is not centring — it lands half a
- * back-button off, which is what the flex version did. */
+ * back-button off, which is what the flex version did.
+ *
+ * Being centred, it has to clear whichever side is wider — twice over, since
+ * shrinking it takes the same off both ends. So the reserve is not "space for
+ * the controls", it is space for the *widest* group, doubled. It was a flat
+ * 180px while the trailing pill was empty; the moment that pill gained two
+ * buttons, a long title ran four pixels underneath it. Derived from the sizes
+ * that decide it, so the next control to arrive moves this on its own. */
+.topbar {
+  /* One 44px control at the leading edge. */
+  --topbar-reserve: calc(var(--edge) + 44px + 8px);
+}
+
+/* Two, plus the pill's own padding, at the trailing edge. */
+.topbar:has(.topbar-actions) {
+  --topbar-reserve: calc(var(--edge) + 2 * 44px + 6px + 8px);
+}
+
 .topbar > .title {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  max-width: calc(100% - 180px);
+  max-width: calc(100% - 2 * var(--topbar-reserve));
   text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -533,7 +627,7 @@ pre {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  max-width: calc(100% - 180px);
+  max-width: calc(100% - 2 * var(--topbar-reserve));
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1606,6 +1700,76 @@ details[open] > summary::before {
   line-height: var(--lh-xs);
 }
 
+/* ── action row ─────────────────────────────────────────────────────── */
+
+/* What the session has produced, stated above the box where you say the next
+ * thing to it. These used to be chips inside the composer, which put them in a
+ * fixed budget of horizontal space shared with the model name — and made them
+ * read as things you do to your message rather than to the work.
+ *
+ * Scrolls sideways rather than wrapping: a second row here would push the
+ * composer down, and the composer's position is the one thing on this screen a
+ * thumb learns. */
+.action-row {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  margin: 0 var(--edge) 8px;
+  padding: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.action-row::-webkit-scrollbar {
+  display: none;
+}
+
+.action-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-full);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.action-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.action-chip:active:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
+.action-chip .icon {
+  color: var(--text-secondary);
+}
+
+/* The counts are the point of the chip, so they are not quieter than the
+ * label — they are the same size, coloured by what they mean. */
+.action-chip .stat {
+  font-variant-numeric: tabular-nums;
+}
+
+.action-chip .stat.add {
+  color: var(--text-success);
+}
+
+.action-chip .stat.del {
+  color: var(--text-danger);
+}
+
 /* ── composer ───────────────────────────────────────────────────────── */
 
 /* A floating outlined card inset from the edges — not a docked bar. */
@@ -2256,6 +2420,13 @@ details[open] > summary::before {
 .setting-row.fact {
   flex-wrap: wrap;
   cursor: default;
+}
+
+/* Destructive rows in an overflow menu. Colour on both the label and the icon,
+ * because the icon is what the eye lands on first in a list of them. */
+.setting-row.danger,
+.setting-row.danger .icon {
+  color: var(--text-danger);
 }
 
 /* Secondary, not tertiary: this line is the whole reason a fact row exists —

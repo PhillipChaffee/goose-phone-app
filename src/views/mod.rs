@@ -86,3 +86,67 @@ pub fn ConfirmDelete(
         }
     }
 }
+
+/// One entry in an overflow menu.
+#[derive(Clone, PartialEq)]
+pub(crate) struct MenuItem {
+    pub icon: &'static str,
+    pub label: &'static str,
+    /// Destructive, and coloured as such.
+    pub danger: bool,
+}
+
+/// The `⋯` in the top bar.
+///
+/// Only the button: the sheet it opens is [`OverflowSheet`], rendered at the
+/// view's root beside the other overlays. They cannot be one component,
+/// because the bar's controls carry `backdrop-filter` — and a filtered element
+/// becomes the containing block for every `position: fixed` descendant, so a
+/// sheet rendered in here is trapped inside a 94px pill in the corner instead
+/// of covering the screen. The same property is why `.app` deliberately avoids
+/// a transform.
+#[component]
+pub fn OverflowButton(onopen: EventHandler<()>) -> Element {
+    rsx! {
+        button {
+            class: "icon-btn",
+            title: "More",
+            onclick: move |_| onopen.call(()),
+            Icon { name: "more" }
+        }
+    }
+}
+
+/// What the `⋯` opens. Render this at the root of a view, not inside the bar.
+#[component]
+pub fn OverflowSheet(
+    items: Vec<MenuItem>,
+    onpick: EventHandler<usize>,
+    onclose: EventHandler<()>,
+) -> Element {
+    rsx! {
+        div { class: "modal-backdrop", onclick: move |_| onclose.call(()),
+            div {
+                // `menu` as well as `sheet`: it is the same pane, but the
+                // capture harness has to be able to tell an overflow menu from
+                // the settings sheet, or they file under one gallery state and
+                // whichever was seen last wins.
+                class: "modal sheet menu",
+                onclick: move |e: Event<MouseData>| e.stop_propagation(),
+                div { class: "setting-list",
+                    for (i, item) in items.iter().enumerate() {
+                        button {
+                            key: "{item.label}",
+                            class: if item.danger { "setting-row danger" } else { "setting-row" },
+                            onclick: move |_| onpick.call(i),
+                            Icon { name: "{item.icon}" }
+                            span { class: "setting-main",
+                                span { class: "setting-name", "{item.label}" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
