@@ -8,7 +8,7 @@ pub(crate) mod code;
 
 // recipes — PR 3 replaces this line
 
-// skills — PR 4 replaces this line
+pub(crate) mod skills;
 
 // scheduler — PR 5 replaces this line
 

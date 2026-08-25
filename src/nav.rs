@@ -150,9 +150,31 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         key: |ctx| ((ctx.tab)() == Tab::Code).then(|| code_key((ctx.code_screen)())),
     },
     // recipes — PR 3 replaces this line
-
-    // skills — PR 4 replaces this line
-
+    Destination {
+        id: "skills",
+        label: "Skills",
+        icon: "sparkle",
+        group: Group::Library,
+        // Nothing to name: Skills owns its own screen signal, so the drawer
+        // leaves it where it was left — including on a skill's detail.
+        go: |ctx| {
+            let mut tab = ctx.tab;
+            tab.set(Tab::Skills);
+        },
+        at_root: |ctx| {
+            (ctx.tab)() == Tab::Skills && (ctx.skills.screen)() == crate::skills::Screen::List
+        },
+        view: |ctx| match (ctx.skills.screen)() {
+            crate::skills::Screen::List => rsx! { views::skills::SkillsView {} },
+            crate::skills::Screen::Detail => rsx! { views::skills::SkillDetailView {} },
+        },
+        // The key mapping lives in `crate::skills` rather than here, so that
+        // adding this destination is one row in this table and not a row plus
+        // a function plus a test.
+        key: |ctx| {
+            ((ctx.tab)() == Tab::Skills).then(|| crate::skills::dump_key((ctx.skills.screen)()))
+        },
+    },
     // scheduler — PR 5 replaces this line
     Destination {
         id: "extensions",

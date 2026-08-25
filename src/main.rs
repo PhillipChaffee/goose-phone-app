@@ -33,6 +33,8 @@ mod markdown;
 
 mod nav;
 
+mod skills;
+
 mod state;
 
 mod viewport;

@@ -44,6 +44,8 @@ LABELS = {
     "code-pulls": "Pull requests",
     "extensions": "Extensions",
     "extensions-detail": "Extension detail",
+    "skills": "Skills",
+    "skill": "Skill detail",
     "settings": "Settings",
 }
 

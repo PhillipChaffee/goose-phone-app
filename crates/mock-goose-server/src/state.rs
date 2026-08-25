@@ -68,6 +68,13 @@ pub(crate) struct State {
     /// lives with the handler that owns it, so the feature's storage arrives
     /// and leaves in one file.
     pub(crate) extensions: crate::features::extensions::Store,
+    /// Whether [`Fixtures::Broken`] has spent its one skill-listing failure.
+    ///
+    /// Broken fails the first `sources/list` for filesystem skills and answers
+    /// normally after that, so the screen's recovery — the pull gesture — is a
+    /// path a person can walk. A mock that failed forever would show the error
+    /// state and nothing else, which proves only half of it.
+    pub(crate) skills_broken_spent: bool,
     /// Stand in for a goose started without `--enable-scheduler`, whose
     /// scheduler methods answer `-32601` with the reason in `data`. Same
     /// story: plumbed here so a scheduler branch has somewhere to read it.
@@ -97,6 +104,7 @@ impl Default for State {
             },
             fixtures: Fixtures::Full,
             extensions: crate::features::extensions::Store::default(),
+            skills_broken_spent: false,
             no_scheduler: false,
         }
     }

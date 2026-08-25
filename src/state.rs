@@ -38,9 +38,7 @@ pub(crate) enum Tab {
     Home,
     Code,
     // recipes — PR 3 replaces this line
-
-    // skills — PR 4 replaces this line
-
+    Skills,
     // scheduler — PR 5 replaces this line
     Extensions,
     // Session history (PR 7) gets no variant: it is the Chats list growing
@@ -196,6 +194,11 @@ pub(crate) type Usage = (u64, u64);
 /// on screen behind it stays on screen, and a failure over a list you can
 /// still read is a toast.
 #[derive(Debug, Clone, PartialEq, Eq)]
+// The `expect(dead_code)` that stood here is gone rather than moved: the
+// scaffolding wrote it saying "this expectation fails when the first screen
+// to hold a list arrives". Every feature screen in this stack is that screen —
+// Extensions reached it first, and Skills, Recipes and the scheduled runs on
+// Chats all hold one too.
 pub(crate) struct Remote<T> {
     pub items: Vec<T>,
     pub loading: bool,
@@ -461,9 +464,7 @@ pub(crate) struct AppCtx {
     // struct merge, five branches adding thirty do not.
 
     // recipes — PR 3 replaces this line
-
-    // skills — PR 4 replaces this line
-
+    pub skills: crate::skills::Ctx,
     // scheduler — PR 5 replaces this line
     pub extensions: crate::extensions::Ctx,
     // session history — PR 7 replaces this line
@@ -521,6 +522,11 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         new_attachments: use_signal(Vec::new),
 
         extensions: crate::extensions::use_ctx(),
+        // One line per feature, each calling its own module's hook. There was
+        // no placeholder here to replace — the struct above has them and this
+        // literal does not — so a sibling branch adding its own field lands
+        // in this same hunk and resolves by keeping both lines.
+        skills: crate::skills::use_ctx(),
     };
     use_context_provider(|| ctx);
     ctx

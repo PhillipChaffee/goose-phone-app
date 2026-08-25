@@ -400,6 +400,7 @@ pub(crate) fn use_pull_to_refresh() {
                     "extensions" => {
                         spawn_forever(async move { crate::extensions::refresh(&ctx).await });
                     }
+                    "skills" => crate::skills::refresh(&ctx),
                     _ => {}
                 }
             }

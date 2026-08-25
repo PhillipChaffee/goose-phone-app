@@ -67,6 +67,12 @@ use serde_json::Value;
 use crate::client::AcpClient;
 use crate::error::{string_data, AcpError, Feature};
 
+// One module per feature area, alphabetical, each re-exported flat so the
+// public path is `goose_acp_client::Thing` wherever the thing lives.
+mod skills;
+
+pub use skills::*;
+
 /// The prefix on every method goose adds to ACP.
 ///
 /// `unstable` is goose's word, not ours: the shapes behind it change between
