@@ -18,7 +18,7 @@
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
@@ -30,6 +30,28 @@ pub enum CodeError {
     Status { status: u16, body: String },
     #[error("{0}")]
     Other(String),
+}
+
+impl CodeError {
+    /// The sentence to put in front of a reader.
+    ///
+    /// The manager answers a refused request with `{"error": "..."}` and that
+    /// sentence is the only part worth showing — `Display` wraps it in the
+    /// status code and the braces it arrived in, which is a stack trace in a
+    /// toast. Falls back to the status when the body is not one of those.
+    #[must_use]
+    pub fn message(&self) -> String {
+        let Self::Status { status, body } = self else {
+            return self.to_string();
+        };
+        serde_json::from_str::<Value>(body)
+            .ok()
+            .as_ref()
+            .and_then(|v| v.get("error"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map_or_else(|| format!("server said {status}"), str::to_owned)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -54,6 +76,53 @@ pub struct RepoEntry {
     pub public_throwaway: bool,
 }
 
+/// A repo's branches, as the manager reads them from GitHub
+/// (`GET /api/repos/<name>/branches`).
+#[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
+pub struct RepoBranches {
+    /// The repo's own default branch. Empty when GitHub would not say — the
+    /// manager degrades rather than losing the whole list over a label, so
+    /// "no default" is a real answer and not a failure.
+    #[serde(rename = "default")]
+    pub default_branch: String,
+    pub branches: Vec<BranchRef>,
+    /// The manager stopped paging (500 branches), so a list that is short can
+    /// say why rather than look complete. The app carries it onto its own
+    /// `BranchList` and the base-branch picker states it above the rows.
+    pub truncated: bool,
+}
+
+impl RepoBranches {
+    /// Just the names, in the manager's order — default first.
+    #[must_use]
+    pub fn names(&self) -> Vec<String> {
+        self.branches.iter().map(|b| b.name.clone()).collect()
+    }
+
+    /// The default branch, or `None` when GitHub would not name one.
+    #[must_use]
+    pub fn default_name(&self) -> Option<&str> {
+        Some(self.default_branch.as_str()).filter(|s| !s.is_empty())
+    }
+}
+
+/// One branch in [`RepoBranches`].
+#[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
+pub struct BranchRef {
+    pub name: String,
+    /// The wire spells it `default`, which is a Rust keyword.
+    ///
+    /// Nothing reads it: the picker marks the default from
+    /// [`RepoBranches::default_branch`], the one field that has an answer even
+    /// when the list is truncated past the row carrying this flag. It is
+    /// decoded so the two halves of the manager's answer stay in step, and so
+    /// a reader of this type is not left wondering whether the wire has it.
+    #[serde(rename = "default")]
+    pub is_default: bool,
+}
+
 /// One chat from the manager's metadata index.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct ChatMeta {
@@ -64,6 +133,11 @@ pub struct ChatMeta {
     pub title: String,
     #[serde(default)]
     pub branch: String,
+    /// The ref this chat's branch was cut from. Empty means the clone's
+    /// default HEAD, which is what every chat made before the base picker
+    /// existed says — a default rather than a migration.
+    #[serde(default)]
+    pub base: String,
     /// `running` | `stopped` | `absent` (absent = recreated on next wake).
     #[serde(default)]
     pub status: String,
@@ -137,6 +211,138 @@ impl FileDiff {
     }
 }
 
+/// Where a pull request stands. `draft` is a flag on an open pull request
+/// rather than a fourth state, because a draft that gets closed is both.
+///
+/// [`PullState::Unknown`] is this client's, not the wire's: a state string it
+/// has not heard of must not read as open, because "open" is half of what
+/// decides whether the app offers to merge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PullState {
+    Open,
+    Merged,
+    Closed,
+    #[default]
+    Unknown,
+}
+
+/// What the head commit's checks add up to.
+///
+/// [`Checks::Unknown`] is a real answer, not a parse failure. The manager's
+/// GitHub credential is a fine-grained PAT with Contents and Pull requests
+/// only (personal-ai-setup `docs/setup/70-code-agents.md`), and check runs
+/// need `Checks: read` while commit statuses need `Commit statuses: read` —
+/// so on a private repo the manager is told 403 and says so rather than
+/// guessing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Checks {
+    Passing,
+    Failing,
+    Pending,
+    /// Nothing runs checks on this repo.
+    None,
+    #[default]
+    Unknown,
+}
+
+/// One pull request from `GET /api/chats/<id>/pulls`.
+///
+/// The manager answers with the pull requests whose head branch is **this
+/// chat's** branch (`agent/<chat-id>`) and no others, which is what makes a
+/// count on a chip meaningful — a repo's other pull requests have nothing to
+/// do with this conversation.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
+pub struct PullRequest {
+    pub number: u64,
+    pub title: String,
+    #[serde(deserialize_with = "de_pull_state")]
+    pub state: PullState,
+    pub draft: bool,
+    /// GitHub computes mergeability asynchronously and answers `null` until it
+    /// has. That is not the same as "cannot be merged", and the two must not
+    /// collapse into one bool: one is a wait, the other is a refusal.
+    pub mergeable: Option<bool>,
+    #[serde(deserialize_with = "de_checks")]
+    pub checks: Checks,
+    /// The `html_url` — where the system browser is sent.
+    pub url: String,
+    /// Head branch, always this chat's `agent/<chat-id>`.
+    pub head: String,
+    /// Base branch the merge would land on.
+    pub base: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+fn de_pull_state<'de, D: serde::Deserializer<'de>>(d: D) -> Result<PullState, D::Error> {
+    let raw = Option::<String>::deserialize(d)?;
+    Ok(match raw.as_deref() {
+        Some("open") => PullState::Open,
+        Some("merged") => PullState::Merged,
+        Some("closed") => PullState::Closed,
+        _ => PullState::Unknown,
+    })
+}
+
+fn de_checks<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Checks, D::Error> {
+    let raw = Option::<String>::deserialize(d)?;
+    Ok(match raw.as_deref() {
+        Some("passing") => Checks::Passing,
+        Some("failing") => Checks::Failing,
+        Some("pending") => Checks::Pending,
+        Some("none") => Checks::None,
+        _ => Checks::Unknown,
+    })
+}
+
+impl PullRequest {
+    /// Whether merging should be offered: GitHub says it can be merged, it is
+    /// open, it is not a draft, and its checks are not failing.
+    ///
+    /// Pending checks are not a refusal — they are checks that have not
+    /// answered — so this says yes and the confirm says they are still
+    /// running. Unknown ones are the credential case above; GitHub's own
+    /// branch protection is the backstop, and it refuses the merge itself.
+    #[must_use]
+    pub const fn is_mergeable(&self) -> bool {
+        matches!(self.state, PullState::Open)
+            && !self.draft
+            && matches!(self.mergeable, Some(true))
+            && !matches!(self.checks, Checks::Failing)
+    }
+}
+
+/// What `POST /api/chats/<id>/pulls/<n>/merge` answers on success.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
+pub struct MergeOutcome {
+    pub merged: bool,
+    /// The merge commit GitHub made.
+    pub sha: String,
+    /// The pull request re-read after the merge. Present in the contract, and
+    /// optional here so that a manager which omits it cannot turn a merge that
+    /// happened into an error — the caller refetches instead.
+    pub pull: Option<PullRequest>,
+}
+
+/// Decode `{"pulls": [...]}`, entry by entry.
+///
+/// An entry this client cannot make sense of is dropped on its own rather
+/// than collapsing the answer to "no pull requests" — and it would be
+/// unrenderable anyway, having neither a number nor a URL.
+fn parse_pulls(body: &Value) -> Vec<PullRequest> {
+    body.get("pulls")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| serde_json::from_value(item.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// A pending permission ask from a chat's `OpenCode` server. Answer with
 /// [`CodeClient::reply_permission`] using `once` / `always` / `reject`.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -163,6 +369,37 @@ impl Default for CodePermission {
     }
 }
 
+/// One entry of the manager's pending-ask aggregate: a [`CodePermission`]
+/// with the chat it belongs to spliced in beside it.
+///
+/// Flattened rather than nested because that is what the manager produces —
+/// a chat's own `/permission` payload with one field added — and because an
+/// entry is useless without the chat: answering needs `/chat/<id>/…`.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
+pub struct PendingAsk {
+    #[serde(rename = "chatId")]
+    pub chat_id: String,
+    #[serde(flatten)]
+    pub permission: CodePermission,
+}
+
+/// The manager's answer to "which chats are blocked waiting on me".
+///
+/// Only chats whose container is **already running** are in it — a stopped
+/// container has no live turn, so it cannot be waiting on anything, and
+/// asking it would wake it (see [`CodeClient::pending_permissions`]).
+#[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
+pub struct PermissionReport {
+    pub permissions: Vec<PendingAsk>,
+    /// Running chats that did not answer in time. The aggregate still
+    /// succeeds without them, and a caller must read their absence from
+    /// `permissions` as "unknown" rather than as "nothing pending" — which is
+    /// the whole reason this list is on the wire instead of being swallowed.
+    pub unreachable: Vec<String>,
+}
+
 /// One message part as `OpenCode`'s API ships it. Kept lenient: only the
 /// fields the transcript fold needs are typed, everything else stays raw.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -176,10 +413,99 @@ pub struct Part {
     #[serde(rename = "type")]
     pub kind: String,
     pub text: Option<String>,
+    /// The server wrote this part on the reader's behalf: the scaffolding it
+    /// wraps a `text/plain` attachment in, the note it leaves when it
+    /// compacts a session, the line it records when the user ran a tool.
+    /// They are the model's context rather than anything anybody said, and
+    /// `OpenCode`'s own UI does not draw them either.
+    pub synthetic: bool,
     pub tool: Option<String>,
     #[serde(rename = "callID")]
     pub call_id: Option<String>,
     pub state: Option<Value>,
+    // `FilePart`: what an attachment looks like coming back out of history.
+    // `url` is whatever the client sent — for this app, a `data:` URI, which
+    // is how a re-opened chat gets its thumbnails back without a second
+    // fetch.
+    pub mime: Option<String>,
+    pub filename: Option<String>,
+    pub url: Option<String>,
+}
+
+impl Part {
+    /// The base64 payload of a `data:` URL, if that is what `url` is.
+    ///
+    /// Deliberately narrow: a `file:` URL names a path inside the chat's
+    /// container, which this device cannot read, and an `http:` one would be
+    /// a fetch the transcript has no business making.
+    #[must_use]
+    pub fn data_url_base64(&self) -> Option<&str> {
+        let url = self.url.as_deref()?;
+        let rest = url.strip_prefix("data:")?;
+        let (meta, payload) = rest.split_once(',')?;
+        meta.ends_with(";base64").then_some(payload)
+    }
+}
+
+/// One entry of the `parts` array a prompt body carries — `OpenCode`'s
+/// `TextPartInput | FilePartInput` (`packages/sdk/js/src/gen/types.gen.ts`).
+///
+/// `FilePartInput` is `{id?, type: "file", mime, filename?, url, source?}`,
+/// and `url` really is a URL rather than a payload field: the server switches
+/// on its protocol. A `data:` URI is the form a phone can use, because
+/// `file:` would name a path on the container rather than on this device.
+/// `source` is for a citation into a file the agent already has and has no
+/// meaning for something uploaded, so it is not modelled here.
+///
+/// One consequence worth knowing about the server side: a `data:` part whose
+/// mime is exactly `text/plain` is decoded and inlined into the conversation
+/// as text, while any other mime is passed through to the model as an
+/// attachment. That is why [`Self::text_file`] exists — a `.md` sent as
+/// `text/markdown` reaches a model that cannot read it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum PromptPart {
+    Text {
+        text: String,
+    },
+    File {
+        mime: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+        url: String,
+    },
+}
+
+impl PromptPart {
+    #[must_use]
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::Text { text: text.into() }
+    }
+
+    /// A file part carrying its bytes inline. `data` is base64.
+    #[must_use]
+    pub fn file(mime: &str, filename: &str, data: &str) -> Self {
+        Self::File {
+            mime: mime.to_owned(),
+            filename: Some(filename.to_owned()),
+            url: format!("data:{mime};base64,{data}"),
+        }
+    }
+
+    /// A text file, declared as `text/plain` whatever it is really called, so
+    /// the server inlines its contents instead of handing the model a blob it
+    /// has no decoder for. `data` is base64.
+    ///
+    /// The inlining is not free and not invisible: the server rewrites this
+    /// one part into three persisted parts — a `Called the Read tool…` line,
+    /// the whole decoded file, and the file part itself — with the first two
+    /// flagged [`Part::synthetic`]. A client that renders every part it is
+    /// given will therefore print the attachment's entire contents back at
+    /// the reader as if they had typed it.
+    #[must_use]
+    pub fn text_file(filename: &str, data: &str) -> Self {
+        Self::file("text/plain", filename, data)
+    }
 }
 
 /// `{info, parts}` from `GET /session/:id/message`.
@@ -210,6 +536,25 @@ pub struct SessionMeta {
     /// turn whose model or variant differs from the record, so it is the
     /// server's own answer to "what will the next message use".
     pub model: Option<SessionModel>,
+    /// The agent the session last ran as — what the app calls the mode.
+    ///
+    /// `OpenCode` writes this onto the session record when a TURN IS SENT,
+    /// beside the model, so it is the server's own answer to what the next
+    /// turn runs as. Absent on a build that does not record it, which reads
+    /// as `None` rather than as a claim.
+    pub agent: Option<String>,
+}
+
+impl SessionMeta {
+    /// The recorded agent that is an actual answer.
+    ///
+    /// The empty string is not one: a server that sends `"agent": ""` has
+    /// said nothing, and adopting it would overwrite a resolved value with a
+    /// blank. Same shape [`SessionModel::effort`] uses for the same reason.
+    #[must_use]
+    pub fn agent(&self) -> Option<&str> {
+        self.agent.as_deref().filter(|a| !a.is_empty())
+    }
 }
 
 /// The model a session is set to, as `Session.model` ships it.
@@ -287,6 +632,145 @@ impl ModelInfo {
         });
         names
     }
+}
+
+/// What an agent may be used for — `Agent.mode` in `OpenCode`'s SDK types.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AgentMode {
+    /// A main assistant you talk to directly.
+    Primary,
+    /// Invoked by another agent for a sub-task, never by a person.
+    Subagent,
+    /// Either way round. `OpenCode`'s default for a definition that does not
+    /// say which it is.
+    #[default]
+    All,
+}
+
+/// `mode` is required by the wire schema, so a missing or unrecognised value
+/// means a server this client does not fully understand. It reads as `all`
+/// rather than as a subagent: only the explicit word `subagent` is a reason
+/// to withhold an agent, and guessing the other way would make a new mode
+/// name silently empty the picker.
+fn de_agent_mode<'de, D: serde::Deserializer<'de>>(d: D) -> Result<AgentMode, D::Error> {
+    let raw = Option::<String>::deserialize(d)?;
+    Ok(match raw.as_deref() {
+        Some("primary") => AgentMode::Primary,
+        Some("subagent") => AgentMode::Subagent,
+        _ => AgentMode::All,
+    })
+}
+
+/// One agent a chat's server offers (`GET /agent`).
+///
+/// `OpenCode` calls this an agent; the app calls it a mode, because that is
+/// what it is from the composer — Build and Plan are the two it ships, and
+/// they differ in what the turn is allowed to do. It rides a turn exactly the
+/// way the model does (`agent` in the prompt body), so switching costs no
+/// config rewrite and no server restart.
+///
+/// Only what the picker renders is typed. Permissions, tools and options stay
+/// where they are enforced, which is the server.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct Agent {
+    /// The id the prompt body's `agent` field takes, e.g. `build`.
+    pub name: String,
+    /// The agent's own one-line account of when to use it.
+    pub description: Option<String>,
+    #[serde(deserialize_with = "de_agent_mode")]
+    pub mode: AgentMode,
+    /// Shipped with `OpenCode` rather than defined by the repo.
+    #[serde(rename = "builtIn")]
+    pub built_in: bool,
+}
+
+impl Agent {
+    /// Whether a session may run on this agent.
+    ///
+    /// A subagent may not: it exists to be called by another agent for a
+    /// sub-task, and pointing a chat at one would be asking for a turn the
+    /// server has no primary agent to run.
+    #[must_use]
+    pub const fn is_primary(&self) -> bool {
+        matches!(self.mode, AgentMode::Primary | AgentMode::All)
+    }
+}
+
+/// The `model` of a chat's resolved `opencode.json`, if it names one.
+///
+/// Pure, so the decoding is testable without a server. Anything that is not a
+/// non-empty string is `None`: a config that names no model, or names one as a
+/// number, has not told us which model runs.
+fn config_model(v: &Value) -> Option<String> {
+    v.get("model")
+        .and_then(Value::as_str)
+        .filter(|m| !m.trim().is_empty())
+        .map(str::to_owned)
+}
+
+/// Percent-encode one URL path segment.
+///
+/// A repo name comes out of the manager's own allowlist — a file the owner
+/// writes by hand — so it is trusted, but it is not guaranteed to be URL-safe,
+/// and a space in one would build a request line the gateway rejects. Encoded
+/// here rather than by taking a dependency: this is the only place in this
+/// client that puts anything but a generated id in a path.
+fn urlencode(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(char::from(byte));
+            }
+            _ => {
+                let hex = |nibble: u8| {
+                    char::from_digit(u32::from(nibble), 16)
+                        .unwrap_or('0')
+                        .to_ascii_uppercase()
+                };
+                out.push('%');
+                out.push(hex(byte >> 4));
+                out.push(hex(byte & 0x0f));
+            }
+        }
+    }
+    out
+}
+
+/// `OpenCode`'s own default agent: the one a turn whose body names none runs
+/// as.
+pub const DEFAULT_AGENT: &str = "build";
+
+/// Which agent the next turn will run as.
+///
+/// `GET /agent` marks no entry as the default — there is no such field, the
+/// whole payload is `{name, description, mode, builtIn}` — so this **resolves**
+/// rather than reads. `chosen` is whatever the app already holds: the reader's
+/// pick, or the agent the session record reports. Failing that, the name
+/// always comes out of the list THIS server sent — [`DEFAULT_AGENT`] when it
+/// has one, otherwise the first agent that may hold a session at all.
+///
+/// `None` when the server offers nothing selectable, because a chip must not
+/// name an agent the server would refuse. The caller then puts the resolved
+/// name in the prompt body, which is what turns a prediction into a fact.
+#[must_use]
+pub fn resolve_agent<'a>(chosen: Option<&'a str>, agents: &'a [Agent]) -> Option<&'a str> {
+    if let Some(name) = chosen.filter(|c| !c.is_empty()) {
+        return Some(name);
+    }
+    // One pass with a remembered fallback rather than two closures, so the
+    // list is walked once and the nursery lints stay quiet.
+    let mut fallback: Option<&'a str> = None;
+    for agent in agents.iter().filter(|a| a.is_primary()) {
+        if agent.name == DEFAULT_AGENT {
+            return Some(agent.name.as_str());
+        }
+        if fallback.is_none() {
+            fallback = Some(agent.name.as_str());
+        }
+    }
+    fallback
 }
 
 /// A model's declared limits. Read-only catalogue data: nothing in the
@@ -560,6 +1044,30 @@ impl CodeClient {
         Ok(serde_json::from_value(v.get("repos").cloned().unwrap_or_default()).unwrap_or_default())
     }
 
+    /// The branches of an allowlisted repo
+    /// (`GET /api/repos/<name>/branches`), default first and marked.
+    ///
+    /// A manager route, not a proxied one: the manager reads these from GitHub
+    /// with its own credential, exactly as it does [`Self::pulls`]. No
+    /// container is touched and none is woken — which is what lets the
+    /// new-session screen, which has no chat of its own, offer a base branch
+    /// at all.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or the request
+    /// outruns the client timeout, and [`CodeError::Status`] on a non-2xx
+    /// answer — 403 for a repo outside the allowlist, 502 when GitHub refused
+    /// the credential or is unreachable, and 404 from a manager predating the
+    /// route. The caller treats every one of those as "cannot list branches"
+    /// rather than as an error worth a toast: the pill still says what it will
+    /// do without one.
+    pub async fn branches(&self, repo: &str) -> Result<RepoBranches, CodeError> {
+        let path = format!("/api/repos/{}/branches", urlencode(repo));
+        let v = Self::json_of(self.req(reqwest::Method::GET, &path).send().await?).await?;
+        Ok(serde_json::from_value(v).unwrap_or_default())
+    }
+
     /// The metadata index of every chat the manager knows (`GET /api/chats`).
     ///
     /// # Errors
@@ -573,24 +1081,95 @@ impl CodeClient {
         Ok(serde_json::from_value(v.get("chats").cloned().unwrap_or_default()).unwrap_or_default())
     }
 
+    /// Every pending permission ask across the chats that are **already
+    /// running** (`GET /api/permissions`).
+    ///
+    /// This is a manager-side aggregate, and it has to be: the alternative is
+    /// [`Self::permissions`] once per chat, and every `/chat/<id>/…` request
+    /// goes through the transparent proxy, which wakes a stopped container.
+    /// Polling the list that way would hold every container open and undo the
+    /// idle spin-down the whole code plane is built on. Restricting the
+    /// aggregate to running containers costs nothing real — a container that
+    /// is down has no live turn, so it has nothing parked on an ask.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or the request
+    /// outruns the client timeout, [`CodeError::Status`] on a non-2xx
+    /// answer — 401 for a wrong `password`, 404 from a manager too old to
+    /// have this route — and [`CodeError::Other`] for a 2xx body that is not
+    /// the contracted shape. A single container that fails to answer does
+    /// **not** fail the aggregate: the manager names it in
+    /// [`PermissionReport::unreachable`] and still returns 200.
+    pub async fn pending_permissions(&self) -> Result<PermissionReport, CodeError> {
+        Self::decode_permission_report(
+            Self::json_of(
+                self.req(reqwest::Method::GET, "/api/permissions")
+                    .send()
+                    .await?,
+            )
+            .await?,
+        )
+    }
+
+    /// Read the aggregate's body, or say why it could not be read.
+    ///
+    /// The strictest decode in this client, and the only one that has to be.
+    /// Everywhere else a 2xx that does not parse degrades to an empty list
+    /// and the screen shows less than it could; here the report is read as
+    /// authority over what is *not* pending — the merge clears every card the
+    /// report does not list — so `unwrap_or_default()` on a body this client
+    /// cannot read announces "nothing is waiting on you anywhere" in a voice
+    /// indistinguishable from the truthful answer, and wipes the list. An
+    /// error keeps whatever the app already had, which is the safe half of
+    /// the ambiguity. `{"permissions": null}` from a manager that meant "none"
+    /// lands here, and so does the `Value::Null` [`Self::json_of`] hands back
+    /// for a body that stopped mid-read.
+    ///
+    /// A bare array is refused rather than tolerated: serde derives
+    /// struct-from-sequence, so `[]` would otherwise decode as an empty
+    /// report — an unrecognised shape that happens to be empty is precisely
+    /// the false negative above.
+    fn decode_permission_report(body: Value) -> Result<PermissionReport, CodeError> {
+        if !body.is_object() {
+            return Err(CodeError::Other(
+                "bad permission aggregate: expected an object carrying `permissions`".into(),
+            ));
+        }
+        serde_json::from_value(body)
+            .map_err(|e| CodeError::Other(format!("bad permission aggregate: {e}")))
+    }
+
     /// Create a chat on `repo` with `task` as its opening instruction.
     /// `model` is `provider/model`; `None` leaves the manager's default.
+    /// `base_branch` is the ref the chat's own branch is cut from; `None` is
+    /// the repo's default HEAD.
     ///
     /// # Errors
     ///
     /// [`CodeError::Http`] on transport failure or timeout,
-    /// [`CodeError::Status`] on a non-2xx answer — 400 for a repo outside the
-    /// allowlist, 401 for a wrong `password` — and [`CodeError::Other`] if
-    /// the created chat's payload does not decode as a [`ChatMeta`].
+    /// [`CodeError::Status`] on a non-2xx answer — 403 for a repo outside the
+    /// allowlist, 400 for a base branch that is malformed or does not exist,
+    /// 401 for a wrong `password` — and [`CodeError::Other`] if the created
+    /// chat's payload does not decode as a [`ChatMeta`]. The manager checks
+    /// the base *before* it builds anything, so a refusal leaves no half-built
+    /// chat behind.
     pub async fn create_chat(
         &self,
         repo: &str,
         task: &str,
         model: Option<&str>,
+        base_branch: Option<&str>,
     ) -> Result<ChatMeta, CodeError> {
         let mut body = json!({"repo": repo, "task": task});
         if let Some(m) = model {
             body["model"] = json!(m);
+        }
+        // Omitted rather than sent empty: a manager that does not understand
+        // the field must cut from the repo's default, and `""` is a branch
+        // name it would go looking for.
+        if let Some(b) = base_branch.filter(|b| !b.is_empty()) {
+            body["base"] = json!(b);
         }
         let v = Self::json_of(
             self.req(reqwest::Method::POST, "/api/chats")
@@ -655,10 +1234,97 @@ impl CodeClient {
         .map(|_| ())
     }
 
+    /// The pull requests **this chat's branch** has produced
+    /// (`GET /api/chats/<id>/pulls`), newest first.
+    ///
+    /// A manager route, not a proxied one: the manager makes these calls to
+    /// GitHub itself with its own credential, so asking costs nothing on the
+    /// container and — the property the whole feature hangs on — does not wake
+    /// a sleeping chat. That is why a chat can carry a pull-request count the
+    /// moment it is opened, while the diff has to wait for a container.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or the request
+    /// outruns the client timeout, and [`CodeError::Status`] on a non-2xx
+    /// answer — 404 for a `chat_id` the manager does not know, 409 when the
+    /// chat's repo has left the allowlist (there is no clone URL left to ask
+    /// GitHub about), 502 when GitHub is unreachable or refuses the
+    /// credential. An entry that does not decode is dropped on its own rather
+    /// than collapsing the list, the same way [`CodeClient::diff`] does it.
+    pub async fn pulls(&self, chat_id: &str) -> Result<Vec<PullRequest>, CodeError> {
+        let body = Self::json_of(
+            self.req(reqwest::Method::GET, &format!("/api/chats/{chat_id}/pulls"))
+                .send()
+                .await?,
+        )
+        .await?;
+        Ok(parse_pulls(&body))
+    }
+
+    /// Merge one of this chat's pull requests
+    /// (`POST /api/chats/<id>/pulls/<n>/merge`).
+    ///
+    /// The empty body takes the manager's merge method. The manager checks
+    /// that `number` is really on this chat's branch before it does anything,
+    /// so this cannot be used to merge a pull request that has nothing to do
+    /// with the chat whose id is in the path.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] on transport failure or timeout, and
+    /// [`CodeError::Status`] on a non-2xx answer — 404 for an unknown chat or
+    /// a pull request that is not on its branch, 409 when the pull request is
+    /// not in a state that can be merged, 422 when GitHub itself refused
+    /// (branch protection, a required review, a head that moved), 502 when
+    /// GitHub is unreachable. Use [`CodeError::message`] for what to show.
+    pub async fn merge_pull(&self, chat_id: &str, number: u64) -> Result<MergeOutcome, CodeError> {
+        let body = Self::json_of(
+            self.req(
+                reqwest::Method::POST,
+                &format!("/api/chats/{chat_id}/pulls/{number}/merge"),
+            )
+            .json(&json!({}))
+            .send()
+            .await?,
+        )
+        .await?;
+        Ok(serde_json::from_value(body).unwrap_or_default())
+    }
+
     // ----------------------------------------------------------- per chat
 
     fn chat_path(chat_id: &str, sub: &str) -> String {
         format!("/chat/{chat_id}{sub}")
+    }
+
+    /// The model this chat's container is configured to run
+    /// (`GET /chat/<id>/config`).
+    ///
+    /// This is the rendered `<chat>/home/.config/opencode/opencode.json` the
+    /// container actually reads, served back resolved. It is the only place
+    /// the fact exists for a chat created without an explicit model: its own
+    /// record says `null`, and its session record says nothing at all until a
+    /// turn has been sent.
+    ///
+    /// `Ok(None)` when the config names no model.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or waking a stopped
+    /// chat outruns the client's 150s request timeout, and
+    /// [`CodeError::Status`] on a non-2xx answer — including the 404 an
+    /// `OpenCode` build predating the route answers with. The caller degrades
+    /// silently on all of them: not knowing which model runs is where the app
+    /// already was.
+    pub async fn default_model(&self, chat_id: &str) -> Result<Option<String>, CodeError> {
+        let v = Self::json_of(
+            self.req(reqwest::Method::GET, &Self::chat_path(chat_id, "/config"))
+                .send()
+                .await?,
+        )
+        .await?;
+        Ok(config_model(&v))
     }
 
     /// The sessions on a chat's own `OpenCode` server (`GET /session`).
@@ -722,6 +1388,39 @@ impl CodeClient {
         last.map_or_else(|| Ok(Vec::new()), Err)
     }
 
+    /// The agents a chat's server offers (`GET /agent`) — what the composer
+    /// calls modes.
+    ///
+    /// Every agent is returned, subagents included; which of them may hold a
+    /// session is [`Agent::is_primary`], and that is the caller's filter to
+    /// apply. Decoded entry by entry so one definition this client cannot
+    /// read drops on its own rather than emptying the picker, and an agent
+    /// with no name is discarded because the name *is* what the prompt body
+    /// sends.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or waking a stopped
+    /// chat outruns the client's 150s request timeout, and
+    /// [`CodeError::Status`] on a non-2xx answer (404 for an unknown
+    /// `chat_id`, or for an `OpenCode` build predating the route).
+    pub async fn agents(&self, chat_id: &str) -> Result<Vec<Agent>, CodeError> {
+        let v = Self::json_of(
+            self.req(reqwest::Method::GET, &Self::chat_path(chat_id, "/agent"))
+                .send()
+                .await?,
+        )
+        .await?;
+        let Value::Array(items) = v else {
+            return Ok(Vec::new());
+        };
+        Ok(items
+            .into_iter()
+            .filter_map(|item| serde_json::from_value::<Agent>(item).ok())
+            .filter(|agent| !agent.name.is_empty())
+            .collect())
+    }
+
     /// Create the chat's `OpenCode` session in its workspace.
     ///
     /// # Errors
@@ -775,35 +1474,36 @@ impl CodeClient {
     /// Fire-and-forget prompt: the turn runs server-side; progress arrives
     /// over the SSE stream. `model` is `provider/model`; one without a `/`
     /// is dropped and the session's own model is used. `variant` is the
-    /// thinking-effort tier, which is a property of the turn in the same way
-    /// the model is — `OpenCode` copies both onto the session record when
-    /// they differ from what is there.
+    /// thinking-effort tier and `agent` is the [`Agent::name`] to run as.
+    /// All three are properties of the turn in the same way — the server
+    /// applies whatever the body asked for and leaves the rest alone.
+    ///
+    /// `parts` is the whole message: text and any attachments, in the order
+    /// the model should see them. See [`PromptPart`].
     ///
     /// # Errors
     ///
+    /// [`CodeError::Other`] if `parts` is empty — the server takes that as a
+    /// message with no content and answers 400.
     /// [`CodeError::Http`] if the gateway is unreachable or waking a stopped
     /// chat outruns the client's 150s request timeout, and
     /// [`CodeError::Status`] on a non-2xx answer — 404 for an unknown
-    /// `chat_id` or `session_id`, 400 for a model the server rejects. A turn
-    /// that fails *after* this returns surfaces on the event stream, not
-    /// here.
+    /// `chat_id` or `session_id`, 400 for a model or agent the server
+    /// rejects. A turn that fails *after* this returns surfaces on the event
+    /// stream, not here.
     pub async fn prompt_async(
         &self,
         chat_id: &str,
         session_id: &str,
-        text: &str,
+        parts: &[PromptPart],
         model: Option<&str>,
         variant: Option<&str>,
+        agent: Option<&str>,
     ) -> Result<(), CodeError> {
-        let mut body = json!({"parts": [{"type": "text", "text": text}]});
-        if let Some(m) = model {
-            if let Some((provider, model_id)) = m.split_once('/') {
-                body["model"] = json!({"providerID": provider, "modelID": model_id});
-            }
+        if parts.is_empty() {
+            return Err(CodeError::Other("prompt has no content".into()));
         }
-        if let Some(v) = variant.filter(|v| !v.is_empty()) {
-            body["variant"] = json!(v);
-        }
+        let body = prompt_body(parts, model, variant, agent);
         Self::json_of(
             self.req(
                 reqwest::Method::POST,
@@ -988,6 +1688,34 @@ impl CodeClient {
     }
 }
 
+/// The body both prompt routes take: the message, plus the three things that
+/// ride a turn rather than being set on the session beforehand.
+///
+/// A field is sent only when there is something to say. `OpenCode` keeps
+/// whatever the session already has for anything the body omits, so an empty
+/// string here would not mean "leave it" — it would mean "use the model, tier
+/// or agent called nothing", which is a 400.
+fn prompt_body(
+    parts: &[PromptPart],
+    model: Option<&str>,
+    variant: Option<&str>,
+    agent: Option<&str>,
+) -> Value {
+    let mut body = json!({ "parts": parts });
+    if let Some(m) = model {
+        if let Some((provider, model_id)) = m.split_once('/') {
+            body["model"] = json!({"providerID": provider, "modelID": model_id});
+        }
+    }
+    if let Some(v) = variant.filter(|v| !v.is_empty()) {
+        body["variant"] = json!(v);
+    }
+    if let Some(a) = agent.filter(|a| !a.is_empty()) {
+        body["agent"] = json!(a);
+    }
+    body
+}
+
 fn find_frame_end(buf: &[u8]) -> Option<usize> {
     buf.windows(2).position(|w| w == b"\n\n")
 }
@@ -1091,6 +1819,35 @@ mod tests {
             }
             other => panic!("wrong event: {other:?}"),
         }
+    }
+
+    /// The server expands a `text/plain` attachment into two text parts of
+    /// its own — one of them the whole file — and flags them. A part that
+    /// arrives without the flag is something somebody actually said.
+    #[test]
+    fn a_parts_synthetic_flag_survives_the_wire() {
+        let part = |raw: Value| match dispatch_event(json!({
+            "type": "message.part.updated",
+            "properties": {"part": raw}
+        })) {
+            CodeEvent::PartUpdated { part, .. } => part,
+            other => panic!("wrong event: {other:?}"),
+        };
+        assert!(
+            part(json!({
+                "id": "prt_2", "messageID": "msg_1", "sessionID": "ses_1",
+                "type": "text", "text": "# notes", "synthetic": true
+            }))
+            .synthetic
+        );
+        assert!(
+            !part(json!({
+                "id": "prt_1", "messageID": "msg_1", "sessionID": "ses_1",
+                "type": "text", "text": "look at this"
+            }))
+            .synthetic,
+            "an ordinary part carries no flag at all"
+        );
     }
 
     #[test]
@@ -1203,5 +1960,551 @@ mod tests {
     #[test]
     fn a_model_with_no_declared_window_reports_none() {
         assert_eq!(ModelLimit::default().context_tokens(), None);
+    }
+
+    /// `GET /agent` as the SDK types describe it, decoded down to the four
+    /// fields the picker needs.
+    #[test]
+    fn an_agent_decodes_with_its_description_and_mode() {
+        let raw = json!({
+            "name": "plan",
+            "description": "Read-only analysis. Cannot edit files.",
+            "mode": "primary",
+            "builtIn": true,
+            "permission": {"edit": "deny", "bash": {"*": "ask"}},
+            "tools": {"write": false},
+            "options": {},
+            "temperature": 0.2
+        });
+        let agent: Agent = serde_json::from_value(raw).unwrap();
+        assert_eq!(agent.name, "plan");
+        assert_eq!(
+            agent.description.as_deref(),
+            Some("Read-only analysis. Cannot edit files.")
+        );
+        assert_eq!(agent.mode, AgentMode::Primary);
+        assert!(agent.built_in);
+        assert!(agent.is_primary());
+    }
+
+    /// A subagent is invoked by another agent, never chosen by a person, so
+    /// it must not be offered as something a chat can run on.
+    #[test]
+    fn a_subagent_is_not_selectable_but_all_is() {
+        let subagent: Agent = serde_json::from_value(json!({
+            "name": "reviewer", "mode": "subagent", "builtIn": false
+        }))
+        .unwrap();
+        assert!(!subagent.is_primary());
+
+        let both: Agent =
+            serde_json::from_value(json!({"name": "general", "mode": "all"})).unwrap();
+        assert!(both.is_primary());
+    }
+
+    /// A mode this client has not heard of, or none at all, still names an
+    /// agent a person can pick — guessing "subagent" would make one word of
+    /// server vocabulary empty the whole picker.
+    #[test]
+    fn an_unknown_mode_is_still_selectable() {
+        for raw in [
+            json!({"name": "build"}),
+            json!({"name": "build", "mode": null}),
+            json!({"name": "build", "mode": "supervisor"}),
+        ] {
+            let agent: Agent = serde_json::from_value(raw).unwrap();
+            assert_eq!(agent.mode, AgentMode::All);
+            assert!(agent.is_primary());
+        }
+    }
+
+    fn agents(rows: &[(&str, &str)]) -> Vec<Agent> {
+        rows.iter()
+            .map(|(name, mode)| {
+                serde_json::from_value(json!({"name": name, "mode": mode})).unwrap()
+            })
+            .collect()
+    }
+
+    /// A pick outranks the server's own default, and an empty string is not a
+    /// pick — a server that sends `"agent": ""` has said nothing.
+    #[test]
+    fn a_pick_outranks_the_servers_own_default() {
+        let list = agents(&[("build", "primary"), ("plan", "primary")]);
+        assert_eq!(resolve_agent(Some("plan"), &list), Some("plan"));
+        assert_eq!(resolve_agent(Some(""), &list), Some("build"));
+        assert_eq!(resolve_agent(None, &list), Some("build"));
+    }
+
+    /// `build` wins wherever it sits, not just at the front: `GET /agent`
+    /// marks nothing as the default, so position must not stand in for one.
+    #[test]
+    fn the_default_agent_is_found_wherever_it_sits() {
+        let list = agents(&[
+            ("plan", "primary"),
+            ("accept-edits", "all"),
+            ("build", "primary"),
+        ]);
+        assert_eq!(resolve_agent(None, &list), Some(DEFAULT_AGENT));
+    }
+
+    /// With no `build`, the first agent that may hold a session wins — and a
+    /// subagent never does, whatever order it arrives in.
+    #[test]
+    fn a_server_without_build_falls_to_its_first_primary() {
+        let list = agents(&[
+            ("general", "subagent"),
+            ("plan", "primary"),
+            ("review", "primary"),
+        ]);
+        assert_eq!(resolve_agent(None, &list), Some("plan"));
+    }
+
+    /// Nothing selectable resolves to nothing: a chip must not name an agent
+    /// the server would refuse the turn for.
+    #[test]
+    fn nothing_selectable_resolves_to_nothing() {
+        assert_eq!(resolve_agent(None, &[]), None);
+        assert_eq!(
+            resolve_agent(None, &agents(&[("general", "subagent")])),
+            None
+        );
+    }
+
+    /// The session record reports the agent its last turn ran as, beside the
+    /// model. An empty or absent one is not an answer.
+    #[test]
+    fn a_session_record_reports_the_agent_it_last_ran() {
+        let with: SessionMeta =
+            serde_json::from_value(json!({"id": "ses_1", "agent": "plan"})).unwrap();
+        assert_eq!(with.agent(), Some("plan"));
+        let blank: SessionMeta =
+            serde_json::from_value(json!({"id": "ses_1", "agent": ""})).unwrap();
+        assert_eq!(blank.agent(), None);
+        let absent: SessionMeta = serde_json::from_value(json!({"id": "ses_1"})).unwrap();
+        assert_eq!(absent.agent(), None);
+    }
+
+    /// The chat's resolved config names the model it really runs — and only a
+    /// non-empty string is a name.
+    #[test]
+    fn a_resolved_config_names_the_model_or_nothing() {
+        assert_eq!(
+            config_model(&json!({"model": "opencode/deepseek-v4-flash"})),
+            Some("opencode/deepseek-v4-flash".to_owned())
+        );
+        assert_eq!(config_model(&json!({})), None);
+        assert_eq!(config_model(&json!({"model": ""})), None);
+        assert_eq!(config_model(&json!({"model": "  "})), None);
+        assert_eq!(config_model(&json!({"model": 42})), None);
+    }
+
+    /// The manager's answer, default first and marked, decoded as the picker
+    /// needs it. `default` is a Rust keyword on both levels of this payload.
+    #[test]
+    fn a_branch_list_decodes_with_its_default_marked() {
+        let raw = json!({
+            "repo": "personal-ai-setup",
+            "slug": "PhillipChaffee/personal-ai-setup",
+            "default": "main",
+            "truncated": false,
+            "branches": [
+                {"name": "main", "default": true},
+                {"name": "claude/budget-note-fix", "default": false}
+            ]
+        });
+        let list: RepoBranches = serde_json::from_value(raw).unwrap();
+        assert_eq!(list.default_name(), Some("main"));
+        assert_eq!(list.names(), ["main", "claude/budget-note-fix"]);
+        assert!(!list.truncated);
+    }
+
+    /// A manager that could not read the default still answers with a usable
+    /// list — losing the label must not read as losing the branches.
+    #[test]
+    fn a_branch_list_without_a_default_is_still_a_list() {
+        let list: RepoBranches = serde_json::from_value(json!({
+            "default": "",
+            "branches": [{"name": "main", "default": false}]
+        }))
+        .unwrap();
+        assert_eq!(list.default_name(), None);
+        assert_eq!(list.names(), ["main"]);
+    }
+
+    /// A repo name goes in a URL path. It comes from the owner's own
+    /// allowlist, so it is trusted — but not necessarily URL-safe.
+    #[test]
+    fn a_repo_name_is_encoded_into_its_path() {
+        assert_eq!(urlencode("personal-ai-setup"), "personal-ai-setup");
+        assert_eq!(
+            urlencode("base-image-with-debugger"),
+            "base-image-with-debugger"
+        );
+        assert_eq!(urlencode("a b"), "a%20b");
+        assert_eq!(urlencode("a/b"), "a%2Fb");
+    }
+
+    /// The turn carries the agent beside the model and the tier, as a bare
+    /// name at the top level of the body.
+    #[test]
+    fn the_prompt_body_carries_model_tier_and_agent() {
+        let body = prompt_body(
+            &[PromptPart::text("ship it")],
+            Some("opencode/claude-sonnet-4-5"),
+            Some("high"),
+            Some("plan"),
+        );
+        assert_eq!(
+            body["model"],
+            json!({"providerID": "opencode", "modelID": "claude-sonnet-4-5"})
+        );
+        assert_eq!(body["variant"], json!("high"));
+        assert_eq!(body["agent"], json!("plan"));
+        assert_eq!(body["parts"][0]["text"], json!("ship it"));
+    }
+
+    /// Nothing chosen means nothing sent: the session keeps what it has.
+    #[test]
+    fn an_unchosen_field_is_left_out_of_the_body() {
+        let body = prompt_body(&[PromptPart::text("hello")], None, None, None);
+        assert!(body.get("model").is_none());
+        assert!(body.get("variant").is_none());
+        assert!(body.get("agent").is_none());
+
+        // Empty is not a choice either — it would name an agent called "".
+        let blank = prompt_body(
+            &[PromptPart::text("hello")],
+            Some("no-slash"),
+            Some(""),
+            Some(""),
+        );
+        assert!(blank.get("model").is_none());
+        assert!(blank.get("variant").is_none());
+        assert!(blank.get("agent").is_none());
+    }
+
+    // ---------------------------------------------------------- pull requests
+
+    fn pull(extra: &Value) -> PullRequest {
+        let mut raw = json!({
+            "number": 12,
+            "title": "Tighten the README quickstart",
+            "state": "open",
+            "draft": false,
+            "mergeable": true,
+            "checks": "passing",
+            "url": "https://github.com/me/notes/pull/12",
+            "head": "agent/notes-9f2c1a",
+            "base": "main",
+            "created_at": "2026-08-24T09:12:31Z",
+            "updated_at": "2026-08-24T10:02:04Z"
+        });
+        if let (Some(base), Some(extra)) = (raw.as_object_mut(), extra.as_object()) {
+            for (k, v) in extra {
+                base.insert(k.clone(), v.clone());
+            }
+        }
+        serde_json::from_value(raw).unwrap()
+    }
+
+    #[test]
+    fn a_pull_decodes_every_field_of_the_contract() {
+        let list = parse_pulls(&json!({"pulls": [{
+            "number": 12,
+            "title": "Tighten the README quickstart",
+            "state": "merged",
+            "draft": false,
+            "mergeable": null,
+            "checks": "none",
+            "url": "https://github.com/me/notes/pull/12",
+            "head": "agent/notes-9f2c1a",
+            "base": "main",
+            "created_at": "2026-08-24T09:12:31Z",
+            "updated_at": "2026-08-24T10:02:04Z"
+        }]}));
+        let [only] = list.as_slice() else {
+            panic!("expected one pull, got {list:?}")
+        };
+        assert_eq!(only.number, 12);
+        assert_eq!(only.state, PullState::Merged);
+        assert_eq!(only.checks, Checks::None);
+        assert_eq!(only.mergeable, None);
+        assert_eq!(only.head, "agent/notes-9f2c1a");
+        assert_eq!(only.base, "main");
+    }
+
+    /// A state or a check summary this client has not heard of must not read
+    /// as "open" or "passing": between them those two decide whether the app
+    /// offers to merge.
+    #[test]
+    fn words_this_client_does_not_know_read_as_unknown() {
+        let odd = pull(&json!({"state": "locked", "checks": "flaky"}));
+        assert_eq!(odd.state, PullState::Unknown);
+        assert_eq!(odd.checks, Checks::Unknown);
+        assert!(!odd.is_mergeable());
+    }
+
+    /// A garbled entry loses itself, not the rest of the list.
+    #[test]
+    fn one_bad_entry_does_not_take_the_list_with_it() {
+        let list = parse_pulls(&json!({"pulls": [
+            {"number": "twelve"},
+            {"number": 13, "state": "open", "url": "https://example.invalid/13"}
+        ]}));
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].number, 13);
+    }
+
+    #[test]
+    fn a_body_without_a_pulls_array_is_no_pulls() {
+        assert!(parse_pulls(&json!({"error": "unknown chat"})).is_empty());
+        assert!(parse_pulls(&Value::Null).is_empty());
+    }
+
+    /// The merge gate, case by case. Everything here is a state GitHub really
+    /// reports, and each one of them is a reason not to offer the button.
+    #[test]
+    fn merging_is_offered_only_when_github_says_it_can_merge() {
+        assert!(pull(&json!({})).is_mergeable());
+        // Checks that have not answered yet are not a refusal.
+        assert!(pull(&json!({"checks": "pending"})).is_mergeable());
+        assert!(pull(&json!({"checks": "none"})).is_mergeable());
+
+        assert!(!pull(&json!({"checks": "failing"})).is_mergeable());
+        assert!(!pull(&json!({"draft": true})).is_mergeable());
+        assert!(!pull(&json!({"mergeable": false})).is_mergeable());
+        // Still being computed: a wait, not a yes.
+        assert!(!pull(&json!({"mergeable": null})).is_mergeable());
+        assert!(!pull(&json!({"state": "merged"})).is_mergeable());
+        assert!(!pull(&json!({"state": "closed"})).is_mergeable());
+    }
+
+    #[test]
+    fn a_merge_answer_carries_the_refreshed_row() {
+        let outcome: MergeOutcome = serde_json::from_value(json!({
+            "merged": true,
+            "sha": "9f2c1ad",
+            "pull": {"number": 12, "state": "merged", "mergeable": false}
+        }))
+        .unwrap();
+        assert!(outcome.merged);
+        assert_eq!(outcome.sha, "9f2c1ad");
+        assert_eq!(outcome.pull.unwrap().state, PullState::Merged);
+    }
+
+    /// A manager that answers the merge without echoing the row must not make
+    /// a merge that happened look like a failure.
+    #[test]
+    fn a_merge_answer_without_a_row_still_decodes() {
+        let outcome: MergeOutcome =
+            serde_json::from_value(json!({"merged": true, "sha": "9f2c1ad"})).unwrap();
+        assert!(outcome.merged);
+        assert_eq!(outcome.pull, None);
+    }
+
+    /// What the user is shown when the manager refuses. The status code and
+    /// the JSON it arrived in are not part of the sentence.
+    #[test]
+    fn a_refusal_is_shown_as_the_servers_own_sentence() {
+        let refused = CodeError::Status {
+            status: 409,
+            body: r##"{"error": "#12 conflicts with main — it needs a rebase."}"##.to_owned(),
+        };
+        assert_eq!(
+            refused.message(),
+            "#12 conflicts with main — it needs a rebase."
+        );
+
+        let github = CodeError::Status {
+            status: 422,
+            body: r#"{"error": "At least 1 approving review is required."}"#.to_owned(),
+        };
+        assert_eq!(github.message(), "At least 1 approving review is required.");
+    }
+
+    /// A body that is not the manager's error shape — an HTML 502 from the
+    /// gateway, or nothing at all — still has to say something.
+    #[test]
+    fn an_answer_with_no_sentence_falls_back_to_the_status() {
+        for body in ["", "<html>502 Bad Gateway</html>", r#"{"error": "  "}"#] {
+            let e = CodeError::Status {
+                status: 502,
+                body: body.to_owned(),
+            };
+            assert_eq!(e.message(), "server said 502");
+        }
+        assert_eq!(CodeError::Other("no route".into()).message(), "no route");
+    }
+
+    /// The prompt body is the one place this client writes `OpenCode`'s own
+    /// schema rather than reading it, so the shape is pinned against
+    /// `TextPartInput | FilePartInput` verbatim.
+    #[test]
+    fn prompt_parts_serialize_to_the_sdk_shapes() {
+        let parts = vec![
+            PromptPart::text("what changed here"),
+            PromptPart::file("image/jpeg", "IMG_0042.jpg", "QUJD"),
+            PromptPart::text_file("notes.md", "QUJD"),
+        ];
+        assert_eq!(
+            serde_json::to_value(&parts).unwrap(),
+            json!([
+                {"type": "text", "text": "what changed here"},
+                {"type": "file", "mime": "image/jpeg", "filename": "IMG_0042.jpg",
+                 "url": "data:image/jpeg;base64,QUJD"},
+                // Declared text/plain whatever the file is called: that is the
+                // one mime the server decodes and inlines.
+                {"type": "file", "mime": "text/plain", "filename": "notes.md",
+                 "url": "data:text/plain;base64,QUJD"},
+            ])
+        );
+    }
+
+    /// History gives an attachment back as a file part, and the transcript
+    /// wants its bytes — but only from a `data:` URL. A `file:` URL names a
+    /// path inside the container, which this device cannot read.
+    #[test]
+    fn only_a_data_url_yields_bytes_to_the_transcript() {
+        let part = |url: &str| Part {
+            url: Some(url.to_owned()),
+            ..Part::default()
+        };
+        assert_eq!(
+            part("data:image/png;base64,QUJD").data_url_base64(),
+            Some("QUJD")
+        );
+        assert_eq!(part("file:///chat/workspace/a.png").data_url_base64(), None);
+        assert_eq!(part("data:text/plain,hello").data_url_base64(), None);
+        assert_eq!(Part::default().data_url_base64(), None);
+    }
+
+    /// A file part decodes out of the same `message.part.updated` envelope
+    /// every other part arrives in, so the fold has something to work with.
+    #[test]
+    fn dispatches_a_file_part() {
+        let raw = json!({
+            "type": "message.part.updated",
+            "properties": {"part": {
+                "id": "prt_2", "messageID": "msg_1", "sessionID": "ses_1",
+                "type": "file", "mime": "image/jpeg", "filename": "IMG_0042.jpg",
+                "url": "data:image/jpeg;base64,QUJD"
+            }}
+        });
+        match dispatch_event(raw) {
+            CodeEvent::PartUpdated { part, .. } => {
+                assert_eq!(part.kind, "file");
+                assert_eq!(part.mime.as_deref(), Some("image/jpeg"));
+                assert_eq!(part.filename.as_deref(), Some("IMG_0042.jpg"));
+                assert_eq!(part.data_url_base64(), Some("QUJD"));
+            }
+            other => panic!("wrong event: {other:?}"),
+        }
+    }
+
+    /// The aggregate's contract, verbatim: a chat's own permission payload
+    /// with `chatId` spliced in beside it. Both halves have to survive the
+    /// flatten, because an ask without its chat cannot be answered and a
+    /// chat without its ask is nothing to show.
+    #[test]
+    fn an_aggregate_entry_carries_both_its_chat_and_its_ask() {
+        let raw = json!({
+            "permissions": [{
+                "chatId": "chat_a1",
+                "id": "per_1",
+                "sessionID": "ses_1",
+                "type": "bash",
+                "title": "Run git push",
+                "metadata": {"command": "git push"}
+            }],
+            "unreachable": ["chat_b2"]
+        });
+        let report: PermissionReport = serde_json::from_value(raw).unwrap();
+        assert_eq!(report.permissions.len(), 1);
+        let ask = &report.permissions[0];
+        assert_eq!(ask.chat_id, "chat_a1");
+        assert_eq!(ask.permission.id, "per_1");
+        assert_eq!(ask.permission.session_id, "ses_1");
+        assert_eq!(ask.permission.kind, "bash");
+        assert_eq!(ask.permission.title, "Run git push");
+        assert_eq!(
+            ask.permission
+                .metadata
+                .get("command")
+                .and_then(Value::as_str),
+            Some("git push")
+        );
+        assert_eq!(report.unreachable, ["chat_b2"]);
+    }
+
+    /// "Nothing is waiting on you" is the common answer and must not need the
+    /// optional half of the contract to be spelled out.
+    #[test]
+    fn an_empty_aggregate_needs_no_optional_keys() {
+        let report: PermissionReport = serde_json::from_value(json!({"permissions": []})).unwrap();
+        assert!(report.permissions.is_empty());
+        assert!(report.unreachable.is_empty());
+    }
+
+    /// The contracted shape survives the strict decode, both halves of it.
+    #[test]
+    fn the_contracted_aggregate_decodes() {
+        let report = CodeClient::decode_permission_report(json!({
+            "permissions": [{
+                "chatId": "chat_a1", "id": "per_1", "sessionID": "ses_1",
+                "type": "bash", "title": "Run git push", "metadata": {}
+            }],
+            "unreachable": ["chat_b2"]
+        }))
+        .unwrap();
+        assert_eq!(report.permissions.len(), 1);
+        assert_eq!(report.unreachable, ["chat_b2"]);
+    }
+
+    /// A 2xx whose shape this client cannot read is not an answer, and above
+    /// all it is not "nothing is waiting on you anywhere" — that reading is
+    /// what clears every card on the list, which is the failure the aggregate
+    /// was built to remove rather than to cause.
+    #[test]
+    fn a_body_the_client_cannot_read_is_an_error_rather_than_an_empty_report() {
+        for body in [
+            // A manager that serialised Python's None for "none pending".
+            json!({"permissions": null}),
+            // What json_of hands back for a body that stopped mid-read, and
+            // for a 204.
+            json!(null),
+            // A map keyed by chat where the flat list was contracted.
+            json!({"permissions": {"chat_a": []}}),
+            // The bare-array shapes: serde would read the empty one as a
+            // struct with every field defaulted.
+            json!([]),
+            json!([{"chatId": "chat_a", "id": "per_1"}]),
+            // An auth or captive-portal page served with a 200 through the
+            // tailnet front door.
+            json!("<html>sign in</html>"),
+        ] {
+            assert!(
+                CodeClient::decode_permission_report(body.clone()).is_err(),
+                "{body} must not read as an empty report"
+            );
+        }
+    }
+
+    /// A manager that grows a field must not take the aggregate down with it:
+    /// unknown keys are ignored, at both levels.
+    #[test]
+    fn an_aggregate_tolerates_fields_it_has_not_heard_of() {
+        let raw = json!({
+            "permissions": [{
+                "chatId": "chat_a1", "id": "per_1", "sessionID": "ses_1",
+                "type": "bash", "title": "Run git push", "metadata": {},
+                "askedAt": 1_756_000_000.0
+            }],
+            "unreachable": [],
+            "scannedAt": 1_756_000_001.0
+        });
+        let report: PermissionReport = serde_json::from_value(raw).unwrap();
+        assert_eq!(report.permissions.len(), 1);
+        assert_eq!(report.permissions[0].chat_id, "chat_a1");
     }
 }

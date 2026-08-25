@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use goose_acp_client::{
-    probe, AcpClient, AcpError, AcpEvent, ConnectConfig, Feature, ProbeOutcome, SessionKind,
-    SessionUpdate,
+    probe, AcpClient, AcpError, AcpEvent, ConnectConfig, ContentBlock, Feature, ProbeOutcome,
+    SessionKind, SessionUpdate,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -95,6 +95,10 @@ enum PromptBehavior {
     /// has the feature switched off does: `-32601` with the explanation in
     /// `data`, not in `message`.
     RenameUnsupported,
+    /// Send the `prompt` array straight back as assistant text. The outbound
+    /// frame is otherwise unobservable from a test, and the whole point of an
+    /// attachment is what it puts on the wire.
+    EchoPrompt,
 }
 
 async fn spawn_ws_stub(behavior: PromptBehavior) -> SocketAddr {
@@ -287,6 +291,11 @@ async fn serve_prompt(
         return false;
     }
 
+    if behavior == PromptBehavior::EchoPrompt {
+        echo_prompt(tx, &sid, frame, id).await;
+        return true;
+    }
+
     notify(
         tx,
         &sid,
@@ -358,6 +367,30 @@ async fn serve_prompt(
     )
     .await;
     true
+}
+
+/// Answer a turn by handing the `prompt` array straight back as assistant
+/// text. Nothing else can observe the frame the client sent.
+async fn echo_prompt(tx: &mut WsTx, session_id: &str, frame: &Value, id: Option<Value>) {
+    let prompt = frame
+        .pointer("/params/prompt")
+        .cloned()
+        .unwrap_or(Value::Null);
+    notify(
+        tx,
+        session_id,
+        json!({
+            "sessionUpdate": "agent_message_chunk",
+            "messageId": "echo",
+            "content": {"type": "text", "text": prompt.to_string()}
+        }),
+    )
+    .await;
+    send(
+        tx,
+        json!({"jsonrpc": "2.0", "id": id, "result": {"stopReason": "end_turn"}}),
+    )
+    .await;
 }
 
 /// Ask the client for tool permission and wait for its answer. A client that
@@ -554,7 +587,7 @@ async fn prompt_streams_updates_and_ends_the_turn() {
 
     let c = client.clone();
     let sid = session.session_id.clone();
-    let turn = tokio::spawn(async move { c.prompt(&sid, "hi").await });
+    let turn = tokio::spawn(async move { c.prompt(&sid, &[ContentBlock::text("hi")]).await });
 
     let mut text = String::new();
     let mut saw_thought = false;
@@ -590,6 +623,71 @@ async fn prompt_streams_updates_and_ends_the_turn() {
     client.close();
 }
 
+/// An attachment is another entry in the `prompt` array, and the array is the
+/// only thing the agent ever sees — so what matters is the wire shape, not the
+/// Rust type that produced it.
+#[tokio::test]
+async fn attachments_ride_in_the_prompt_array_beside_the_text() {
+    let addr = spawn_ws_stub(PromptBehavior::EchoPrompt).await;
+    let (client, mut events, _) = AcpClient::connect(&config(addr, SECRET)).await.unwrap();
+    let session = client.session_new("/home/demo").await.unwrap();
+
+    let c = client.clone();
+    let sid = session.session_id.clone();
+    let turn = tokio::spawn(async move {
+        c.prompt(
+            &sid,
+            &[
+                ContentBlock::text("what is in this"),
+                ContentBlock::image("QUJD", "image/jpeg"),
+                ContentBlock::resource_text("file:///notes.md", "text/markdown", "# notes"),
+                ContentBlock::resource_blob("file:///spec.pdf", "application/pdf", "QUJD"),
+            ],
+        )
+        .await
+    });
+
+    let mut echoed = String::new();
+    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(5), events.recv()).await {
+        if let AcpEvent::Update {
+            update: SessionUpdate::AgentMessageChunk(c),
+            ..
+        } = event
+        {
+            echoed = c.content.text_repr();
+            break;
+        }
+    }
+    assert_eq!(turn.await.unwrap().unwrap(), "end_turn");
+
+    let sent: Value = serde_json::from_str(&echoed).unwrap();
+    assert_eq!(
+        sent,
+        json!([
+            {"type": "text", "text": "what is in this"},
+            {"type": "image", "data": "QUJD", "mimeType": "image/jpeg"},
+            {"type": "resource", "resource": {
+                "uri": "file:///notes.md", "mimeType": "text/markdown", "text": "# notes"}},
+            {"type": "resource", "resource": {
+                "uri": "file:///spec.pdf", "mimeType": "application/pdf", "blob": "QUJD"}},
+        ]),
+        "the prompt array must be ACP's ContentBlock shapes verbatim"
+    );
+
+    client.close();
+}
+
+/// A turn with nothing in it is refused here rather than at the agent, which
+/// answers `invalid_params` and leaves the caller guessing.
+#[tokio::test]
+async fn an_empty_prompt_is_refused_before_it_is_sent() {
+    let addr = spawn_ws_stub(PromptBehavior::EchoPrompt).await;
+    let (client, _events, _) = AcpClient::connect(&config(addr, SECRET)).await.unwrap();
+    let err = client.prompt("20260821_1", &[]).await.unwrap_err();
+    assert!(err.to_string().contains("no content"), "got: {err}");
+    client.close();
+}
+
 #[tokio::test]
 async fn permission_request_is_surfaced_and_answered() {
     let addr = spawn_ws_stub(PromptBehavior::AskPermission).await;
@@ -598,7 +696,8 @@ async fn permission_request_is_surfaced_and_answered() {
 
     let c = client.clone();
     let sid = session.session_id.clone();
-    let turn = tokio::spawn(async move { c.prompt(&sid, "run a tool").await });
+    let turn =
+        tokio::spawn(async move { c.prompt(&sid, &[ContentBlock::text("run a tool")]).await });
 
     let mut answered = false;
     let mut tool_status = None;
@@ -639,7 +738,7 @@ async fn losing_the_connection_emits_disconnected_and_fails_pending_requests() {
 
     let c = client.clone();
     let sid = session.session_id.clone();
-    let turn = tokio::spawn(async move { c.prompt(&sid, "hi").await });
+    let turn = tokio::spawn(async move { c.prompt(&sid, &[ContentBlock::text("hi")]).await });
 
     let mut disconnected = false;
     while let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(5), events.recv()).await {

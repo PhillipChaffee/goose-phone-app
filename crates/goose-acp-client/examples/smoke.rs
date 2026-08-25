@@ -22,7 +22,9 @@
 
 use std::time::Instant;
 
-use goose_acp_client::{probe, AcpClient, AcpEvent, ConnectConfig, SessionKind, SessionUpdate};
+use goose_acp_client::{
+    probe, AcpClient, AcpEvent, ConnectConfig, ContentBlock, SessionKind, SessionUpdate,
+};
 
 #[tokio::main]
 async fn main() {
@@ -112,8 +114,11 @@ async fn main() {
         });
 
         let prompt_client = client.clone();
-        let prompt_task =
-            tokio::spawn(async move { prompt_client.prompt(&sid, "smoke test: run a tool").await });
+        let prompt_task = tokio::spawn(async move {
+            prompt_client
+                .prompt(&sid, &[ContentBlock::text("smoke test: run a tool")])
+                .await
+        });
 
         if let Ok(Some(p)) = pump.await {
             client.respond_permission(p.request_id, Some("allow_once".into()));
