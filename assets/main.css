@@ -162,7 +162,9 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 
   /* Floating chrome. --edge is the gutter every floating thing shares, so the
-   * bars, the composer and the alerts all line up down the same margin. */
+   * bars, the composer and the alerts all line up down the same margin — and
+   * the scroll regions pad themselves by it, so the page's own content lines
+   * up down it too. Giving it up is how the review screen goes full-bleed. */
   --edge: 16px;
   /* How far the floating bars sit inside the safe area. Every scroll pad and
    * composer margin has to add this too, or the gap you asked for is 8px
@@ -379,9 +381,87 @@ pre {
  * title readable is the scroll-edge scrim further down this file. */
 .glass,
 .topbar > .icon-btn,
-.topbar-actions {
+.topbar-actions,
+.scroll-bottom,
+.ptr {
   background: var(--bg-primary);
   box-shadow: var(--shadow-md);
+}
+
+/* The pull-to-refresh indicator.
+ *
+ * It rides above the chrome scrim and travels down on its own rather than
+ * pushing the list: iOS already applies elastic overscroll to the scroller, so
+ * moving the content too would double the motion and leave the swipe rows
+ * somewhere their gesture handler does not expect them. Fixed rather than
+ * absolute because the pull is a property of the screen, not of whichever
+ * list is mounted.
+ *
+ * --ptr-y is written by the gesture (src/viewport.rs); everything else here
+ * follows from it. */
+.ptr {
+  position: fixed;
+  top: calc(var(--safe-top) + var(--chrome-gap));
+  left: 50%;
+  z-index: var(--z-chrome);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, calc(var(--ptr-y, 0px) - 44px));
+  transition: opacity 140ms ease, transform 180ms ease;
+}
+
+.ptr.on {
+  opacity: 1;
+}
+
+/* Released without reaching the threshold, the indicator should snap back
+   rather than glide, so a half-pull does not read as a refresh that failed. */
+.ptr:not(.on) {
+  transition: opacity 100ms ease, transform 100ms ease;
+}
+
+.ptr svg {
+  width: 18px;
+  height: 18px;
+  transition: transform 180ms ease;
+}
+
+/* Armed: the icon turns to say the gesture has been recognised, so you know
+   it will fire before you let go rather than after. */
+.ptr.armed {
+  color: var(--text-primary);
+}
+
+.ptr.armed svg {
+  transform: rotate(180deg);
+}
+
+.ptr.run svg {
+  animation: ptr-spin 900ms linear infinite;
+}
+
+@keyframes ptr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ptr,
+  .ptr svg {
+    transition: none;
+  }
+
+  .ptr.run svg {
+    animation-duration: 2400ms;
+  }
 }
 
 /* Controls inside the group pill share its material rather than stacking a
@@ -396,7 +476,8 @@ pre {
 @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
   .glass,
   .topbar > .icon-btn,
-  .topbar-actions {
+  .topbar-actions,
+  .scroll-bottom {
     background: color-mix(in srgb, var(--bg-primary) var(--glass-tint), transparent);
     -webkit-backdrop-filter: var(--glass-blur);
     backdrop-filter: var(--glass-blur);
@@ -414,7 +495,8 @@ pre {
 @media (prefers-reduced-transparency: reduce) {
   .glass,
   .topbar > .icon-btn,
-  .topbar-actions {
+  .topbar-actions,
+  .scroll-bottom {
     background: var(--bg-primary);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
@@ -494,12 +576,29 @@ pre {
 /* The title centres on the screen's centre line. It is out of flow because
  * the leading and trailing control groups are different widths on every
  * screen, and centring "between them" is not centring — it lands half a
- * back-button off, which is what the flex version did. */
+ * back-button off, which is what the flex version did.
+ *
+ * Being centred, it has to clear whichever side is wider — twice over, since
+ * shrinking it takes the same off both ends. So the reserve is not "space for
+ * the controls", it is space for the *widest* group, doubled. It was a flat
+ * 180px while the trailing pill was empty; the moment that pill gained two
+ * buttons, a long title ran four pixels underneath it. Derived from the sizes
+ * that decide it, so the next control to arrive moves this on its own. */
+.topbar {
+  /* One 44px control at the leading edge. */
+  --topbar-reserve: calc(var(--edge) + 44px + 8px);
+}
+
+/* Two, plus the pill's own padding, at the trailing edge. */
+.topbar:has(.topbar-actions) {
+  --topbar-reserve: calc(var(--edge) + 2 * 44px + 6px + 8px);
+}
+
 .topbar > .title {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  max-width: calc(100% - 180px);
+  max-width: calc(100% - 2 * var(--topbar-reserve));
   text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -533,7 +632,7 @@ pre {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  max-width: calc(100% - 180px);
+  max-width: calc(100% - 2 * var(--topbar-reserve));
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -856,6 +955,14 @@ pre {
   animation: pulse 1.4s ease-in-out infinite;
 }
 
+/* Blocked on an answer. Same amber as .dot.busy and as the dot on the tile —
+ * it is the same fact, told once for a scroll down the list and once for a
+ * reader who has stopped on the row — but still, because the pulse is what
+ * says a turn is moving and this one is not going anywhere without you. */
+.dot.wait {
+  background: var(--bg-warning);
+}
+
 @keyframes pulse {
   0%,
   100% {
@@ -873,8 +980,8 @@ pre {
 .scroll {
   flex: 1;
   overflow-y: auto;
-  padding: calc(var(--safe-top) + var(--chrome-gap) + var(--topbar-h) + var(--scrim-fade)) 16px
-    calc(var(--safe-bottom) + var(--chrome-gap) + 24px);
+  padding: calc(var(--safe-top) + var(--chrome-gap) + var(--topbar-h) + var(--scrim-fade))
+    var(--edge) calc(var(--safe-bottom) + var(--chrome-gap) + 24px);
   -webkit-overflow-scrolling: touch;
 }
 
@@ -882,6 +989,46 @@ pre {
  * the tab bar, so the transcript only needs its own breathing room. */
 .scroll.chat {
   padding-bottom: 8px;
+}
+
+/* The new-session screen's page: one field filling everything the chrome
+ * leaves. Not a .scroll — the textarea is its own scroller, so a long draft
+ * scrolls inside the field rather than sliding under the pills, and there is
+ * nothing on this screen to pull down for. */
+.compose {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: calc(var(--safe-top) + var(--chrome-gap) + var(--topbar-h) + var(--scrim-fade))
+    var(--edge) 8px;
+}
+
+/* Chromeless like .input, and one step larger. This is the screen's content
+ * rather than a line in a control row, and --text-sm filling a 700px column
+ * reads as a form field someone forgot to finish. Sans, not the serif: the
+ * serif is the voice of what the agent says (rule 1), and this is what you are
+ * about to say to it. */
+.compose-field {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-md);
+  line-height: var(--lh-md);
+  resize: none;
+  overflow-y: auto;
+}
+
+.compose-field::placeholder {
+  color: var(--text-secondary);
+}
+
+.compose-field:focus {
+  outline: none;
 }
 
 /* An empty screen is mostly empty screen: pinned to the top of an 844px
@@ -1098,9 +1245,24 @@ select.field {
 
 /* The card body — what the row itself used to be. Exactly the width of the
  * row, so the tray is out of sight until it is dragged in, and the snap point
- * at its start is what "closed" means. */
+ * at its start is what "closed" means.
+ *
+ * `flex-basis: 100%` does not say that on its own: a flex item's automatic
+ * min-width is its min-content width, so one unbreakable token — a URL in a
+ * `curl` the agent is asking to run, a branch name, a session id — grows the
+ * pane past the row and carries the right-hand half of the card off the
+ * screen with it, taking the ask panel's Approve button with it. The two
+ * declarations below are the rule stated in full: break anywhere rather than
+ * push (`anywhere`, not `break-word`, because only `anywhere` also lowers the
+ * min-content width the flex sizing reads), and never wider than the row
+ * whatever the content. Nothing in here is measured by the audit's overflow
+ * walk — a swiped row is a horizontal scroller on purpose, so the walk
+ * exempts everything inside it — but with a fixed pane an over-long token
+ * becomes a clipped box, which the audit does see. */
 .session-swipe {
   flex: 0 0 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
   scroll-snap-align: start;
   display: flex;
   align-items: flex-start;
@@ -1165,6 +1327,30 @@ select.field {
   font-size: 20px;
 }
 
+/* This chat is blocked waiting for an answer (rule 8: state is a dot). It
+ * rides the tile rather than the panel below so a scroll down the list says
+ * which row wants you without reading a word of it, and it is warning rather
+ * than danger because nothing has gone wrong — something is waiting.
+ *
+ * The ring is the page colour, not a border: a 10px dot half over the tile's
+ * corner and half over the card needs an edge on both, and one hairline
+ * cannot be two colours. */
+.session-tile.attention {
+  position: relative;
+}
+
+.session-tile.attention::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--bg-warning);
+  box-shadow: 0 0 0 2px var(--bg-primary);
+}
+
 .session-main {
   flex: 1;
   min-width: 0;
@@ -1227,8 +1413,8 @@ select.field {
   line-height: var(--lh-sm);
 }
 
-/* Flex so a long id and a timestamp wrap as whole items with even gaps,
- * instead of the date breaking across lines mid-value. */
+/* Flex so a repo and a branch wrap as whole items with even gaps, instead of
+ * a long branch name breaking across lines mid-value. */
 .session-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1238,6 +1424,59 @@ select.field {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: 1.5;
+}
+
+/* The permission ask, inset in the card that is blocked on it.
+ *
+ * Same geometry as .session-quote — 12px inside the row's 16px, rule 4 — but
+ * tinted rather than grey. A goose row already carries a grey panel of quoted
+ * text, so grey here would be one more thing to read rather than the one row
+ * in the list that wants a decision. Rule 7's dot for the tint sits on the
+ * tile instead of in here: two amber dots 30px apart is fussing. */
+.session-ask {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--bg-warning) 12%, var(--bg-primary));
+  border: 1px solid color-mix(in srgb, var(--bg-warning) 45%, transparent);
+  border-radius: var(--radius-lg);
+}
+
+/* Clamped, not ellipsised: a tool title is a command, and the front of one
+ * ("Run git push --force-with-lease origin…") is the part that decides the
+ * answer. Two lines of it beats one line and a chevron. */
+.session-ask-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text-warning);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+/* Two equal answers, same grid as .modal-actions and .btn-row: buttons sized
+ * to their own labels leave a ragged row, and neither answer is the
+ * recommended one.
+ *
+ * .btn.small rather than the full 40px: the row itself is the primary target
+ * (rule 9) and these are subordinate to it, the same relationship the review
+ * screen's "Mark all" has to the progress row it sits in. */
+.session-ask-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* The panel's own colour, not --text-secondary: a tint carries coloured text
+ * (rule 7), and grey measured 4.44:1 on this one — under the 4.5 bar by the
+ * width of a rounding error, which is exactly how the other tinted surfaces
+ * in here got their colours. Size is what separates it from the title. */
+.session-ask-more {
+  margin-top: 8px;
+  color: var(--text-warning);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
 }
 
 /* ── chat transcript ────────────────────────────────────────────────── */
@@ -1606,6 +1845,143 @@ details[open] > summary::before {
   line-height: var(--lh-xs);
 }
 
+/* ── action row ─────────────────────────────────────────────────────── */
+
+/* What the session has produced, stated above the box where you say the next
+ * thing to it. These used to be chips inside the composer, which put them in a
+ * fixed budget of horizontal space shared with the model name — and made them
+ * read as things you do to your message rather than to the work.
+ *
+ * Scrolls sideways rather than wrapping: a second row here would push the
+ * composer down, and the composer's position is the one thing on this screen a
+ * thumb learns. */
+.action-row {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  margin: 0 var(--edge) 8px;
+  padding: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.action-row::-webkit-scrollbar {
+  display: none;
+}
+
+.action-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-full);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.action-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.action-chip:active:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
+.action-chip .icon {
+  color: var(--text-secondary);
+}
+
+/* The counts are the point of the chip, so they are not quieter than the
+ * label — they are the same size, coloured by what they mean. */
+.action-chip .stat {
+  font-variant-numeric: tabular-nums;
+}
+
+.action-chip .stat.add {
+  color: var(--text-success);
+}
+
+.action-chip .stat.del {
+  color: var(--text-danger);
+}
+
+/* ── scroll to bottom ───────────────────────────────────────────────── */
+
+/* A slot with no height, sitting between the transcript and everything under
+ * it. The button hangs out of it, so it floats above whatever comes next — the
+ * action row on the code tab, the composer on the goose tab — and follows that
+ * as the composer grows with the draft and as the shell tracks the visual
+ * viewport. Pinning it to the bottom of the screen instead would bury it under
+ * the composer, and under the keyboard the moment one opened. */
+.scroll-bottom-slot {
+  position: relative;
+  flex-shrink: 0;
+  height: 0;
+}
+
+/* Shown only while the transcript is scrolled away from its bottom. That is a
+ * class a passive JS listener puts on <body> (src/viewport.rs): deciding it in
+ * Rust would mean an onscroll handler, and the native renderer sends every
+ * listened-to event through a synchronous XHR — a blocking round trip on every
+ * frame of every scroll. Rust owns the button and its tap; JS owns whether it
+ * is there to be tapped. */
+.scroll-bottom {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  z-index: var(--z-chrome);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  color: var(--text-primary);
+  font-size: 20px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 8px);
+  transition: opacity 140ms ease, transform 140ms ease;
+  cursor: pointer;
+}
+
+body.away-from-bottom .scroll-bottom {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
+}
+
+.scroll-bottom:active {
+  background: var(--bg-secondary);
+}
+
+/* The fade is not motion and stays; the 8px rise is. */
+@media (prefers-reduced-motion: reduce) {
+  .scroll-bottom {
+    transition: opacity 140ms ease;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* A count is a fact about the label it follows, not a second word in the
+ * label: "Pull requests 4" reads as a broken sentence, and a separator costs
+ * an element the row does not need. */
+.action-chip .stat.count::before {
+  content: "· ";
+  color: var(--text-secondary);}
+
 /* ── composer ───────────────────────────────────────────────────────── */
 
 /* A floating outlined card inset from the edges — not a docked bar. */
@@ -1626,15 +2002,74 @@ details[open] > summary::before {
   box-shadow: var(--shadow-sm);
 }
 
+/* The new-session composer holds no field — the page is the field — so it
+ * holds nothing but two rows of pills, and a bordered, shadowed box around six
+ * capsules that already carry their own edges is a rectangle drawn for its own
+ * sake (rule 5). It keeps the margin, so the pills line up down the same
+ * gutter as every other floating thing. 8px rather than the card's 6: without
+ * the padding around them the two rows need their own air. */
+.composer.bare {
+  gap: 8px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
 .composer-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
+/* One line, and the model name is the only thing that gives way.
+ *
+ * The row is the attach button, the model chip, the mode chip and — near the
+ * end of a context window — the readout. This used to wrap, and a composer
+ * that grows a row under your thumb is worse than a name you can tap to read
+ * in full: the sheet the model chip opens states it whole. So the deficit goes
+ * entirely on the name, by construction rather than by proportion — every
+ * other item in here is `flex-shrink: 0`.
+ *
+ * `flex: 1` with `min-width: 0`: this takes the row minus the send button and
+ * may go under its own content — the chips inside are what shrink, and that is
+ * not available if this box is held open at content width.
+ *
+ * Send stays a child of .composer-row rather than moving in here, so it is
+ * pinned to the trailing edge and so the fallback below still has something to
+ * key on. It matches `.composer-row > .send:only-child`, which stays reachable
+ * for the composer that offers nothing at all — such a screen writes no
+ * .chip-row, because there are no chips to put in one. None of today's three
+ * is that screen; all of them write it.
+ *
+ * The sideways scroller is a valve, not a layout, and it is in the same shape
+ * .action-row and .attach-tray already use. Measured over 3780 compositions it
+ * engages in exactly one family — 320pt with four chips, over budget by 7-35px
+ * however the space is divided — and docs/measure-composer.js fails on it
+ * everywhere else, so a fifth chip cannot quietly slide off the edge. Without
+ * it, those chips paint over the send button. */
+.chip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.chip-row::-webkit-scrollbar {
+  display: none;
+}
+
 /* With no chips to show, the control row holds one button and the two-row
  * shape becomes a tall box with a lone circle floating in it. Fold back to a
- * single row in that case. */
+ * single row in that case. Both chat composers now carry an attach button, so
+ * this is the fallback for a composer that offers nothing at all — kept
+ * because "nothing at all" is a state a new screen can reach, not because
+ * either of today's two does. */
 .composer:has(.composer-row > .send:only-child) {
   flex-direction: row;
   align-items: flex-end;
@@ -1647,9 +2082,10 @@ details[open] > summary::before {
 }
 
 /* Chips carry what is real on this screen — the session's settings and the
- * token budget here, diff and PR on the Code tab. Only what a backend can
- * actually change becomes a control; the rest is stated as a fact inside the
- * sheet the settings chip opens. See docs/design.md rule 11. */
+ * token budget here; what the Code tab's session has produced moved up to
+ * .action-row. Only what a backend can actually change becomes a control; the
+ * rest is stated as a fact inside the sheet the settings chip opens. See
+ * docs/design.md rule 11. */
 .composer-chip {
   display: inline-flex;
   align-items: center;
@@ -1682,16 +2118,209 @@ details[open] > summary::before {
   min-width: 0;
 }
 
+/* A chip cannot be squeezed below what it takes to draw itself.
+ *
+ * 12px of padding either side, 1px of border either side, the 6px gap and one
+ * 12px glyph are the pill's own furniture — the model chip's trailing chevron,
+ * or the repo and branch pills' leading icon; the arithmetic is the same 44
+ * either way. These three are the only chips that give way, so they are the
+ * only ones that can be crushed past that, and a crushed pill paints its glyph
+ * outside itself: 5px of it at 320pt with four chips, which the measure script
+ * could not see until it was taught to look at every child rather than at the
+ * label alone.
+ *
+ * The first selector used to carry `max-width: calc(100% - 44px)`, which
+ * decided which item took the second line. There is no second line any more
+ * and the cap measures inert (identical name widths at every viewport with and
+ * without it), so it is gone and the 44px is a different fact about the same
+ * chip: not what it may take, but what it must keep. */
+.composer-chip:has(.chip-model),
+.composer-chip:has(.chip-name) {
+  min-width: 44px;
+}
+
+/* Rule 8: state is a dot. The session cannot start until the model pill has a
+ * value, and the send button beside it being disabled says that something is
+ * missing without saying which of three pills it is. Warning rather than
+ * danger, because nothing has gone wrong — something is outstanding — and the
+ * same dot, at the same size, as the list puts on a chat that is waiting on
+ * you (.session-tile.attention) — same 10px, same fill, same 2px ring. The
+ * ring is the page colour for the reason that one's is: the dot sits half on
+ * the pill and half off it, and one hairline cannot be two colours.
+ *
+ * -2px where the tile's is -3px, and that is the one deliberate difference: a
+ * capsule's corner curves away sooner than a rounded square's, so the same
+ * offset would float the dot clear of the edge it is meant to sit on. */
+.composer-chip.needed {
+  position: relative;
+}
+
+.composer-chip.needed::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--bg-warning);
+  box-shadow: 0 0 0 2px var(--bg-primary);
+}
+
 /* Only the label gives way; the chevron beside it must stay, or the chip
  * stops reading as something you can open.
  *
  * min-width here as well as on the chip: this is itself a flex item, and
  * without it the label holds its full content width and spills out of a chip
- * that has already given way — the pill closes in and the text stays put. */
+ * that has already given way — the pill closes in and the text stays put.
+ *
+ * The label holds two facts, and they give way in a fixed order, so it is a
+ * flex row rather than one ellipsised string: ellipsising the string would eat
+ * the effort tier first, since it comes last, and the tier is the entire
+ * reason the chip says anything beyond a name. The name gives way instead —
+ * but only down to a point, because a name cut to one word has stopped
+ * naming anything. See .chip-effort for where that point is. */
 .chip-label {
+  display: flex;
+  align-items: baseline;
+  /* A word space. "Opus 5 Max" is one phrase, not two controls in a row. */
+  gap: 5px;
   min-width: 0;
   overflow: hidden;
+  color: var(--text-primary);
+}
+
+/* The mode chip does not give way, and the model chip does.
+ *
+ * Both carry a .chip-label, so the rule above would let both ellipsise — and
+ * flexbox shares a deficit in proportion to content width, which takes the
+ * same *fraction* off each. A model name has fractions to spare; "Auto" does
+ * not, and at 360pt with a long model name beside it the mode chip rendered
+ * as a lone ellipsis. So the pressure goes entirely on the model name, which
+ * is the one the sheet states in full anyway.
+ *
+ * Written after that rule deliberately: equal specificity, so source order is
+ * what decides.
+ *
+ * The cap is what keeps a chip that cannot shrink from eating the row, and 7ch
+ * is not a taste: it is the widest cap at which a 360pt goose composer — model
+ * chip, mode chip, context chip and send — still renders a short model name in
+ * full. Anything larger and `GPT-5.2` came out as `GPT…` on a small phone
+ * whatever the mode was called. It holds every mode OpenCode ships and all of
+ * goose's but `Manual approval`.
+ *
+ * With the row on one line the cap is now the ONLY thing bounding this chip,
+ * because it does not shrink at all. Re-measured at
+ * 280/320/360/375/390/393/402/430, every tier: a short name is rendered in
+ * full at all of them. */
+.composer-chip.mode {
+  /* Rigid, which is what states the new rule exactly: the model name is the
+   * only elastic item in the row.
+   *
+   * 0.1 was chosen for a wrapping row — "the mode label is short and had
+   * nothing to give… it stopped being right when the model chip grew a tier".
+   * Under one line it is measurably worse than 0: at 0.1 the mode label is cut
+   * in 1257 of 3780 compositions, including `Auto` reading `Aut…` at 320pt,
+   * while at 0 no mode label of five characters or fewer is ever cut at any
+   * width from 320 to 430. A lone ellipsis where the mode should be is the
+   * exact failure the comment above was written to prevent. */
+  flex-shrink: 0;
+}
+
+/* Block, not the flex row .chip-label is by default: this label carries one
+ * fact rather than two, and a bare text node inside a flex container is an
+ * anonymous flex item — which `text-overflow` does not apply to. That is why
+ * the cap below rendered `Manual approval` as `Manual ap`: cut mid-word, with
+ * nothing to say it had been cut. `overflow: hidden` comes from .chip-label
+ * and `white-space: nowrap` from the chip, so a block box is the only piece
+ * missing. .chip-model escapes this only by being a real element. */
+.composer-chip.mode .chip-label {
+  display: block;
+  max-width: 7ch;
   text-overflow: ellipsis;
+}
+
+/* The name gives way as far as it has to, and what is cut says that it was
+ * cut.
+ *
+ * This used to carry `min-width: 6ch`, on the argument that a model rendered
+ * as four characters tells you nothing. The floor is gone because it was never
+ * a floor: .chip-label is `overflow: hidden` with `min-width: 0`, so once the
+ * row is one line the label shrinks past 6ch and a 45px .chip-model box inside
+ * a 12px label is cut mid-glyph by the PARENT — and `text-overflow` only ever
+ * paints on the box that does its own clipping. Measured at 320pt: the box
+ * reported 45px and 0-26px of it was painted, with no ellipsis at all, which
+ * is precisely the failure the .composer-chip.mode .chip-label comment above
+ * warns about. It was unaffordable as well as ineffective: at 320pt the label
+ * has 25px and 6ch wants 45.
+ *
+ * Without it the name's own box is the clipper at every width, so the cut
+ * always reads as one. What survives instead of a width floor is the tier
+ * (capped at 5ch below) and the chevron, with the sheet the chip opens stating
+ * the model in full.
+ *
+ * The shrink factor is what makes "the name gives way first" a rule rather
+ * than a hope. Flexbox shares a deficit in proportion to shrink × content
+ * width, so a tier that shrinks at all would take its share while the name
+ * still had room — which is the thing .chip-effort's comment forbids. At 1000
+ * against the tier's 1 the name absorbs 99.9% of every deficit (measured: the
+ * name lands within 0.1px of what a rigid tier gave it, at every width from
+ * 320 to 402 and every tier either backend serves), and only once the name is
+ * frozen at zero does the remainder reach the tier at all. */
+.chip-model {
+  flex-shrink: 1000;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The repo and branch names on the new-session composer give way exactly as
+ * the model name does, and for the same reason: the sheet each pill opens
+ * states it in full, and the placeholder sentence above spells the repo out.
+ * Its own selector rather than a second class on .chip-model, because the
+ * model chip's rules — the 44px floor, the tier beside it — are about a chip
+ * these two do not have. */
+.chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Dimmer than the model name, and no dimmer than that. --text-tertiary is the
+ * reflex for "quieter still" and measures 2.03:1 on a chip's --bg-secondary
+ * fill in light and 1.85:1 in dark — under even the 3:1 a non-text indicator
+ * gets, let alone the 4.5:1 this is. There is no headroom below secondary on
+ * this fill, so the step is taken from the other end: the name lifts to
+ * primary (9.16:1 light, 9.93:1 dark) and the tier keeps the secondary the
+ * chip was already using (4.64:1 and 5.00:1).
+ *
+ * Last to give way, and bounded — taking the first before the second was the
+ * bug. The tier is the fact this label grew a second element to carry, so it
+ * must not be the part that ellipsises; but an item that never gives way at
+ * all spends the label's whole budget before the name gets any, and the goose
+ * row's label is 120px at 360pt while "Claude Sonnet 5" wants 94 of it. A
+ * six-letter tier left the name reading "Claude…", which is the one thing the
+ * chip cannot afford to stop saying. Five characters clears every tier either
+ * backend serves — `Xhigh`, the widest, measures 4.3 of them, and
+ * session_settings.rs shortens goose's `medium` and OpenCode's `minimal` on
+ * the way here — so the cap only ever bites on a word neither of them has, and
+ * it bites the tier rather than the name.
+ *
+ * `flex-shrink: 1` with `min-width: 0`, against .chip-model's 1000, is what
+ * orders the two rather than what shares between them (see there). It is not
+ * a softening of the rule above: it is the rule's last case. `flex-shrink: 0`
+ * here meant that once the name reached zero the tier was still asking for its
+ * full width inside a label narrower than that — and the LABEL was then the
+ * clipper, which `text-overflow` never paints on. Measured at 375pt on the
+ * crowded goose row: a 32.5px `Xhigh` with 14.7px of it painted and no
+ * ellipsis, so the chip stated a tier called `Xh`. `Max` came out `Ma` at
+ * 320pt on every row. Shrinking here puts the cut back on the tier's own box,
+ * where the ellipsis is, so a tier that has given way says so. */
+.chip-effort {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 5ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-secondary);
 }
 
 .composer-chip > .icon {
@@ -1714,6 +2343,170 @@ details[open] > summary::before {
 
 .composer-chip .icon {
   color: var(--text-secondary);
+}
+
+/* ── attachments ────────────────────────────────────────────────────── */
+
+/* The + that opens the photo / camera / Files sheet. Square rather than a
+ * pill because it holds a glyph and nothing else — a label in a fixed circle
+ * wraps and overflows (rule 9) — and 36px so it clears the 32px tap floor
+ * with room, between the 32px chips beside it and the 40px send. */
+.composer-chip.attach {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  justify-content: center;
+}
+
+/* What is attached to the message being written, above the field rather than
+ * beside the send button: a file name is server-length text, and the control
+ * row is where the send button has to survive it. Scrolls sideways for the
+ * same reason .action-row does — wrapping moves the composer, and where the
+ * composer sits is the one thing on this screen a thumb learns. */
+.attach-tray {
+  display: flex;
+  gap: 8px;
+  /* The chips carry a shadowless hairline, but a focus ring would be clipped
+   * flush against a scrollport with no padding. */
+  padding: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.attach-tray::-webkit-scrollbar {
+  display: none;
+}
+
+.attach-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  /* Wide enough for a name worth reading, narrow enough that three of them
+   * are visibly three. */
+  max-width: 200px;
+  height: 44px;
+  padding: 4px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.attach-thumb {
+  flex-shrink: 0;
+  display: block;
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+}
+
+.attach-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  color: var(--text-secondary);
+}
+
+/* The name is the only thing here that can give way, and it has to: the file
+ * came from a picker and can be called anything at all. */
+.attach-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.attach-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attach-size {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.attach-remove {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.attach-remove:active {
+  background: var(--bg-tertiary);
+}
+
+/* Reading and resizing three photos takes seconds, and a composer that sits
+ * there saying nothing is indistinguishable from one that dropped the pick. */
+.attach-chip.reading {
+  padding: 4px 12px;
+  color: var(--text-secondary);
+}
+
+/* Attachments inside the user's turn. The bubble is inverted, so everything
+ * in here takes its colour from the bubble rather than from the page's
+ * semantic text tokens — those are tuned against the page and would be the
+ * wrong way round on it. */
+.attach-list {
+  display: flex;
+  flex-wrap: wrap;
+  /* Not the default stretch: a flex row stretches a replaced element's box to
+   * the tallest item in it, and an <img> stretched on one axis with the
+   * default object-fit: fill is a photo of the wrong shape. */
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.attach-list:not(:last-child) {
+  margin-bottom: 8px;
+}
+
+.attach-image {
+  display: block;
+  max-width: 180px;
+  max-height: 180px;
+  border-radius: var(--radius-lg);
+}
+
+.attach-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, currentcolor 28%, transparent);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.attach-file .attach-icon {
+  width: auto;
+  color: inherit;
+}
+
+/* A tint of the bubble's own ink, not --text-secondary: on the inverted
+ * bubble that token is the wrong way round in both themes. 72% measures
+ * 6.0:1 in light and 6.1:1 in dark against the bubble. */
+.attach-file .attach-size {
+  color: color-mix(in srgb, currentcolor 72%, transparent);
 }
 
 /* Send is a filled circle at the trailing end, always in the same place. */
@@ -1960,7 +2753,18 @@ details[open] > summary::before {
 
 .modal-backdrop {
   position: fixed;
-  inset: 0;
+  /* Anchored to the VISUAL viewport, like .app, and not to the layout one.
+   * `position: fixed` measures against the layout viewport, which iOS does not
+   * shrink when the keyboard opens — it offsets the visual one
+   * (src/viewport.rs). Until now no modal held a focusable control, so nothing
+   * had exercised it; a picker with a Search field would put that field under
+   * the keys the moment it was tapped. With no keyboard up the two viewports
+   * agree, so nothing else on any screen moves. */
+  top: var(--vv-top, 0px);
+  left: 0;
+  right: 0;
+  height: 100dvh;
+  height: var(--vv-height, 100dvh);
   z-index: var(--z-modal);
   display: flex;
   align-items: flex-end;
@@ -1968,11 +2772,17 @@ details[open] > summary::before {
   background: rgb(0 0 0 / 0.5);
 }
 
-/* The one element that carries both a border and a shadow. */
+/* The one element that carries both a border and a shadow.
+ *
+ * The cap is a percentage of the backdrop, not `vh`. The backdrop is the
+ * VISUAL viewport now (see above) and `vh` is the layout one, which iOS does
+ * not shrink — so with the keyboard up a `vh` cap sizes the sheet against a
+ * container that is no longer that tall, and `align-items: flex-end` pushes
+ * the overflow off the TOP of the screen, title first. */
 .modal {
   width: 100%;
   max-width: 560px;
-  max-height: 85vh;
+  max-height: 85%;
   overflow-y: auto;
   padding: 24px 20px calc(24px + var(--safe-bottom));
   background: var(--bg-primary);
@@ -2158,9 +2968,62 @@ details[open] > summary::before {
 }
 
 /* A sheet that is a list of choices: taller than an alert, shorter than a
- * screen, and it stops at what it holds. */
+ * screen, and it stops at what it holds.
+ *
+ * A percentage of the backdrop rather than `70vh`, for the reason .modal's own
+ * cap is: measured at 375x874 with a 30-row branch list, a 612px sheet inside
+ * a 538px backdrop (a typical iOS keyboard) put its own top at -74 and its
+ * <h2> at -49 — the title of the thing you just opened, off the top of the
+ * screen. This is the sheet the search field lives in, so it is the one that
+ * raises the keyboard in the first place. */
 .modal.sheet {
-  max-height: 70vh;
+  max-height: 70%;
+}
+
+/* A picker long enough to need finding rather than scrolling gets a filter,
+ * and it goes at the bottom: within a thumb's reach, and it stays put while
+ * the list moves under it. That costs the sheet its single scrollbox — the
+ * list becomes the scroller and the sheet becomes a column around it — which
+ * is why this is keyed off the field being there rather than applied to every
+ * sheet. */
+.modal.sheet:has(.sheet-search) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal.sheet:has(.sheet-search) .choice-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* A pill, like everything else you operate here (rule 4: identity tier). The
+ * magnifier is the leading mark and the field inside is chromeless — the pill
+ * around it is the frame, so there is never a box inside a box. */
+.sheet-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-top: 12px;
+  padding: 0 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+}
+
+.sheet-search .field {
+  min-height: 44px;
+  padding-left: 0;
+  padding-right: 0;
+  background: transparent;
+  border: 0;
+}
+
+.sheet-search .field:focus {
+  border: 0;
 }
 
 /* Drilling into one setting swaps the sheet's title for a back control and
@@ -2258,6 +3121,13 @@ details[open] > summary::before {
   cursor: default;
 }
 
+/* Destructive rows in an overflow menu. Colour on both the label and the icon,
+ * because the icon is what the eye lands on first in a list of them. */
+.setting-row.danger,
+.setting-row.danger .icon {
+  color: var(--text-danger);
+}
+
 /* Secondary, not tertiary: this line is the whole reason a fact row exists —
  * it says why the setting is stuck — so it has to be as readable as `.hint`,
  * not as quiet as a divider label. */
@@ -2285,7 +3155,10 @@ details[open] > summary::before {
   align-items: center;
   gap: 12px;
   min-height: 48px;
-  padding: 0 12px;
+  /* Vertical padding as well as the min-height: a mode row carries a
+   * description under its name, and a two-line row taller than 48px would
+   * otherwise have its text against the top and bottom edges. */
+  padding: 8px 12px;
   border: 0;
   border-radius: var(--radius-lg);
   background: transparent;
@@ -2296,6 +3169,17 @@ details[open] > summary::before {
   cursor: pointer;
 }
 
+/* Name over description. A column rather than the settings row's wrapping
+ * line, because these two are not a name and a value competing for one line —
+ * the description is a sentence and always belongs underneath. */
+.choice-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .choice-name {
   flex: 1;
   min-width: 0;
@@ -2304,8 +3188,27 @@ details[open] > summary::before {
   white-space: nowrap;
 }
 
-.choice .icon {
+/* Same treatment as a setting's note, and secondary for the same reason: it
+ * is the line that tells one mode from another, so it has to be as readable
+ * as `.hint`. */
+.choice-note {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* The leading mark says which mode this is; only the trailing check says
+ * which one is in force, so only the check is coloured as a state. Scoped to
+ * a direct child so the wrapped icon in .choice-lead keeps its own colour. */
+.choice > .icon {
+  flex-shrink: 0;
   color: var(--text-success);
+}
+
+.choice-lead {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-secondary);
 }
 
 .choice.selected {
@@ -2401,15 +3304,38 @@ details[open] > summary::before {
  * re-hunking that makes this readable is in src/diff.rs; what is here is the
  * surface it lands on. */
 
+/* The review screen is the one page whose content is code, and code wants
+ * every column the phone has: 47 of them inside a card at 402pt, 52 without
+ * one. So this scroller alone gives up the page gutter, and the three things
+ * on it that are chrome rather than code state that gutter for themselves.
+ *
+ * Longhands rather than the shorthand, so the vertical padding that clears the
+ * floating chrome survives. `.scroll.diff` (0,2,0) beats `.scroll` (0,1,0) and
+ * comes later in the file, so it wins on both counts. */
+.scroll.diff {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* The one direct child of this scroller that is a rounded, bordered card, so
+ * the one that has to be handed the gutter back. `p.empty` carries its own
+ * 24px padding and needs nothing. */
+.scroll.diff > .error-box {
+  margin: 0 var(--edge) 16px;
+}
+
 /* How far you are through the review, and one control to declare yourself
  * done with the rest. Hidden below two files, where the answer is on screen
- * anyway (rule 11: only offer controls that do something). */
+ * anyway (rule 11: only offer controls that do something).
+ *
+ * The margin re-states the gutter the scroller just gave up: this row is
+ * chrome, not code. */
 .diff-progress {
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 32px;
-  margin-bottom: 8px;
+  margin: 0 var(--edge) 8px;
 }
 
 .diff-progress-label {
@@ -2420,9 +3346,11 @@ details[open] > summary::before {
   line-height: var(--lh-xs);
 }
 
+/* Same gutter as the row above it: the bar must line up with its own label,
+ * not run edge to edge like the code. */
 .diff-progress-track {
   height: 4px;
-  margin-bottom: 16px;
+  margin: 0 var(--edge) 16px;
   overflow: hidden;
   border-radius: var(--radius-full);
   background: var(--bg-secondary);
@@ -2437,29 +3365,62 @@ details[open] > summary::before {
   transition: width 160ms ease;
 }
 
-/* Borrowed wholesale from .tool: a surface one step off the page with a
- * hairline, in flow so no shadow (rule 5), at the control radius (rule 4). */
+/* A band, not a card. It was .tool's card — a surface one step off the page,
+ * hairlined, at the control radius — and the two side borders plus the
+ * scroller's gutter spent 34 of 402 points, about five columns, on saying
+ * "this is an object" about the one thing on the phone that is not an object
+ * but a document. The head keeps the page's gutter because it is chrome; the
+ * code below it runs edge to edge. Rules rather than a box, for the reason
+ * rule 4 exempts a full-bleed surface from rounding: a curve at a corner the
+ * screen edge already cuts is a notch, not a card.
+ *
+ * The bands butt together and SHARE one rule. Each carrying its own pair plus
+ * a 12px margin drew a double hairline with a strip of page between every two
+ * files, which turns a full-bleed band back into an object sitting on a page —
+ * the exact thing the exemption exists to deny. Measured in headless Chromium
+ * at 320/360/375/390/393/402 in both themes: 0px between consecutive bands,
+ * computed borders 1px/0px on every band and 1px/1px on the last.
+ *
+ * `:last-of-type`, not `:last-child`: the scroller's other children —
+ * .diff-progress, .diff-progress-track, p.error-box, p.empty — are not
+ * <details>, and any one of them arriving after the cards would take the
+ * closing rule off the final band. Nothing needs a compensating margin either:
+ * .diff-progress-track already carries `margin: 0 var(--edge) 16px` above the
+ * first band, and .scroll's bottom padding clears the last.
+ *
+ * `overflow: hidden` stays — it is what contains the no-wrap body's
+ * scrollport. */
 .diff-file {
-  margin-bottom: 12px;
   background: var(--tool-surface);
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-lg);
+  border-top: 1px solid var(--border-primary);
   overflow: hidden;
 }
 
-/* Reviewed reads on the card's own edge rather than by fading its text: a
- * dimmed head is a contrast failure waiting to happen, and the filled check
- * beside it is already saying it in a second channel. */
-.diff-file.seen {
-  border-color: color-mix(in srgb, var(--bg-success) 55%, transparent);
+.diff-file:last-of-type {
+  border-bottom: 1px solid var(--border-primary);
 }
 
+/* The head is against the screen edge now, so its leading chevron and its
+ * trailing Viewed checkbox sit on the page's own 16pt margin instead of 4px
+ * and 8px inside a card border — the same margin the progress row, the error
+ * box and every other screen's content line up down, so it is the spacing
+ * scale rather than a new number. With no pill around the control the *word*
+ * is what lands on that gutter (measured: the button's right edge is 16px from
+ * the viewport edge at every width) rather than a border landing there with
+ * the word 12px inside it, so it lines up with the progress label above it.
+ *
+ * `min-height` keeps the fold target at the HIG size (rule 9) whatever the
+ * trailing control's height turns out to be; with today's 44px checkbox it is
+ * a no-op and the head measures 56px — unchanged from the card, and unchanged
+ * from the two-line head, because the 44px tap target was always the tallest
+ * thing in it. */
 .diff-file-head {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 6px 8px 6px 4px;
+  min-height: 44px;
+  padding: 6px var(--edge);
   list-style: none;
   cursor: pointer;
 }
@@ -2481,15 +3442,19 @@ details[open] > summary::before {
   transition: transform 120ms ease;
 }
 
-.diff-file-id {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
+/* The growable half of the head, and the only one. The basis is 0 (`flex: 1`,
+ * not `flex: 1 1 auto`) so the stats and the checkbox are sized from their own
+ * content first and the path takes what is left — which is what makes "the
+ * path is the only thing that gives way" exact rather than approximate.
+ *
+ * Do not change `line-height`: it is --lh-sm (20px) against .diff-stat's
+ * --lh-xs (16px), chosen when the head was a two-line stack, and measured, the
+ * path, the stats, the badge and the Viewed label all land on the same
+ * baseline under the head's `align-items: center`. It is the first value to
+ * look at if the head is ever re-tuned for height, and nothing to touch until
+ * then. */
 .diff-path {
+  flex: 1;
   display: flex;
   align-items: baseline;
   min-width: 0;
@@ -2498,9 +3463,14 @@ details[open] > summary::before {
   line-height: var(--lh-sm);
 }
 
-/* The directory gives way first and the filename never shrinks. The filename
- * is what you scan a file list for; a path truncated the usual way loses it
- * and leaves you reading four rows of "crates/opencode-client/src/…". */
+/* The directory gives way first, and is spent to nothing before the filename
+ * gives up anything. The filename is what you scan a file list for; a path
+ * truncated the usual way loses it and leaves you reading four rows of
+ * "crates/opencode-client/src/…".
+ *
+ * This is the only shrinkable item in the row, which is what makes the order
+ * absolute rather than a matter of degree — see .diff-name for why a shrink
+ * factor cannot express "last". */
 .diff-dir {
   min-width: 0;
   overflow: hidden;
@@ -2509,16 +3479,71 @@ details[open] > summary::before {
   color: var(--text-secondary);
 }
 
+/* Gives way last, rather than not at all. `flex-shrink: 0` said "the filename
+ * never shrinks", which is the right *order* but was not a reachable promise:
+ * a file at the root of the repo has no .diff-dir in front of it to spend, so
+ * a long enough bare name had nothing to give and painted straight over the
+ * trailing control instead. Measured at 402pt, with a lowercase name: the old
+ * 44px circle was first overlapped at 40 characters, and the Viewed pill is
+ * 43px wider, so it would have been reached around 36 — the bug is older than
+ * the pill, and widening the control is what made it likely rather than
+ * pathological.
+ *
+ * `max-width` rather than a shrink factor, because a factor cannot say
+ * "last". Flexbox splits a deficit in proportion to factor x base size, so any
+ * non-zero factor here takes something off the name from the first pixel — and
+ * a name one pixel short of its text is a name with the last character
+ * replaced by an ellipsis. Measured with .diff-dir at 100 against .diff-name
+ * at 1, over every path in this repo: at 402pt the name in
+ * `crates/opencode-client/examples/sse_probe.rs` was ellipsised at 86px of the
+ * 87 it wanted, while the directory beside it was still showing 162 of its own
+ * 231 — and at 360pt `crates/mock-goose-server/src/main.rs` lost the end of
+ * `main.rs` with 156 of 210px of directory still on screen. The order was
+ * proportional, not ordered.
+ *
+ * A maximum is absolute instead. The name is unshrinkable and capped at the
+ * width of the path row, so its *hypothetical* size — which is what the flex
+ * algorithm starts from — is already inside the row, the whole deficit lands
+ * on the directory beside it, and the name is only ever cut in the case this
+ * rule exists for: the one where the directory has been spent to nothing and
+ * the name still does not fit.
+ *
+ * `max-width: 100%` still resolves against .diff-path now that .diff-path is
+ * itself the flex item — the wrapping column it used to sit in is gone, and
+ * the head is one line.
+ *
+ * The path is genuinely narrower for it, and the promise is the ORDER rather
+ * than a truncation count. Measured over every path in this repo at
+ * 320/360/375/390/393/402, both themes: with no badge beside it, one name is
+ * cut at 320 and none at 360 and above; with the widest badge (`deleted +0
+ * −3`, 102px) it is 18 at 320, 8 at 360, 5 at 375 and 1 at 390/393/402. Every
+ * one of those has its .diff-dir already spent to 0 — which is the rule
+ * holding, not failing — and no name overlaps the trailing checkbox at any
+ * width. */
 .diff-name {
   flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-primary);
   font-weight: 600;
 }
 
+/* A count cannot be shortened — `+12…` is a number that lies — so this never
+ * shrinks, and what gives way beside it is the path, directory first. Without
+ * `flex-shrink: 0` the counts are a shrinkable flex item on the same line as
+ * the path and would be the first thing squeezed.
+ *
+ * 6px within against the head's 8px between, so the badge and the two counts
+ * read as one item rather than as three things evenly spaced next to the
+ * checkbox. Measured widths at every tested viewport: `+3 −2` 37px, `binary`
+ * 51px, `added +5 −0` 95px, `deleted +0 −3` 102px. */
 .diff-stat {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-shrink: 0;
+  gap: 6px;
   font-size: var(--text-xs);
   line-height: var(--lh-xs);
 }
@@ -2538,7 +3563,14 @@ details[open] > summary::before {
  * would sit on. Primary rather than secondary text for the same reason .chip
  * is — secondary on this fill measures 4.01:1 light and 4.24:1 dark. Only
  * present when there is something to say: a plain modified file has no
- * badge. */
+ * badge.
+ *
+ * It sits inside .diff-stat, ahead of the counts, and out of .diff-path. For a
+ * binary file there are no counts and the badge takes their slot, so every
+ * head keeps the same three-part shape and the checkbox column never moves
+ * down the list; and .diff-path's whole shrink budget is promised to the
+ * filename by .diff-name's max-width, which an unshrinkable badge sharing that
+ * line would overflow. */
 .diff-badge {
   padding: 1px 8px;
   border-radius: var(--radius-full);
@@ -2548,35 +3580,114 @@ details[open] > summary::before {
   line-height: var(--lh-sm);
 }
 
-/* GitHub's "Viewed" checkbox, at the HIG's 44px. It lives inside a
- * <summary>, so its handler stops the click reaching the fold. */
+/* GitLab's "Viewed" checkbox: a plain box with the word beside it. It was a
+ * 44px circle holding a tick alone, which is the app's own word for "reviewed"
+ * written in a glyph nothing on screen translates — a tick beside a filename
+ * could as easily mean the file passed something — and then an outlined 92px
+ * capsule, which claims to be the row's action when it is something you tick
+ * on the way past. Losing the border and the side padding takes it to 63px
+ * (18 box + 6 gap + 39 label) and puts the word itself on the page's gutter.
+ *
+ * The 44px is height alone now, and it is the tap target (rule 9): nothing
+ * draws it, but a thumb still gets 63x44. No fill and no border is also what
+ * keeps it honest against the audit's SQUARE check — the answer to an
+ * unrounded box is that there is no box, not a radius on one that should not
+ * exist. Verified three ways: with `border: 0` and a transparent background the
+ * audit reports clean in both themes, and either half put back at radius 0
+ * trips it — the border produces `SQUARE button.diff-seen 65x44` and a fill
+ * `SQUARE button.diff-seen 63x44`, which is the point: it is having a box at
+ * all that the check is about, not having an edge.
+ *
+ * `padding` is left off entirely — the `*` reset at the top of this file
+ * already zeroes it — and `justify-content` with it, which is a no-op on a
+ * shrink-to-fit inline-flex. The transition is `color` alone because nothing
+ * ever gives this button a background.
+ *
+ * `flex-shrink: 0` and `white-space: nowrap` because the label is fixed text
+ * this app chose, so it is never the right thing to shorten: what gives way
+ * beside it is the path, directory first and filename second.
+ *
+ * It lives inside a <summary>, so its handler stops the click reaching the
+ * fold. */
 .diff-seen {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 44px;
+  gap: 6px;
   height: 44px;
   flex-shrink: 0;
-  padding: 0;
-  border: 1px solid var(--border-secondary);
-  border-radius: var(--radius-full);
+  border: 0;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 18px;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  white-space: nowrap;
   cursor: pointer;
-  transition: background-color 120ms ease, color 120ms ease;
+  transition: color 120ms ease;
 }
 
+/* The box and the tick occupy the same 18px square, so checking the box moves
+ * nothing beside it. Both are 1em icons, so the square is stated here rather
+ * than through font-size on the button: --text-xs would draw them at 12px
+ * beside 12px text — a mark, not a checkbox. */
+/* The box itself. --text-secondary, not --border-secondary: a hairline reads
+ * as an edge, and this is a control. The audit measured that reflex at 1.42:1
+ * against the head's own surface, where a graphical object needs 3. This
+ * border is now the only thing drawn here at all, so it takes text weight
+ * rather than border weight. */
+.diff-seen .cbox {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--text-secondary);
+  /* There is no pill left to nest inside, so rule 4's concentric argument
+   * needs a different footing: 12px — the control tier — on an 18px box is a
+   * circle, and a checkbox that reads as a radio button is the wrong control.
+   * 5px keeps the tier's *proportion* instead, 5/18 being 12/44. */
+  border-radius: 5px;
+}
+
+.diff-seen .cbox .icon {
+  position: absolute;
+  /* Back out the border so the tick fills the box rather than the box's
+   * content area, which the 2px edge would otherwise inset it into. */
+  inset: -2px;
+  width: 18px;
+  height: 18px;
+  /* Heavier than the app's 2: this one is drawn at 18px inside a filled box
+   * rather than at its natural size on a flat surface. */
+  stroke-width: 3;
+}
+
+/* Filled, not tinted, and that is what lets the label keep text contrast.
+ * --text-inverse on --bg-success measures 3.48:1 in light: enough for a glyph
+ * (icons answer to 3:1), not enough for a word (4.5:1). Putting the word
+ * beside the box rather than inside it means only the tick is ever on the
+ * green, so the word sits on the head's own background at --text-primary.
+ *
+ * The icon set draws stroke-only paths (fill="none" on the element), so the
+ * checked box takes its fill here.
+ *
+ * Reviewed is said twice, and only one of the two is colour: the word, and the
+ * box being ticked. The third went — the band's own edge used to go green
+ * above and below — because two saturated rules per file, down a list where
+ * most files end up reviewed, turns the whole page green and says nothing the
+ * checkbox beside it has not already said. */
 .diff-seen[aria-pressed="true"] {
+  color: var(--text-primary);
+}
+
+.diff-seen[aria-pressed="true"] .cbox {
   background: var(--bg-success);
-  border-color: transparent;
+  border-color: var(--bg-success);
   color: var(--text-inverse);
 }
 
-/* The code surface, closing the card, so it takes that card's bottom corners
- * (11px inside a 12px border) exactly as .tool > .tool-output pre does. */
+/* The code surface, edge to edge: the width is the whole point of this
+ * screen, and there is no card corner left for it to take. */
 .diff-body {
-  border-radius: 0 0 11px 11px;
   background: var(--code-bg);
   color: var(--code-fg);
   font-family: var(--font-mono);
@@ -2633,8 +3744,8 @@ details[open] > summary::before {
 }
 
 /* Wrapping is the default, and the reason is that horizontal scroll hides
- * characters — at the 47 columns this width allows, a -/+ pair that differs
- * past column 47 looks identical, and you cannot know there is something to
+ * characters — at the 52 columns this width allows, a -/+ pair that differs
+ * past column 52 looks identical, and you cannot know there is something to
  * scroll to without scrolling to it. Two smaller reasons: a per-hunk scroll
  * offset does not survive the next card, and a horizontally scrollable child
  * inside a vertically scrolling list captures near-diagonal swipes, so the
@@ -2698,7 +3809,7 @@ details[open] > summary::before {
 }
 
 /* A collapsed run of unchanged lines. The line number lives here rather than
- * in a per-row gutter: a gutter costs 4 of 47 columns, and under soft wrap a
+ * in a per-row gutter: a gutter costs 4 of 52 columns, and under soft wrap a
  * number is only correct on the first visual row of a source line, so it
  * becomes a mostly-blank column. This band is where you actually need the
  * anchor. */
@@ -2743,6 +3854,21 @@ details[open] > summary::before {
   font-family: var(--font-sans);
   font-size: var(--text-xs);
   line-height: var(--lh-sm);
+}
+
+/* ── pull requests ──────────────────────────────────────────────────── */
+
+/* The list is the session list — same card, same press, same head-and-meta
+ * grammar — so all this screen adds is the part a session row has no use for:
+ * a control inside the row. */
+
+/* Merge, on the rows where GitHub says it can happen. Inside the card rather
+ * than behind a swipe like Delete: it is not destructive enough to hide, and
+ * a row that offers it is the exception rather than every row. */
+.pull-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 /* ── scrollbars ─────────────────────────────────────────────────────── */

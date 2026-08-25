@@ -145,6 +145,7 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
             CodeScreen::New => rsx! { views::code::CodeNewView {} },
             CodeScreen::Chat => rsx! { views::code::CodeChatView {} },
             CodeScreen::Diff => rsx! { views::code::CodeDiffView {} },
+            CodeScreen::Pulls => rsx! { views::code::CodePullsView {} },
         },
         key: |ctx| ((ctx.tab)() == Tab::Code).then(|| code_key((ctx.code_screen)())),
     },
@@ -230,6 +231,7 @@ const fn code_key(screen: CodeScreen) -> &'static str {
         CodeScreen::New => "code-new",
         CodeScreen::Chat => "code-chat",
         CodeScreen::Diff => "code-diff",
+        CodeScreen::Pulls => "code-pulls",
     }
 }
 
@@ -262,6 +264,7 @@ mod tests {
                     CodeScreen::New,
                     CodeScreen::Chat,
                     CodeScreen::Diff,
+                    CodeScreen::Pulls,
                 ]
                 .into_iter()
                 .map(code_key),

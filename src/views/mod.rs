@@ -1,3 +1,5 @@
+pub(crate) mod attach;
+
 pub(crate) mod chat;
 
 pub(crate) mod chrome;
@@ -68,6 +70,74 @@ pub fn SwipeDelete(on_delete: EventHandler<()>) -> Element {
     }
 }
 
+/// The way back to the bottom of a transcript you have read up from.
+///
+/// Rendered on every chat screen; whether it is *visible* is decided in JS
+/// (`crate::viewport`), because the alternative is an `onscroll` handler in
+/// Rust and a blocking round trip on every frame of every scroll. Rust owns
+/// that the button exists and what a tap does, and nothing else about it.
+///
+/// The slot around it has no height and sits between the transcript and
+/// everything below it, so the button hangs above whatever comes next and
+/// moves with it. It has to: the composer grows with the draft, and the whole
+/// shell tracks the visual viewport when the keyboard opens, so anything
+/// placed against the bottom of the screen ends up behind one or the other.
+#[component]
+pub fn ScrollToBottom(scroller: &'static str) -> Element {
+    rsx! {
+        div { class: "scroll-bottom-slot",
+            button {
+                class: "scroll-bottom",
+                title: "Jump to the latest",
+                onclick: move |_| crate::viewport::scroll_to_bottom(scroller),
+                Icon { name: "arrow-down" }
+            }
+        }
+    }
+}
+
+/// The confirmation a swipe earns, as a sheet rather than a row in the card.
+/// Say it plainly, then Cancel and the thing itself.
+///
+/// One component rather than one per action, because the difference between
+/// confirming a delete and confirming a merge is two strings and which colour
+/// the second button takes — and a copy of the modal per action is a copy of
+/// the modal per action to keep in step.
+#[component]
+pub fn Confirm(
+    title: String,
+    body: String,
+    /// The word on the button that does it. Never "OK": the label is the last
+    /// chance to say what is about to happen.
+    confirm_label: String,
+    /// Destructive, and coloured as such (rule 7 — a control the user presses
+    /// is what earns a saturated fill).
+    danger: bool,
+    on_confirm: EventHandler<()>,
+    on_cancel: EventHandler<()>,
+) -> Element {
+    rsx! {
+        div { class: "modal-backdrop",
+            div { class: "modal",
+                h2 { "{title}" }
+                p { class: "modal-body", "{body}" }
+                div { class: "modal-actions",
+                    button {
+                        class: "btn secondary",
+                        onclick: move |_| on_cancel.call(()),
+                        "Cancel"
+                    }
+                    button {
+                        class: if danger { "btn danger" } else { "btn primary" },
+                        onclick: move |_| on_confirm.call(()),
+                        "{confirm_label}"
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The confirmation a swipe earns, as a sheet rather than a row in the card.
 ///
 /// Both planes delete for good: goose's `session/delete` is not a soft
@@ -89,20 +159,74 @@ pub fn ConfirmDelete(
     on_cancel: EventHandler<()>,
 ) -> Element {
     rsx! {
-        div { class: "modal-backdrop",
-            div { class: "modal",
-                h2 { "{title}" }
-                p { class: "modal-body", "{body}" }
-                div { class: "modal-actions",
-                    button {
-                        class: "btn secondary",
-                        onclick: move |_| on_cancel.call(()),
-                        "Cancel"
-                    }
-                    button {
-                        class: "btn danger",
-                        onclick: move |_| on_confirm.call(()),
-                        "{confirm_label}"
+        Confirm {
+            title,
+            body,
+            confirm_label,
+            danger: true,
+            on_confirm,
+            on_cancel,
+        }
+    }
+}
+
+/// One entry in an overflow menu.
+#[derive(Clone, PartialEq)]
+pub(crate) struct MenuItem {
+    pub icon: &'static str,
+    pub label: &'static str,
+    /// Destructive, and coloured as such.
+    pub danger: bool,
+}
+
+/// The `⋯` in the top bar.
+///
+/// Only the button: the sheet it opens is [`OverflowSheet`], rendered at the
+/// view's root beside the other overlays. They cannot be one component,
+/// because the bar's controls carry `backdrop-filter` — and a filtered element
+/// becomes the containing block for every `position: fixed` descendant, so a
+/// sheet rendered in here is trapped inside a 94px pill in the corner instead
+/// of covering the screen. The same property is why `.app` deliberately avoids
+/// a transform.
+#[component]
+pub fn OverflowButton(onopen: EventHandler<()>) -> Element {
+    rsx! {
+        button {
+            class: "icon-btn",
+            title: "More",
+            onclick: move |_| onopen.call(()),
+            Icon { name: "more" }
+        }
+    }
+}
+
+/// What the `⋯` opens. Render this at the root of a view, not inside the bar.
+#[component]
+pub fn OverflowSheet(
+    items: Vec<MenuItem>,
+    onpick: EventHandler<usize>,
+    onclose: EventHandler<()>,
+) -> Element {
+    rsx! {
+        div { class: "modal-backdrop", onclick: move |_| onclose.call(()),
+            div {
+                // `menu` as well as `sheet`: it is the same pane, but the
+                // capture harness has to be able to tell an overflow menu from
+                // the settings sheet, or they file under one gallery state and
+                // whichever was seen last wins.
+                class: "modal sheet menu",
+                onclick: move |e: Event<MouseData>| e.stop_propagation(),
+                div { class: "setting-list",
+                    for (i, item) in items.iter().enumerate() {
+                        button {
+                            key: "{item.label}",
+                            class: if item.danger { "setting-row danger" } else { "setting-row" },
+                            onclick: move |_| onpick.call(i),
+                            Icon { name: "{item.icon}" }
+                            span { class: "setting-main",
+                                span { class: "setting-name", "{item.label}" }
+                            }
+                        }
                     }
                 }
             }

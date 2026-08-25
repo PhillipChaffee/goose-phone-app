@@ -12,6 +12,8 @@
 
 mod app;
 
+mod attach;
+
 mod code;
 
 mod cron;
@@ -22,6 +24,8 @@ mod diff;
 
 #[cfg(debug_assertions)]
 mod domdump;
+
+mod external;
 
 mod icons;
 

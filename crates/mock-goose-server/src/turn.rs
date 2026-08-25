@@ -3,6 +3,10 @@
 //! Every step is cancellable, because the Stop button is the thing this
 //! script exists to exercise. Prompt keywords: "slow" = a long stream (time
 //! to hit Stop), "notool" = skip the tool call and its permission prompt.
+//!
+//! A prompt is a `ContentBlock` array, not a string: the text is the first
+//! *text* block, and anything else in the array is an attachment, which the
+//! answer says back and the replay record keeps.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,6 +34,10 @@ struct Turn {
     cancel: Arc<Notify>,
     delay: Duration,
     record: Vec<Value>,
+    /// How many blocks of the prompt were not text. Said back in the answer:
+    /// against a mock, "did the attachment actually reach the server" is
+    /// otherwise a question only a packet capture can settle.
+    attachments: usize,
 }
 
 /// The client sent `session/cancel` while the turn was streaming.
@@ -119,6 +127,15 @@ impl Turn {
 
     /// Assistant message stream (markdown showcase).
     async fn answer(&mut self, slow: bool) -> Result<(), Cancelled> {
+        if self.attachments > 0 {
+            let n = self.attachments;
+            let plural = if n == 1 { "" } else { "s" };
+            self.step().await?;
+            self.emit(
+                json!({"sessionUpdate":"agent_message_chunk","messageId":"m_1",
+                   "content":{"type":"text","text":format!("Got {n} attachment{plural}.\n\n")}}),
+            );
+        }
         let chunks: Vec<String> = if slow {
             (1..=40)
                 .map(|i| format!("chunk {i} of a very long streaming answer… "))
@@ -172,11 +189,25 @@ pub(crate) async fn run_turn(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let user_text = params
-        .pointer("/prompt/0/text")
+    // The first TEXT block, not the first block: an attached image is another
+    // entry in the same array, and `prompt/0/text` read as empty the moment
+    // one arrived ahead of the message.
+    let prompt: Vec<Value> = params
+        .get("prompt")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let user_text = prompt
+        .iter()
+        .find(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .and_then(|block| block.get("text"))
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let attachments = prompt
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) != Some("text"))
+        .count();
 
     if !state.lock().unwrap().sessions.contains_key(&sid) {
         let frame = error_frame(&request_id, -32002, &format!("session not found: {sid}"));
@@ -192,13 +223,18 @@ pub(crate) async fn run_turn(
         cancel,
         delay: Duration::from_millis(if slow { 400 } else { 150 }),
         record: Vec::new(),
+        attachments,
     };
 
     // Real goose only replays user chunks on session/load — it does NOT echo
-    // them during a live turn. Record for replay without emitting.
-    turn.record.push(
-        json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":user_text}}),
-    );
+    // them during a live turn. Record for replay without emitting. Every
+    // block, not just the text one: replaying an attachment is how the
+    // transcript gets it back after a reconnect, and a mock that dropped them
+    // would make that path untestable without a real server.
+    for content in prompt {
+        turn.record
+            .push(json!({"sessionUpdate": "user_message_chunk", "content": content}));
+    }
     notify(
         &turn.out,
         "_goose/unstable/session/update",

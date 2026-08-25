@@ -244,9 +244,18 @@ const SEARCH_DEBOUNCE: Duration = Duration::from_millis(250);
 #[component]
 pub(crate) fn SearchField(
     #[props(default = "Search".to_owned())] placeholder: String,
+    /// What the field starts with.
+    ///
+    /// The filter it drives lives above this component, and this component is
+    /// behind a screen `match`, so it unmounts whenever you open something and
+    /// remounts empty when you come back — while the list it filtered stays
+    /// filtered. Without this the recovery from "no results" is to guess that
+    /// you must type a character into an already-blank box and delete it.
+    #[props(default)]
+    value: String,
     on_search: EventHandler<String>,
 ) -> Element {
-    let mut text = use_signal(String::new);
+    let mut text = use_signal(|| value);
     // Every keystroke starts a timer and invalidates the ones before it; the
     // last one standing is the only one that fires.
     let mut latest = use_signal(|| 0u64);
