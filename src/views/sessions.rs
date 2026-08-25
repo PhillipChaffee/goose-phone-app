@@ -28,18 +28,13 @@ pub fn SessionsView() -> Element {
             }
             h1 { class: "title", "Chats" }
             ConnBadge {}
-            div { class: "topbar-actions",
-                button {
-                    class: "icon-btn",
-                    disabled: loading,
-                    onclick: move |_| {
-                        spawn_forever(async move { refresh_sessions(&ctx, false).await });
-                    },
-                    if loading { "…" } else { Icon { name: "refresh" } }
-                }
-            }
         }
-        main { class: "scroll has-fab",
+        main {
+            class: "scroll has-fab",
+            // Named, so the pull-to-refresh listener knows this list has
+            // something to fetch and which fetch it is.
+            "data-refresh": "chats",
+            "data-refreshing": "{loading}",
             if sessions.is_empty() && !loading {
                 p { class: "empty", "No sessions yet — start a new chat." }
             }
@@ -63,11 +58,16 @@ pub fn SessionsView() -> Element {
                                         span { class: "session-age", "{age}" }
                                     }
                                 }
-                                div { class: "session-meta",
-                                    if let Some(count) = info.message_count() {
+                                // Conditional outside the wrapper, not inside
+                                // it: `message_count()` is an Option, and a
+                                // server that omits `messageCount` would
+                                // otherwise leave an empty .session-meta whose
+                                // `margin-top` still opens a gap above the
+                                // quote.
+                                if let Some(count) = info.message_count() {
+                                    div { class: "session-meta",
                                         span { "{count} msgs" }
                                     }
-                                    span { "{info.session_id}" }
                                 }
                                 if let Some(snippet) = info.last_message_snippet() {
                                     div { class: "session-quote", "{snippet}" }

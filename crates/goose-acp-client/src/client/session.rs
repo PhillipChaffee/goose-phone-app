@@ -134,19 +134,32 @@ impl AcpClient {
     /// Send a user message; resolves at end of turn with the stop reason
     /// (`end_turn`, `max_tokens`, `refusal`, `cancelled`, …).
     ///
+    /// Takes the whole `prompt` array rather than a string: ACP's message is
+    /// a list of [`ContentBlock`]s, and an attached image or file is another
+    /// block beside the text one, not something encoded into it.
+    ///
     /// # Errors
     ///
+    /// [`AcpError::Config`] if `blocks` is empty — a turn with nothing in it
+    /// is a client bug, and the agent answers `invalid_params` to it anyway.
     /// [`AcpError::Rpc`] if the agent fails the turn (an unknown session id, a
     /// provider error), or [`AcpError::Closed`] if the connection drops before
     /// the turn ends. There is no timeout — a turn may legitimately run for
     /// minutes.
-    pub async fn prompt(&self, session_id: &str, text: &str) -> Result<String, AcpError> {
+    pub async fn prompt(
+        &self,
+        session_id: &str,
+        blocks: &[ContentBlock],
+    ) -> Result<String, AcpError> {
+        if blocks.is_empty() {
+            return Err(AcpError::Config("prompt has no content".into()));
+        }
         let result = self
             .request(
                 "session/prompt",
                 json!({
                     "sessionId": session_id,
-                    "prompt": [ContentBlock::text(text)],
+                    "prompt": blocks,
                 }),
             )
             .await?;

@@ -12,6 +12,8 @@
 
 mod app;
 
+mod attach;
+
 mod code;
 
 mod css;
@@ -22,6 +24,8 @@ mod diff;
 mod domdump;
 
 mod extensions;
+
+mod external;
 
 mod icons;
 

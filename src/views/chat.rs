@@ -1,17 +1,25 @@
 use dioxus::dioxus_core::spawn_forever;
-use dioxus::document;
 use dioxus::prelude::*;
 
 use goose_acp_client::ConfigOption;
 
+use crate::attach::AttachTarget;
 use crate::icons::Icon;
 use crate::markdown;
 use crate::state::{
-    answer_permission, send_prompt, stop_turn, use_app_ctx, ChatItem, Screen, Usage,
+    answer_permission, new_session, send_prompt, show_toast, stop_turn, use_app_ctx, ChatItem,
+    Screen, Usage,
 };
+use crate::views::attach::{attachment_list, AttachButton, AttachTray};
 use crate::views::session_settings::{
-    choice_label, SessionSettingsSheet, SettingChoice, SettingRow,
+    chip_effort, choice_label, mode_icon, ChoicePickerSheet, SessionSettingsSheet, SettingChoice,
+    SettingRow,
 };
+use crate::views::{ConfirmDelete, MenuItem, OverflowButton, OverflowSheet, ScrollToBottom};
+
+/// The transcript's scroller, named so the pin and the scroll-to-bottom
+/// button address the same element.
+const SCROLL_ID: &str = "chat-scroll";
 
 #[component]
 pub fn ChatView() -> Element {
@@ -26,16 +34,15 @@ pub fn ChatView() -> Element {
     // chat signal is read INSIDE the effect so it re-runs on every change.
     use_effect(move || {
         let _ = ctx.chat.read().items.len();
-        document::eval(
-            "requestAnimationFrame(() => { \
-               const el = document.getElementById('chat-scroll'); \
-               if (el) el.scrollTop = el.scrollHeight; \
-             });",
-        );
+        crate::viewport::pin_transcript(SCROLL_ID);
     });
 
     let running = chat.running;
     let can_send = !running && !chat.loading;
+    // Which conversation the composer's picks belong to. Passed down rather
+    // than read off the context inside the two components, so neither of them
+    // subscribes to a signal that changes on every streamed token.
+    let conversation = chat.session_id.clone().unwrap_or_default();
 
     // Whatever the agent says it has, in the order it says it: provider,
     // mode, model and thinking effort today. Reading the list rather than
@@ -47,18 +54,47 @@ pub fn ChatView() -> Element {
         .find(|o| o.config_id == "model")
         .and_then(ConfigOption::current_label)
         .map_or_else(|| "Session".to_owned(), str::to_owned);
+    // The effort rides on the chip after the model, so the setting is visible
+    // without opening the sheet. Only when it is a choice: goose ships
+    // `thinking_effort` as a lone `off` whenever the session's model cannot
+    // reason, and "Claude Sonnet 5 Off" reads as something switched off rather
+    // than as something the model never had. `is_adjustable` is already the
+    // question "would choosing change anything", and this is the same one.
+    let effort = config
+        .iter()
+        .find(|o| o.config_id == "thinking_effort")
+        .filter(|o| o.is_adjustable())
+        .and_then(|o| chip_effort(o.current_value.as_deref()));
     let rows = goose_setting_rows(&config, usage);
+    // A goose that stops offering a mode simply has no mode chip: this is
+    // `None` and everything below skips it, rather than the chip appearing
+    // with nothing behind it.
+    let mode = config.iter().find(|o| is_mode_chip(o)).cloned();
     let mut sheet = use_signal(|| false);
+    let mut mode_sheet = use_signal(|| false);
+    let mut confirm_delete = use_signal(|| false);
+    let mut menu = use_signal(|| false);
 
     let mut submit = move || {
         let text = draft.peek().trim().to_string();
-        if text.is_empty() {
+        // A message can be attachments alone — a photo with nothing to say
+        // about it is still a message.
+        let files = ctx.attachments.peek().clone();
+        if text.is_empty() && files.is_empty() {
             return;
         }
-        // Only clear the draft once the message was actually accepted, so a
-        // failed send (e.g. disconnected) doesn't eat the typed text.
-        if send_prompt(&ctx, text) {
+        // Cleared only once the message is on its way, so a send that never
+        // starts — disconnected, no session — leaves the typed text and the
+        // picked files where they were. A send that starts and then fails on
+        // the wire is `send_prompt`'s to put right: it answers long after
+        // this returns, and it hands the files back to the tray itself.
+        if send_prompt(&ctx, text, &files) {
             draft.set(String::new());
+            // Your own message always takes you back to the bottom, whatever
+            // you had scrolled up to read. Without this the transcript stays
+            // where it was and the message you just sent is off screen.
+            crate::viewport::scroll_to_bottom(SCROLL_ID);
+            ctx.attachments.clone().set(Vec::new());
         }
     };
 
@@ -74,10 +110,18 @@ pub fn ChatView() -> Element {
                 Icon { name: "chevron-left" }
             }
             h1 { class: "title ellipsis", "{chat.title}" }
-            div { class: "topbar-actions" }
+            div { class: "topbar-actions",
+                button {
+                    class: "icon-btn",
+                    title: "New chat",
+                    onclick: move |_| new_session(&ctx),
+                    Icon { name: "plus" }
+                }
+                OverflowButton { onopen: move |()| menu.set(true) }
+            }
         }
 
-        main { class: "scroll chat", id: "chat-scroll",
+        main { class: "scroll chat", id: SCROLL_ID,
             if chat.loading {
                 p { class: "empty", "Loading history…" }
             }
@@ -91,7 +135,10 @@ pub fn ChatView() -> Element {
             }
         }
 
+        ScrollToBottom { scroller: SCROLL_ID }
+
         footer { class: "composer",
+            AttachTray { target: AttachTarget::Goose, conversation: conversation.clone() }
             textarea {
                 class: "input",
                 placeholder: "Message goose…",
@@ -108,18 +155,56 @@ pub fn ChatView() -> Element {
                 },
             }
             div { class: "composer-row",
-                if !rows.is_empty() {
-                    button {
-                        class: "composer-chip action",
-                        title: "Session settings",
-                        onclick: move |_| sheet.set(true),
-                        span { class: "chip-label", "{chip_label}" }
-                        Icon { name: "chevron-down" }
+                // This box is one line and never more (`.chip-row` in
+                // main.css). The send button is outside it, which is what
+                // keeps it pinned to the trailing edge whatever the chips
+                // inside do — and what it used to be outside a *wrapping* box
+                // for. The wrap is gone: a composer that grows a row under
+                // your thumb is worse than a model name you can tap to read in
+                // full.
+                div { class: "chip-row",
+                    AttachButton { target: AttachTarget::Goose, conversation }
+                    if !rows.is_empty() {
+                        button {
+                            class: "composer-chip action model",
+                            title: "Session settings",
+                            onclick: move |_| sheet.set(true),
+                            span { class: "chip-label",
+                                span { class: "chip-model", "{chip_label}" }
+                                if let Some(effort) = effort {
+                                    span { class: "chip-effort", "{effort}" }
+                                }
+                            }
+                            Icon { name: "chevron-down" }
+                        }
                     }
-                }
-                if let Some((used, limit)) = usage {
-                    span { class: "composer-chip",
-                        "{format_tokens(used)}/{format_tokens(limit)}"
+                    if let Some(mode) = mode.as_ref() {
+                        button {
+                            class: "composer-chip action mode",
+                            title: "Mode",
+                            onclick: move |_| mode_sheet.set(true),
+                            Icon {
+                                name: mode_icon(mode.current_value.as_deref().unwrap_or_default()),
+                            }
+                            // The one place in this app a chip can end up
+                            // naming its own control, and it is a fallback
+                            // rather than a state the app can produce: goose
+                            // ships `currentValue` inside the `configOptions`
+                            // of `session/new`, so `current_label` answers on
+                            // every build that has one. Hiding the chip
+                            // instead would hide the picker with it — the mode
+                            // is filtered out of the settings sheet
+                            // (`goose_setting_rows`) precisely because this
+                            // chip is where it lives.
+                            span { class: "chip-label",
+                                {mode.current_label().unwrap_or("Mode")}
+                            }
+                        }
+                    }
+                    if let Some(percent) = crowding(usage) {
+                        span { class: "composer-chip warn", title: "Context used",
+                            "{percent}%"
+                        }
                     }
                 }
                 if running {
@@ -151,20 +236,126 @@ pub fn ChatView() -> Element {
                 onclose: move |()| sheet.set(false),
             }
         }
+
+        if let Some(mode) = mode.filter(|_| mode_sheet()) {
+            ChoicePickerSheet {
+                title: "Select mode",
+                backend: "goose",
+                choices: mode_choices(&mode),
+                current: mode.current_value.clone(),
+                // Unreachable while the chip only renders for an adjustable
+                // option, and stated anyway: an empty picker with nothing in
+                // it and nothing to say is the one outcome a reader cannot
+                // act on.
+                empty: "This agent offers no other mode.",
+                onchoose: {
+                    let config_id = mode.config_id.clone();
+                    move |value: String| {
+                        crate::state::set_config_option(&ctx, &config_id, &value);
+                        mode_sheet.set(false);
+                    }
+                },
+                onclose: move |()| mode_sheet.set(false),
+            }
+        }
+
+        if menu() {
+            OverflowSheet {
+                items: vec![MenuItem { icon: "trash", label: "Delete chat", danger: true }],
+                onpick: move |_| {
+                    menu.set(false);
+                    confirm_delete.set(true);
+                },
+                onclose: move |()| menu.set(false),
+            }
+        }
+
+        if confirm_delete() {
+            ConfirmDelete {
+                title: "Delete this chat?",
+                body: "The whole conversation goes from the goose server. \
+                       This cannot be undone.",
+                on_cancel: move |()| confirm_delete.set(false),
+                on_confirm: move |()| {
+                    confirm_delete.set(false);
+                    let Some(session_id) = ctx.chat.peek().session_id.clone() else {
+                        return;
+                    };
+                    spawn_forever(async move {
+                        let Some(client) = ctx.client.peek().clone() else { return };
+                        match client.session_delete(&session_id).await {
+                            Ok(()) => {
+                                let mut sessions = ctx.sessions;
+                                sessions.write().retain(|s| s.session_id != session_id);
+                                ctx.screen.clone().set(Screen::Sessions);
+                            }
+                            Err(e) => show_toast(&ctx, format!("Delete failed: {e}")),
+                        }
+                    });
+                },
+            }
+        }
     }
 }
 
-/// The goose tab's rows: every option the agent offers, plus the one fact
-/// about the session that is worth stating and cannot be changed.
+/// The mode selector, when picking between its values would change anything.
+///
+/// This is the one place the goose sheet stops being purely data-driven, and
+/// it is deliberate: mode is a chip in the composer row with a picker of its
+/// own, so it is taken out of the list rather than rendered twice. ACP gives
+/// an agent two ways to say which option that is — the `mode` category, which
+/// the spec defines for exactly this sort of placement decision, and the
+/// `mode` id goose has always used — and either will do, so an agent that
+/// sends only one of them is still understood.
+///
+/// An option with a single value stays in the sheet as a fact. A chip that
+/// opens a one-row picker is a control that does nothing (design rule 11),
+/// and the setting still exists, so it is reported rather than hidden.
+fn is_mode_chip(option: &ConfigOption) -> bool {
+    (option.category.as_deref() == Some("mode") || option.config_id == "mode")
+        && option.is_adjustable()
+}
+
+/// The mode picker's rows, in the order the agent sent them.
+///
+/// Each carries the agent's own description — goose writes one per mode, and
+/// they are what tells "Auto" from "Manual approval" without having to try
+/// both — and an icon derived from the value, because neither ACP nor goose
+/// has a field for one.
+fn mode_choices(option: &ConfigOption) -> Vec<SettingChoice> {
+    option
+        .options
+        .iter()
+        .map(|c| {
+            SettingChoice::new(&c.value, choice_label(&c.name, &c.value))
+                .with_note(c.description.clone())
+                .with_icon(mode_icon(&c.value))
+        })
+        .collect()
+}
+
+/// The goose tab's rows: every option the agent offers apart from mode, plus
+/// the one fact about the session that is worth stating and cannot be
+/// changed.
 ///
 /// Context length is that fact. `session/set_config_option` routes exactly
 /// four ids — provider, mode, model, `thinking_effort` — and rejects anything
 /// else; a context window reaches the client only as read-only information
 /// about a model. The number is already flowing in on every `usage_update`,
-/// so the sheet reports it rather than pretending to a control.
+/// so the sheet reports it rather than pretending to a control — and reports
+/// it as unknown before the first turn has produced one, because a row that
+/// appears partway through a conversation reads as the app having found
+/// something rather than as the agent having said it.
 fn goose_setting_rows(config: &[ConfigOption], usage: Option<Usage>) -> Vec<SettingRow> {
+    // A session whose config has not arrived and that has not run a turn has
+    // nothing to report. Returning no rows is what keeps the chip off the
+    // composer entirely, rather than offering a sheet holding one dash.
+    if config.is_empty() && usage.is_none() {
+        return Vec::new();
+    }
     let mut rows: Vec<SettingRow> = config
         .iter()
+        .filter(|option| !is_mode_chip(option))
         .map(|option| {
             SettingRow::select(
                 &option.config_id,
@@ -173,20 +364,29 @@ fn goose_setting_rows(config: &[ConfigOption], usage: Option<Usage>) -> Vec<Sett
                 option
                     .options
                     .iter()
-                    .map(|c| SettingChoice::new(&c.value, choice_label(&c.name, &c.value)))
+                    .map(|c| {
+                        SettingChoice::new(&c.value, choice_label(&c.name, &c.value))
+                            .with_note(c.description.clone())
+                    })
                     .collect(),
                 option.description.clone(),
             )
         })
         .collect();
-    if let Some((_, limit)) = usage {
-        rows.push(SettingRow::fact(
+    rows.push(match usage {
+        Some((_, limit)) => SettingRow::fact(
             "context_length",
             "Context length",
             format!("{} tokens", format_tokens(limit)),
-            "Fixed by the model. The agent takes no context window on a session.",
-        ));
-    }
+            "Fixed by the model. Nothing a message carries changes it.",
+        ),
+        None => SettingRow::fact(
+            "context_length",
+            "Context length",
+            "—",
+            "The agent reports this with the first turn of the session.",
+        ),
+    });
     rows
 }
 
@@ -287,11 +487,18 @@ fn tool_kind_phrase(kind: &str, n: usize) -> String {
 /// Shared transcript renderer — the Code tab reuses it (views/code.rs).
 pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
     match item {
-        ChatItem::User { text } => {
+        ChatItem::User { text, attachments } => {
             let html = markdown::escape_text(text);
             rsx! {
                 div { key: "{index}", class: "bubble user",
-                    div { class: "bubble-text", dangerous_inner_html: "{html}" }
+                    if !attachments.is_empty() {
+                        {attachment_list(attachments)}
+                    }
+                    // An empty text node still draws a line box, which is a
+                    // blank strip under a photo sent with nothing to say.
+                    if !text.is_empty() {
+                        div { class: "bubble-text", dangerous_inner_html: "{html}" }
+                    }
                 }
             }
         }
@@ -380,6 +587,51 @@ fn tool_icon(kind: &str) -> &'static str {
     }
 }
 
+/// How full the context window is, as the chip states it.
+///
+/// It used to read `128.0k/200.0k`, which is 106px of a 306px composer row —
+/// and with a mode chip in that row as well, a phone at 360pt had 48px left
+/// for two chip labels, so even `GPT-5.2` and `Auto` came out ellipsised.
+/// The two numbers were never the question anyway: "how much room is left" is,
+/// and one percentage answers it in a third of the width. The window itself is
+/// still stated in full, as the Context length row of the settings sheet.
+///
+/// A limit of zero is a server that has not said, and there is no fraction of
+/// nothing; a count above it is clamped, because a turn that overran its own
+/// window should read as full rather than as 103%. Widened to `u128` first,
+/// so scaling by 100 cannot wrap and cannot saturate — saturating would turn
+/// a nearly-full window into "1%", which is the opposite of the truth.
+/// The context readout, but only once it is worth the room it costs.
+///
+/// It used to be there always. Four chips do not fit a 360pt composer — a
+/// model name, its effort tier, a mode and this came to 306px of a 306px row,
+/// and the model name was rendered in under six of them. Something had to
+/// leave, and this is the one whose absence costs least: the window is stated
+/// in full in the settings sheet, and "12% used" is not a fact anyone acts on.
+/// Near the end of the window it becomes the most useful thing in the row, so
+/// that is when it appears — which is also what the reference app does, as a
+/// notice rather than a permanent readout.
+///
+/// Returns `None` below the threshold, so the chip does not render at all
+/// rather than rendering empty.
+fn crowding(usage: Option<Usage>) -> Option<u128> {
+    const SPEAK_UP_AT: u128 = 75;
+    let (used, limit) = usage?;
+    if limit == 0 {
+        return None;
+    }
+    let percent = (u128::from(used) * 100 / u128::from(limit)).min(100);
+    (percent >= SPEAK_UP_AT).then_some(percent)
+}
+
+/// A token count, as short as it can be said without losing anything.
+///
+/// The decimal earns its place under ten thousand, where a tenth of a
+/// thousand is a tenth of what is on screen. Above that it is noise that
+/// costs room: "128.0k/200.0k" measured 106px of the 306px the goose
+/// composer's chip row has at 360pt, which is what left the model name with
+/// nothing to give when the effort tier arrived beside it. "128k/200k" says
+/// the same thing in 86.
 pub(crate) fn format_tokens(n: u64) -> String {
     // Scoped to this one cast, not to the whole function: anything else added
     // here should have to justify its own arithmetic.
@@ -391,6 +643,8 @@ pub(crate) fn format_tokens(n: u64) -> String {
     let tokens = n as f64;
     if n >= 1_000_000 {
         format!("{:.1}M", tokens / 1_000_000.0)
+    } else if n >= 10_000 {
+        format!("{:.0}k", tokens / 1_000.0)
     } else if n >= 1_000 {
         format!("{:.1}k", tokens / 1_000.0)
     } else {
@@ -516,5 +770,162 @@ fn permission_label(name: Option<&str>, option_id: &str) -> String {
         "reject_once" => "Reject".to_string(),
         "reject_always" => "Always reject".to_string(),
         other => other.replace('_', " "),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        crowding, format_tokens, goose_setting_rows, is_mode_chip, mode_choices, ConfigOption,
+    };
+    use goose_acp_client::ConfigChoice;
+
+    /// The readout costs a chip in a row that has none to spare, so it only
+    /// appears when it is the most useful thing there — and a turn that
+    /// overran its own window reads as full rather than as 103%.
+    #[test]
+    fn the_context_chip_speaks_up_only_near_the_end_of_the_window() {
+        assert_eq!(crowding(None), None);
+        assert_eq!(crowding(Some((128_000, 200_000))), None); // 64%, not yet
+        assert_eq!(crowding(Some((150_000, 200_000))), Some(75));
+        assert_eq!(crowding(Some((190_000, 200_000))), Some(95));
+        // Overran, and clamped rather than reading 103%.
+        assert_eq!(crowding(Some((206_000, 200_000))), Some(100));
+        // A server that has not said what the window is says nothing here.
+        assert_eq!(crowding(Some((1, 0))), None);
+        // No overflow on a window the size of a whole model's training set.
+        assert_eq!(crowding(Some((u64::MAX, u64::MAX))), Some(100));
+    }
+
+    fn choice(value: &str, name: &str, description: Option<&str>) -> ConfigChoice {
+        ConfigChoice {
+            value: value.to_owned(),
+            name: name.to_owned(),
+            description: description.map(str::to_owned),
+        }
+    }
+
+    fn option(config_id: &str, category: Option<&str>, values: &[&str]) -> ConfigOption {
+        ConfigOption {
+            config_id: config_id.to_owned(),
+            name: config_id.to_owned(),
+            description: None,
+            category: category.map(str::to_owned),
+            kind: Some("select".to_owned()),
+            current_value: values.first().map(|v| (*v).to_owned()),
+            options: values.iter().map(|v| choice(v, v, None)).collect(),
+        }
+    }
+
+    fn row_ids(config: &[ConfigOption]) -> Vec<String> {
+        goose_setting_rows(config, None)
+            .into_iter()
+            .map(|r| r.id)
+            .collect()
+    }
+
+    /// Mode has a chip and a picker of its own, so the sheet must not carry
+    /// it as well — and everything else keeps the agent's own order.
+    #[test]
+    fn mode_leaves_the_sheet_it_has_a_chip_in() {
+        let config = [
+            option("provider", None, &["anthropic", "openai"]),
+            option("mode", Some("mode"), &["auto", "approve"]),
+            option("model", Some("model"), &["opus", "sonnet"]),
+            option("thinking_effort", Some("thought_level"), &["off", "high"]),
+        ];
+        assert_eq!(
+            row_ids(&config),
+            ["provider", "model", "thinking_effort", "context_length"]
+        );
+    }
+
+    /// The agent may say which option is the mode with the spec's category
+    /// rather than the id goose happens to use, and either has to be enough.
+    #[test]
+    fn the_mode_is_found_by_category_as_well_as_by_id() {
+        assert!(is_mode_chip(&option(
+            "session_mode",
+            Some("mode"),
+            &["auto", "approve"]
+        )));
+        assert!(is_mode_chip(&option("mode", None, &["auto", "approve"])));
+        assert!(!is_mode_chip(&option("model", Some("model"), &["a", "b"])));
+    }
+
+    /// One value is not a choice, so it earns no chip — and it stays in the
+    /// sheet as a fact rather than leaving the app altogether.
+    #[test]
+    fn a_mode_with_one_value_stays_in_the_sheet() {
+        let config = [option("mode", Some("mode"), &["auto"])];
+        assert!(!is_mode_chip(&config[0]));
+        assert_eq!(row_ids(&config), ["mode", "context_length"]);
+    }
+
+    /// A goose that sends no mode at all has nothing to put on a chip, and
+    /// nothing else about the sheet changes.
+    #[test]
+    fn a_goose_with_no_mode_option_has_nothing_to_pick() {
+        let config = [option("model", Some("model"), &["opus", "sonnet"])];
+        assert!(!config.iter().any(is_mode_chip));
+        assert_eq!(row_ids(&config), ["model", "context_length"]);
+    }
+
+    /// Context length is a row before the first turn as well as after it: one
+    /// that appears partway through a conversation reads as the app having
+    /// found something rather than the agent having said it.
+    #[test]
+    fn context_length_is_stated_before_the_agent_has_reported_one() {
+        let config = [option("model", Some("model"), &["opus", "sonnet"])];
+        let rows = goose_setting_rows(&config, None);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].value, "—");
+        assert_eq!(
+            goose_setting_rows(&config, Some((1_000, 200_000)))[1].value,
+            "200k tokens"
+        );
+    }
+
+    /// Nothing to report is nothing to open: with no config and no turn yet,
+    /// the sheet has no rows and the composer has no chip.
+    #[test]
+    fn a_session_with_nothing_to_report_has_no_rows() {
+        assert!(goose_setting_rows(&[], None).is_empty());
+        assert_eq!(goose_setting_rows(&[], Some((1_000, 200_000))).len(), 1);
+    }
+
+    /// The picker's rows carry the agent's own words, and a mark each.
+    #[test]
+    fn mode_choices_keep_the_agents_descriptions() {
+        let mut mode = option("mode", Some("mode"), &["auto", "approve"]);
+        mode.options = vec![
+            choice("auto", "Auto", Some("Run tools without asking.")),
+            choice("approve", "Manual approval", None),
+        ];
+        let choices = mode_choices(&mode);
+        assert_eq!(choices[0].label, "Auto");
+        assert_eq!(
+            choices[0].note.as_deref(),
+            Some("Run tools without asking.")
+        );
+        assert_eq!(choices[0].icon.as_deref(), Some("bolt"));
+        assert_eq!(choices[1].label, "Manual approval");
+        assert_eq!(choices[1].note, None);
+        assert_eq!(choices[1].icon.as_deref(), Some("shield-check"));
+    }
+
+    /// A count keeps its decimal only where the decimal is a real difference.
+    /// Above ten thousand it is a hundred tokens, and it is spent on the one
+    /// row in the app that has no width to spare.
+    #[test]
+    fn a_token_count_carries_a_decimal_only_while_it_says_something() {
+        assert_eq!(format_tokens(0), "0");
+        assert_eq!(format_tokens(842), "842");
+        assert_eq!(format_tokens(1_200), "1.2k");
+        assert_eq!(format_tokens(9_400), "9.4k");
+        assert_eq!(format_tokens(10_000), "10k");
+        assert_eq!(format_tokens(128_400), "128k");
+        assert_eq!(format_tokens(200_000), "200k");
+        assert_eq!(format_tokens(1_500_000), "1.5M");
     }
 }
