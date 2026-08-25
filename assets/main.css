@@ -589,8 +589,18 @@ pre {
   --topbar-reserve: calc(var(--edge) + 44px + 8px);
 }
 
-/* Two, plus the pill's own padding, at the trailing edge. */
-.topbar:has(.topbar-actions) {
+/* Two, plus the pill's own padding, at the trailing edge.
+ *
+ * `:not(:empty)` is load-bearing, because `TopBar` renders the pill on every
+ * screen and lets CSS hide the ones with nothing in them: the bar on Chats,
+ * on Settings and on every future screen with no trailing control carries an
+ * empty `.topbar-actions`, and a bare `:has(.topbar-actions)` widened the
+ * reserve for two buttons that are not there — about 100px off a centred
+ * title, which shrinks from both ends. `:empty` is the same matcher the
+ * `display: none` below already relies on and it holds here: Dioxus renders an
+ * absent child as an HTML comment, and a comment does not stop an element
+ * being empty. */
+.topbar:has(.topbar-actions:not(:empty)) {
   --topbar-reserve: calc(var(--edge) + 2 * 44px + 6px + 8px);
 }
 

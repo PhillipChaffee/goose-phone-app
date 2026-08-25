@@ -86,6 +86,12 @@ const LONGEST = {
   '.session-title': 'Refactor the transcript folding so streamed parts land in order',
   '.session-ask-title': 'Approve or deny curl -sSL https://raw.githubusercontent.com/example/really-long-org-name/main/scripts/install.sh',
   '.topbar > .title': 'Refactor the transcript folding so streamed parts land in order',
+  // A two-line title is a different geometry from a one-line one — it is the
+  // `.titlegroup` that is centred and clipped, not the `h1` — and every
+  // screen that uses one puts *server* text in it: an extension's package
+  // name, a skill's name, a recipe's title. Stressing only `.topbar > .title`
+  // left the shape that actually carries the long strings unchecked.
+  '.titlegroup > .title': 'Refactor the transcript folding so streamed parts land in order',
   // Every settings-shaped row on every screen puts server text here — a model
   // name, an MCP command line, a cron sentence read back as English — and
   // none of it was being stressed.
