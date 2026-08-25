@@ -44,6 +44,7 @@ const DUMP_JS: &str = r"
     // a modal. Ask most-specific first, or every overlay reports as 'confirm'.
     if (document.querySelector('.modal.sheet.menu')) on.push('menu');
     else if (document.querySelector('.modal.sheet.picker')) on.push('picker');
+    else if (document.querySelector('.modal.sheet.rename')) on.push('rename');
     else if (document.querySelector('.choice-list')) on.push('choices');
     else if (document.querySelector('.modal.sheet')) on.push('sheet');
     else if (document.querySelector('.modal-backdrop')) on.push('confirm');

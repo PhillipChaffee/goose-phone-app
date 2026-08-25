@@ -23,7 +23,8 @@
 use std::time::Instant;
 
 use goose_acp_client::{
-    probe, AcpClient, AcpEvent, ConnectConfig, ContentBlock, SessionKind, SessionUpdate,
+    probe, AcpClient, AcpEvent, ConnectConfig, ContentBlock, SessionKind, SessionQuery,
+    SessionUpdate,
 };
 
 #[tokio::main]
@@ -53,7 +54,7 @@ async fn main() {
     println!("connected: {} {}", info.agent_name, info.agent_version);
 
     let list = client
-        .session_list(&[SessionKind::User], None)
+        .session_list(&SessionQuery::new(&[SessionKind::User], None))
         .await
         .expect("session/list");
     println!("sessions: {}", list.sessions.len());

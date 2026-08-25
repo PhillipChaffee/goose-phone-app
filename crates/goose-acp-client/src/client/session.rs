@@ -14,8 +14,8 @@ use super::{AcpClient, Cmd, CLIENT_NAME};
 use crate::error::AcpError;
 use crate::goose::{LIST_TIMEOUT, MUTATE_TIMEOUT};
 use crate::types::{
-    config_options_from, ConfigOption, ContentBlock, NewSessionResponse, SessionKind,
-    SessionListResponse,
+    config_options_from, ConfigOption, ContentBlock, NewSessionResponse, SessionListResponse,
+    SessionQuery,
 };
 
 /// The `_meta` object `session/new` sends: the client's own marker, with any
@@ -35,6 +35,30 @@ fn new_session_meta(meta: Option<&Value>) -> Value {
         }
     }
     Value::Object(merged)
+}
+
+/// The `session/list` params for `query`.
+///
+/// Everything but the cursor rides in `_meta`: `types` and `query` are goose
+/// extensions to the base ACP request, and `goose.includeLastMessageSnippet`
+/// is what makes a list row able to show its last line without loading the
+/// session. `query` is omitted rather than sent as `null` when there is no
+/// search — an absent key and a null both mean "no keyword" to goose, but
+/// only the absent one matches what a hand-written request looks like.
+fn session_list_params(query: &SessionQuery) -> Value {
+    let types: Vec<&str> = query.kinds().iter().map(|kind| kind.as_wire()).collect();
+    let mut meta = json!({
+        "types": types,
+        "goose": {"includeLastMessageSnippet": true},
+    });
+    if let Some(keyword) = query.query() {
+        meta["query"] = Value::String(keyword.to_string());
+    }
+    let mut params = json!({"_meta": meta});
+    if let Some(cursor) = query.cursor() {
+        params["cursor"] = Value::String(cursor.to_string());
+    }
+    params
 }
 
 impl AcpClient {
@@ -99,10 +123,15 @@ impl AcpClient {
         .await
     }
 
-    /// List sessions of the given kinds, newest first.
+    /// List sessions, newest first: the kinds, the keyword search and the page
+    /// all come from one [`SessionQuery`], because the server binds the cursor
+    /// to the filters and rejects a mismatched pair.
     ///
-    /// An empty `kinds` means all of them: that is the server's own reading of
-    /// an absent or empty `types` filter, not a special case invented here.
+    /// The search is the server's, across the whole history rather than the
+    /// page already loaded, and it reads the *messages*: goose splits the
+    /// query on whitespace, ORs the words, and matches the text of every
+    /// user-visible message. A session whose title says nothing still comes
+    /// back if something in it was said.
     ///
     /// # Errors
     ///
@@ -112,21 +141,10 @@ impl AcpClient {
     /// [`SessionListResponse`].
     pub async fn session_list(
         &self,
-        kinds: &[SessionKind],
-        cursor: Option<String>,
+        query: &SessionQuery,
     ) -> Result<SessionListResponse, AcpError> {
-        let types: Vec<&str> = kinds.iter().map(|kind| kind.as_wire()).collect();
-        let mut params = json!({
-            "_meta": {
-                "types": types,
-                "goose": {"includeLastMessageSnippet": true},
-            }
-        });
-        if let Some(cursor) = cursor {
-            params["cursor"] = Value::String(cursor);
-        }
         let result = self
-            .request_with_timeout("session/list", params, LIST_TIMEOUT)
+            .request_with_timeout("session/list", session_list_params(query), LIST_TIMEOUT)
             .await?;
         serde_json::from_value(result).map_err(|e| AcpError::Transport(e.to_string()))
     }
@@ -258,8 +276,13 @@ impl AcpClient {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test assertions: a failing unwrap is the failing check"
+)]
 mod tests {
     use super::*;
+    use crate::types::SessionKind;
 
     /// A caller's keys go *alongside* the client marker, and win where they
     /// collide — the recipe launch path in a later PR depends on both halves.
@@ -278,6 +301,97 @@ mod tests {
         assert_eq!(
             new_session_meta(Some(&json!("recipe"))),
             json!({"client": CLIENT_NAME})
+        );
+    }
+
+    /// A `session/list` reply carrying `next_cursor`, parsed the way a real
+    /// one would be so the tests below cannot invent a field name.
+    fn page(next_cursor: Option<&str>) -> SessionListResponse {
+        serde_json::from_value(json!({"sessions": [], "nextCursor": next_cursor})).unwrap()
+    }
+
+    /// The frame the app has always sent, now pinned: the kinds filter, the
+    /// snippet opt-in, and no `query` and no `cursor` at all on page one.
+    #[test]
+    fn user_only_first_page_frame() {
+        assert_eq!(
+            session_list_params(&SessionQuery::new(&[SessionKind::User], None)),
+            json!({"_meta": {
+                "types": ["user"],
+                "goose": {"includeLastMessageSnippet": true},
+            }})
+        );
+    }
+
+    /// All three kinds and a keyword. `query` is goose's spelling — the
+    /// server reads `_meta.query`, not `_meta.keyword` or a top-level field.
+    #[test]
+    fn all_kinds_with_a_query_frame() {
+        assert_eq!(
+            session_list_params(&SessionQuery::new(&SessionKind::ALL, Some("deploy"))),
+            json!({"_meta": {
+                "types": ["user", "scheduled", "acp"],
+                "query": "deploy",
+                "goose": {"includeLastMessageSnippet": true},
+            }})
+        );
+    }
+
+    /// The cursor is a top-level `cursor`, beside `_meta`, and the filters go
+    /// out again unchanged with it — the server re-hashes them to check.
+    #[test]
+    fn next_page_frame_repeats_the_filters() {
+        let first = SessionQuery::new(&[SessionKind::Scheduled], Some("nightly"));
+        let next = first.next_page(&page(Some("cursor-1"))).unwrap();
+        assert_eq!(
+            session_list_params(&next),
+            json!({
+                "cursor": "cursor-1",
+                "_meta": {
+                    "types": ["scheduled"],
+                    "query": "nightly",
+                    "goose": {"includeLastMessageSnippet": true},
+                }
+            })
+        );
+    }
+
+    /// The invariant the type exists for: a cursor can only ever be paired
+    /// with the filters it was minted under.
+    ///
+    /// There is no constructor and no setter that takes one, so the only way
+    /// to get a cursor into a request is [`SessionQuery::next_page`], which
+    /// copies its own filters across. Changing the search or the kinds means
+    /// building a fresh query, and a fresh query starts at page one — the
+    /// stale cursor is not dropped by a rule someone has to remember, it is
+    /// unreachable.
+    #[test]
+    fn a_cursor_cannot_outlive_the_filters_that_minted_it() {
+        let first = SessionQuery::new(&[SessionKind::User], Some("dep"));
+        let next = first.next_page(&page(Some("cursor-1"))).unwrap();
+        assert_eq!(next.kinds(), first.kinds());
+        assert_eq!(next.query(), first.query());
+
+        // The user types one more character: the only query value that can
+        // exist for the new search is a first page.
+        let widened = SessionQuery::new(&[SessionKind::User], Some("depl"));
+        assert_eq!(widened.cursor(), None);
+        assert!(session_list_params(&widened).get("cursor").is_none());
+
+        // And the last page ends the chain rather than repeating itself.
+        assert_eq!(next.next_page(&page(None)), None);
+    }
+
+    /// A search box mid-edit and an empty one are the same request: the
+    /// server trims and drops a blank keyword, so doing it here keeps the
+    /// filter hash — and therefore the cursor — stable across the difference.
+    #[test]
+    fn blank_searches_are_no_search() {
+        let blank = SessionQuery::new(&[SessionKind::User], Some("   "));
+        assert_eq!(blank, SessionQuery::new(&[SessionKind::User], None));
+        assert_eq!(
+            SessionQuery::new(&[SessionKind::User], Some(" deploy ")).query(),
+            Some("deploy")
         );
     }
 }

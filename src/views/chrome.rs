@@ -97,17 +97,6 @@ pub(crate) struct RowFace {
     pub danger: bool,
 }
 
-// `cfg_attr(not(test))` because the tests below do use these: an expectation
-// that holds in one cfg and not the other is an error in whichever cfg it
-// does not hold in.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no list in the shell has a tray yet; the first one arrives \
-                  in PR 3, and this expectation fails then"
-    )
-)]
 impl RowFace {
     /// The one action every list in this app has. Spelled once so four
     /// future lists cannot each invent their own word for it.
@@ -224,11 +213,6 @@ pub(crate) fn ListRow(
 ///
 /// Long enough that typing a word is one call rather than four, short enough
 /// that the list feels like it is following you.
-#[expect(
-    dead_code,
-    reason = "nothing in the shell is searchable; the first list long enough \
-              to need it arrives in PR 3, and this expectation fails then"
-)]
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(250);
 
 /// A text field whose value becomes a network call on a timer.
