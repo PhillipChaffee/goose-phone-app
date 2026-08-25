@@ -1162,23 +1162,33 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
     let cwd = info.cwd.clone().unwrap_or_else(|| "/".to_string());
     let running = ctx.running_sessions.peek().contains(&info.session_id);
 
-    // An attachment belongs to the message it was picked for. The draft is
-    // component-local and dies with the screen; the tray lives on the context
-    // (the picker has to be able to reach it from the app root), so it has to
-    // be told.
+    // An attachment belongs to the message it was picked for, and the tray
+    // lives on the context (the picker has to be able to reach it from the app
+    // root), so it has to be told.
     ctx.attachments.clone().set(Vec::new());
+
     // Walking out of a chat and back into it replays it from scratch, and the
     // replay cannot say what a photo was called or what it looked like. Only
     // from the same session: two conversations' attachments have nothing to
     // say about each other.
-    let carry = {
+    let (same_session, carry) = {
         let current = ctx.chat.peek();
         if current.session_id.as_deref() == Some(info.session_id.as_str()) {
-            crate::attach::sent_attachments(&current.items)
+            (true, crate::attach::sent_attachments(&current.items))
         } else {
-            Vec::new()
+            (false, Vec::new())
         }
     };
+    // The draft belongs to the conversation for the same reason. It used to be
+    // a `use_signal` that died with the screen; hoisting it onto the context
+    // (so a recipe can fill it in before its chat exists) means half-typed
+    // text would otherwise follow you out of one conversation and into the
+    // next with the send button lit. Cleared only when the conversation
+    // actually changes, so leaving a chat and coming back keeps what you were
+    // writing — exactly what `open_code_chat` already does for `code_draft`.
+    if !same_session {
+        ctx.chat_draft.clone().set(String::new());
+    }
     chat.set(ChatState {
         marks: Vec::new(),
         last_at: 0,
