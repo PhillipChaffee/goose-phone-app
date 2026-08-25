@@ -41,7 +41,19 @@ const path = require('path');
 const { chromium } = require('playwright');
 
 const STATES = path.join(__dirname, 'gallery-states.json');
-const CSS = path.join(__dirname, '..', 'assets', 'main.css');
+// Every stylesheet the app embeds, in the order src/css.rs concatenates them:
+// assets/main.css is the design system and comes first, and a feature brings
+// assets/features/<name>.css of its own. Linking main.css alone would rebuild
+// every feature screen unstyled and then measure the result, which passes.
+const ASSETS = path.join(__dirname, '..', 'assets');
+const FEATURE_CSS = path.join(ASSETS, 'features');
+const STYLESHEETS = [
+  path.join(ASSETS, 'main.css'),
+  ...(fs.existsSync(FEATURE_CSS)
+    ? fs.readdirSync(FEATURE_CSS).filter((f) => f.endsWith('.css')).sort()
+      .map((f) => path.join(FEATURE_CSS, f))
+    : []),
+];
 
 // ── stress ──────────────────────────────────────────────────────────────
 // A captured state only ever shows the one string the app happened to be
@@ -52,19 +64,45 @@ const CSS = path.join(__dirname, '..', 'assets', 'main.css');
 // swapped for the longest plausible value — substituting into markup the app
 // really produced, rather than hand-writing a copy of it, which is the same
 // reason the gallery is generated.
+// One unbreakable token, not a long sentence: a permission ask quotes the
+// command the agent wants to run, and a fetch or an install one-liner carries
+// a URL. A word with nowhere to break is the case that pushes a card wider
+// than the phone rather than simply wrapping.
 const LONGEST = {
+  // The model name moved into .chip-model when the chip grew an effort tier
+  // beside it; a state captured before that has it straight on .chip-label.
+  // Both are named, and the swap only writes into whichever one is actually
+  // holding the text — see below.
   '.chip-label': 'Qwen3 Coder 480B A35B Instruct',
+  '.chip-model': 'Qwen3 Coder 480B A35B Instruct',
+  // A filename is the agent's to choose, not this app's, and the review
+  // screen's head has a fixed-width control on the other end of it. The
+  // stylesheet's promise is that the directory is spent first and the name
+  // ellipsises rather than painting over that control; both halves of that
+  // are geometry, so this walk can see them. Written into every .diff-name in
+  // the state, which stresses the root-level file — the one with no directory
+  // to spend — alongside the ones that have one.
+  '.diff-name': 'transcript_folding_and_permission_merge_regression.rs',
   '.session-title': 'Refactor the transcript folding so streamed parts land in order',
+  '.session-ask-title': 'Approve or deny curl -sSL https://raw.githubusercontent.com/example/really-long-org-name/main/scripts/install.sh',
   '.topbar > .title': 'Refactor the transcript folding so streamed parts land in order',
   // Every settings-shaped row on every screen puts server text here — a model
   // name, an MCP command line, a cron sentence read back as English — and
   // none of it was being stressed.
   '.setting-value': 'npx -y @modelcontextprotocol/server-filesystem /srv/goose/workspaces/current',
-  '.session-meta': 'Every weekday at 09:00 America/Los_Angeles · 20250823_140512_9f3ab2',
+  // The leaf, not the wrapper: .session-meta is a div of spans, and the swap
+  // below refuses to write into anything with an element child — so keying
+  // this on the wrapper would look like a stress case and test nothing.
+  '.session-meta > span': 'Every weekday at 09:00 America/Los_Angeles · 20250823_140512_9f3ab2',
 };
 
+// The class a selector is worth looking for in the captured markup: the last
+// *class* in it, since a leaf may be a bare tag (`.session-meta > span`) and
+// `span` is in every state ever captured.
+const anchorClass = (sel) => sel.split(/[\s>]+/).filter((part) => part.startsWith('.')).pop().slice(1);
+
 const stressed = (states) => states.flatMap((state) => {
-  const hits = Object.entries(LONGEST).filter(([sel]) => state.body.includes(sel.split(' > ').pop().slice(1)));
+  const hits = Object.entries(LONGEST).filter(([sel]) => state.body.includes(anchorClass(sel)));
   if (!hits.length) return [];
   return [{
     label: `${state.label} (long text)`,
@@ -130,7 +168,17 @@ const GEOMETRY = () => {
       out.push(`OVERFLOW-X   ${name(el)} left=${r.left.toFixed(0)} right=${r.right.toFixed(0)} vw=${vw}`);
     }
     if (parked) continue;
-    if (el.scrollWidth > el.clientWidth + 1 && cs.overflowX === 'hidden' && cs.textOverflow !== 'ellipsis') {
+    // A flex or grid container that overflows is overflowing BOXES, not text,
+    // and every one of those boxes is visited by this same walk — so it is
+    // checked for its own ellipsis on its own terms. Asking a flex container
+    // for `text-overflow` is asking a question the property does not answer:
+    // it only applies to inline content in a block container. The chip label
+    // holding a model name and an effort tier is exactly this shape.
+    const laysOutBoxes = cs.display.includes('flex') || cs.display.includes('grid');
+    if (!laysOutBoxes
+        && el.scrollWidth > el.clientWidth + 1
+        && cs.overflowX === 'hidden'
+        && cs.textOverflow !== 'ellipsis') {
       out.push(`CLIPPED-X    ${name(el)} scroll=${el.scrollWidth} client=${el.clientWidth}`);
     }
 
@@ -139,9 +187,12 @@ const GEOMETRY = () => {
     const filled = cs.backgroundColor !== 'rgba(0, 0, 0, 0)';
     const boxed = px(cs.borderTopWidth) > 0 && px(cs.borderLeftWidth) > 0 && px(cs.borderBottomWidth) > 0;
     // A surface that spans the whole viewport in either axis is a page or a
-    // panel; square corners are correct for both.
-    const fullScreen = (r.width >= vw - 0.5 && r.height >= vh - 0.5)
-      || r.height >= vh - 0.5;
+    // panel; square corners are correct for both. Either axis really does
+    // mean either: the review screen's file bands run edge to edge so the
+    // code gets the width, and a curve at a corner the screen edge already
+    // cuts is a notch rather than a card. The width half of this sentence
+    // used to be `&&`-ed with the height and so decided nothing.
+    const fullScreen = r.width >= vw - 0.5 || r.height >= vh - 0.5;
     // Nor is a row a surface. Something that fills its clipping parent from
     // edge to edge already has that parent's corners — rounding it as well
     // is what rule 4 means by concentric, and doing it to each row of a diff
@@ -155,6 +206,26 @@ const GEOMETRY = () => {
     }
     if (tag === 'button' && (r.height < 32 || r.width < 32)) {
       out.push(`SMALL-TAP    ${name(el)} ${r.width.toFixed(0)}x${r.height.toFixed(0)}`);
+    }
+  }
+
+  // The title is centred on the screen and the controls are not, so the only
+  // thing keeping them apart is the width the title is allowed. Nothing
+  // clips, nothing overflows the viewport and nothing reports an error — the
+  // title simply runs underneath a button. Caught here because it is the sort
+  // of thing that only appears when a control group changes width.
+  const bar = document.querySelector('.topbar');
+  if (bar) {
+    const heading = bar.querySelector(':scope > .title, :scope > .titlegroup');
+    if (heading) {
+      const h = heading.getBoundingClientRect();
+      for (const group of bar.querySelectorAll(':scope > .icon-btn, :scope > .topbar-actions')) {
+        const g = group.getBoundingClientRect();
+        const over = Math.min(h.right, g.right) - Math.max(h.left, g.left);
+        if (over > 0.5) {
+          out.push(`TITLE-COLLIDE ${name(heading)} overlaps ${name(group)} by ${over.toFixed(0)}px`);
+        }
+      }
     }
   }
 
@@ -335,13 +406,21 @@ const CONTRAST = () => {
       const file = path.join(tmp, `state-${i}.html`);
       fs.writeFileSync(file,
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-        + `<link rel="stylesheet" href="${CSS}">`
+        + STYLESHEETS.map((href) => `<link rel="stylesheet" href="${href}">`).join('')
         + `</head><body>${state.body}</body></html>`);
       await page.goto(`file://${file}`, { waitUntil: 'load' });
       if (state.swap) {
         await page.evaluate((swap) => {
           for (const [sel, text] of Object.entries(swap)) {
-            document.querySelectorAll(sel).forEach((el) => { el.textContent = text; });
+            document.querySelectorAll(sel).forEach((el) => {
+              // Never into a wrapper. The longest string belongs in the
+              // element that holds the text, and writing it onto a parent
+              // deletes the parent's other children — stressing .chip-label
+              // that way would take the effort tier out of the chip and audit
+              // an arrangement the app does not build.
+              if (el.firstElementChild) return;
+              el.textContent = text;
+            });
           }
         }, state.swap);
       }
