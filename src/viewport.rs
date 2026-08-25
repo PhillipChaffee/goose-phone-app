@@ -448,9 +448,11 @@ mod tests {
     /// error, no clippy warning, because the fallthrough arm is legitimately
     /// there for the scrollers that set no name at all.
     ///
-    /// This is how the skills list arrived: `crate::skills::refresh` was
-    /// written for the pull and then had no caller, because the gesture and
-    /// the view were authored on branches that had never met.
+    /// This lives on the shared scaffolding rather than on the branch that
+    /// first tripped over it, because the gesture and the lists it serves are
+    /// written on different branches: every feature that arrives with a list
+    /// of its own has to claim its name here, and only a test on the base can
+    /// tell all of them so.
     #[test]
     fn every_scroller_that_names_a_refresh_has_an_arm_that_answers_to_it() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/views");
@@ -481,7 +483,10 @@ mod tests {
                 );
             }
         }
-        // A scan that silently matches nothing would pass forever.
-        assert!(found >= 5, "only found {found} data-refresh scrollers");
+        // A scan that silently matches nothing would pass forever. Four is
+        // what this branch alone guarantees — chats, and the three code
+        // screens — so a feature branch adding a fifth does not have to move
+        // the floor to stay honest.
+        assert!(found >= 4, "only found {found} data-refresh scrollers");
     }
 }
