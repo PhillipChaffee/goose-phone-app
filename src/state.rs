@@ -219,15 +219,33 @@ pub(crate) struct AppCtx {
     pub code_chats_loading: Signal<bool>,
     pub code_repos: Signal<Vec<opencode_client::RepoEntry>>,
     /// The chat servers' model catalogue — names, context windows and
-    /// thinking-effort tiers. Fetched once, on the first open of the session
-    /// settings sheet; nothing else needs it.
+    /// thinking-effort tiers. Fetched once, on the first open of a picker that
+    /// needs it, and kept for the app's whole run. The new-session screen has
+    /// no chat of its own, so it borrows a running one to ask
+    /// (`crate::code::catalogue_donor`).
     pub code_models: Signal<Vec<opencode_client::ModelInfo>>,
     pub code_models_loading: Signal<bool>,
-    /// The open chat's agents — what the composer's mode chip picks between.
-    /// Fetched on the first tap of that chip, and dropped when another chat
-    /// is opened, because a repository can define agents of its own.
+    /// The open chat's agents — what the composer's mode chip picks between,
+    /// and what its label is resolved out of.
+    ///
+    /// Fetched quietly as part of opening a chat, because a chip that names
+    /// the mode has to be told what the modes are; the tap on the chip is a
+    /// loud retry for the case where that failed. Dropped when another chat is
+    /// opened, because a repository can define agents of its own.
     pub code_agents: Signal<Vec<opencode_client::Agent>>,
+    /// The id of the chat whose container answered `code_agents`, or empty.
+    ///
+    /// The list is a *repository's* as much as a server's, so "some list is
+    /// already here" is not the same question as "the right list is here". The
+    /// new-session screen is where the difference shows: it borrows a
+    /// container to ask, and without this it would keep showing the agents of
+    /// whichever chat was last opened however many times its repo pill moved.
+    pub code_agents_from: Signal<String>,
     pub code_agents_loading: Signal<bool>,
+    /// The branches of the repo the new-session screen is pointed at.
+    /// Answered by the manager from GitHub with its own credential, so it
+    /// wakes no container — the same plane `code_pulls` is fetched on.
+    pub code_branches: Signal<crate::code::BranchList>,
     pub code_chat: Signal<crate::code::CodeChatState>,
     /// Pending permission asks from code chats, tagged by chat id. A separate
     /// queue from `permission` by construction: goose and `OpenCode` ids can
@@ -298,6 +316,16 @@ pub(crate) struct AppCtx {
     /// `attachments` for the same reason `code_draft` is separate from the
     /// goose draft: they are different conversations.
     pub code_attachments: Signal<Vec<crate::attach::PendingAttachment>>,
+    /// Files picked on the new-session composer and not yet sent.
+    ///
+    /// Its own tray for the same reason it has its own conversation key
+    /// (`crate::code::NEW_CONVERSATION`): the session it belongs to does not
+    /// exist yet, and `code_attachments` belongs to whichever chat was last
+    /// opened. Sharing one Vec put a photo picked in that chat into the tray
+    /// of a new session pointed at a different repo — and, sent, into its
+    /// first prompt. `conversation_key` only ever gated the *arrival* of a
+    /// pick; what a tray already holds needed the same line drawn through it.
+    pub new_attachments: Signal<Vec<crate::attach::PendingAttachment>>,
 }
 
 pub(crate) fn use_app_ctx_provider() -> AppCtx {
@@ -333,7 +361,9 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_models: use_signal(Vec::new),
         code_models_loading: use_signal(|| false),
         code_agents: use_signal(Vec::new),
+        code_agents_from: use_signal(String::new),
         code_agents_loading: use_signal(|| false),
+        code_branches: use_signal(crate::code::BranchList::default),
         code_chat: use_signal(crate::code::CodeChatState::default),
         code_permissions: use_signal(Vec::new),
         code_answered: use_signal(HashSet::new),
@@ -346,6 +376,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_diff_wrap: use_signal(|| true),
         code_draft: use_signal(String::new),
         code_attachments: use_signal(Vec::new),
+        new_attachments: use_signal(Vec::new),
     };
     use_context_provider(|| ctx);
     ctx

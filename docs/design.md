@@ -107,6 +107,12 @@ rather than an object on one, whatever screen it turns up on. That is the rule,
 not a carve-out for this screen — anything spanning 402pt has had its corners
 cut by the phone, so there is nothing left there to round.
 
+Consecutive full-bleed bands **butt together and share a single hairline**,
+rather than each carrying its own pair with a gap between. A gap turns a
+full-bleed band back into an object sitting on a page, which is the thing this
+exemption exists to deny — and two hairlines with a strip of page between them
+is a double rule drawn between every two files.
+
 ### 5. Borders separate; shadows float
 
 Anything in normal flow — cards, session rows, tool cards, table rules — gets
@@ -219,24 +225,160 @@ itself is still stated in full, as the Context length row of the sheet.
 a send button pushed off the edge — the row was within its bounds the whole
 time it was useless.
 
-The chips wrap onto a second line when they do not fit; the send button never
-does. It lives outside the wrapping box (`.chip-row`) rather than inside it, so
-it stays pinned to the trailing edge and centred on however many lines of chips
-there are — wrapping the row itself put the primary action alone on line two,
-which is the one item that must never move.
+**A chip states a value, never its own name.** "Model" and "Mode" were the app
+declining to answer questions that always have answers: a chat is always
+running as some agent — `OpenCode` has no "no agent" state — and its container
+is always configured with some model. Neither was read, only because neither
+had been asked for. The mode chip now resolves the agent out of the server's
+own list (`build` when it has one, else the first agent that may hold a
+session) and `send_code_prompt` puts that name in the prompt body, so the chip
+does not predict what the server will pick — the app tells it, and the claim
+and the request agree by construction. The model chip asks the chat's own
+container what it is configured with (`GET /chat/<id>/config`, the rendered
+`opencode.json`) for the one case nothing else can answer: a chat created with
+no model and never prompted, whose own record says `null` and whose session
+record says nothing until a turn has been sent. Where even that fails the chip
+reads `Default`, which is still a statement — the turn will carry no model and
+the container's own default will run. The new-session screen's mode chip
+resolves against the same list its own picker ticks, from one expression fed to
+the label, the icon, the tick and the agent the session is created with:
+reading the raw signal in one place and `resolve_agent` in another is how a
+chip came to say `Build` on a server whose list has no `build` while the sheet
+it opened ticked `Plan`.
 
-**Which chip takes the second line is decided, not left to the row.** A line
-breaks on an item's *unshrunk* width, so a chip sized to its own text can take
-a line of its own without having given up a pixel — and at 402pt a long model
-name did exactly that, leaving the attach button alone above it and pushing the
-mode chip to a third line. The model chip is capped at the row minus the attach
-button instead, so it always fits beside it and what wraps is the mode chip and
-the context readout. A shrink-and-grow arrangement was tried first and is the
-thing to avoid: where the line breaks and how much a chip gets afterwards are
-two decisions, and they stopped agreeing between 375 and 402pt — a wider phone
-showed *less* of the model name than a narrower one. `docs/measure-composer.js`
-now runs several widths in one pass and fails on exactly that, because no
-single width can see it.
+The goose tab never had this problem and must not be "fixed": it ships
+`currentValue` inside the `configOptions` of `session/new`, so its two chips
+read real values on every build that sends one. The single exception in the app
+is a fallback rather than a face it can wear — `mode.current_label()` answering
+`None` puts the word `Mode` on the goose mode chip — and it stays because
+hiding the chip would hide the picker with it: the mode is filtered out of the
+settings sheet precisely because the chip is where it lives.
+
+**A screen that configures a session is a composer, not a form.** The
+new-session screen used to be a repository dropdown, a task box and a model
+text field stacked in a card over a Start button — three labelled boxes to
+scroll past to reach the one control. It is now the same composer the two chat
+screens are: the page is the field, the parameters are pills under it, and the
+field's placeholder is a sentence naming them, so the screen states its own
+configuration where the reader is already looking. Two rows, not one, and the
+split is by what a pill decides: the top row is what the session runs **on** and
+outlives every turn (repository, base branch), the bottom row is what its first
+turn runs **as** and can be changed again from the chat afterwards (model,
+mode) — plus the attach button and send, which belong to the message. Nothing
+spans the width and nothing is boxed: the composer drops its card there
+(`.composer.bare`), because its field is not inside it and a border around six
+capsules is a rectangle drawn for its own sake.
+
+**A model is chosen, never defaulted into.** It is the one parameter that
+decides what the work costs, how good it is, and — through privacy hard rule 1
+— who gets to see the code, and "Model (optional)" meant most sessions ran on
+whatever the manager happened to fall back to. Send is disabled until the pill
+is filled, and an unfilled required pill carries the warning dot the Code list
+already puts on a chat that is waiting on you (rule 8) — a disabled primary
+action says something is missing, and the dot is what says which. The one case
+a default is offered is the one where nothing else can be: `/config/providers`
+is a route on a *chat's* `OpenCode` server, so a manager with no chat on it has
+no catalogue to show, and what the picker offers then is "The server's default
+model" as a real value with a reason under it — the same downgrade
+`SettingRow::select` makes when there is nothing to choose between.
+
+That row is offered only once the fetch has **settled** empty, never while it
+is in flight, and the distinction is the whole rule rather than a detail of it.
+The catalogue is fetched by the tap that opens the sheet, so on every first
+open the list is empty and loading at the same instant — and offering the
+escape hatch then would put the manager's default at the top of an otherwise
+blank sheet on every single open, which is the path of least resistance this
+paragraph exists to close. While it is in flight the sheet offers nothing and
+says it is asking. The other empty list has no escape hatch at all and must
+not grow one: a catalogue every model of which trains on its input is a dead
+end for a repo that is not a public throwaway, and "the server's default"
+there would be one of those same models with the rule not applied to it. The
+copy states the way out (a throwaway repo, or a model on the server that does
+not train) rather than offering a door that should not open.
+
+**What is deliberately not there.** No **environment** pill: the reference has
+cloud environments and this app has no such concept anywhere — not in the
+manager, not in `repos.json`, not on a chat — so it would be chrome that
+decides nothing. No **microphone**: voice is out of scope. No **thinking
+effort**: a tier belongs to a model and `set_code_model` clears it on every
+switch, so a tier picked before the model settles is a value the next tap
+throws away; the chat's own settings chip takes it from the first turn on.
+
+**The picker grows a filter where finding beats scrolling** — over eight
+choices, which today is the branch list and the model catalogue and nothing
+else. It sits at the bottom of the sheet, within reach and still while the list
+moves under it, which is what makes the sheet a column around a scrolling list
+rather than one scrollbox — and it is why `.modal-backdrop` now follows the
+visual viewport the way `.app` does: no modal had held a focusable control
+before, so nothing had noticed that a fixed backdrop puts its own contents
+under the keyboard.
+
+Moving the backdrop moved what a sheet's height is a percentage **of**, and
+both caps had to follow it. `70vh` is the layout viewport, which iOS does not
+shrink; measured at 375x874 with a 30-row branch list and the keyboard up, a
+612px sheet inside a 538px backdrop put its own top at −74 and its title at
+−49, off the top of the screen. `max-height: 70%` and `85%` measure against the
+backdrop, so the sheet is bounded by the space it is actually in.
+
+**A borrowed list says whose it is.** The mode picker on that screen asks a
+container for its agents, and this repo may have none — so the app borrows one,
+preferring a chat on the selected repo, then any that is already awake. A
+repository can define agents of its own (`.opencode/agent/`), which makes a
+borrowed list a good guess rather than an answer, so the sheet names the repo
+it came from when that is not the one selected. The base-branch picker says the
+same kind of thing about a different limit: the manager stops reading at 500
+branches, and with a filter over a list that has been cut short, "Nothing
+matches" about a branch that exists is a lie the reader has no way to catch.
+
+**Attachments belong to the composer they were picked in**, and the new-session
+screen is a composer without a chat. It gets a tray of its own
+(`new_attachments`) rather than sharing the code chat's: `conversation_key`
+decides which arriving picks are accepted, and one Vec behind two composers
+meant a photo picked in a chat and left unsent was rendered in the new
+session's tray and lifted into its first prompt — at a different repo. The two
+halves have to be drawn by the same line.
+
+**The chip block is one line and never more.** The send button lives outside
+it (`.chip-row`) rather than inside, so it stays pinned to the trailing edge
+whatever the chips do — putting the wrap on the row itself put the primary
+action alone on line two, which is the one item that must never move.
+
+The chips used to wrap, and the reversal is worth recording rather than
+erasing. Wrapping was chosen so that a long model name would not be crushed; it
+was rejected because a composer that grows a row under your thumb is worse than
+a name you can tap to read in full. **The model name is the only elastic item
+in the row** — everything else is rigid, so the deficit lands on it by
+construction rather than by proportion, and the sheet the chip opens states the
+model whole.
+
+What one line costs, measured (Chromium, the longest catalogue name, real
+effort tiers): at 402pt the name keeps 70–107px, at 375 it keeps 43–80, at 360
+it drops to 28–65, and at 320 with a tier beside it there is nothing left and
+the chip is an ellipsised tier and a chevron. In characters rather than pixels
+— which is the honest unit for a name — 43px is five, and two of this app's
+models share their first four, so at 375 the chip is telling you which family
+the model is in and the sheet is where you read which one.
+
+The crowded goose row — model, tier, mode and the context readout — is worse
+than that paragraph reads and the number is worth writing down. It spends the
+name entirely at **every** width the app meets when a tier is present: 0px at
+320, 360 and 375, 6px at 390, 18px at 402 with `Max` and 9px with `Xhigh`. With
+no tier it recovers 5px at 360 and 20 at 375. So on that row the model chip is
+a chevron in an empty pill on an iPhone 12 mini, and a chevron beside two
+letters of a tier at 375. That is the trade the row already makes deliberately
+— at that moment the context warning is the most useful thing in it, and
+`crowding()` only shows the readout from 75% of the window on — but it is a
+trade, not a truncation, and the alternative on offer is the wrapping row this
+one replaced. 320pt is a defensive width rather than a device; the narrowest
+this app really meets is 360.
+
+That row cannot be one line at 320pt by 7–35px however the space is divided, so
+`.chip-row` is a sideways scroller in the same shape `.action-row` and
+`.attach-tray` already use. It is a **valve, not a layout**: it engages in
+exactly that one composition family, and `docs/measure-composer.js` fails on
+any overflow anywhere else, so a fifth chip cannot quietly slide off the edge.
+Without it those chips paint over the send button, which is the worse of the
+two.
 
 The sheet has exactly two kinds of row, and which one a setting gets is
 **The settings chip's face is the model, then the effort tier** — `Opus 5
@@ -254,21 +396,51 @@ and `--text-tertiary` measures 2.03:1 and 1.85:1 there — under even the 3:1 a
 non-text indicator gets. So the name goes to `--text-primary` (9.16:1, 9.93:1)
 and the tier keeps the secondary the chip already had.
 
-**Neither half may eat the other.** The name is what gives way when the chip
+**The tier may not eat the name.** The name is what gives way when the chip
 runs out of room — it is the long one, and the sheet the chip opens states it
-in full — but only as far as it can give way and still be a name. The goose
-row is the tight one: its chips and send button share 306px at 360pt, which
-leaves the label 120 and `Claude Sonnet 5` wants 94 of them, so a tier that is
-pinned *and* unbounded spends the whole difference and the chip comes back
-reading `Claude…`, which cannot tell Opus from Sonnet. Three things hold the
-tier to about a fifth of the label instead: `chip_effort` shortens the two long
-tiers either backend serves (goose's `medium`, `OpenCode`'s `minimal`) on the
-way to the chip, `.chip-effort` caps what arrives at five characters, and the
-token chip stopped spending 20px on decimals it could not use — `128k/200k`,
-not `128.0k/200.0k`, since a tenth of a thousand is a hundred tokens and no
-one is deciding anything on it. `docs/measure-composer.js` fails if the tier
-takes more than 40px, or if a name that has been ellipsised is left holding
-less than twice what the tier holds.
+in full — but the tier is the fact the label grew a second element to carry, so
+it must never be what gives instead. The goose row is the tight one: its chips
+and send button share 306px at 360pt, which leaves the label 120 and `Claude
+Sonnet 5` wants 94 of them, so a tier that is pinned *and* unbounded spends the
+whole difference and the chip comes back reading `Claude…`, which cannot tell
+Opus from Sonnet. Three things hold the tier to about a fifth of the label
+instead: `chip_effort` shortens the two long tiers either backend serves
+(goose's `medium`, `OpenCode`'s `minimal`) on the way to the chip,
+`.chip-effort` caps what arrives at five characters, and the token chip stopped
+spending 20px on decimals it could not use — `128k/200k`, not `128.0k/200.0k`,
+since a tenth of a thousand is a hundred tokens and no one is deciding anything
+on it. `docs/measure-composer.js` fails if the tier takes more than 40px, or if
+it is clipped away or ellipsised while the name still has width.
+
+**"Last" is not "never", and the difference is a rendering bug.** Holding the
+tier rigid (`flex-shrink: 0`) said "never" and produced the failure the
+paragraph above is about, one element along: once the name reached zero the
+tier was still asking for its full width inside a label narrower than that, and
+the LABEL became the clipper — which `text-overflow` never paints on. A 32.5px
+`Xhigh` with 14.7px of it painted is a chip stating a tier called `Xh`; `Max`
+came out `Ma` at 320pt on every row. What orders the two now is the ratio of
+their shrink factors — 1000 on the name against 1 on the tier — so the name
+absorbs 99.9% of any deficit (measured: within 0.1px of what a rigid tier gave
+it, at every width and every tier) and the tier gives only once the name is
+frozen at nothing, on its own box, where the ellipsis is. Strict priority is
+what was wanted; rigidity was a way of asking for it that had a last case.
+
+The name has **no width floor**, and the `min-width: 6ch` that used to be one
+is gone because it never was one. `.chip-label` clips, so once the row is one
+line the label shrinks past 6ch and a 45px `.chip-model` box inside a 12px
+label is cut mid-glyph by the *parent* — and `text-overflow` only ever paints
+on the box that does its own clipping. Measured at 320pt: the box reported 45px
+and 0–26px of it was painted, with no ellipsis at all. What replaced it is
+three absolute things — the tier's 5ch cap, the chip's own `min-width: 44px`
+(the padding, border, gap and one glyph it takes to draw itself, below which a
+crushed pill paints its chevron outside itself), and a script assertion that
+the name's own box is what clips it, so a cut always says it was a cut. Above
+375pt the script also holds a non-crowded row to 30px of name — three
+characters, two glyphs and the ellipsis. That is a floor against the name
+vanishing rather than a promise of legibility, and it is deliberately below the
+42.5px the arrangement actually delivers there: pinned to the measurement, the
+assertion would be a record of today's layout instead of a statement of the
+rule, which is that the chip must still be a name and not a chevron.
 The composer's chip row holds what is real on that screen: the token budget on
 the goose tab, and one chip per tab that opens the session's settings. The code
 tab's own two — the diff and the branch's pull requests — sit in the action row
@@ -547,35 +719,58 @@ control on the review screen's file head.
 
 `node docs/measure-composer.js [width…]` is separate because the audit cannot
 see what it looks for: text spilling out of a chip is an anonymous text node
-with no box, and no chip sets `overflow-x`. It builds the two composer rows the
-app actually assembles, at every width you give it, with the longest model
-names any server has offered and every effort tier that can reach a chip — and
-fails if the send button leaves the screen, if a label spills past its pill, if
-the tier is squeezed out through the side of the pill, if the tier takes more
-than the 40px it is allowed, or if a name that has had to ellipsise is left
-holding less than twice what the tier holds. That last pair is what the earlier
-version missed by trying `Max` alone: it is the cheapest tier there is, and the
-only one nothing goes wrong with.
+with no box, and no chip sets `overflow-x`. It builds the composer rows the app
+actually assembles — both chat tabs and the new-session screen's two — at every
+width you give it, with the longest model names any server has offered and
+every effort tier that can reach a chip.
 
-It fails on three more things that were on screen the whole time it reported
-clean, because none of them is a number going out of range: the send button
-wrapping below the chips, the send button not centred on the chip block, and a
-label clipped with no ellipsis. A wrapping row grows rather than overflowing,
-so send could sit on a line of its own with `overflow` still reading 0; and a
-label that clips itself measures as spilling a *negative* amount, so a hard cut
-mid-word read as cleaner than a label with room to spare. The overflow it
-measures is `.chip-row`'s, not `.composer-row`'s: the row holds a chip block
-that shrinks and a send button that does not, so its own scrollWidth can never
-exceed its clientWidth and asking it was asking a question with one answer.
+The first thing it fails on is a chip block taking **more than one line**, which
+is the rule the stylesheet states. It is measured by clustering each row's chips
+on their vertical centres rather than their tops, because the attach button is
+36px tall and the chips 32, so grouping by `top` reports two lines for a row
+that is plainly one. It replaced the send-button-below-the-chips check, which a
+`nowrap` row can no longer fail; the send button is still held to its own row's
+centre, and judged against *that* row rather than every chip on the page —
+otherwise the new-session screen's context row reads as a wrap on every clean
+run.
+
+Then: the send button leaving the screen, any chip's own children painting past
+its pill (not just its label — a crushed pill pushes its chevron out through the
+side, which is a real 5px failure at 320pt), the composer growing wider than the
+screen, the tier being clipped away or ellipsised while the name still has
+width, the tier taking more than the 40px it is allowed, and a label clipped
+with no ellipsis — in the mode chip, in the model name, and in the tier. That
+last one is what the removed `min-width: 6ch` floor was silently failing: a
+parent narrower than the box inside it produces a hard cut mid-glyph and
+`text-overflow` never paints, so the floor measured as present while nothing of
+it was drawn. The tier had the same failure and it survived the floor's
+removal, because the question was asked *only where the name still had width* —
+and the label is narrowest, so the parent is likeliest to be the clipper,
+exactly where the name has none. 360 compositions were rendering `Xh` and `Ma`
+under a clean run. The hard-cut check is now asked of every composition
+regardless, and it is what the name's suppression rule was moved off: a tier
+that has given way may ellipsise once the name is at zero, but it may never be
+cut by a box that cannot say so.
+
+The width floor that remains is banded — 30px of name at 375pt and above, on a
+row that is not carrying the context readout — because below 375 one line costs
+the name everything and 320 is a defensive width rather than a device.
+
+The row's overflow is `.chip-row`'s, not `.composer-row`'s, and it is now how far
+the scroller would have to scroll. It must be 0 everywhere except the one family
+that cannot fit — 320pt with four chips — so the valve cannot quietly absorb a
+fifth chip.
 
 And it fails on one thing no single width can show — a bigger phone rendering
-*less* of the model name than a smaller one. That is the shape of failure a
-wrapping row invites, because where a line breaks and what a chip gets
+*less* of the model name than a smaller one. That was the shape of failure a
+wrapping row invited, because where a line breaks and what a chip gets
 afterwards are two decisions that can stop agreeing; it read `Claude Son…` at
 390pt and `Claude Sonnet 4.5` at 375pt while every number was in range at both.
-So the script takes a list of widths and defaults to 320/360/375/390/393/402 —
-390 and 393 are in it because the old habit of running 360, 375 and 402 stepped
-straight over the two widths where it was worst.
+One line makes it true by construction, so it is a guard against the wrap coming
+back rather than the thing it was written to catch. The script takes a list of
+widths and defaults to 320/360/375/390/393/402 — 390 and 393 are in it because
+the old habit of running 360, 375 and 402 stepped straight over the two widths
+where it was worst.
 
 `node docs/measure-ptr.js both` and `node docs/measure-scroll-bottom.js both`
 cover the two controls no screenshot will ever catch. Against a local mock a
@@ -586,11 +781,13 @@ markup instead of reading the gallery — that is exactly the drift the gallery
 exists to prevent, and it is accepted here only because the alternative is not
 checking them at all, so keep them in step with the views. The scroll-to-bottom
 fixture builds its composer with a `.chip-row`, and one of its cases fills that
-row until the chips take two lines: a composer whose chips are flat in
-`.composer-row` cannot grow a second line whatever is put in it, so it would be
-measuring a height the app never has. Both measure what a
-screenshot would have shown: hidden when it should be, present and in the right
-place when it should be, in both themes.
+row with everything it can carry at once. That case used to prove the composer
+at its tallest — four chips wrapped, 34px the button had to move up by — and it
+proves the opposite now: the row is one line whatever is in it, so the button
+must sit at exactly the `top` the plain case puts it at, and the case asserts
+that rather than silently becoming a second copy of the first. Both measure what
+a screenshot would have shown: hidden when it should be, present and in the
+right place when it should be, in both themes.
 
 The scroll-to-bottom check goes one further and drives the button's *rule*,
 because placement was never the half that broke. It reads the three scripts

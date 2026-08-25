@@ -153,8 +153,13 @@ pub fn ChatView() -> Element {
                 },
             }
             div { class: "composer-row",
-                // The chips wrap onto a second line; the send button below
-                // does not, because it is outside this box.
+                // This box is one line and never more (`.chip-row` in
+                // main.css). The send button is outside it, which is what
+                // keeps it pinned to the trailing edge whatever the chips
+                // inside do — and what it used to be outside a *wrapping* box
+                // for. The wrap is gone: a composer that grows a row under
+                // your thumb is worse than a model name you can tap to read in
+                // full.
                 div { class: "chip-row",
                     AttachButton { target: AttachTarget::Goose, conversation }
                     if !rows.is_empty() {
@@ -179,6 +184,16 @@ pub fn ChatView() -> Element {
                             Icon {
                                 name: mode_icon(mode.current_value.as_deref().unwrap_or_default()),
                             }
+                            // The one place in this app a chip can end up
+                            // naming its own control, and it is a fallback
+                            // rather than a state the app can produce: goose
+                            // ships `currentValue` inside the `configOptions`
+                            // of `session/new`, so `current_label` answers on
+                            // every build that has one. Hiding the chip
+                            // instead would hide the picker with it — the mode
+                            // is filtered out of the settings sheet
+                            // (`goose_setting_rows`) precisely because this
+                            // chip is where it lives.
                             span { class: "chip-label",
                                 {mode.current_label().unwrap_or("Mode")}
                             }

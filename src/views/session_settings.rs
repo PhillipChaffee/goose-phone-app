@@ -290,8 +290,30 @@ pub(crate) fn SessionSettingsSheet(
     }
 }
 
+/// A list long enough that finding is faster than scrolling gets a filter.
+/// Below this the field would be a control that does nothing (rule 11) and a
+/// row of chrome above a five-item list.
+const SEARCH_AT: usize = 8;
+
+/// The choices whose label, value or note contains `needle`, case-folded.
+///
+/// A free fn so it can be tested without a renderer. The note is searched as
+/// well as the name, which is what makes a repo findable by its owner.
+fn matching(choices: &[SettingChoice], needle: &str) -> Vec<SettingChoice> {
+    if needle.is_empty() {
+        return choices.to_vec();
+    }
+    let needle = needle.to_ascii_lowercase();
+    let hit = |s: &str| s.to_ascii_lowercase().contains(&needle);
+    choices
+        .iter()
+        .filter(|c| hit(&c.label) || hit(&c.value) || c.note.as_deref().is_some_and(hit))
+        .cloned()
+        .collect()
+}
+
 /// A sheet that is one picker and nothing else — what the composer's mode
-/// chip opens.
+/// chip opens, and what each of the new-session screen's four pills opens.
 ///
 /// Mode is the one setting with a chip of its own, because it is the one you
 /// change mid-conversation: the rest of the sheet is what the session runs
@@ -303,6 +325,15 @@ pub(crate) fn ChoicePickerSheet(
     title: String,
     /// Named in the subtitle, exactly as the settings sheet names it.
     backend: String,
+    /// Replaces the "{backend} · applies from your next message" line where
+    /// that copy is not true. The new-session screen has no next message; it
+    /// has a first one, and saying otherwise about a session that does not
+    /// exist yet is the kind of borrowed sentence rule 8 is about.
+    subtitle: Option<String>,
+    /// One line about the LIST rather than about a choice in it — today, the
+    /// free models a private repo is not being offered. Same sentence the
+    /// settings sheet's Model row carries, from the same helper.
+    note: Option<String>,
     choices: Vec<SettingChoice>,
     current: Option<String>,
     /// Stands in for the list when there is nothing in it yet.
@@ -310,7 +341,12 @@ pub(crate) fn ChoicePickerSheet(
     onchoose: EventHandler<String>,
     onclose: EventHandler<()>,
 ) -> Element {
-    let list = choice_list(&choices, current.as_deref(), move |value| {
+    let mut query = use_signal(String::new);
+    let searchable = choices.len() > SEARCH_AT;
+    let shown = matching(&choices, &query());
+    let subtitle =
+        subtitle.unwrap_or_else(|| format!("{backend} · applies from your next message"));
+    let list = choice_list(&shown, current.as_deref(), move |value| {
         onchoose.call(value);
     });
     rsx! {
@@ -325,11 +361,38 @@ pub(crate) fn ChoicePickerSheet(
                 class: "modal sheet picker",
                 onclick: move |e: Event<MouseData>| e.stop_propagation(),
                 h2 { "{title}" }
-                p { class: "modal-session", "{backend} · applies from your next message" }
-                if choices.is_empty() {
-                    p { class: "empty", "{empty}" }
+                p { class: "modal-session", "{subtitle}" }
+                if let Some(note) = note {
+                    p { class: "hint", "{note}" }
+                }
+                if shown.is_empty() {
+                    // Two different emptinesses, and conflating them is how a
+                    // search that matched nothing came out reading like a
+                    // server that offered nothing.
+                    p { class: "empty",
+                        if choices.is_empty() { "{empty}" } else { "Nothing matches “{query}”." }
+                    }
                 }
                 {list}
+                // At the bottom, where a thumb is and where it stays put as
+                // the list moves under it — which is where the reference puts
+                // it, and what costs the sheet its single scrollbox (see
+                // .modal.sheet:has(.sheet-search) in main.css).
+                if searchable {
+                    div { class: "sheet-search",
+                        Icon { name: "search" }
+                        input {
+                            class: "field",
+                            r#type: "text",
+                            placeholder: "Search",
+                            autocapitalize: "off",
+                            autocomplete: "off",
+                            spellcheck: "false",
+                            value: "{query}",
+                            oninput: move |e| query.set(e.value()),
+                        }
+                    }
+                }
             }
         }
     }
@@ -552,6 +615,28 @@ mod tests {
             SettingChoice::new("auto", "Auto").with_note(None).note,
             None
         );
+    }
+
+    /// The filter folds case and reaches the note, which is what makes a repo
+    /// findable by its owner rather than only by its bare name.
+    #[test]
+    fn the_filter_folds_case_and_searches_the_note() {
+        let choices = vec![
+            SettingChoice::new("PhillipChaffee/personal-ai-setup", "personal-ai-setup")
+                .with_note(Some("PhillipChaffee".to_owned())),
+            SettingChoice::new("jaegertracing/artwork", "artwork")
+                .with_note(Some("jaegertracing".to_owned())),
+        ];
+        let by_owner = matching(&choices, "JAEGER");
+        assert_eq!(by_owner.len(), 1);
+        assert_eq!(by_owner[0].label, "artwork");
+        assert_eq!(matching(&choices, "SETUP").len(), 1);
+        assert_eq!(
+            matching(&choices, "").len(),
+            2,
+            "an empty needle matches all"
+        );
+        assert!(matching(&choices, "nothing-like-this").is_empty());
     }
 
     #[test]

@@ -41,15 +41,53 @@ pub(crate) enum CodeScreen {
     Pulls,
 }
 
+/// The conversation key the new-session composer's attachments belong to.
+///
+/// `conversation_key` normally answers with the open chat's id, and on this
+/// screen there is no open chat — the last one you visited is still in
+/// `code_chat`, and its id would make a photo picked here land in it. It also
+/// selects the tray those picks sit in (`crate::attach::tray_of`), which is
+/// the half that keeps the two composers' held files apart rather than only
+/// their arriving ones.
+///
+/// It cannot collide with a real chat: the manager names one
+/// `{repo}-{6 hex}`, so every id it issues carries a suffix.
+pub(crate) const NEW_CONVERSATION: &str = "new";
+
+/// A repo's branches, for the new-session screen's base-branch pill.
+///
+/// It carries the repo it was fetched for. A read takes a round trip and the
+/// repo pill is one tap away, so an answer that arrives after the reader has
+/// moved on is for a different repo — and showing it would offer branches
+/// that do not exist on the one now selected.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub(crate) struct BranchList {
+    pub repo: String,
+    /// The repo's own default, marked `Default` in the picker and what the
+    /// pill seeds itself from. `None` when GitHub would not say, which the
+    /// manager reports rather than failing the whole list over.
+    pub default: Option<String>,
+    pub names: Vec<String>,
+    /// The manager stopped paging before the end (500 branches). Carried so
+    /// the picker can say the list is short rather than let it look complete —
+    /// with a filter over it, "Nothing matches" about a branch that exists is
+    /// the wrong answer to give silently.
+    pub truncated: bool,
+    pub loading: bool,
+}
+
 /// Everything the code chat screen renders.
 #[derive(Clone, PartialEq, Default)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "these four are independent facts about the screen, not a state \
+    reason = "these five are independent facts about the screen, not a state \
               machine to collapse into an enum: a chat can be waking AND \
-              loading at once, running is orthogonal to both, and picked is \
-              about where the model came from rather than about the chat's \
-              lifecycle at all"
+              loading at once, running is orthogonal to both, and picked and \
+              agent_picked are about where the model and the mode came from \
+              rather than about the chat's lifecycle at all. Neither of the \
+              two flags can be folded into its own Option either — see picked \
+              below for why doing so makes the server's record permanently \
+              unadoptable"
 )]
 pub(crate) struct CodeChatState {
     pub chat_id: Option<String>,
@@ -79,15 +117,24 @@ pub(crate) struct CodeChatState {
     /// variant). `None` means the model's own default.
     pub effort: Option<String>,
     /// The agent the next turn runs as — what the composer calls the mode.
-    /// `None` means the server's own default agent.
     ///
-    /// No `picked` companion, and for the reason `picked` exists rather than
-    /// in spite of it: the session record carries a model but says nothing
-    /// about an agent, so there is no server value that could overrule a
-    /// local one, and here "has a value" and "the reader chose it" really are
-    /// the same question. The day `GET /session` starts reporting the agent,
-    /// this needs its own flag exactly as the model does.
+    /// Either the reader's pick or the agent the session record reports;
+    /// `agent_picked` beside it says which. `None` means neither has spoken
+    /// yet, and the composer resolves one out of the server's own agent list
+    /// rather than showing the name of the control
+    /// ([`opencode_client::resolve_agent`]).
+    ///
+    /// This used to say a flag would be owed "the day `GET /session` starts
+    /// reporting the agent". That day is here: `Session.to_wire()` emits
+    /// `agent` beside `model`, written on every turn that names one.
     pub agent: Option<String>,
+    /// The reader picked `agent` in the mode sheet, as opposed to it being
+    /// adopted from the session record.
+    ///
+    /// Exactly `picked`'s job for the mode. `attach_chat` also runs on an SSE
+    /// reconnect, so without this a mode chosen seconds ago and not yet sent
+    /// would be overwritten by whatever the last turn ran as.
+    pub agent_picked: bool,
     /// The reader picked `model`/`effort` in the settings sheet, as opposed
     /// to them being seeded from the chat record.
     ///
@@ -495,28 +542,74 @@ pub(crate) fn is_free_model(reference: &str) -> bool {
     matches!(bare.as_str(), "big-pickle" | "muse-spark-contributor") || bare.contains("free")
 }
 
-/// Whether the open chat's repo is flagged a public throwaway — the one case
-/// where a model that trains on its input is allowed to see the code.
-pub(crate) fn open_chat_allows_free_models(ctx: &AppCtx) -> bool {
-    let repo = ctx.code_chat.peek().repo.clone();
+/// Whether `repo` is flagged a public throwaway — the one case where a model
+/// that trains on its input is allowed to see the code.
+///
+/// Asked about a repo name rather than about the open chat, because the
+/// new-session screen has no chat: it applies this rule to whichever repo is
+/// selected on it, which is the same rule the settings sheet applies to the
+/// one a chat is on.
+pub(crate) fn repo_allows_free_models(ctx: &AppCtx, repo: &str) -> bool {
     ctx.code_repos
         .peek()
         .iter()
         .any(|r| r.name == repo && r.public_throwaway)
 }
 
+/// The same question about the chat that is open.
+pub(crate) fn open_chat_allows_free_models(ctx: &AppCtx) -> bool {
+    let repo = ctx.code_chat.peek().repo.clone();
+    repo_allows_free_models(ctx, &repo)
+}
+
+/// The chat whose container is asked for a catalogue the app has no chat of
+/// its own to ask for.
+///
+/// A *running* one first, whichever it is: `/config/providers` and `/agent`
+/// reach `OpenCode` through the manager's transparent proxy and any request to
+/// a stopped chat wakes it, so borrowing one that is already awake costs
+/// nothing the idle spin-down cares about. Only when none is running does this
+/// fall back to the chat you last opened, and then to the first the manager
+/// listed — and that one does wake, which is the price of the catalogue living
+/// where it lives.
+fn catalogue_donor(ctx: &AppCtx) -> Option<String> {
+    let chats = ctx.code_chats.peek();
+    if let Some(running) = chats.iter().find(|c| c.is_running()) {
+        return Some(running.id.clone());
+    }
+    ctx.code_chat
+        .peek()
+        .chat_id
+        .clone()
+        .or_else(|| chats.first().map(|c| c.id.clone()))
+}
+
 /// Fetch the chat server's model catalogue, once, on first need.
 ///
 /// Deliberately not part of opening a chat: it is every model of every
-/// provider and nothing outside the settings sheet reads it, so it is paid
-/// for when that sheet is opened and not before.
+/// provider and nothing outside the pickers reads it, so it is paid for when
+/// one of them is opened and not before. The answer is app-wide and kept for
+/// the session, so the cost is paid once per app run.
 pub(crate) fn ensure_code_models(ctx: &AppCtx) {
-    if !ctx.code_models.peek().is_empty() || *ctx.code_models_loading.peek() {
-        return;
-    }
     let Some(chat_id) = ctx.code_chat.peek().chat_id.clone() else {
         return;
     };
+    fetch_models(ctx, chat_id);
+}
+
+/// The same catalogue, from whichever chat can answer — the new-session
+/// screen's path, where there is no chat of its own yet.
+pub(crate) fn ensure_code_catalogue(ctx: &AppCtx) {
+    let Some(chat_id) = catalogue_donor(ctx) else {
+        return;
+    };
+    fetch_models(ctx, chat_id);
+}
+
+fn fetch_models(ctx: &AppCtx, chat_id: String) {
+    if !ctx.code_models.peek().is_empty() || *ctx.code_models_loading.peek() {
+        return;
+    }
     let Some(client) = ctx.code_client.peek().clone() else {
         return;
     };
@@ -532,42 +625,196 @@ pub(crate) fn ensure_code_models(ctx: &AppCtx) {
     });
 }
 
-/// Fetch the chat server's agents — the composer's modes — once, on first
-/// need.
+/// Fetch the open chat's agents — the composer's modes — loudly, on the tap
+/// that opens the picker.
 ///
-/// Same shape as [`ensure_code_models`] and paid for the same way: on the tap
-/// that opens the picker, not on opening a chat. Unlike the model catalogue
-/// this list is cleared when a chat is opened, because agents can be defined
-/// by the repository (`.opencode/agent/`), so the next chat's are not
-/// necessarily these.
+/// After [`refresh_code_agents`] has run on chat open this is a free no-op;
+/// after a *failed* open it retries and says why, which is what the loud half
+/// is for.
 pub(crate) fn ensure_code_agents(ctx: &AppCtx) {
-    if !ctx.code_agents.peek().is_empty() || *ctx.code_agents_loading.peek() {
-        return;
-    }
     let Some(chat_id) = ctx.code_chat.peek().chat_id.clone() else {
         return;
     };
+    fetch_agents(ctx, chat_id, true);
+}
+
+/// The same list, quietly, as part of opening a chat.
+///
+/// This used to be paid for on the chip tap alone, to save a request per open.
+/// What that bought was a chip naming itself — `Mode` — instead of the mode
+/// the next turn actually runs in, which is the whole reason the chip exists.
+/// The request is not the cost it was: `attach_chat` reaches this point with
+/// the container already awake and five requests already spent on it, so
+/// `GET /agent` adds one round trip and no wake. That is the identical trade
+/// [`refresh_diff_counts`] makes two lines above it.
+///
+/// Quiet is load-bearing: an `OpenCode` build predating the route answers 404,
+/// and a loud fetch here would toast on every single chat open.
+pub(crate) fn refresh_code_agents(ctx: &AppCtx) {
+    let Some(chat_id) = ctx.code_chat.peek().chat_id.clone() else {
+        return;
+    };
+    fetch_agents(ctx, chat_id, false);
+}
+
+/// The agents of a borrowed chat — the new-session screen's path.
+///
+/// The donor is chosen for `repo` rather than taken from
+/// [`catalogue_donor`], because agents are not the catalogue: models come from
+/// the server's own config and are the same in every container, while agents
+/// can be defined by the repository (`.opencode/agent/`). A chat on this repo
+/// is therefore the only donor whose answer is certainly right for it, and one
+/// that is already awake is preferred over one that has to be woken.
+pub(crate) fn ensure_code_agent_list(ctx: &AppCtx, repo: &str) {
+    let Some(chat_id) = agent_donor(ctx, repo) else {
+        return;
+    };
+    fetch_agents(ctx, chat_id, true);
+}
+
+/// Whichever chat is asked what agents `repo` has: one of its own first,
+/// running before stopped, and only then anybody's.
+fn agent_donor(ctx: &AppCtx, repo: &str) -> Option<String> {
+    let own = {
+        let chats = ctx.code_chats.peek();
+        chats
+            .iter()
+            .find(|c| c.repo == repo && c.is_running())
+            .or_else(|| chats.iter().find(|c| c.repo == repo))
+            .map(|c| c.id.clone())
+    };
+    own.or_else(|| catalogue_donor(ctx))
+}
+
+/// The repo whose container answered the agent list the app is holding, when
+/// that is not `repo`.
+///
+/// The new-session screen states this in the picker rather than passing a
+/// borrowed list off as the selected repo's. `None` covers both "it is this
+/// repo's" and "the donor is no longer in the list", which want the same
+/// silence.
+pub(crate) fn borrowed_agents_from(ctx: &AppCtx, repo: &str) -> Option<String> {
+    let from = ctx.code_agents_from.peek().clone();
+    if from.is_empty() {
+        return None;
+    }
+    ctx.code_chats
+        .peek()
+        .iter()
+        .find(|c| c.id == from)
+        .map(|c| c.repo.clone())
+        .filter(|donor| donor != repo && !donor.is_empty())
+}
+
+/// Unlike the model catalogue this list is dropped when the chat that answered
+/// it is no longer the one being asked about — on opening a chat, and on the
+/// new-session screen when its repo has a container of its own to ask —
+/// because agents can be defined by the repository (`.opencode/agent/`), so
+/// one chat's are not necessarily another's.
+///
+/// `code_agents_from` is what makes that checkable. Without it the guard below
+/// reads "some list is already here", which on the new-session screen made the
+/// mode pill a no-op that showed the last chat you opened whatever repo you
+/// had since chosen.
+fn fetch_agents(ctx: &AppCtx, chat_id: String, loud: bool) {
+    let held_from = ctx.code_agents_from.peek().clone();
+    if held_from == chat_id
+        && (!ctx.code_agents.peek().is_empty() || *ctx.code_agents_loading.peek())
+    {
+        return;
+    }
     let Some(client) = ctx.code_client.peek().clone() else {
         return;
     };
+    ctx.code_agents_from.clone().set(chat_id.clone());
+    ctx.code_agents.clone().set(Vec::new());
     let mut loading = ctx.code_agents_loading;
     loading.set(true);
     let ctx = *ctx;
     spawn_forever(async move {
-        match client.agents(&chat_id).await {
+        let answer = client.agents(&chat_id).await;
+        // The reader may have opened a chat, or pointed the new-session screen
+        // at another repo, while the container answered — either makes this
+        // the wrong list to write. Same guard `ensure_code_branches` uses.
+        if *ctx.code_agents_from.peek() != chat_id {
+            return;
+        }
+        match answer {
             Ok(agents) => ctx.code_agents.clone().set(agents),
-            Err(e) => show_toast(&ctx, format!("Mode list unavailable: {e}")),
+            Err(e) => {
+                if loud {
+                    show_toast(&ctx, format!("Mode list unavailable: {e}"));
+                }
+            }
         }
         ctx.code_agents_loading.clone().set(false);
     });
 }
 
+/// Fetch `repo`'s branches, unless they are already in hand.
+///
+/// Fired by choosing a repo rather than by tapping the branch pill: the pill
+/// has to be able to say `main` before it is touched, because the field's
+/// placeholder names the branch in a sentence. It costs nothing a container
+/// pays for — the manager answers this from GitHub with its own credential,
+/// exactly as it answers `pulls`.
+pub(crate) fn ensure_code_branches(ctx: &AppCtx, repo: &str) {
+    if repo.is_empty() {
+        return;
+    }
+    {
+        let held = ctx.code_branches.peek();
+        if held.repo == repo && (held.loading || !held.names.is_empty()) {
+            return;
+        }
+    }
+    let Some(client) = ctx.code_client.peek().clone() else {
+        return;
+    };
+    ctx.code_branches.clone().set(BranchList {
+        repo: repo.to_owned(),
+        loading: true,
+        ..BranchList::default()
+    });
+    let (ctx, repo) = (*ctx, repo.to_owned());
+    spawn_forever(async move {
+        let answer = client.branches(&repo).await;
+        // Quiet on failure, like `refresh_code_permissions`: a manager too old
+        // to have the route would otherwise toast on every repo change, about
+        // a pill that already says what it will do without it.
+        let mut slot = ctx.code_branches;
+        if slot.peek().repo != repo {
+            return;
+        }
+        slot.set(match answer {
+            Ok(list) => BranchList {
+                default: list.default_name().map(str::to_owned),
+                names: list.names(),
+                truncated: list.truncated,
+                repo,
+                loading: false,
+            },
+            Err(_) => BranchList {
+                repo,
+                loading: false,
+                ..BranchList::default()
+            },
+        });
+    });
+}
+
 /// Run the open chat's next turn as `agent` (an [`Agent::name`]).
+///
+/// Mirrors [`set_code_model`]: re-picking the name that is already there is
+/// still a pick, because it means the reader looked and kept it — and the
+/// server must not overrule it on the next reconnect.
 ///
 /// [`Agent::name`]: opencode_client::Agent::name
 pub(crate) fn set_code_agent(ctx: &AppCtx, agent: &str) {
     let mut chat = ctx.code_chat;
-    chat.write().agent = Some(agent.to_owned());
+    let mut c = chat.write();
+    c.agent_picked = true;
+    c.agent = Some(agent.to_owned());
 }
 
 /// Point the open chat's next turn at `reference` (`provider/model`).
@@ -617,9 +864,11 @@ pub(crate) fn open_code_chat(ctx: &AppCtx, meta: ChatMeta) {
     }
 
     // Agents can come from the repository (`.opencode/agent/`), so the list
-    // is per chat in a way the model catalogue is not. Dropping it here is
-    // what makes the next `ensure_code_agents` ask this chat's server.
+    // is per chat in a way the model catalogue is not. Dropping it here — and
+    // with it the note of which container answered — is what makes the next
+    // `ensure_code_agents` ask this chat's server.
     ctx.code_agents.clone().set(Vec::new());
+    ctx.code_agents_from.clone().set(String::new());
 
     let cached = ctx.code_cache.peek().chats.get(&meta.id).cloned();
     let waking = !meta.is_running();
@@ -653,6 +902,7 @@ pub(crate) fn open_code_chat(ctx: &AppCtx, meta: ChatMeta) {
         model: meta.model.clone(),
         effort: None,
         agent: None,
+        agent_picked: false,
         picked: false,
     });
     screen.set(CodeScreen::Chat);
@@ -707,17 +957,26 @@ async fn attach_chat(ctx: &AppCtx, chat_id: String, epoch: u64) {
     // the server's value unconditionally threw away a pick the user had made
     // and not yet sent, with no visible cause. A local choice is the more
     // recent intent and stands until the next turn makes the server agree.
-    if let Some(model) = list
-        .iter()
-        .find(|s| Some(&s.id) == session_id.as_ref())
-        .and_then(|s| s.model.as_ref())
-    {
+    //
+    // The agent is adopted the same way, under its own flag, for the same
+    // reason on the same path: the record carries it beside the model, written
+    // by the same turn.
+    if let Some(session) = list.iter().find(|s| Some(&s.id) == session_id.as_ref()) {
         let mut c = chat.write();
         if !c.picked {
-            if let Some(reference) = model.reference() {
-                c.model = Some(reference);
+            if let Some(model) = session.model.as_ref() {
+                if let Some(reference) = model.reference() {
+                    c.model = Some(reference);
+                }
+                c.effort = model.effort().map(str::to_owned);
             }
-            c.effort = model.effort().map(str::to_owned);
+        }
+        if !c.agent_picked {
+            // `agent()` filters the empty string, so a server that sends
+            // `"agent": ""` does not overwrite a resolved value with nothing.
+            if let Some(agent) = session.agent() {
+                c.agent = Some(agent.to_owned());
+            }
         }
     }
     chat.write().session_id.clone_from(&session_id);
@@ -736,7 +995,14 @@ async fn attach_chat(ctx: &AppCtx, chat_id: String, epoch: u64) {
     // diff has to be fetched by opening the chat rather than by opening the
     // review screen. Free in practice: the container is already awake by this
     // point, which is what the request would otherwise have paid for.
+    //
+    // The other two ride the same argument, and all three are fire-and-forget
+    // spawns, so none of them delays the transcript, the SSE attach, or each
+    // other. A chip that names the mode and the model has to be told what they
+    // are, and here is where asking is cheapest.
     refresh_diff_counts(ctx);
+    refresh_code_agents(ctx);
+    resolve_default_model(ctx);
 
     catch_up_permissions(ctx, &client, &chat_id).await;
     stream_events(ctx, &client, &chat_id, epoch).await;
@@ -1248,9 +1514,21 @@ pub(crate) fn send_code_prompt(
         // the session's model" call, it copies whatever the turn asked for
         // onto the session record. That is why the sheet and the mode picker
         // both say "from your next message" and mean it.
+        //
+        // The agent is *resolved* here rather than sent as whatever the state
+        // happens to hold, so the chip's claim and the request agree by
+        // construction: the chip does not predict which agent the server will
+        // pick, the app tells it. `prompt_body` drops an absent or empty
+        // agent, so a resolution of None keeps today's behaviour byte for
+        // byte.
         let (model, effort, agent) = {
             let c = ctx.code_chat.peek();
-            (c.model.clone(), c.effort.clone(), c.agent.clone())
+            let agents = ctx.code_agents.peek();
+            (
+                c.model.clone(),
+                c.effort.clone(),
+                opencode_client::resolve_agent(c.agent.as_deref(), &agents).map(str::to_owned),
+            )
         };
         if let Err(e) = client
             .prompt_async(
@@ -1371,6 +1649,49 @@ pub(crate) fn load_code_diff(ctx: &AppCtx) {
     if fetch_diff(ctx, true) {
         ctx.code_screen.clone().set(CodeScreen::Diff);
     }
+}
+
+/// Ask the chat's own container which model it is configured to run, when
+/// nothing else in the app knows.
+///
+/// A chat's record carries a model only when one was named at creation, and
+/// its session record only after a turn has been sent — so a chat created
+/// without a model and not yet prompted has none anywhere the app can see,
+/// while its container has had one all along: the one `render_chat_config`
+/// wrote into the chat volume. `GET /chat/<id>/config` is that file, resolved.
+///
+/// Silent on every failure path. Not knowing which model runs is exactly where
+/// the app already was, so there is no news in saying so.
+pub(crate) fn resolve_default_model(ctx: &AppCtx) {
+    // Both facts off one guard, and the guard dropped before anything else
+    // touches the signal — the same shape `send_code_prompt` had to be taught.
+    let (chat_id, known) = {
+        let c = ctx.code_chat.peek();
+        (c.chat_id.clone(), c.model.is_some())
+    };
+    if known {
+        return;
+    }
+    let Some(chat_id) = chat_id else {
+        return;
+    };
+    let Some(client) = ctx.code_client.peek().clone() else {
+        return;
+    };
+    let ctx = *ctx;
+    spawn_forever(async move {
+        let Ok(Some(model)) = client.default_model(&chat_id).await else {
+            return;
+        };
+        // The reader may have opened another chat, or picked a model, while
+        // the container answered. Either makes this answer the wrong one to
+        // write — same guard `fetch_diff` uses, for the same reason.
+        let mut chat = ctx.code_chat;
+        let mut c = chat.write();
+        if c.chat_id.as_deref() == Some(chat_id.as_str()) && c.model.is_none() && !c.picked {
+            c.model = Some(model);
+        }
+    });
 }
 
 /// Fetch the diff without going anywhere, so the Diff chip can carry its
@@ -1657,26 +1978,89 @@ pub(crate) const fn mergeability_label(pull: &PullRequest) -> Option<(&'static s
     }
 }
 
-/// Create a new code chat and open it, sending the task as the first prompt.
-pub(crate) fn new_code_chat(ctx: &AppCtx, repo: String, task: String, model: Option<String>) {
+/// Everything the new-session composer collected.
+///
+/// A struct rather than five positional arguments because four of them are
+/// `Option<String>`-shaped, and a call site with three `None`s in a row is a
+/// bug waiting to be written.
+pub(crate) struct NewSessionSpec {
+    pub repo: String,
+    pub task: String,
+    /// `provider/model`. `None` means the manager's own default, which is the
+    /// one case the model pill allows it.
+    pub model: Option<String>,
+    /// The agent the first turn runs as — what the composer calls the mode.
+    pub agent: Option<String>,
+    /// What the session's branch is cut from. `None` is the repo's default.
+    pub base_branch: Option<String>,
+}
+
+/// Create a new code chat and open it, sending the task as its first prompt.
+///
+/// `files` is passed in rather than read off a tray: the new-session screen has
+/// a tray of its own ([`crate::state::AppCtx::new_attachments`]), and these
+/// have to be lifted out of it before the create, because by the time the
+/// prompt goes out the screen has been replaced by the chat it made. The tray
+/// is emptied here rather than by the composer, so a create that fails leaves
+/// the photos where the reader can still see them.
+pub(crate) fn new_code_chat(
+    ctx: &AppCtx,
+    spec: NewSessionSpec,
+    files: Vec<crate::attach::PendingAttachment>,
+) {
     let Some(client) = ctx.code_client.peek().clone() else {
         show_toast(ctx, "Code plane not connected — check Settings");
         return;
     };
     let ctx = *ctx;
     spawn_forever(async move {
-        show_toast(&ctx, format!("Preparing workspace for {repo}…"));
-        match client.create_chat(&repo, &task, model.as_deref()).await {
+        show_toast(&ctx, format!("Preparing workspace for {}…", spec.repo));
+        let created = client
+            .create_chat(
+                &spec.repo,
+                &spec.task,
+                spec.model.as_deref(),
+                spec.base_branch.as_deref(),
+            )
+            .await;
+        match created {
             Ok(meta) => {
                 refresh_code_chats(&ctx).await;
                 open_code_chat(&ctx, meta);
-                if !task.trim().is_empty() {
+                // They are this chat's now, and the screen that held them is
+                // gone. Left behind they would be in the tray of the *next*
+                // new session, whatever repo that one is pointed at.
+                ctx.new_attachments.clone().set(Vec::new());
+                // The reader's picks, written back over the state
+                // `open_code_chat` seeds from the manager's record alone.
+                // `picked` with them: OpenCode writes a model onto a session
+                // only when a turn is sent, so without it the reconnect path
+                // in `attach_chat` would adopt the server's value and throw
+                // away a choice made seconds earlier.
+                {
+                    let mut chat = ctx.code_chat;
+                    let mut c = chat.write();
+                    if spec.agent.is_some() {
+                        c.agent.clone_from(&spec.agent);
+                        c.agent_picked = true;
+                    }
+                    if spec.model.is_some() {
+                        c.model.clone_from(&spec.model);
+                        c.picked = true;
+                    }
+                }
+                // A first turn always carries text, because the task is also
+                // the session's title — `can_start` is what makes that true,
+                // and an attachment alone cannot start a session for the same
+                // reason. So there is no files-only case to guard for here,
+                // unlike in the chat composer where a photo is a message.
+                if !spec.task.trim().is_empty() {
                     // First prompt after the open flow resolves the session.
                     tokio::time::sleep(Duration::from_secs(1)).await;
-                    send_code_prompt(&ctx, task, &[]);
+                    send_code_prompt(&ctx, spec.task, &files);
                 }
             }
-            Err(e) => show_toast(&ctx, format!("Create failed: {e}")),
+            Err(e) => show_toast(&ctx, format!("Create failed: {}", e.message())),
         }
     });
 }
@@ -2381,6 +2765,7 @@ mod tests {
             repo: "testrepo".to_owned(),
             title: "Wire up the aggregate".to_owned(),
             branch: "agent/testrepo-9f3403".to_owned(),
+            base: String::new(),
             status: status.to_owned(),
             model: None,
             last_active: 0.0,

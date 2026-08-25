@@ -506,6 +506,16 @@ pub(crate) fn reading_for(picks: &[Pick], target: AttachTarget, conversation: &s
 pub(crate) fn conversation_key(ctx: &AppCtx, target: AttachTarget) -> String {
     match target {
         AttachTarget::Goose => ctx.chat.peek().session_id.clone().unwrap_or_default(),
+        // The new-session composer has no chat of its own yet, and `code_chat`
+        // still holds whichever one you last visited — so without this a photo
+        // picked for a session that does not exist is either dropped as
+        // belonging to another conversation, or worse, accepted into it. It is
+        // its own conversation until it becomes one, which is also why
+        // `tray_of` gives it a tray of its own: this decides which picks are
+        // accepted, and that decides where the accepted ones sit.
+        AttachTarget::Code if *ctx.code_screen.peek() == crate::code::CodeScreen::New => {
+            crate::code::NEW_CONVERSATION.to_owned()
+        }
         AttachTarget::Code => ctx.code_chat.peek().chat_id.clone().unwrap_or_default(),
     }
 }
@@ -565,7 +575,7 @@ pub(crate) fn receive(ctx: &AppCtx, payload: &str) {
     let picked: Vec<PendingAttachment> =
         msg.files.into_iter().map(PendingAttachment::from).collect();
     {
-        let mut tray = tray_of(ctx, target);
+        let mut tray = tray_of(ctx, target, &msg.conversation);
         let mut held = tray.write();
         refused.extend(accept(&mut held, picked));
     }
@@ -591,9 +601,22 @@ impl From<PickedFile> for PendingAttachment {
 }
 
 /// Which tray a pick belongs in.
-pub(crate) const fn tray_of(ctx: &AppCtx, target: AttachTarget) -> Signal<Vec<PendingAttachment>> {
+///
+/// Keyed by conversation and not by target alone, for the reason
+/// [`conversation_key`] exists: the Code tab has two composers and only one of
+/// them belongs to a chat. A pick made on the new-session screen is for a
+/// session that does not exist yet, so it cannot share a Vec with the last
+/// chat you had open — that Vec is rendered by that chat's tray and lifted
+/// into its next message. `conversation_key` gates which picks are *accepted*;
+/// this is what keeps the ones already accepted apart.
+pub(crate) fn tray_of(
+    ctx: &AppCtx,
+    target: AttachTarget,
+    conversation: &str,
+) -> Signal<Vec<PendingAttachment>> {
     match target {
         AttachTarget::Goose => ctx.attachments,
+        AttachTarget::Code if conversation == crate::code::NEW_CONVERSATION => ctx.new_attachments,
         AttachTarget::Code => ctx.code_attachments,
     }
 }
@@ -950,7 +973,7 @@ pub(crate) fn return_to_tray(
         return " — that chat is no longer open, so its attachments were not put back".to_owned();
     }
     let refused = {
-        let mut tray = tray_of(ctx, target);
+        let mut tray = tray_of(ctx, target, conversation);
         let mut held = tray.write();
         accept(&mut held, files).len()
     };

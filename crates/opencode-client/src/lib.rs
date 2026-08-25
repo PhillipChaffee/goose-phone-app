@@ -76,6 +76,53 @@ pub struct RepoEntry {
     pub public_throwaway: bool,
 }
 
+/// A repo's branches, as the manager reads them from GitHub
+/// (`GET /api/repos/<name>/branches`).
+#[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
+pub struct RepoBranches {
+    /// The repo's own default branch. Empty when GitHub would not say — the
+    /// manager degrades rather than losing the whole list over a label, so
+    /// "no default" is a real answer and not a failure.
+    #[serde(rename = "default")]
+    pub default_branch: String,
+    pub branches: Vec<BranchRef>,
+    /// The manager stopped paging (500 branches), so a list that is short can
+    /// say why rather than look complete. The app carries it onto its own
+    /// `BranchList` and the base-branch picker states it above the rows.
+    pub truncated: bool,
+}
+
+impl RepoBranches {
+    /// Just the names, in the manager's order — default first.
+    #[must_use]
+    pub fn names(&self) -> Vec<String> {
+        self.branches.iter().map(|b| b.name.clone()).collect()
+    }
+
+    /// The default branch, or `None` when GitHub would not name one.
+    #[must_use]
+    pub fn default_name(&self) -> Option<&str> {
+        Some(self.default_branch.as_str()).filter(|s| !s.is_empty())
+    }
+}
+
+/// One branch in [`RepoBranches`].
+#[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
+pub struct BranchRef {
+    pub name: String,
+    /// The wire spells it `default`, which is a Rust keyword.
+    ///
+    /// Nothing reads it: the picker marks the default from
+    /// [`RepoBranches::default_branch`], the one field that has an answer even
+    /// when the list is truncated past the row carrying this flag. It is
+    /// decoded so the two halves of the manager's answer stay in step, and so
+    /// a reader of this type is not left wondering whether the wire has it.
+    #[serde(rename = "default")]
+    pub is_default: bool,
+}
+
 /// One chat from the manager's metadata index.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct ChatMeta {
@@ -86,6 +133,11 @@ pub struct ChatMeta {
     pub title: String,
     #[serde(default)]
     pub branch: String,
+    /// The ref this chat's branch was cut from. Empty means the clone's
+    /// default HEAD, which is what every chat made before the base picker
+    /// existed says — a default rather than a migration.
+    #[serde(default)]
+    pub base: String,
     /// `running` | `stopped` | `absent` (absent = recreated on next wake).
     #[serde(default)]
     pub status: String,
@@ -484,6 +536,25 @@ pub struct SessionMeta {
     /// turn whose model or variant differs from the record, so it is the
     /// server's own answer to "what will the next message use".
     pub model: Option<SessionModel>,
+    /// The agent the session last ran as — what the app calls the mode.
+    ///
+    /// `OpenCode` writes this onto the session record when a TURN IS SENT,
+    /// beside the model, so it is the server's own answer to what the next
+    /// turn runs as. Absent on a build that does not record it, which reads
+    /// as `None` rather than as a claim.
+    pub agent: Option<String>,
+}
+
+impl SessionMeta {
+    /// The recorded agent that is an actual answer.
+    ///
+    /// The empty string is not one: a server that sends `"agent": ""` has
+    /// said nothing, and adopting it would overwrite a resolved value with a
+    /// blank. Same shape [`SessionModel::effort`] uses for the same reason.
+    #[must_use]
+    pub fn agent(&self) -> Option<&str> {
+        self.agent.as_deref().filter(|a| !a.is_empty())
+    }
 }
 
 /// The model a session is set to, as `Session.model` ships it.
@@ -624,6 +695,82 @@ impl Agent {
     pub const fn is_primary(&self) -> bool {
         matches!(self.mode, AgentMode::Primary | AgentMode::All)
     }
+}
+
+/// The `model` of a chat's resolved `opencode.json`, if it names one.
+///
+/// Pure, so the decoding is testable without a server. Anything that is not a
+/// non-empty string is `None`: a config that names no model, or names one as a
+/// number, has not told us which model runs.
+fn config_model(v: &Value) -> Option<String> {
+    v.get("model")
+        .and_then(Value::as_str)
+        .filter(|m| !m.trim().is_empty())
+        .map(str::to_owned)
+}
+
+/// Percent-encode one URL path segment.
+///
+/// A repo name comes out of the manager's own allowlist — a file the owner
+/// writes by hand — so it is trusted, but it is not guaranteed to be URL-safe,
+/// and a space in one would build a request line the gateway rejects. Encoded
+/// here rather than by taking a dependency: this is the only place in this
+/// client that puts anything but a generated id in a path.
+fn urlencode(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(char::from(byte));
+            }
+            _ => {
+                let hex = |nibble: u8| {
+                    char::from_digit(u32::from(nibble), 16)
+                        .unwrap_or('0')
+                        .to_ascii_uppercase()
+                };
+                out.push('%');
+                out.push(hex(byte >> 4));
+                out.push(hex(byte & 0x0f));
+            }
+        }
+    }
+    out
+}
+
+/// `OpenCode`'s own default agent: the one a turn whose body names none runs
+/// as.
+pub const DEFAULT_AGENT: &str = "build";
+
+/// Which agent the next turn will run as.
+///
+/// `GET /agent` marks no entry as the default — there is no such field, the
+/// whole payload is `{name, description, mode, builtIn}` — so this **resolves**
+/// rather than reads. `chosen` is whatever the app already holds: the reader's
+/// pick, or the agent the session record reports. Failing that, the name
+/// always comes out of the list THIS server sent — [`DEFAULT_AGENT`] when it
+/// has one, otherwise the first agent that may hold a session at all.
+///
+/// `None` when the server offers nothing selectable, because a chip must not
+/// name an agent the server would refuse. The caller then puts the resolved
+/// name in the prompt body, which is what turns a prediction into a fact.
+#[must_use]
+pub fn resolve_agent<'a>(chosen: Option<&'a str>, agents: &'a [Agent]) -> Option<&'a str> {
+    if let Some(name) = chosen.filter(|c| !c.is_empty()) {
+        return Some(name);
+    }
+    // One pass with a remembered fallback rather than two closures, so the
+    // list is walked once and the nursery lints stay quiet.
+    let mut fallback: Option<&'a str> = None;
+    for agent in agents.iter().filter(|a| a.is_primary()) {
+        if agent.name == DEFAULT_AGENT {
+            return Some(agent.name.as_str());
+        }
+        if fallback.is_none() {
+            fallback = Some(agent.name.as_str());
+        }
+    }
+    fallback
 }
 
 /// A model's declared limits. Read-only catalogue data: nothing in the
@@ -897,6 +1044,30 @@ impl CodeClient {
         Ok(serde_json::from_value(v.get("repos").cloned().unwrap_or_default()).unwrap_or_default())
     }
 
+    /// The branches of an allowlisted repo
+    /// (`GET /api/repos/<name>/branches`), default first and marked.
+    ///
+    /// A manager route, not a proxied one: the manager reads these from GitHub
+    /// with its own credential, exactly as it does [`Self::pulls`]. No
+    /// container is touched and none is woken — which is what lets the
+    /// new-session screen, which has no chat of its own, offer a base branch
+    /// at all.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or the request
+    /// outruns the client timeout, and [`CodeError::Status`] on a non-2xx
+    /// answer — 403 for a repo outside the allowlist, 502 when GitHub refused
+    /// the credential or is unreachable, and 404 from a manager predating the
+    /// route. The caller treats every one of those as "cannot list branches"
+    /// rather than as an error worth a toast: the pill still says what it will
+    /// do without one.
+    pub async fn branches(&self, repo: &str) -> Result<RepoBranches, CodeError> {
+        let path = format!("/api/repos/{}/branches", urlencode(repo));
+        let v = Self::json_of(self.req(reqwest::Method::GET, &path).send().await?).await?;
+        Ok(serde_json::from_value(v).unwrap_or_default())
+    }
+
     /// The metadata index of every chat the manager knows (`GET /api/chats`).
     ///
     /// # Errors
@@ -971,22 +1142,34 @@ impl CodeClient {
 
     /// Create a chat on `repo` with `task` as its opening instruction.
     /// `model` is `provider/model`; `None` leaves the manager's default.
+    /// `base_branch` is the ref the chat's own branch is cut from; `None` is
+    /// the repo's default HEAD.
     ///
     /// # Errors
     ///
     /// [`CodeError::Http`] on transport failure or timeout,
-    /// [`CodeError::Status`] on a non-2xx answer — 400 for a repo outside the
-    /// allowlist, 401 for a wrong `password` — and [`CodeError::Other`] if
-    /// the created chat's payload does not decode as a [`ChatMeta`].
+    /// [`CodeError::Status`] on a non-2xx answer — 403 for a repo outside the
+    /// allowlist, 400 for a base branch that is malformed or does not exist,
+    /// 401 for a wrong `password` — and [`CodeError::Other`] if the created
+    /// chat's payload does not decode as a [`ChatMeta`]. The manager checks
+    /// the base *before* it builds anything, so a refusal leaves no half-built
+    /// chat behind.
     pub async fn create_chat(
         &self,
         repo: &str,
         task: &str,
         model: Option<&str>,
+        base_branch: Option<&str>,
     ) -> Result<ChatMeta, CodeError> {
         let mut body = json!({"repo": repo, "task": task});
         if let Some(m) = model {
             body["model"] = json!(m);
+        }
+        // Omitted rather than sent empty: a manager that does not understand
+        // the field must cut from the repo's default, and `""` is a branch
+        // name it would go looking for.
+        if let Some(b) = base_branch.filter(|b| !b.is_empty()) {
+            body["base"] = json!(b);
         }
         let v = Self::json_of(
             self.req(reqwest::Method::POST, "/api/chats")
@@ -1113,6 +1296,35 @@ impl CodeClient {
 
     fn chat_path(chat_id: &str, sub: &str) -> String {
         format!("/chat/{chat_id}{sub}")
+    }
+
+    /// The model this chat's container is configured to run
+    /// (`GET /chat/<id>/config`).
+    ///
+    /// This is the rendered `<chat>/home/.config/opencode/opencode.json` the
+    /// container actually reads, served back resolved. It is the only place
+    /// the fact exists for a chat created without an explicit model: its own
+    /// record says `null`, and its session record says nothing at all until a
+    /// turn has been sent.
+    ///
+    /// `Ok(None)` when the config names no model.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or waking a stopped
+    /// chat outruns the client's 150s request timeout, and
+    /// [`CodeError::Status`] on a non-2xx answer — including the 404 an
+    /// `OpenCode` build predating the route answers with. The caller degrades
+    /// silently on all of them: not knowing which model runs is where the app
+    /// already was.
+    pub async fn default_model(&self, chat_id: &str) -> Result<Option<String>, CodeError> {
+        let v = Self::json_of(
+            self.req(reqwest::Method::GET, &Self::chat_path(chat_id, "/config"))
+                .send()
+                .await?,
+        )
+        .await?;
+        Ok(config_model(&v))
     }
 
     /// The sessions on a chat's own `OpenCode` server (`GET /session`).
@@ -1804,6 +2016,133 @@ mod tests {
             assert_eq!(agent.mode, AgentMode::All);
             assert!(agent.is_primary());
         }
+    }
+
+    fn agents(rows: &[(&str, &str)]) -> Vec<Agent> {
+        rows.iter()
+            .map(|(name, mode)| {
+                serde_json::from_value(json!({"name": name, "mode": mode})).unwrap()
+            })
+            .collect()
+    }
+
+    /// A pick outranks the server's own default, and an empty string is not a
+    /// pick — a server that sends `"agent": ""` has said nothing.
+    #[test]
+    fn a_pick_outranks_the_servers_own_default() {
+        let list = agents(&[("build", "primary"), ("plan", "primary")]);
+        assert_eq!(resolve_agent(Some("plan"), &list), Some("plan"));
+        assert_eq!(resolve_agent(Some(""), &list), Some("build"));
+        assert_eq!(resolve_agent(None, &list), Some("build"));
+    }
+
+    /// `build` wins wherever it sits, not just at the front: `GET /agent`
+    /// marks nothing as the default, so position must not stand in for one.
+    #[test]
+    fn the_default_agent_is_found_wherever_it_sits() {
+        let list = agents(&[
+            ("plan", "primary"),
+            ("accept-edits", "all"),
+            ("build", "primary"),
+        ]);
+        assert_eq!(resolve_agent(None, &list), Some(DEFAULT_AGENT));
+    }
+
+    /// With no `build`, the first agent that may hold a session wins — and a
+    /// subagent never does, whatever order it arrives in.
+    #[test]
+    fn a_server_without_build_falls_to_its_first_primary() {
+        let list = agents(&[
+            ("general", "subagent"),
+            ("plan", "primary"),
+            ("review", "primary"),
+        ]);
+        assert_eq!(resolve_agent(None, &list), Some("plan"));
+    }
+
+    /// Nothing selectable resolves to nothing: a chip must not name an agent
+    /// the server would refuse the turn for.
+    #[test]
+    fn nothing_selectable_resolves_to_nothing() {
+        assert_eq!(resolve_agent(None, &[]), None);
+        assert_eq!(
+            resolve_agent(None, &agents(&[("general", "subagent")])),
+            None
+        );
+    }
+
+    /// The session record reports the agent its last turn ran as, beside the
+    /// model. An empty or absent one is not an answer.
+    #[test]
+    fn a_session_record_reports_the_agent_it_last_ran() {
+        let with: SessionMeta =
+            serde_json::from_value(json!({"id": "ses_1", "agent": "plan"})).unwrap();
+        assert_eq!(with.agent(), Some("plan"));
+        let blank: SessionMeta =
+            serde_json::from_value(json!({"id": "ses_1", "agent": ""})).unwrap();
+        assert_eq!(blank.agent(), None);
+        let absent: SessionMeta = serde_json::from_value(json!({"id": "ses_1"})).unwrap();
+        assert_eq!(absent.agent(), None);
+    }
+
+    /// The chat's resolved config names the model it really runs — and only a
+    /// non-empty string is a name.
+    #[test]
+    fn a_resolved_config_names_the_model_or_nothing() {
+        assert_eq!(
+            config_model(&json!({"model": "opencode/deepseek-v4-flash"})),
+            Some("opencode/deepseek-v4-flash".to_owned())
+        );
+        assert_eq!(config_model(&json!({})), None);
+        assert_eq!(config_model(&json!({"model": ""})), None);
+        assert_eq!(config_model(&json!({"model": "  "})), None);
+        assert_eq!(config_model(&json!({"model": 42})), None);
+    }
+
+    /// The manager's answer, default first and marked, decoded as the picker
+    /// needs it. `default` is a Rust keyword on both levels of this payload.
+    #[test]
+    fn a_branch_list_decodes_with_its_default_marked() {
+        let raw = json!({
+            "repo": "personal-ai-setup",
+            "slug": "PhillipChaffee/personal-ai-setup",
+            "default": "main",
+            "truncated": false,
+            "branches": [
+                {"name": "main", "default": true},
+                {"name": "claude/budget-note-fix", "default": false}
+            ]
+        });
+        let list: RepoBranches = serde_json::from_value(raw).unwrap();
+        assert_eq!(list.default_name(), Some("main"));
+        assert_eq!(list.names(), ["main", "claude/budget-note-fix"]);
+        assert!(!list.truncated);
+    }
+
+    /// A manager that could not read the default still answers with a usable
+    /// list — losing the label must not read as losing the branches.
+    #[test]
+    fn a_branch_list_without_a_default_is_still_a_list() {
+        let list: RepoBranches = serde_json::from_value(json!({
+            "default": "",
+            "branches": [{"name": "main", "default": false}]
+        }))
+        .unwrap();
+        assert_eq!(list.default_name(), None);
+        assert_eq!(list.names(), ["main"]);
+    }
+
+    /// A repo name goes in a URL path. It comes from the owner's own
+    /// allowlist, so it is trusted — but not necessarily URL-safe.
+    #[test]
+    fn a_repo_name_is_encoded_into_its_path() {
+        assert_eq!(urlencode("personal-ai-setup"), "personal-ai-setup");
+        assert_eq!(
+            urlencode("base-image-with-debugger"),
+            "base-image-with-debugger"
+        );
+        assert_eq!(urlencode("a b"), "a%20b");
+        assert_eq!(urlencode("a/b"), "a%2Fb");
     }
 
     /// The turn carries the agent beside the model and the tier, as a bare

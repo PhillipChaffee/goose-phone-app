@@ -55,6 +55,13 @@ pub(crate) fn path_for(name: &str) -> Option<&'static str> {
         "bolt" => "M13 3 4 14h7l-1 7 9-11h-7z",
         "shield-check" => "M12 21c4.7-2.3 7-5.6 7-9.6V5.6L12 3 5 5.6V11.4c0 4 2.3 7.3 7 9.6zM9.2 11.6l2 2 3.6-3.6",
         "list" => "M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01",
+        // The repository pill on the new-session screen. GitHub's own mark is
+        // a logo and this app draws none; a repo is a book everywhere else in
+        // the tooling, and the shape survives at 12px.
+        "repo" => "M6 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a2 2 0 0 1 0-4h12",
+        // Two commits and the cut between them — the base-branch pill. Same
+        // circle idiom as "pull-request" above, so the two read as a family.
+        "git-branch" => "M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9",
         _ => return None,
     })
 }

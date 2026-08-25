@@ -49,7 +49,9 @@ pub fn AttachButton(target: AttachTarget, conversation: String) -> Element {
 #[component]
 pub fn AttachTray(target: AttachTarget, conversation: String) -> Element {
     let ctx = use_app_ctx();
-    let mut tray = crate::attach::tray_of(&ctx, target);
+    // The conversation, not just the target: the Code tab's two composers hold
+    // two different trays and this component renders both of them.
+    let mut tray = crate::attach::tray_of(&ctx, target, &conversation);
     // Read without cloning: this holds the bytes of every picked file, and
     // the composer re-renders on every keystroke.
     let held = tray.read();

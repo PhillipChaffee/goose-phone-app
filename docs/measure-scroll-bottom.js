@@ -88,17 +88,16 @@ const CHIP = '<button class="composer-chip action model"><span class="chip-label
 const MODE = '<button class="composer-chip action mode">' + ICON
   + '<span class="chip-label">Manual approval</span></button>';
 
-// Everything the composer can be carrying at once, which is what puts the
-// chips on two lines: the app only shows the context readout near the end of
-// the window (`crowding` in src/views/chat.rs), so this is the tallest
-// composer the button ever has to clear.
+// Everything the composer can be carrying at once: the app only shows the
+// context readout near the end of the window (`crowding` in
+// src/views/chat.rs), so four chips is the fullest row either tab builds.
 const CROWDED = ATTACH + CHIP + MODE + '<span class="composer-chip warn">96%</span>';
 
-// .chip-row, not the chips loose in .composer-row: the wrap lives one level in
-// so that the send button stays pinned to the trailing edge (assets/main.css).
-// A fixture with the chips flat cannot produce a two-line composer at all,
-// whatever is put in it, so the height this measures against would be a height
-// the app never has.
+// .chip-row, not the chips loose in .composer-row. It used to be here because
+// the wrap lived one level in and a flat fixture could not produce a two-line
+// composer at all; the row is one line now, and the reason to keep it is what
+// the level was always for — .chip-row is the send button's SIBLING, which is
+// what pins send to the trailing edge (assets/main.css).
 const shell = (c) => `<div class="app">
 <header class="topbar"><h1 class="title">Chat</h1></header>
 <main class="scroll chat" id="chat-scroll">${c.transcript || '<p>content</p>'}</main>
@@ -118,16 +117,26 @@ const page = (c, on) => `<!doctype html><html><head><meta charset="utf-8">
 ${c.keyboard ? '--vv-height:520px;' : ''}}</style></head>
 <body class="${on ? 'away-from-bottom' : ''}">${shell(c)}</body></html>`;
 
-// The shapes the button has to sit above, on both tabs. The last one is the
-// composer at its tallest: four chips is a second line of them, which is 34px
-// the button has to move up by and could not reach before .chip-row existed.
+// The shapes the button has to sit above, on both tabs. The last one used to
+// be the composer at its tallest — four chips wrapped onto a second line, 34px
+// the button had to move up by — and it proves the opposite now: the chip row
+// is one line whatever is in it, so the composer's height no longer depends on
+// how many chips it carries and the button must sit at exactly the `top` the
+// plain case puts it at. `sameTopAs` is that assertion, and it is what keeps
+// this case earning its place instead of silently becoming a second copy of
+// the first.
 const CASES = [
   { label: 'goose composer', draft: 24, actions: false, keyboard: false },
   { label: 'code action row', draft: 24, actions: true, keyboard: false },
   { label: 'a draft four lines tall', draft: 96, actions: false, keyboard: false },
   { label: 'the keyboard up', draft: 24, actions: false, keyboard: true },
   {
-    label: 'chips on two lines', draft: 24, actions: false, keyboard: false, chips: CROWDED,
+    label: 'a full chip row',
+    draft: 24,
+    actions: false,
+    keyboard: false,
+    chips: CROWDED,
+    sameTopAs: 'goose composer',
   },
 ];
 
@@ -266,6 +275,8 @@ const readingBack = async (browser) => {
     const p = await browser.newPage({ viewport: { width: 402, height: 874 } });
     await p.emulateMedia({ colorScheme: theme });
     console.log(`\n  ${theme}`);
+    // label -> the button's top, so a case can be held to another's.
+    const tops = new Map();
     for (const c of CASES) {
       for (const on of [false, true]) {
         const file = path.join(os.tmpdir(), `sb-${theme}-${c.label.replace(/ /g, '_')}-${on}.html`);
@@ -308,6 +319,15 @@ const readingBack = async (browser) => {
         if (r.gap > 24) problems.push(`${r.gap}px above the composer — adrift`);
         if (r.top < 0 || r.bottom > r.shellBottom) {
           problems.push(`outside the shell (${r.top}..${r.bottom} of ${r.shellBottom})`);
+        }
+        tops.set(`${c.label}|${on}`, r.top);
+        // The composer's height must not depend on how many chips are in it.
+        if (c.sameTopAs) {
+          const want = tops.get(`${c.sameTopAs}|${on}`);
+          if (want !== undefined && want !== r.top) {
+            problems.push(`${Math.abs(r.top - want)}px off the plain composer`
+              + ` — the chip row grew a line`);
+          }
         }
         if (problems.length) bad += problems.length;
         console.log(

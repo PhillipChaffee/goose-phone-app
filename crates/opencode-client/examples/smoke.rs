@@ -184,7 +184,12 @@ async fn main() {
         .first()
         .map_or_else(|| "testrepo".into(), |r| r.name.clone());
 
-    let chat = match client.create_chat(&repo, "smoke: push and PR", None).await {
+    // No base branch: the smoke run is about the lifecycle, and cutting from
+    // the repo's default HEAD is what every chat did before the picker.
+    let chat = match client
+        .create_chat(&repo, "smoke: push and PR", None, None)
+        .await
+    {
         Ok(c) => c,
         Err(e) => {
             println!("FAIL  create chat — {e}");
