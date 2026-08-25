@@ -1628,23 +1628,33 @@ pub(crate) const fn checks_label(checks: Checks) -> (&'static str, &'static str)
     }
 }
 
-/// Why there is no Merge button on an open pull request.
+/// Dot class and word for a mergeability the row is not otherwise saying.
 ///
-/// `None` when merging is offered, and when the question does not arise —
-/// nobody wonders why a merged pull request has no Merge button.
-pub(crate) const fn merge_block_note(pull: &PullRequest) -> Option<&'static str> {
-    if !matches!(pull.state, PullState::Open) || pull.is_mergeable() {
+/// The state and checks chips beside this one name three of the four reasons
+/// merging is not offered: closed, merged, draft, failing. The fourth is
+/// `mergeable` itself, and it is invisible — an open pull request with passing
+/// checks that GitHub says conflicts renders exactly like one it says can
+/// merge, minus the button. So this chip is that fact and only that fact.
+///
+/// `None` where the answer is already on the row: where merging *is* offered,
+/// where the pull request is not open, and where one of the other two chips is
+/// already carrying the reason. Draft outranks the rest for the reason it
+/// always did — marking it ready is the first move whatever else is wrong —
+/// and only one reason is ever shown.
+pub(crate) const fn mergeability_label(pull: &PullRequest) -> Option<(&'static str, &'static str)> {
+    if !matches!(pull.state, PullState::Open)
+        || pull.draft
+        || matches!(pull.checks, Checks::Failing)
+    {
         return None;
     }
-    Some(if pull.draft {
-        "Still a draft. Mark it ready for review on GitHub and it can be merged from here."
-    } else if matches!(pull.checks, Checks::Failing) {
-        "Checks are failing, so this is not offered — read them on GitHub first."
-    } else if matches!(pull.mergeable, Some(false)) {
-        "Conflicts with the base branch. Ask the agent to rebase, then pull to refresh."
-    } else {
-        "GitHub has not finished working out whether this can merge. Pull to refresh."
-    })
+    match pull.mergeable {
+        Some(true) => None,
+        Some(false) => Some(("dot err", "conflicts")),
+        // Not a refusal: GitHub computes mergeability asynchronously and has
+        // not answered yet. Pulling the list again is what re-asks.
+        None => Some(("dot busy", "mergeability pending")),
+    }
 }
 
 /// Create a new code chat and open it, sending the task as the first prompt.
@@ -1754,7 +1764,7 @@ pub(crate) fn status_label(
 #[cfg(test)]
 mod tests {
     use super::{
-        checks_label, fold_part_into, merge_block_note, merge_permission_report, poll_tick,
+        checks_label, fold_part_into, merge_permission_report, mergeability_label, poll_tick,
         pull_state_label, status_label, ChatItem, ChatMeta, Checks, CodePermission, GapSink,
         HashMap, HashSet, PermissionReport, PullRequest, PullState, Tab, Tick,
     };
@@ -1802,43 +1812,48 @@ mod tests {
         assert_eq!(checks_label(Checks::Failing), ("dot err", "checks failing"));
     }
 
-    /// Every open pull request that cannot be merged says which of the four
-    /// reasons it is — and a mergeable one, or one whose merge is behind it,
-    /// says nothing at all.
+    /// The two merge-blocked states no other chip on the row can name — a
+    /// conflict, and a mergeability GitHub has not worked out yet — each get
+    /// one of their own. Without them an open pull request that cannot be
+    /// merged reads exactly like one that can, minus the button.
     #[test]
-    fn a_pull_that_cannot_be_merged_says_why() {
-        let note = |p: &PullRequest| merge_block_note(p).unwrap_or("");
-
+    fn a_pull_that_only_conflicts_still_says_so() {
         assert_eq!(
-            merge_block_note(&pull(PullState::Open, false, Some(true), Checks::Passing)),
-            None,
-            "a row with a Merge button needs no explanation"
+            mergeability_label(&pull(PullState::Open, false, Some(false), Checks::Passing)),
+            Some(("dot err", "conflicts"))
         );
         assert_eq!(
-            merge_block_note(&pull(PullState::Merged, false, Some(false), Checks::None)),
-            None,
-            "nobody wonders why a merged pull request cannot be merged"
-        );
-
-        assert!(note(&pull(PullState::Open, true, Some(true), Checks::Passing)).contains("draft"));
-        assert!(
-            note(&pull(PullState::Open, false, Some(true), Checks::Failing)).contains("failing")
-        );
-        assert!(
-            note(&pull(PullState::Open, false, Some(false), Checks::Passing)).contains("Conflicts")
-        );
-        assert!(
-            note(&pull(PullState::Open, false, None, Checks::Passing)).contains("not finished"),
+            mergeability_label(&pull(PullState::Open, false, None, Checks::Passing)),
+            Some(("dot busy", "mergeability pending")),
             "mergeability GitHub has not computed is a wait, and says so"
         );
     }
 
-    /// Draft outranks the rest: marking it ready is the first move whatever
-    /// else is wrong with it, and only one reason gets shown.
+    /// Silent wherever the row already answers the question: a Merge button is
+    /// its own explanation, a merged or closed pull request raises no question,
+    /// and draft and failing checks are already chips beside this one.
     #[test]
-    fn a_draft_is_told_it_is_a_draft_before_anything_else() {
-        let messy = pull(PullState::Open, true, Some(false), Checks::Failing);
-        assert!(merge_block_note(&messy).unwrap_or("").contains("draft"));
+    fn a_row_that_already_says_why_says_it_once() {
+        assert_eq!(
+            mergeability_label(&pull(PullState::Open, false, Some(true), Checks::Passing)),
+            None,
+            "a row with a Merge button needs no explanation"
+        );
+        assert_eq!(
+            mergeability_label(&pull(PullState::Merged, false, Some(false), Checks::None)),
+            None,
+            "nobody wonders why a merged pull request cannot be merged"
+        );
+        assert_eq!(
+            mergeability_label(&pull(PullState::Open, true, Some(false), Checks::Failing)),
+            None,
+            "draft outranks the rest: marking it ready is the first move"
+        );
+        assert_eq!(
+            mergeability_label(&pull(PullState::Open, false, None, Checks::Failing)),
+            None,
+            "the checks chip is already carrying this row's reason"
+        );
     }
 
     fn text_part(id: &str, message_id: &str, text: &str) -> Part {

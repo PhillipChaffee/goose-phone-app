@@ -26,6 +26,10 @@ pub(crate) fn path_for(name: &str) -> Option<&'static str> {
         "plus" => "M12 5v14M5 12h14",
         "chevron-down" => "m6 9 6 6 6-6",
         "check" => "m5 13 4 4 10-10",
+        // The box half of a checkbox. Paired with "check" behind it in
+        // .diff-seen, so the tick is the app's own glyph rather than a second
+        // drawing of one, and the filled state is this path taking a fill.
+        "square" => "M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z",
         "close" => "M6 6l12 12M18 6 6 18",
         "terminal" => "m4 7 5 5-5 5M13 17h7",
         "file" => "M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7zM14 3v4h4M9 13h6M9 17h4",

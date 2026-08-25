@@ -14,7 +14,7 @@ use crate::attach::AttachTarget;
 use crate::code::{
     answer_code_permission, ask_label, checks_label, delete_code_chat, ensure_code_agents,
     ensure_code_models, expand_diff_gap, is_free_model, load_code_diff, mark_all_diff_seen,
-    merge_block_note, merge_pull, new_code_chat, open_chat_allows_free_models, open_code_chat,
+    merge_pull, mergeability_label, new_code_chat, open_chat_allows_free_models, open_code_chat,
     open_code_pulls, pull_state_label, refresh_code_chats, refresh_code_permissions,
     reveal_removed_lines, send_code_prompt, set_code_agent, set_code_effort, set_code_model,
     start_code_poll, status_label, stop_code_turn, toggle_diff_file, toggle_diff_seen, CodeScreen,
@@ -820,36 +820,40 @@ pub fn CodeChatView() -> Element {
                 },
             }
             div { class: "composer-row",
-                AttachButton { target: AttachTarget::Code, conversation }
-                button {
-                    class: "composer-chip action model",
-                    title: "Session settings",
-                    onclick: move |_| {
-                        ensure_code_models(&ctx);
-                        sheet.set(true);
-                    },
-                    span { class: "chip-label",
-                        span { class: "chip-model", "{chip_label}" }
-                        if let Some(effort) = effort {
-                            span { class: "chip-effort", "{effort}" }
+                // The chips wrap onto a second line; the send button below
+                // does not, because it is outside this box.
+                div { class: "chip-row",
+                    AttachButton { target: AttachTarget::Code, conversation }
+                    button {
+                        class: "composer-chip action model",
+                        title: "Session settings",
+                        onclick: move |_| {
+                            ensure_code_models(&ctx);
+                            sheet.set(true);
+                        },
+                        span { class: "chip-label",
+                            span { class: "chip-model", "{chip_label}" }
+                            if let Some(effort) = effort {
+                                span { class: "chip-effort", "{effort}" }
+                            }
                         }
+                        Icon { name: "chevron-down" }
                     }
-                    Icon { name: "chevron-down" }
-                }
-                // Always offered, unlike goose's, because whether this server
-                // has any agents is not known until the list is asked for —
-                // and asking on every chat open would spend a request on a
-                // chip most opens never touch. An empty answer is reported
-                // inside the picker instead.
-                button {
-                    class: "composer-chip action mode",
-                    title: "Mode",
-                    onclick: move |_| {
-                        ensure_code_agents(&ctx);
-                        mode_sheet.set(true);
-                    },
-                    Icon { name: mode_icon(chat.agent.as_deref().unwrap_or_default()) }
-                    span { class: "chip-label", "{mode_label}" }
+                    // Always offered, unlike goose's, because whether this
+                    // server has any agents is not known until the list is
+                    // asked for — and asking on every chat open would spend a
+                    // request on a chip most opens never touch. An empty
+                    // answer is reported inside the picker instead.
+                    button {
+                        class: "composer-chip action mode",
+                        title: "Mode",
+                        onclick: move |_| {
+                            ensure_code_agents(&ctx);
+                            mode_sheet.set(true);
+                        },
+                        Icon { name: mode_icon(chat.agent.as_deref().unwrap_or_default()) }
+                        span { class: "chip-label", "{mode_label}" }
+                    }
                 }
                 if running {
                     button {
@@ -938,16 +942,23 @@ pub fn CodeChatView() -> Element {
     }
 }
 
-/// The review screen: the session's cumulative diff, one collapsible card
+/// The review screen: the session's cumulative diff, one collapsible band
 /// per file.
 ///
 /// **Unified, not split.** At 402px the two columns of a split view get
-/// `(368 − 2×18 − 8) ÷ 2 = 162px`, about 22 monospace columns each.
+/// `(402 − 2×18 − 8) ÷ 2 = 179px`, about 24 monospace columns each.
 /// `pub(crate) fn load_code_diff(` is 30 characters, so every real line wraps
 /// on both sides — and to *different* heights on each side, which stops the
 /// rows lining up. Lining the before and after up on one visual row is the
 /// entire value of split view, so at this width it is not merely cramped, it
 /// is self-defeating.
+///
+/// **Full width, and the only screen that is.** The scroller gives up the
+/// page's gutter so each file's body can run edge to edge — 52 monospace
+/// columns at 402pt where a card allowed 47 — while the head keeps that
+/// gutter, because the head is chrome and the code is content. The soft-wrap
+/// toggle is unaffected: a no-wrap body is still its own horizontal
+/// scrollport, now one that starts at the screen's edge.
 #[component]
 pub fn CodeDiffView() -> Element {
     let ctx = use_app_ctx();
@@ -1034,7 +1045,7 @@ pub fn CodeDiffView() -> Element {
     }
 }
 
-/// One file's card: a head you can scan, and a body that folds away
+/// One file's band: a head you can scan, and a body that folds away
 /// independently of every other file's.
 fn render_diff_file(ctx: &AppCtx, state: &DiffState, file: &DiffFile, wrap: bool) -> Element {
     let ctx = *ctx;
@@ -1047,7 +1058,7 @@ fn render_diff_file(ctx: &AppCtx, state: &DiffState, file: &DiffFile, wrap: bool
     let binary = file.info.is_binary();
     let deleted = file.info.status == FileStatus::Deleted;
 
-    // Only for a card that is actually showing them. Re-hunking every file on
+    // Only for a band that is actually showing them. Re-hunking every file on
     // every render meant a session touching twenty files paid for twenty
     // parses to display one — and <details open=false> does not render its
     // children, so the work was thrown away.
@@ -1099,6 +1110,26 @@ fn render_diff_file(ctx: &AppCtx, state: &DiffState, file: &DiffFile, wrap: bool
                 // A trailing control inside a row-sized target: it stops the
                 // click reaching the summary, the same way the list's trash
                 // button does (design rule 9).
+                //
+                // Labelled, not a bare circle: a checked circle beside a
+                // filename is the app's word for "reviewed" and nothing on
+                // screen says so, which is a thing to be learned rather than
+                // read. GitHub writes the word, and this is the one screen
+                // whose grammar is borrowed from GitLab outright.
+                //
+                // A real checkbox, not a lone tick: unchecked is an empty box,
+                // so the unreviewed state carries no checkmark at all. A bare
+                // tick that is present either way is what this replaced — it
+                // read as decoration rather than as a control with a state.
+                //
+                // The box and the tick are two overlaid icons rather than one
+                // combined path, so the tick stays the same glyph the rest of
+                // the app uses. .diff-seen shows and hides the tick.
+                //
+                // The word is a <span> rather than a bare text node because
+                // the pill is a flex container: a bare node becomes an
+                // anonymous flex item, which the gap does reach but no rule
+                // ever can. It needs no class — .diff-seen styles it.
                 button {
                     class: "diff-seen",
                     "aria-pressed": "{seen}",
@@ -1108,10 +1139,14 @@ fn render_diff_file(ctx: &AppCtx, state: &DiffState, file: &DiffFile, wrap: bool
                         e.prevent_default();
                         toggle_diff_seen(&ctx, &path, fingerprint);
                     },
-                    Icon { name: "check" }
+                    span { class: "cbox",
+                        Icon { name: "square" }
+                        Icon { name: "check" }
+                    }
+                    span { "Viewed" }
                 }
             }
-            // Rendered only when open: a closed card costs nothing, which is
+            // Rendered only when open: a closed band costs nothing, which is
             // what keeps a twenty-file diff cheap.
             if open {
                 div { class: if wrap { "diff-body" } else { "diff-body nowrap" },
@@ -1321,7 +1356,7 @@ fn render_pull(
     let url = pull.url.clone();
     let (state_dot, state_word) = pull_state_label(pull);
     let (checks_dot, checks_word) = checks_label(pull.checks);
-    let note = merge_block_note(pull);
+    let merge_block = mergeability_label(pull);
     let offer_merge = pull.is_mergeable();
     let busy = merging == Some(number);
 
@@ -1353,12 +1388,18 @@ fn render_pull(
                             span { class: "{checks_dot}" }
                             "{checks_word}"
                         }
-                    }
-                    // Why there is no Merge button. Rule 11 says only offer
-                    // controls that do something; a reader still deserves to
-                    // know what is missing and why.
-                    if let Some(note) = note {
-                        p { class: "pull-note", "{note}" }
+                        // The fourth reason merging is not offered, and the
+                        // only one the two chips above cannot say. A chip
+                        // rather than the paragraph this used to be: rule 11
+                        // says do not render a control that does nothing, not
+                        // that the reader must guess — and the row already has
+                        // a grammar for a one-word fact.
+                        if let Some((dot, word)) = merge_block {
+                            span { class: "chip",
+                                span { class: "{dot}" }
+                                "{word}"
+                            }
+                        }
                     }
                     if offer_merge {
                         div { class: "pull-actions",

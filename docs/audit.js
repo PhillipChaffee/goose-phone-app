@@ -63,6 +63,14 @@ const LONGEST = {
   // holding the text — see below.
   '.chip-label': 'Qwen3 Coder 480B A35B Instruct',
   '.chip-model': 'Qwen3 Coder 480B A35B Instruct',
+  // A filename is the agent's to choose, not this app's, and the review
+  // screen's head has a fixed-width control on the other end of it. The
+  // stylesheet's promise is that the directory is spent first and the name
+  // ellipsises rather than painting over that control; both halves of that
+  // are geometry, so this walk can see them. Written into every .diff-name in
+  // the state, which stresses the root-level file — the one with no directory
+  // to spend — alongside the ones that have one.
+  '.diff-name': 'transcript_folding_and_permission_merge_regression.rs',
   '.session-title': 'Refactor the transcript folding so streamed parts land in order',
   '.session-ask-title': 'Approve or deny curl -sSL https://raw.githubusercontent.com/example/really-long-org-name/main/scripts/install.sh',
   '.topbar > .title': 'Refactor the transcript folding so streamed parts land in order',
@@ -154,9 +162,12 @@ const GEOMETRY = () => {
     const filled = cs.backgroundColor !== 'rgba(0, 0, 0, 0)';
     const boxed = px(cs.borderTopWidth) > 0 && px(cs.borderLeftWidth) > 0 && px(cs.borderBottomWidth) > 0;
     // A surface that spans the whole viewport in either axis is a page or a
-    // panel; square corners are correct for both.
-    const fullScreen = (r.width >= vw - 0.5 && r.height >= vh - 0.5)
-      || r.height >= vh - 0.5;
+    // panel; square corners are correct for both. Either axis really does
+    // mean either: the review screen's file bands run edge to edge so the
+    // code gets the width, and a curve at a corner the screen edge already
+    // cuts is a notch rather than a card. The width half of this sentence
+    // used to be `&&`-ed with the height and so decided nothing.
+    const fullScreen = r.width >= vw - 0.5 || r.height >= vh - 0.5;
     // Nor is a row a surface. Something that fills its clipping parent from
     // edge to edge already has that parent's corners — rounding it as well
     // is what rule 4 means by concentric, and doing it to each row of a diff

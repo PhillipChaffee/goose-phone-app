@@ -153,35 +153,41 @@ pub fn ChatView() -> Element {
                 },
             }
             div { class: "composer-row",
-                AttachButton { target: AttachTarget::Goose, conversation }
-                if !rows.is_empty() {
-                    button {
-                        class: "composer-chip action model",
-                        title: "Session settings",
-                        onclick: move |_| sheet.set(true),
-                        span { class: "chip-label",
-                            span { class: "chip-model", "{chip_label}" }
-                            if let Some(effort) = effort {
-                                span { class: "chip-effort", "{effort}" }
+                // The chips wrap onto a second line; the send button below
+                // does not, because it is outside this box.
+                div { class: "chip-row",
+                    AttachButton { target: AttachTarget::Goose, conversation }
+                    if !rows.is_empty() {
+                        button {
+                            class: "composer-chip action model",
+                            title: "Session settings",
+                            onclick: move |_| sheet.set(true),
+                            span { class: "chip-label",
+                                span { class: "chip-model", "{chip_label}" }
+                                if let Some(effort) = effort {
+                                    span { class: "chip-effort", "{effort}" }
+                                }
+                            }
+                            Icon { name: "chevron-down" }
+                        }
+                    }
+                    if let Some(mode) = mode.as_ref() {
+                        button {
+                            class: "composer-chip action mode",
+                            title: "Mode",
+                            onclick: move |_| mode_sheet.set(true),
+                            Icon {
+                                name: mode_icon(mode.current_value.as_deref().unwrap_or_default()),
+                            }
+                            span { class: "chip-label",
+                                {mode.current_label().unwrap_or("Mode")}
                             }
                         }
-                        Icon { name: "chevron-down" }
                     }
-                }
-                if let Some(mode) = mode.as_ref() {
-                    button {
-                        class: "composer-chip action mode",
-                        title: "Mode",
-                        onclick: move |_| mode_sheet.set(true),
-                        Icon { name: mode_icon(mode.current_value.as_deref().unwrap_or_default()) }
-                        span { class: "chip-label",
-                            {mode.current_label().unwrap_or("Mode")}
+                    if let Some(percent) = crowding(usage) {
+                        span { class: "composer-chip warn", title: "Context used",
+                            "{percent}%"
                         }
-                    }
-                }
-                if let Some(percent) = crowding(usage) {
-                    span { class: "composer-chip warn", title: "Context used",
-                        "{percent}%"
                     }
                 }
                 if running {

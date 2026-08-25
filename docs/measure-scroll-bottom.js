@@ -79,10 +79,26 @@ const ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentC
   + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
   + '<path d="M12 4v16M5 13l7 7 7-7"></path></svg>';
 
-const CHIP = '<button class="composer-chip action"><span class="chip-label">'
+const ATTACH = '<button class="composer-chip action attach">' + ICON + '</button>';
+
+const CHIP = '<button class="composer-chip action model"><span class="chip-label">'
   + '<span class="chip-model">Claude Opus 5</span>'
   + '<span class="chip-effort">Max</span></span>' + ICON + '</button>';
 
+const MODE = '<button class="composer-chip action mode">' + ICON
+  + '<span class="chip-label">Manual approval</span></button>';
+
+// Everything the composer can be carrying at once, which is what puts the
+// chips on two lines: the app only shows the context readout near the end of
+// the window (`crowding` in src/views/chat.rs), so this is the tallest
+// composer the button ever has to clear.
+const CROWDED = ATTACH + CHIP + MODE + '<span class="composer-chip warn">96%</span>';
+
+// .chip-row, not the chips loose in .composer-row: the wrap lives one level in
+// so that the send button stays pinned to the trailing edge (assets/main.css).
+// A fixture with the chips flat cannot produce a two-line composer at all,
+// whatever is put in it, so the height this measures against would be a height
+// the app never has.
 const shell = (c) => `<div class="app">
 <header class="topbar"><h1 class="title">Chat</h1></header>
 <main class="scroll chat" id="chat-scroll">${c.transcript || '<p>content</p>'}</main>
@@ -90,7 +106,8 @@ const shell = (c) => `<div class="app">
 ${c.actions ? '<div class="action-row"><button class="action-chip">Diff</button></div>' : ''}
 <footer class="composer">
 <textarea class="input" rows="1" style="height:${c.draft}px"></textarea>
-<div class="composer-row">${CHIP}<button class="send">${ICON}</button></div>
+<div class="composer-row"><div class="chip-row">${c.chips || ATTACH + CHIP}</div>
+<button class="send">${ICON}</button></div>
 </footer></div>`;
 
 // --vv-height is what src/viewport.rs writes when the keyboard opens, and
@@ -101,12 +118,17 @@ const page = (c, on) => `<!doctype html><html><head><meta charset="utf-8">
 ${c.keyboard ? '--vv-height:520px;' : ''}}</style></head>
 <body class="${on ? 'away-from-bottom' : ''}">${shell(c)}</body></html>`;
 
-// The three shapes the button has to sit above, on both tabs.
+// The shapes the button has to sit above, on both tabs. The last one is the
+// composer at its tallest: four chips is a second line of them, which is 34px
+// the button has to move up by and could not reach before .chip-row existed.
 const CASES = [
   { label: 'goose composer', draft: 24, actions: false, keyboard: false },
   { label: 'code action row', draft: 24, actions: true, keyboard: false },
   { label: 'a draft four lines tall', draft: 96, actions: false, keyboard: false },
   { label: 'the keyboard up', draft: 24, actions: false, keyboard: true },
+  {
+    label: 'chips on two lines', draft: 24, actions: false, keyboard: false, chips: CROWDED,
+  },
 ];
 
 // A transcript long enough to read a good way back through.

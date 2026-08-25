@@ -1,6 +1,6 @@
 // Does the composer row survive a long, server-supplied model name?
 //
-//   node docs/measure-composer.js [width]
+//   node docs/measure-composer.js [width…]
 //
 // The send button is the primary action and the only control that must always
 // be reachable, so the first failure this watches for is a chip holding the
@@ -23,15 +23,37 @@
 //
 // docs/audit.js cannot see any of it. Its overflow walk visits elements, and
 // spilling text is an anonymous text node; its clipped-text check requires
-// overflow-x: hidden, which a chip never sets. And it renders at 402pt, which
-// is the width where the damage is smallest.
+// overflow-x: hidden, which a chip never sets. And it renders at 402pt alone,
+// which is the width where the damage is smallest.
+//
+// Three more failures were invisible to this script as well, and all of them
+// were on screen the whole time it reported Clean. A wrapping row does not
+// overflow — it grows — so `overflow` stayed 0 while the send button, being
+// the row's last flex item, sat alone on a line of its own under the chips.
+// A label that clips itself makes `spill` *negative*, so a hard cut with
+// no ellipsis ("Manual ap") measured cleaner than a label with room to spare.
+// And the third is not a property of one rendering at all: the model name was
+// wider at 375pt than at 390, and every number was in range at both. None of
+// them is a number that goes out of range; each needed its own question asked
+// — where is send relative to the chips, does the thing being cut say that it
+// was cut, and does a bigger phone ever show less.
+//
+// That last question is why this takes a list of widths and runs them in one
+// process. Run it at one width and it answers everything but that one.
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { chromium } = require('playwright');
 
 const CSS = fs.readFileSync(path.join(__dirname, '..', 'assets', 'main.css'), 'utf8');
-const WIDTH = parseInt(process.argv[2] || '402', 10);
+// More than one width in a single run, because the failure below that no
+// single width can see is a *comparison* between two of them. 390 and 393 are
+// in the default list for that reason: they are the two the earlier list
+// (280/320/360/375/402) stepped straight over, and they are where the model
+// chip was at its worst.
+const WIDTHS = process.argv.length > 2
+  ? process.argv.slice(2).map((w) => parseInt(w, 10))
+  : [320, 360, 375, 390, 393, 402];
 
 // What .chip-effort's max-width comes to at --text-xs, plus a couple of
 // pixels of font-metric slack. No tier may cost the name more than this.
@@ -110,7 +132,7 @@ const page = (row, label, effort, names) => `<!doctype html><html><head><meta ch
 <style>${CSS}</style></head><body><div class="app"><footer class="composer">
 ${names && names.length ? tray(names) : ''}
 <textarea class="input" rows="1" placeholder="Message the code agent…"></textarea>
-<div class="composer-row">${ROWS[row].build(label, effort)}
+<div class="composer-row"><div class="chip-row">${ROWS[row].build(label, effort)}</div>
   <button class="send">${icon}</button>
 </div></footer></div></body></html>`;
 
@@ -143,8 +165,12 @@ const EFFORTS = [
 
 (async () => {
   const browser = await chromium.launch();
-  const p = await browser.newPage({ viewport: { width: WIDTH, height: 874 } });
   let bad = 0;
+  // nameWidth for every composition, keyed by everything except the width, so
+  // the same composition can be compared across widths afterwards.
+  const namesByWidth = new Map();
+  for (const WIDTH of WIDTHS) {
+  const p = await browser.newPage({ viewport: { width: WIDTH, height: 874 } });
   for (const row of Object.keys(ROWS)) {
     console.log(`\n  ${row} composer @ ${WIDTH}pt`);
     for (const label of LABELS) {
@@ -155,6 +181,13 @@ const EFFORTS = [
         await p.goto(`file://${file}`, { waitUntil: 'load' });
         const r = await p.evaluate(() => {
           const rowEl = document.querySelector('.composer-row');
+          // .chip-row is the box that can overflow now: .composer-row holds a
+          // chip block that shrinks to fit and a send button that does not, so
+          // its scrollWidth equals its clientWidth by construction and asking
+          // it is asking a question with one possible answer. The composer
+          // that offers no chips at all writes no .chip-row, and for that one
+          // the row is still the right box.
+          const chipRow = document.querySelector('.chip-row') || rowEl;
           const send = document.querySelector('.send');
           const chips = [...document.querySelectorAll('.composer-chip')];
           const spill = Math.max(0, ...chips.map((c) => {
@@ -179,8 +212,15 @@ const EFFORTS = [
           const model = document.querySelector('.chip-model');
           const clip = document.querySelector('.chip-label');
           const box = tierEl && tierEl.getBoundingClientRect();
+          // Where send sits relative to the block of chips, and whether the
+          // one label that is a bare text node says it has been cut.
+          const chipBoxes = chips.map((c) => c.getBoundingClientRect());
+          const blockTop = Math.min(...chipBoxes.map((b) => b.top));
+          const blockBottom = Math.max(...chipBoxes.map((b) => b.bottom));
+          const sendBox = send.getBoundingClientRect();
+          const modeLabel = document.querySelector('.composer-chip.mode .chip-label');
           return {
-            overflow: Math.round(rowEl.scrollWidth - rowEl.clientWidth),
+            overflow: Math.round(chipRow.scrollWidth - chipRow.clientWidth),
             spill,
             lost: tierEl
               ? box.width < 1
@@ -190,6 +230,11 @@ const EFFORTS = [
             tierCut: tierEl ? tierEl.scrollWidth > tierEl.clientWidth + 0.5 : false,
             nameWidth: model.clientWidth,
             nameCut: model.scrollWidth > model.clientWidth + 0.5,
+            sendBelowChips: sendBox.top > blockBottom - 0.5,
+            sendOffCentre: Math.abs((sendBox.top + sendBox.bottom) / 2
+              - (blockTop + blockBottom) / 2) > 1,
+            modeHardClip: modeLabel.scrollWidth > modeLabel.clientWidth + 0.5
+              && getComputedStyle(modeLabel).textOverflow !== 'ellipsis',
             sendRight: Math.round(send.getBoundingClientRect().right),
             composerWidth: Math.round(document.querySelector('.composer').getBoundingClientRect().width),
             vw: document.documentElement.clientWidth,
@@ -199,7 +244,10 @@ const EFFORTS = [
         if (r.sendRight > r.vw) {
           problems.push(`send is ${r.sendRight - r.vw}px off the right edge`);
         }
-        if (r.overflow > 0) problems.push(`the row overflows by ${r.overflow}px`);
+        if (r.overflow > 0) problems.push(`the chip block overflows by ${r.overflow}px`);
+        if (r.sendBelowChips) problems.push('the send button wrapped below the chips');
+        if (r.sendOffCentre) problems.push('the send button is not centred on the chip block');
+        if (r.modeHardClip) problems.push('the mode label is clipped with no ellipsis');
         // An attachment tray full of long file names would stretch the
         // composer itself if it did not scroll sideways.
         if (r.composerWidth > r.vw) {
@@ -229,6 +277,9 @@ const EFFORTS = [
           problems.push(`the name is down to ${r.nameWidth}px, which identifies nothing`);
         }
         if (problems.length) bad += problems.length;
+        const key = `${row} | ${label}${tier ? ` + ${tier}` : ''} | tray ${names.length}`;
+        if (!namesByWidth.has(key)) namesByWidth.set(key, []);
+        namesByWidth.get(key).push([WIDTH, r.nameWidth]);
         console.log(
           `    ${problems.length ? 'FAIL' : 'ok  '} ${`${label}${tier ? ` + ${tier}` : ''}`.padEnd(50)}`
           + ` overflow=${r.overflow}  spill=${r.spill}`
@@ -240,10 +291,42 @@ const EFFORTS = [
       }
     }
   }
+  await p.close();
+  }
   await browser.close();
+
+  // A bigger phone must never show less of the model name than a smaller one.
+  // Nothing above can see this: every number is inside its range at every
+  // width taken on its own, and the fault is that two of the widths disagree.
+  // It is the shape of failure a wrapping row invites, because where the line
+  // breaks and how much the chips get are two different decisions and they can
+  // stop agreeing — a chip that just fits on one line takes what is left of
+  // that line, while the same chip one point narrower gets a line to itself
+  // and takes all of it. Measured at 390pt against 375pt, that read "Claude
+  // Son…" on the bigger phone and "Claude Sonnet 4.5" on the smaller one.
+  if (WIDTHS.length > 1) {
+    for (const [key, seen] of namesByWidth) {
+      const ordered = [...seen].sort((a, b) => a[0] - b[0]);
+      for (let i = 1; i < ordered.length; i += 1) {
+        const [wNarrow, nNarrow] = ordered[i - 1];
+        const [wWide, nWide] = ordered[i];
+        if (nWide < nNarrow - 0.5) {
+          bad += 1;
+          console.log(
+            `\n  FAIL ${key}: the name is ${nWide}px at ${wWide}pt`
+            + ` but ${nNarrow}px at ${wNarrow}pt — a wider phone shows less of it`,
+          );
+        }
+      }
+    }
+  }
+
   if (bad) {
     console.log(`\n${bad} composer problem${bad > 1 ? 's' : ''}.`);
     process.exit(1);
   }
-  console.log('\nClean: send stays on screen, no chip spills, and the model name keeps the chip.');
+  console.log(
+    `\nClean at ${WIDTHS.join('/')}pt: send stays on screen, no chip spills, the model name`
+    + ' keeps the chip, and it never shrinks as the phone grows.',
+  );
 })();

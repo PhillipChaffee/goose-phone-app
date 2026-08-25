@@ -162,7 +162,9 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 
   /* Floating chrome. --edge is the gutter every floating thing shares, so the
-   * bars, the composer and the alerts all line up down the same margin. */
+   * bars, the composer and the alerts all line up down the same margin — and
+   * the scroll regions pad themselves by it, so the page's own content lines
+   * up down it too. Giving it up is how the review screen goes full-bleed. */
   --edge: 16px;
   /* How far the floating bars sit inside the safe area. Every scroll pad and
    * composer margin has to add this too, or the gap you asked for is 8px
@@ -978,8 +980,8 @@ pre {
 .scroll {
   flex: 1;
   overflow-y: auto;
-  padding: calc(var(--safe-top) + var(--chrome-gap) + var(--topbar-h) + var(--scrim-fade)) 16px
-    calc(var(--safe-bottom) + var(--chrome-gap) + 24px);
+  padding: calc(var(--safe-top) + var(--chrome-gap) + var(--topbar-h) + var(--scrim-fade))
+    var(--edge) calc(var(--safe-bottom) + var(--chrome-gap) + 24px);
   -webkit-overflow-scrolling: touch;
 }
 
@@ -1371,8 +1373,8 @@ select.field {
   line-height: var(--lh-sm);
 }
 
-/* Flex so a long id and a timestamp wrap as whole items with even gaps,
- * instead of the date breaking across lines mid-value. */
+/* Flex so a repo and a branch wrap as whole items with even gaps, instead of
+ * a long branch name breaking across lines mid-value. */
 .session-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1964,17 +1966,44 @@ body.away-from-bottom .scroll-bottom {
   display: flex;
   align-items: center;
   gap: 8px;
-  /* Wraps rather than crushing. The row carries an attach button, the model
-   * and its tier, the mode, and near the end of a context window a fourth
-   * chip — and at 360pt those do not fit on one line. Every way of making
-   * them fit is worse than a second line: a model name under six characters
-   * identifies nothing, a tier squeezed to zero disappears without saying so,
-   * and a mode that vanishes as the window fills is a mystery. The composer
-   * grows by 34px on the phones and in the states that need it, and on
-   * nothing else. */
-  flex-wrap: wrap;
 }
 
+/* The chips wrap; the send button never does.
+ *
+ * Wrapping used to be set on the row itself, and the row's last child is the
+ * send button — so what landed alone on line two was the primary action: a
+ * lone circle floating under the chips. The wrap moves one level in, onto a
+ * box holding the chips and nothing else, which leaves send a direct child of
+ * the row: pinned to the trailing edge, centred against however many lines of
+ * chips there are.
+ *
+ * Wrapping at all is still right, for the reason it was added: the row carries
+ * an attach button, the model and its tier, the mode, and near the end of a
+ * context window a fourth chip — and at 360pt those do not fit on one line.
+ * What was wrong is which item paid for it. Which item takes the second line
+ * is decided by .composer-chip:has(.chip-model) below: the model chip is
+ * capped so it always fits beside the attach button, so what wraps is the mode
+ * chip and the context readout, never the name.
+ *
+ * `flex: 1` with `min-width: 0`: this takes the row minus the send button and
+ * may go under its own content — the chips inside are what choose between
+ * shrinking and a second line, and neither is available if this box is held
+ * open at content width.
+ *
+ * Send stays a child of .composer-row rather than moving in here, so the
+ * fallback below still has something to key on. It matches
+ * `.composer-row > .send:only-child`, which stays reachable for the composer
+ * that offers nothing at all — such a screen writes no .chip-row, because
+ * there are no chips to put in one. Neither of today's two is that screen;
+ * both always write it, and both always put an attach button inside. */
+.chip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+}
 
 /* With no chips to show, the control row holds one button and the two-row
  * shape becomes a tall box with a lone circle floating in it. Fold back to a
@@ -2030,6 +2059,41 @@ body.away-from-bottom .scroll-bottom {
   min-width: 0;
 }
 
+/* The model chip never takes a line to itself.
+ *
+ * Which line a flex item lands on is decided from its *unshrunk* width, so a
+ * chip sized to its own content breaks the line before it has given up a single
+ * pixel. At 402pt a 265px model chip did exactly that once send stopped
+ * absorbing the break: the attach button was left alone on line one, the model
+ * chip took line two and the mode chip line three.
+ *
+ * 44px is the attach button and the gap beside it — the one thing on this row
+ * that is always there and never gives way, so it is what "the rest of line
+ * one" costs. Capping the chip at what is left means its unshrunk width always
+ * fits beside the attach button, so it never starts a line of its own: what
+ * wraps is whatever comes after it, which is the mode chip and the context
+ * readout, and those are exactly the two the earlier comment on .chip-row says
+ * a second line is for.
+ *
+ * A cap, not a basis. `flex-basis` with `flex-grow` was tried and is worse in a
+ * way a screenshot at one width will not show: the basis decides where the line
+ * breaks and the grow decides what the chip gets afterwards, and those two
+ * answers stop agreeing between 375 and 402pt. Measured, goose composer,
+ * `Claude Sonnet 4.5 · Max`, name width by viewport: 360 → 104, 375 → 104,
+ * 390 → 67, 402 → 79. A wider phone showed less of the name than a narrower
+ * one, because at 390 and up the whole row fitted on one line and the chip
+ * grew back to only 151 of the 176px its text wanted. With the cap the same
+ * sweep reads 104 at every width from 360 up, and the row takes its second
+ * line instead — which is the trade docs/design.md already made: a second line
+ * beats a crushed name.
+ *
+ * Nothing stretches the pill past its text, because the chip does not grow;
+ * `max-width: max-content` was only ever undoing a `flex-grow` that is no
+ * longer here. */
+.composer-chip:has(.chip-model) {
+  max-width: calc(100% - 44px);
+}
+
 /* Only the label gives way; the chevron beside it must stay, or the chip
  * stops reading as something you can open.
  *
@@ -2070,7 +2134,16 @@ body.away-from-bottom .scroll-bottom {
  * chip, mode chip, context chip and send — still renders a short model name in
  * full. Anything larger and `GPT-5.2` came out as `GPT…` on a small phone
  * whatever the mode was called. It holds every mode OpenCode ships and all of
- * goose's but `Manual approval`. */
+ * goose's but `Manual approval`.
+ *
+ * Both values still measure right, but one thing under them moved: the model
+ * chip is now capped at the row minus the attach button, so on a narrow phone
+ * this chip is pushed to a second line rather than sharing a crowded one with
+ * it. What that changes here is only when this chip is asked to give way, not
+ * the order: the model name is still what gives way first, and 7ch is still
+ * what stops this label taking the row on the widths where both fit.
+ * Re-measured at 280/320/360/375/390/393/402/430, every tier: a short name is
+ * rendered in full at all of them. */
 .composer-chip.mode {
   /* Shrinks, but last and least. `flex-shrink: 0` was right when the row held
    * a model chip and this one: the mode label is short and had nothing to
@@ -2084,8 +2157,17 @@ body.away-from-bottom .scroll-bottom {
   flex-shrink: 0.1;
 }
 
+/* Block, not the flex row .chip-label is by default: this label carries one
+ * fact rather than two, and a bare text node inside a flex container is an
+ * anonymous flex item — which `text-overflow` does not apply to. That is why
+ * the cap below rendered `Manual approval` as `Manual ap`: cut mid-word, with
+ * nothing to say it had been cut. `overflow: hidden` comes from .chip-label
+ * and `white-space: nowrap` from the chip, so a block box is the only piece
+ * missing. .chip-model escapes this only by being a real element. */
 .composer-chip.mode .chip-label {
+  display: block;
   max-width: 7ch;
+  text-overflow: ellipsis;
 }
 
 /* The name is the one thing on this chip that cannot go. The tier is beside
@@ -3037,15 +3119,38 @@ body.away-from-bottom .scroll-bottom {
  * re-hunking that makes this readable is in src/diff.rs; what is here is the
  * surface it lands on. */
 
+/* The review screen is the one page whose content is code, and code wants
+ * every column the phone has: 47 of them inside a card at 402pt, 52 without
+ * one. So this scroller alone gives up the page gutter, and the three things
+ * on it that are chrome rather than code state that gutter for themselves.
+ *
+ * Longhands rather than the shorthand, so the vertical padding that clears the
+ * floating chrome survives. `.scroll.diff` (0,2,0) beats `.scroll` (0,1,0) and
+ * comes later in the file, so it wins on both counts. */
+.scroll.diff {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* The one direct child of this scroller that is a rounded, bordered card, so
+ * the one that has to be handed the gutter back. `p.empty` carries its own
+ * 24px padding and needs nothing. */
+.scroll.diff > .error-box {
+  margin: 0 var(--edge) 16px;
+}
+
 /* How far you are through the review, and one control to declare yourself
  * done with the rest. Hidden below two files, where the answer is on screen
- * anyway (rule 11: only offer controls that do something). */
+ * anyway (rule 11: only offer controls that do something).
+ *
+ * The margin re-states the gutter the scroller just gave up: this row is
+ * chrome, not code. */
 .diff-progress {
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 32px;
-  margin-bottom: 8px;
+  margin: 0 var(--edge) 8px;
 }
 
 .diff-progress-label {
@@ -3056,9 +3161,11 @@ body.away-from-bottom .scroll-bottom {
   line-height: var(--lh-xs);
 }
 
+/* Same gutter as the row above it: the bar must line up with its own label,
+ * not run edge to edge like the code. */
 .diff-progress-track {
   height: 4px;
-  margin-bottom: 16px;
+  margin: 0 var(--edge) 16px;
   overflow: hidden;
   border-radius: var(--radius-full);
   background: var(--bg-secondary);
@@ -3073,29 +3180,53 @@ body.away-from-bottom .scroll-bottom {
   transition: width 160ms ease;
 }
 
-/* Borrowed wholesale from .tool: a surface one step off the page with a
- * hairline, in flow so no shadow (rule 5), at the control radius (rule 4). */
+/* A band, not a card. It was .tool's card — a surface one step off the page,
+ * hairlined, at the control radius — and the two side borders plus the
+ * scroller's gutter spent 34 of 402 points, about five columns, on saying
+ * "this is an object" about the one thing on the phone that is not an object
+ * but a document. The head keeps the page's gutter because it is chrome; the
+ * code below it runs edge to edge. Rules top and bottom rather than a box,
+ * for the reason rule 4 exempts a full-bleed surface from rounding: a curve
+ * at a corner the screen edge already cuts is a notch, not a card.
+ *
+ * `overflow: hidden` stays — it is what contains the no-wrap body's
+ * scrollport. */
 .diff-file {
   margin-bottom: 12px;
   background: var(--tool-surface);
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-lg);
+  border-top: 1px solid var(--border-primary);
+  border-bottom: 1px solid var(--border-primary);
   overflow: hidden;
 }
 
-/* Reviewed reads on the card's own edge rather than by fading its text: a
- * dimmed head is a contrast failure waiting to happen, and the filled check
- * beside it is already saying it in a second channel. */
+/* Reviewed reads on the band's own edge rather than by fading its text: a
+ * dimmed head is a contrast failure waiting to happen, and the Viewed pill
+ * beside it is already saying it in words.
+ *
+ * `border-color` still, not a longhand: the band has two edges left instead of
+ * four, and the shorthand paints whichever of them exist. It is a quieter
+ * signal than it was for that reason, which is affordable only because the
+ * pill next to it stopped being a bare tick and now says "Viewed". */
 .diff-file.seen {
   border-color: color-mix(in srgb, var(--bg-success) 55%, transparent);
 }
 
+/* The head is against the screen edge now, so its leading chevron and its
+ * trailing Viewed pill sit on the page's own 16pt margin instead of 4px and
+ * 8px inside a card border — the same margin the progress row, the error box
+ * and every other screen's content line up down, so it is the spacing scale
+ * rather than a new number.
+ *
+ * `min-height` keeps the fold target at the HIG size (rule 9) whatever the
+ * trailing control's height turns out to be; with today's 44px pill it is a
+ * no-op and the head measures 56px, exactly as it did as a card. */
 .diff-file-head {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 6px 8px 6px 4px;
+  min-height: 44px;
+  padding: 6px var(--edge);
   list-style: none;
   cursor: pointer;
 }
@@ -3134,9 +3265,14 @@ body.away-from-bottom .scroll-bottom {
   line-height: var(--lh-sm);
 }
 
-/* The directory gives way first and the filename never shrinks. The filename
- * is what you scan a file list for; a path truncated the usual way loses it
- * and leaves you reading four rows of "crates/opencode-client/src/…". */
+/* The directory gives way first, and is spent to nothing before the filename
+ * gives up anything. The filename is what you scan a file list for; a path
+ * truncated the usual way loses it and leaves you reading four rows of
+ * "crates/opencode-client/src/…".
+ *
+ * This is the only shrinkable item in the row, which is what makes the order
+ * absolute rather than a matter of degree — see .diff-name for why a shrink
+ * factor cannot express "last". */
 .diff-dir {
   min-width: 0;
   overflow: hidden;
@@ -3145,8 +3281,43 @@ body.away-from-bottom .scroll-bottom {
   color: var(--text-secondary);
 }
 
+/* Gives way last, rather than not at all. `flex-shrink: 0` said "the filename
+ * never shrinks", which is the right *order* but was not a reachable promise:
+ * a file at the root of the repo has no .diff-dir in front of it to spend, so
+ * a long enough bare name had nothing to give and painted straight over the
+ * trailing control instead. Measured at 402pt, with a lowercase name: the old
+ * 44px circle was first overlapped at 40 characters, and the Viewed pill is
+ * 43px wider, so it would have been reached around 36 — the bug is older than
+ * the pill, and widening the control is what made it likely rather than
+ * pathological.
+ *
+ * `max-width` rather than a shrink factor, because a factor cannot say
+ * "last". Flexbox splits a deficit in proportion to factor x base size, so any
+ * non-zero factor here takes something off the name from the first pixel — and
+ * a name one pixel short of its text is a name with the last character
+ * replaced by an ellipsis. Measured with .diff-dir at 100 against .diff-name
+ * at 1, over every path in this repo: at 402pt the name in
+ * `crates/opencode-client/examples/sse_probe.rs` was ellipsised at 86px of the
+ * 87 it wanted, while the directory beside it was still showing 162 of its own
+ * 231 — and at 360pt `crates/mock-goose-server/src/main.rs` lost the end of
+ * `main.rs` with 156 of 210px of directory still on screen. The order was
+ * proportional, not ordered.
+ *
+ * A maximum is absolute instead. The name is unshrinkable and capped at the
+ * width of the path row, so its *hypothetical* size — which is what the flex
+ * algorithm starts from — is already inside the row, the whole deficit lands
+ * on the directory beside it, and the name is only ever cut in the case this
+ * rule exists for: the one where the directory has been spent to nothing and
+ * the name still does not fit. Measured over every path in this repo at
+ * 320/360/375/390/393/402: no name truncated at 360 and above, none overlapping
+ * the pill at any width, and at 320 the single name that is cut has a
+ * directory already at 0. */
 .diff-name {
   flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-primary);
   font-weight: 600;
 }
@@ -3184,35 +3355,100 @@ body.away-from-bottom .scroll-bottom {
   line-height: var(--lh-sm);
 }
 
-/* GitHub's "Viewed" checkbox, at the HIG's 44px. It lives inside a
- * <summary>, so its handler stops the click reaching the fold. */
+/* GitHub's "Viewed" checkbox, at the HIG's 44px, and carrying the word as
+ * well as the tick. It was a 44px circle holding a tick alone, which is the
+ * app's own word for "reviewed" written in a glyph nothing on screen
+ * translates: a tick beside a filename could as easily mean the file passed
+ * something. This screen borrows its whole grammar from GitHub's review view,
+ * and GitHub writes the word, so the pill grows to about 92px and says it.
+ *
+ * `flex-shrink: 0` and `white-space: nowrap` because the label is fixed text
+ * this app chose, so it is never the right thing to shorten: what gives way
+ * beside it is the path, directory first and filename second.
+ *
+ * It lives inside a <summary>, so its handler stops the click reaching the
+ * fold. */
 .diff-seen {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
+  gap: 6px;
   height: 44px;
   flex-shrink: 0;
-  padding: 0;
+  padding: 0 12px;
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-full);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 18px;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  white-space: nowrap;
   cursor: pointer;
   transition: background-color 120ms ease, color 120ms ease;
 }
 
-.diff-seen[aria-pressed="true"] {
-  background: var(--bg-success);
-  border-color: transparent;
-  color: var(--text-inverse);
+/* The box and the tick occupy the same 18px square, so checking the box moves
+ * nothing beside it. Both are 1em icons, so the square is stated here rather
+ * than through font-size on the button: --text-xs would draw them at 12px
+ * beside 12px text — a mark, not a checkbox. */
+.diff-seen .cbox {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
 }
 
-/* The code surface, closing the card, so it takes that card's bottom corners
- * (11px inside a 12px border) exactly as .tool > .tool-output pre does. */
+.diff-seen .cbox .icon {
+  position: absolute;
+  inset: 0;
+  width: 18px;
+  height: 18px;
+}
+
+/* Unchecked is an empty box. The tick is hidden rather than absent so the box
+ * never reflows — and because a control that shows a checkmark whether or not
+ * it is checked is exactly what this replaced. */
+.diff-seen .cbox .icon:last-child {
+  opacity: 0;
+}
+
+/* --border-secondary, the same hairline the pill itself uses: an empty box is
+ * a border, not a mark, and it should not shout louder than the pill holding
+ * it. Defined in both themes (#cbd1d6 light, #525b68 dark). */
+.diff-seen .cbox .icon:first-child {
+  color: var(--border-secondary);
+}
+
+/* Filled, not tinted, and that is what lets the label keep text contrast.
+ * --text-inverse on --bg-success measures 3.48:1 in light: enough for a glyph
+ * (icons answer to 3:1), not enough for a word (4.5:1). Putting the word
+ * beside the box rather than inside it means only the tick is ever on the
+ * green, so the word sits on the pill's own background at --text-primary.
+ *
+ * The icon set draws stroke-only paths (fill="none" on the element), so the
+ * checked box takes its fill here.
+ *
+ * Reviewed is still said three ways, only one of them colour: the word, the
+ * checked box, and the band's own edge going green above and below. */
+.diff-seen[aria-pressed="true"] {
+  color: var(--text-primary);
+}
+
+.diff-seen[aria-pressed="true"] .cbox .icon:first-child {
+  color: var(--bg-success);
+  fill: var(--bg-success);
+}
+
+.diff-seen[aria-pressed="true"] .cbox .icon:last-child {
+  opacity: 1;
+  color: var(--text-inverse);
+  stroke-width: 3;
+}
+
+/* The code surface, edge to edge: the width is the whole point of this
+ * screen, and there is no card corner left for it to take. */
 .diff-body {
-  border-radius: 0 0 11px 11px;
   background: var(--code-bg);
   color: var(--code-fg);
   font-family: var(--font-mono);
@@ -3269,8 +3505,8 @@ body.away-from-bottom .scroll-bottom {
 }
 
 /* Wrapping is the default, and the reason is that horizontal scroll hides
- * characters — at the 47 columns this width allows, a -/+ pair that differs
- * past column 47 looks identical, and you cannot know there is something to
+ * characters — at the 52 columns this width allows, a -/+ pair that differs
+ * past column 52 looks identical, and you cannot know there is something to
  * scroll to without scrolling to it. Two smaller reasons: a per-hunk scroll
  * offset does not survive the next card, and a horizontally scrollable child
  * inside a vertically scrolling list captures near-diagonal swipes, so the
@@ -3334,7 +3570,7 @@ body.away-from-bottom .scroll-bottom {
 }
 
 /* A collapsed run of unchanged lines. The line number lives here rather than
- * in a per-row gutter: a gutter costs 4 of 47 columns, and under soft wrap a
+ * in a per-row gutter: a gutter costs 4 of 52 columns, and under soft wrap a
  * number is only correct on the first visual row of a source line, so it
  * becomes a mostly-blank column. This band is where you actually need the
  * anchor. */
@@ -3385,8 +3621,7 @@ body.away-from-bottom .scroll-bottom {
 
 /* The list is the session list — same card, same press, same head-and-meta
  * grammar — so all this screen adds is the part a session row has no use for:
- * a control inside the row, and a sentence explaining a control that is not
- * there. */
+ * a control inside the row. */
 
 /* Merge, on the rows where GitHub says it can happen. Inside the card rather
  * than behind a swipe like Delete: it is not destructive enough to hide, and
@@ -3395,16 +3630,6 @@ body.away-from-bottom .scroll-bottom {
   display: flex;
   gap: 8px;
   margin-top: 10px;
-}
-
-/* Why merging is not offered — a draft, a conflict, failing checks. Rule 11
- * says do not render a control that does nothing; it does not say leave the
- * reader guessing which of the four reasons applies. */
-.pull-note {
-  margin-top: 6px;
-  color: var(--text-secondary);
-  font-size: var(--text-xs);
-  line-height: var(--lh-sm);
 }
 
 /* ── scrollbars ─────────────────────────────────────────────────────── */

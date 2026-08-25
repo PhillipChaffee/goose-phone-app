@@ -95,6 +95,18 @@ Where something is clipped by a rounded parent its own radius is *concentric*:
 the parent's minus the border. The tool-call output slab is 11px inside a 12px
 card for exactly that reason.
 
+**A surface that runs edge to edge is exempt, and only that.** The screen's
+own edge has already cut the corner; curving it there notches the band rather
+than rounding it. The review screen's file bands are the only place this
+applies today — code is the only content on this phone worth the whole width
+(47 monospace columns inside a card at 402pt, 52 without one) — and the head of
+each band keeps the page's 16pt gutter, because the head is chrome and only
+the code is content. `docs/audit.js` reads the exemption off the geometry
+rather than off that list: full width, or full height, is a page or a panel
+rather than an object on one, whatever screen it turns up on. That is the rule,
+not a carve-out for this screen — anything spanning 402pt has had its corners
+cut by the phone, so there is nothing left there to round.
+
 ### 5. Borders separate; shadows float
 
 Anything in normal flow — cards, session rows, tool cards, table rules — gets
@@ -179,6 +191,16 @@ context window is. A control that does nothing is worse than no control. (Diff
 and PR are not in it; they act on the work rather than on your message, and
 they have their own row above the composer.)
 
+**A control that is missing still owes an explanation, and it is a chip, not a
+paragraph.** The pull-request row offers Merge only where GitHub says merging
+can happen, and there are four reasons it cannot: closed or merged, draft,
+failing checks, and a conflict GitHub has found or not yet looked for. The
+first three are already named by the two chips every row carries, so only the
+fourth needs saying — `conflicts`, or `mergeability pending` while GitHub works
+it out. Said in the row's existing grammar rather than a sentence under it: the
+sentence was a fourth line of prose in a list you scan, and three quarters of
+what it said was already on screen beside it.
+
 Everything else adjustable lives behind the model chip rather than getting a
 chip of its own — four settings would be four chips and a composer that is
 mostly chrome. **Mode is the one exception**, on both backends. It is the
@@ -196,6 +218,25 @@ itself is still stated in full, as the Context length row of the sheet.
 `docs/measure-composer.js` fails on a label clipped to nothing now, not just on
 a send button pushed off the edge — the row was within its bounds the whole
 time it was useless.
+
+The chips wrap onto a second line when they do not fit; the send button never
+does. It lives outside the wrapping box (`.chip-row`) rather than inside it, so
+it stays pinned to the trailing edge and centred on however many lines of chips
+there are — wrapping the row itself put the primary action alone on line two,
+which is the one item that must never move.
+
+**Which chip takes the second line is decided, not left to the row.** A line
+breaks on an item's *unshrunk* width, so a chip sized to its own text can take
+a line of its own without having given up a pixel — and at 402pt a long model
+name did exactly that, leaving the attach button alone above it and pushing the
+mode chip to a third line. The model chip is capped at the row minus the attach
+button instead, so it always fits beside it and what wraps is the mode chip and
+the context readout. A shrink-and-grow arrangement was tried first and is the
+thing to avoid: where the line breaks and how much a chip gets afterwards are
+two decisions, and they stopped agreeing between 375 and 402pt — a wider phone
+showed *less* of the model name than a narrower one. `docs/measure-composer.js`
+now runs several widths in one pass and fails on exactly that, because no
+single width can see it.
 
 The sheet has exactly two kinds of row, and which one a setting gets is
 **The settings chip's face is the model, then the effort tier** — `Opus 5
@@ -497,21 +538,44 @@ targets, radius nesting), the scrim still being opaque where the title sits,
 and rows that render nothing and so measure nothing. It exits non-zero on a
 finding.
 
-`node docs/measure-composer.js [width]` is separate because the audit cannot
+It also repeats every state with the server-supplied strings swapped for the
+longest plausible value, because a captured state only shows the one string the
+app happened to be holding. What belongs in that list is any text this app does
+not choose: a model name, a session title, the command a permission ask quotes
+— and a filename, which is the agent's to pick and sits opposite a fixed-width
+control on the review screen's file head.
+
+`node docs/measure-composer.js [width…]` is separate because the audit cannot
 see what it looks for: text spilling out of a chip is an anonymous text node
-with no box, and no chip sets `overflow-x`. It builds the two composer rows
-the app actually assembles, at whatever width you give it, with the longest
-model and mode names any server has offered — and fails if the send button
-leaves the screen, if a label spills past its pill, or if a label is clipped
-down to an ellipsis and nothing else. Run it at 360 as well as 402; 402 is the
-model names any server has offered and every effort tier that can reach a chip
-— and fails if the send button leaves the screen, if the tier is squeezed out
-through the side of the pill, if the tier takes more than the 40px it is
-allowed, or if a name that has had to ellipsise is left holding less than
-twice what the tier holds. That last pair is what the earlier version missed
-by trying `Max` alone: it is the cheapest tier there is, and the only one
-nothing goes wrong with. Run it at 360 and 375 as well as 402; 402 is the
-width where the damage is smallest.
+with no box, and no chip sets `overflow-x`. It builds the two composer rows the
+app actually assembles, at every width you give it, with the longest model
+names any server has offered and every effort tier that can reach a chip — and
+fails if the send button leaves the screen, if a label spills past its pill, if
+the tier is squeezed out through the side of the pill, if the tier takes more
+than the 40px it is allowed, or if a name that has had to ellipsise is left
+holding less than twice what the tier holds. That last pair is what the earlier
+version missed by trying `Max` alone: it is the cheapest tier there is, and the
+only one nothing goes wrong with.
+
+It fails on three more things that were on screen the whole time it reported
+clean, because none of them is a number going out of range: the send button
+wrapping below the chips, the send button not centred on the chip block, and a
+label clipped with no ellipsis. A wrapping row grows rather than overflowing,
+so send could sit on a line of its own with `overflow` still reading 0; and a
+label that clips itself measures as spilling a *negative* amount, so a hard cut
+mid-word read as cleaner than a label with room to spare. The overflow it
+measures is `.chip-row`'s, not `.composer-row`'s: the row holds a chip block
+that shrinks and a send button that does not, so its own scrollWidth can never
+exceed its clientWidth and asking it was asking a question with one answer.
+
+And it fails on one thing no single width can show — a bigger phone rendering
+*less* of the model name than a smaller one. That is the shape of failure a
+wrapping row invites, because where a line breaks and what a chip gets
+afterwards are two decisions that can stop agreeing; it read `Claude Son…` at
+390pt and `Claude Sonnet 4.5` at 375pt while every number was in range at both.
+So the script takes a list of widths and defaults to 320/360/375/390/393/402 —
+390 and 393 are in it because the old habit of running 360, 375 and 402 stepped
+straight over the two widths where it was worst.
 
 `node docs/measure-ptr.js both` and `node docs/measure-scroll-bottom.js both`
 cover the two controls no screenshot will ever catch. Against a local mock a
@@ -520,7 +584,11 @@ and the scroll-to-bottom button is only on screen while a transcript is
 scrolled up, which is never a state the capture settles in. Both restate their
 markup instead of reading the gallery — that is exactly the drift the gallery
 exists to prevent, and it is accepted here only because the alternative is not
-checking them at all, so keep them in step with the views. Both measure what a
+checking them at all, so keep them in step with the views. The scroll-to-bottom
+fixture builds its composer with a `.chip-row`, and one of its cases fills that
+row until the chips take two lines: a composer whose chips are flat in
+`.composer-row` cannot grow a second line whatever is put in it, so it would be
+measuring a height the app never has. Both measure what a
 screenshot would have shown: hidden when it should be, present and in the right
 place when it should be, in both themes.
 
