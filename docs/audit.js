@@ -4,27 +4,27 @@
 //   node docs/audit.js         [light|dark|both]
 //
 // Every screen state in docs/gallery-states.json is rebuilt as a standalone
-// 402x874 document — the gallery's <iframe> gives clean style isolation, but
-// this needs the states as top-level pages — and then walked for:
+// document at every phone size below — the gallery's <iframe> gives clean
+// style isolation, but this needs the states as top-level pages — and walked
+// for:
 //
 //   geometry  overflow past the viewport, text clipped without an ellipsis or
 //             spilling a box that does not clip at all, filled or
 //             fully-bordered boxes left at radius 0, buttons under 32px, any
-//             child rounded more than the parent clipping it, and a bar title
-//             taller than the bar.
+//             child rounded more than the parent clipping it, a bar title
+//             taller than the bar, the chrome band still opaque where that
+//             title sits with the scroller's padding still clearing it, and
+//             rows that render nothing and therefore measure nothing.
 //   contrast  every element carrying its own text, composited against the
 //             first opaque background behind it, against 4.5:1 (3:1 for large
 //             or bold text) — and every icon, which carries no text of its
 //             own and so is invisible to that walk, against 3:1.
-//   scrim     the chrome band still opaque where the title sits, and the
-//             scroller's padding still clearing it.
-//   collapsed rows that render nothing and therefore measure nothing.
 //
 // Each state is also repeated with server-supplied text swapped for the
 // longest plausible value, because a captured state only ever shows the one
 // string the app happened to be holding — and the geometry walk is repeated at
-// every iOS text size, because a captured state was also only ever rendered at
-// one of those.
+// every iOS text size and at every phone size, because a captured state was
+// also only ever rendered at one of each.
 //
 // Exits non-zero if anything is found, so it can gate a change.
 //
@@ -34,11 +34,15 @@
 // rather than to iOS's. Positions and text metrics are what the simulator is
 // for.
 //
-// What it is structurally blind to, and what covers it instead: this renders
-// at 402pt alone, and the composer's chip row is decided by width — so
-// docs/measure-composer.js builds that row at several widths and at several
-// text sizes. The text spilling out of a chip that SPILL below now catches is
-// the check that script had and this one did not.
+// What it is structurally blind to, and what covers it instead: this walks
+// whole screens at whole phone sizes, and the composer's chip row is decided
+// by how many COLUMNS it has rather than by which phone it is on — so
+// docs/measure-composer.js sweeps that one row across six widths at one
+// height, including two (390, 393) that are three points apart and were where
+// the model chip was at its worst. Both scripts now gate the same floor, 320
+// effective points; that is what stops them drifting apart. The text spilling
+// out of a chip that SPILL below now catches is the check that script had and
+// this one did not.
 
 const fs = require('fs');
 const os = require('os');
@@ -87,6 +91,55 @@ const STYLESHEETS = [
 // required ratio from 4.5 to 3 above 18.66px, so the smallest scale is the
 // binding case and the larger ones can only re-report what it found.
 const SCALES = [16, 17, 23, 53];
+
+// ── phone size ──────────────────────────────────────────────────────────
+// Every point size the app runs at, ascending. Height travels with width
+// because a phone is not a column: the two failures this axis found are both
+// "content is taller than the space it was given", and holding the height at
+// the reference 874 while narrowing invents a tall thin phone nobody owns and
+// understates every one of them. Measured, before the fixes that came with
+// this list: 375x874 reported 24 findings and 375x667 — the size an SE 3rd gen
+// actually is — reported 116, with two destination names painted on top of
+// each other.
+//
+//   320x568  what a 4.7" phone (SE 2nd/3rd gen, 8) reports with Display Zoom
+//            set to Larger Text, and the layout of the retired 4" phones.
+//            Unverified here — no simulator, no device — so the reason it is
+//            in this list is the one that does not depend on it:
+//            docs/measure-composer.js already gates 320 as a defensive floor
+//            ("a run that never sees the tight case is not a test of the tight
+//            case"), and an audit that gave up at 375 would gate a narrower
+//            band than the composer script does.
+//   375x667  SE (3rd gen), sold new until 2025 — the narrowest size a phone
+//            Apple supports gives at the default zoom, and where the drawer
+//            failure below is 38px rather than the 2px a tall 375 shows.
+//   390x844  12 / 13 / 14 / 16e — the size most phones in the field report.
+//            It finds nothing today; it is here because the failure
+//            docs/measure-composer.js was written for was a width rendering
+//            LESS than a narrower one, so "between two clean sizes" is not a
+//            proof of anything on this axis.
+//   402x874  17 Pro / 16 Pro. The reference: what docs/style-gallery.html is
+//            captured at and what every measurement in docs/design.md was made
+//            against. CONTRAST runs here alone — see the walk below.
+//   440x956  17 Pro Max / 16 Pro Max, the widest.
+//
+// 393x852 (14 Pro / 15 / 16) is deliberately absent: three points from 390 is
+// a question about how many columns one elastic chip has, which is
+// docs/measure-composer.js's subject, not a question about the geometry of 98
+// screens. 375x812 (13 mini) is absent because 375x667 is the same width and
+// strictly harsher in the axis that turned out to matter.
+//
+// A fixed list rather than argv, unlike measure-composer.js's widths: that
+// script's are a sweep for a comparison, while these are a COVERAGE CLAIM
+// about which phones the app is gated on, and a claim that narrows silently
+// when someone passes an argument is not a claim.
+const SIZES = [
+  { width: 320, height: 568 },
+  { width: 375, height: 667 },
+  { width: 390, height: 844 },
+  { width: 402, height: 874, reference: true },
+  { width: 440, height: 956 },
+];
 
 // ── stress ──────────────────────────────────────────────────────────────
 // A captured state only ever shows the one string the app happened to be
@@ -203,7 +256,25 @@ const GEOMETRY = () => {
     // drawer is translated fully off the left edge on purpose. Only something
     // that is partly visible can be said to spill.
     const parked = r.right <= 0.5 || r.left >= vw - 0.5;
-    if (!parked && (r.right > vw + 0.5 || r.left < -0.5) && !inHorizontalScroller(el)) {
+    // An element INSIDE an <svg> is painted through that root's own viewport,
+    // and `svg:root { overflow: hidden }` is a UA rule — so a <path> whose
+    // geometry bbox reaches past the screen has not put a pixel there. It is
+    // the exemption walk above that needs this said out loud: that walk stops
+    // at the first ancestor which clips, and from inside an icon the first
+    // such ancestor is always the icon's own root, so it can never reach the
+    // scroller. The result was an icon legitimately scrolled off the end of
+    // .action-row being exempt while the path drawing it was not — 20 findings
+    // at 320pt, all one element, none of them a pixel anyone could see.
+    //
+    // Conditioned on the root actually clipping rather than on being inside an
+    // <svg> at all, so an svg that states `overflow: visible` really does let
+    // its children out and they are still reported. The root itself is never
+    // exempted by this — `ownerSVGElement` is null for it — so it goes on
+    // answering for itself.
+    const insideClippingSvg = !!el.ownerSVGElement
+      && getComputedStyle(el.ownerSVGElement).overflow !== 'visible';
+    if (!parked && !insideClippingSvg
+        && (r.right > vw + 0.5 || r.left < -0.5) && !inHorizontalScroller(el)) {
       out.push(`OVERFLOW-X   ${name(el)} left=${r.left.toFixed(0)} right=${r.right.toFixed(0)} vw=${vw}`);
     }
     if (parked) continue;
@@ -386,6 +457,53 @@ const GEOMETRY = () => {
       out.push(`RADIUS-NEST  ${name(el)} ${cr}px inside ${name(p)} ${pr}px`);
     }
   }
+
+  // The floating chrome is legible because an opaque scrim covers the band it
+  // sits in, and the scroller's top padding keeps content out of that band. If
+  // the two ever disagree, the title lands on whatever scrolled underneath it
+  // and both stay readable — a collision, not a layering. The failure is
+  // invisible at rest, because at rest there is nothing scrolled up yet.
+  //
+  // Geometry, not contrast, and it lives here for that reason: it compares two
+  // measured edges, and the bar's is the one that moves. A title that wraps at
+  // a narrow width makes the bar taller and the scrim stops covering it — a
+  // failure the whole phone-size axis exists to reach, and one TITLE-TALLER
+  // cannot see, because the heading is still inside the now-taller bar.
+  const app = document.querySelector('.app');
+  const scroller = document.querySelector('.scroll');
+  if (app && bar) {
+    const scrim = parseFloat(getComputedStyle(app, '::before').height) || 0;
+    const fade = parseFloat(getComputedStyle(app).getPropertyValue('--scrim-fade')) || 0;
+    const barBottom = bar.getBoundingClientRect().bottom;
+    // The mask fades the scrim out over its last `--scrim-fade` pixels, so
+    // only `scrim - fade` of it is at full tint. That solid part has to reach
+    // past the bar: put the fade inside the bar's own band and the material
+    // thins exactly where the title sits, which leaves a dark code block
+    // scrolling under it legible straight through the serif. The icon buttons
+    // never showed this because they carry glass of their own.
+    if (scrim - fade < barBottom - 0.5) {
+      out.push(`SCRIM        solid to ${(scrim - fade).toFixed(0)}px but the bar ends at ${barBottom.toFixed(0)}px — the fade crosses the title`);
+    }
+    if (scroller) {
+      const pad = scroller.getBoundingClientRect().top + parseFloat(getComputedStyle(scroller).paddingTop);
+      if (scrim - pad > 0.5) {
+        out.push(`SCRIM        content starts ${(scrim - pad).toFixed(1)}px inside the ${scrim}px chrome scrim`);
+      }
+    }
+  }
+
+  // A row that renders nothing renders no line box, so it measures zero and
+  // disappears. That is how every blank line in a diff silently vanished,
+  // closing up the gaps the author put there. A height, so it belongs on the
+  // size axis with the rest of the geometry.
+  for (const el of document.querySelectorAll('.diff-line, .setting-row, .drawer-item, .session-item')) {
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+    if (el.getBoundingClientRect().height < 1) {
+      const cls = typeof el.className === 'string' ? el.className.trim() : '';
+      out.push(`COLLAPSED    .${cls.split(/\s+/).join('.')} has no height — empty content generates no line box`);
+    }
+  }
   return out;
 };
 
@@ -452,47 +570,6 @@ const CONTRAST = () => {
     }
   }
 
-  // The floating chrome is legible because an opaque scrim covers the band it
-  // sits in, and the scroller's top padding keeps content out of that band. If
-  // the two ever disagree, the title lands on whatever scrolled underneath it
-  // and both stay readable — a collision, not a layering. The failure is
-  // invisible at rest, because at rest there is nothing scrolled up yet.
-  const app = document.querySelector('.app');
-  const bar = document.querySelector('.topbar');
-  const scroller = document.querySelector('.scroll');
-  if (app && bar) {
-    const scrim = parseFloat(getComputedStyle(app, '::before').height) || 0;
-    const fade = parseFloat(getComputedStyle(app).getPropertyValue('--scrim-fade')) || 0;
-    const barBottom = bar.getBoundingClientRect().bottom;
-    // The mask fades the scrim out over its last `--scrim-fade` pixels, so
-    // only `scrim - fade` of it is at full tint. That solid part has to reach
-    // past the bar: put the fade inside the bar's own band and the material
-    // thins exactly where the title sits, which leaves a dark code block
-    // scrolling under it legible straight through the serif. The icon buttons
-    // never showed this because they carry glass of their own.
-    if (scrim - fade < barBottom - 0.5) {
-      out.push(`SCRIM        solid to ${(scrim - fade).toFixed(0)}px but the bar ends at ${barBottom.toFixed(0)}px — the fade crosses the title`);
-    }
-    if (scroller) {
-      const pad = scroller.getBoundingClientRect().top + parseFloat(getComputedStyle(scroller).paddingTop);
-      if (scrim - pad > 0.5) {
-        out.push(`SCRIM        content starts ${(scrim - pad).toFixed(1)}px inside the ${scrim}px chrome scrim`);
-      }
-    }
-  }
-
-  // A row that renders nothing renders no line box, so it measures zero and
-  // disappears. That is how every blank line in a diff silently vanished,
-  // closing up the gaps the author put there.
-  for (const el of document.querySelectorAll('.diff-line, .setting-row, .drawer-item, .session-item')) {
-    const cs = getComputedStyle(el);
-    if (cs.display === 'none' || cs.visibility === 'hidden') continue;
-    if (el.getBoundingClientRect().height < 1) {
-      const cls = typeof el.className === 'string' ? el.className.trim() : '';
-      out.push(`COLLAPSED    .${cls.split(/\s+/).join('.')} has no height — empty content generates no line box`);
-    }
-  }
-
   // Icons carry no text of their own, so the walk above skips every one of
   // them — and an icon is often the only thing distinguishing two otherwise
   // identical rows. A chevron at 2.20:1 was the entire difference between a
@@ -543,7 +620,9 @@ const CONTRAST = () => {
   let findings = 0;
 
   for (const theme of themes) {
-    const page = await browser.newPage({ viewport: { width: 402, height: 874 } });
+    const page = await browser.newPage({
+      viewport: { width: SIZES[0].width, height: SIZES[0].height },
+    });
     await page.emulateMedia({ colorScheme: theme });
 
     for (const [i, state] of states.entries()) {
@@ -568,32 +647,78 @@ const CONTRAST = () => {
           }
         }, state.swap);
       }
-      if (state.scroll) {
-        await page.evaluate((want) => {
-          const el = document.querySelector('.scroll');
-          if (el) el.scrollTop = want === 'bottom' ? el.scrollHeight : (parseInt(want, 10) || 0);
-        }, state.scroll);
-      }
-      // One document, walked once per text size. The root's font-size is set
-      // from here rather than written into the document because the state is
-      // otherwise identical — same markup, same swap, same scroll offset — and
-      // a reflow is cheaper than a navigation. An inline style on <html> beats
-      // every stylesheet rule, which is what makes it a simulation of the
-      // opt-in rather than a rule competing with one.
-      for (const [s, scale] of SCALES.entries()) {
-        await page.evaluate((px) => {
-          document.documentElement.style.fontSize = `${px}px`;
-        }, scale);
-        const issues = [...new Set([
-          ...await page.evaluate(GEOMETRY),
-          // Contrast at the smallest scale only: the 18.66px large-text
-          // threshold makes every larger scale strictly more permissive.
-          ...(s === 0 ? await page.evaluate(CONTRAST) : []),
-        ])];
-        if (issues.length) {
-          findings += issues.length;
-          console.log(`\n${state.label}  [${theme}, root ${scale}px]`);
-          issues.forEach((str) => console.log(`  ${str}`));
+      // One document, walked once per phone size and once per text size
+      // within that. Both are set from here rather than written into the
+      // document because the state is otherwise identical — same markup, same
+      // swap — and a reflow is far cheaper than a navigation: this list costs
+      // 980 resizes and no extra page loads.
+      //
+      // Size outside scale rather than inside, so the flush below runs once
+      // per size instead of once per size and scale.
+      for (const size of SIZES) {
+        await page.setViewportSize({ width: size.width, height: size.height });
+        // A resize is a reflow like the font-size below, with one exception
+        // that costs phantom findings. A closed <details> is a
+        // content-visibility-locked subtree, and Chromium does not re-lay it
+        // out when the viewport NARROWS: its cached rect keeps the previous
+        // size's inline size until something inside it is measured again. The
+        // walk is that something, so the first walk after a narrowing resize
+        // reads the last size's numbers — the code card's <pre>, whose right
+        // edge is 385 at 402pt, reported at 423 when 402 is stepped down from
+        // 440, which is 21px past a viewport it is 17px inside. Touching
+        // every rect once is what forces the relayout; reading
+        // document.body.offsetHeight is not, because a page-level reflow is
+        // precisely what a locked subtree skips.
+        //
+        // It does not bite in the order SIZES is actually in, because that
+        // list only ever widens and the narrowing step back to the front of it
+        // lands on a document that has just been navigated and never measured.
+        // That is a property of the list, not of the walk. Reverse SIZES with
+        // this line deleted and the run reports 300 findings against a true
+        // 284; put it back and it reports 284 again. Measured at no cost —
+        // the walk was going to force that layout a moment later anyway — so
+        // it buys the result's independence from the order of a list somebody
+        // will eventually reorder.
+        //
+        // Do not delete it as a no-op. Without it the walk still reports; it
+        // reports the wrong size, and on the steps where the stale value is
+        // the SMALLER one that is a finding which silently passes.
+        await page.evaluate(() => {
+          for (const el of document.querySelectorAll('*')) el.getBoundingClientRect();
+        });
+        if (state.scroll) {
+          // Inside the size loop, not before it: a resize re-clamps scrollTop
+          // against the new scrollHeight, so a state scrolled once at the top
+          // would be measured un-scrolled at four of the five sizes.
+          await page.evaluate((want) => {
+            const el = document.querySelector('.scroll');
+            if (el) el.scrollTop = want === 'bottom' ? el.scrollHeight : (parseInt(want, 10) || 0);
+          }, state.scroll);
+        }
+        // An inline style on <html> beats every stylesheet rule, which is what
+        // makes it a simulation of the Dynamic Type opt-in rather than a rule
+        // competing with one.
+        for (const [s, scale] of SCALES.entries()) {
+          await page.evaluate((px) => {
+            document.documentElement.style.fontSize = `${px}px`;
+          }, scale);
+          const issues = [...new Set([
+            ...await page.evaluate(GEOMETRY),
+            // Contrast at the smallest scale and the reference size only. It
+            // is a walk over computed colours: the 18.66px large-text
+            // threshold makes every larger scale strictly more permissive,
+            // and a wider phone moves boxes rather than colours. Honest to
+            // gate on the size only because the two checks that were in this
+            // function and were NOT about colour — the scrim covering the bar,
+            // and a row that measures nothing — have moved into GEOMETRY,
+            // where they are walked at every size like the geometry they are.
+            ...(s === 0 && size.reference ? await page.evaluate(CONTRAST) : []),
+          ])];
+          if (issues.length) {
+            findings += issues.length;
+            console.log(`\n${state.label}  [${theme}, ${size.width}x${size.height}, root ${scale}px]`);
+            issues.forEach((str) => console.log(`  ${str}`));
+          }
         }
       }
     }
@@ -603,7 +728,10 @@ const CONTRAST = () => {
   await browser.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 
+  // The sizes are named rather than counted: an unnamed count is exactly how a
+  // coverage claim rots.
   const scope = `${states.length} states x ${themes.length} theme${themes.length > 1 ? 's' : ''}`
+    + ` x ${SIZES.length} phone sizes (${SIZES.map((z) => `${z.width}x${z.height}`).join('/')})`
     + ` x ${SCALES.length} text sizes (${SCALES.join('/')}px)`;
   if (findings) {
     console.log(`\n${findings} finding${findings > 1 ? 's' : ''} across ${scope}.`);

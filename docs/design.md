@@ -811,10 +811,90 @@ That is the right simulation rather than a shortcut: Chromium cannot parse
 of the opt-in is that the root's px *is* the body size, so stating it as a
 number is the same claim in the only form this browser can hear. It needs no
 re-capture, which is what makes it compatible with never hand-editing the
-gallery. Contrast runs at the smallest size alone, because the 18.66px
-large-text threshold makes every larger one strictly more permissive.
+gallery.
 
-Three of its checks only mean something on that axis. **`CLIPPED-Y`** is the
+It walks a second axis too — **five phone sizes**, width *and* height:
+320×568, 375×667, 390×844, 402×874 and 440×956. Height travels with width
+because a phone is not a column, and that is not a detail. Both failures this
+axis found are "content taller than the space it was given", so holding the
+height at the reference 874 while narrowing invents a tall thin phone nobody
+owns and understates every one of them: at 375×874 the drawer reported 24
+findings, and at 375×667 — the size an SE 3rd gen actually is — it reported
+116. 402×874 stays as the **reference size**, because it is what the gallery is
+captured at and what every measurement in this document was made against;
+contrast runs there and at the smallest text size alone, since the 18.66px
+large-text threshold makes every larger one strictly more permissive and a
+wider phone moves boxes rather than colours. 320×568 is in the list because
+`docs/measure-composer.js` already gates 320 as a defensive floor, and an audit
+that gave up at 375 would gate a narrower band than the composer script does —
+the two now share a floor, which is what stops them drifting apart. 393×852 is
+deliberately absent: three points from 390 is a question about how many columns
+one elastic chip has, which is that script's subject, not a question about the
+geometry of 98 screens.
+
+Adding that axis turned the gate red with **284 findings**, every one of them
+at AX5 and none of them at 390, 402 or 440. They were five causes, and both of
+the real ones had been on screen the whole time the audit reported clean at one
+size.
+
+The first was the drawer, and it is the more instructive. `.drawer-nav` was
+given `flex: 1; min-height: 0; overflow-y: auto` precisely so the destinations
+would scroll at accessibility sizes — but a scroller only helps if its content
+keeps its size, and the rows are flex items of that column with the default
+`flex-shrink: 1`. Worse, `min-height: 48px` on `.drawer-item` is an *explicit*
+minimum, so it replaces the automatic content-based one and licenses flexbox to
+crush the row below its own line box before the scroller ever engages. The fix
+had been half-done and looked finished. Measured at 375×667 and AX5: every row
+squeezed to 48px, a two-line "Scheduler" label occupying 389..513 inside a
+427..475 box, painting 28px of real glyph across the "Skills" row above it —
+two destination names on top of each other. `flex-shrink: 0` is the whole fix,
+and it cannot regress the reference size because there is no crush there to
+undo: at 402×874 the rows already measure their natural 62px and the nav's
+scrollHeight equals its clientHeight. With it, the nav finally scrolls the way
+its own comment says it should — 724px of content in a 497px port.
+
+The second was four boxes where one word is wider than the column it was given,
+at 320×568: `streamable_http` 277px in a 256px `.banner`, `reviewed` 152px in a
+119px `.diff-progress-label`, `commands` 189px in a 153px `.choice-note`, and
+`Credentials` — uppercase with 0.06em of tracking, which is what makes it the
+worst of the four — 290px in a 254px card head, whose ink lands 3px past the
+right edge of the *screen* and is saved only by `.app`'s own overflow. All four
+are the second half of an idiom this stylesheet already states eleven times,
+and two of them already carried the first half (`min-width: 0`): the flex
+minimum had been lowered without the `overflow-wrap: anywhere` that lets the
+word actually break. `anywhere` rather than `break-word`, because only
+`anywhere` also lowers the min-content size the box is being sized from.
+
+The remaining 20 were the check being wrong, and are the one place this axis
+argued for *narrowing* a walk. All 20 were the same `<path>`, inside an
+`svg.icon`, inside an `.action-chip` scrolled off the end of `.action-row` —
+which is a deliberate sideways scroller. The chip and the svg root are both
+exempted correctly; the path was not, because `inHorizontalScroller` stops at
+the first ancestor that clips and from inside an icon that is always the icon's
+own root (`svg:root { overflow: hidden }` is a UA rule), so the walk could
+never reach the scroller. A path's bbox is not a box on screen. The exemption
+is conditioned on the root actually clipping rather than on being inside an
+`<svg>` at all, so an svg that states `overflow: visible` still reports its
+children; and the root is never exempted by it, so it goes on answering for
+itself. Verified both ways: with the CSS fixed but the tightening absent the
+residual is exactly those 20 findings and nothing else, and with `.action-row`
+forced to `overflow: visible` the svg root, both chips and the stat count all
+still fire.
+
+One implementation note worth keeping, because it looks like a no-op. The size
+loop resizes a live page rather than opening one per size — 196 navigations
+stay constant and only reflows multiply — and it follows every resize by
+touching every element's rect once. A closed `<details>` is a
+`content-visibility`-locked subtree, and Chromium does not re-lay it out when
+the viewport *narrows*: the first walk afterwards reads the previous size's
+numbers. Reading `document.body.offsetHeight` does not clear it, because a
+page-level reflow is precisely what a locked subtree skips. It does not bite in
+the order the list is actually in, since that list only ever widens — but
+reverse the list with that line deleted and the run reports 300 findings
+against a true 284. It costs nothing measurable, because the walk was going to
+force that layout a moment later anyway.
+
+Three of its checks only mean something on the text-size axis. **`CLIPPED-Y`** is the
 vertical half of the clipped-text walk, with anything carrying a
 `-webkit-line-clamp` exempted, because four `.session-*` elements clip
 vertically on purpose. **`SPILL`** is ink outside a box that never clips —
@@ -825,6 +905,16 @@ and the audit did not have it at all. **`TITLE-TALLER`** is the bar's heading
 leaving the bar, which the `SCRIM` check could not see while `.topbar` had a
 pinned height: its bottom edge never moved, so the comparison could not go
 wrong and reported clean with the title painted outside the glass.
+
+`SCRIM` and `COLLAPSED` are counted with the geometry rather than the contrast
+walk, which is where they started. Both measure edges, not colours — `SCRIM`
+compares the solid band against the bar's *measured* bottom, and `COLLAPSED` is
+a height — so both belong on the phone-size axis, and `SCRIM` in particular is
+width-sensitive in a way nothing else covers: a title that wraps at a narrow
+width makes the bar taller and the scrim stops reaching it, which
+`TITLE-TALLER` cannot see because the heading is still inside the now-taller
+bar. Moving them is also what makes it honest to run the contrast walk at the
+reference size alone; what is left in that function is provably colour-only.
 
 Against the stylesheet as it stood before rule 14 landed, that pass reports
 **844 findings** — 36 at 16px, 36 at 17, 84 at 23 and 688 at 53 — and it is

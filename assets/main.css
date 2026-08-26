@@ -1236,6 +1236,14 @@ html:has(.titlegroup) {
   line-height: var(--lh-xs);
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  /* Nothing clips a card head, so a word too wide for it is painted outside
+   * rather than cut. The two declarations above are what make that reachable:
+   * uppercase and 0.06em of tracking put "Credentials" at 290px inside a 254px
+   * card at AX5 on a 320pt screen, whose ink then lands 3px past the right
+   * edge of the SCREEN and is saved only by `.app`'s own overflow. `anywhere`
+   * rather than `break-word`, here and in the three rules below: only
+   * `anywhere` also lowers the min-content size the box is being sized from. */
+  overflow-wrap: anywhere;
 }
 
 /* Groups run label → field → optional hint, repeated. Without a gap between
@@ -3205,6 +3213,19 @@ body.away-from-bottom .scroll-bottom {
   display: flex;
   align-items: center;
   gap: 14px;
+  /* A row of a scroller, not a spring. `.drawer-nav` (in the section at the
+   * foot of this file) scrolls when the destinations stop fitting — but every
+   * row is a flex item OF that scroller, and the `min-height` on the next line
+   * is an EXPLICIT minimum, so it replaces the automatic content-based one and
+   * licenses flexbox to squeeze the row below its own line box before the
+   * scroller ever engages. Measured at AX5 on a 375x667 phone: every row
+   * crushed to 48px, a two-line "Scheduler" label occupying 389..513 inside a
+   * 427..475 box and painting 28px of real glyph across the "Skills" row above
+   * it. Two destination names on top of each other.
+   *
+   * `.drawer-group` is safe without this only because it has no min-height of
+   * its own and so keeps `min-height: auto`. */
+  flex-shrink: 0;
   min-height: 48px;
   /* A destination's label is a bare text node, so it is an anonymous flex
    * item whose automatic minimum is its longest word — and at AX5 one word is
@@ -3497,6 +3518,12 @@ body.away-from-bottom .scroll-bottom {
   color: var(--text-secondary);
   font-size: var(--text-xs);
   line-height: var(--lh-sm);
+  /* Its parent `.choice-main` is `flex: 1 1 0`, so the flex minimum has
+   * already been lowered — but a lowered minimum only helps if the word can
+   * break. At AX5 on a 320pt screen "commands" is 189px in a 153px note, and
+   * the 36px that will not fit is painted 24px across the check that says
+   * which mode is in force. */
+  overflow-wrap: anywhere;
 }
 
 /* The leading mark says which mode this is; only the trailing check says
@@ -3589,6 +3616,11 @@ body.away-from-bottom .scroll-bottom {
   font-size: var(--text-xs);
   line-height: var(--lh-sm);
   text-align: center;
+  /* What a banner carries is a transport or an error the server named, and
+   * those are single tokens with nowhere to break: `streamable_http` is 277px
+   * in a 256px banner at AX5 on a 320pt screen, and the banner does not clip,
+   * so the rest is painted out through its own border. */
+  overflow-wrap: anywhere;
 }
 
 /* Rule 8's dot again, sized like `.dot`. Centred by the row, so unlike
@@ -3652,6 +3684,11 @@ body.away-from-bottom .scroll-bottom {
   color: var(--text-secondary);
   font-size: var(--text-xs);
   line-height: var(--lh-xs);
+  /* `min-width: 0` above lowered the flex minimum; this is the half that makes
+   * the word actually break. Without it, at AX5 on a 320pt screen "reviewed"
+   * is 152px in a 119px label, and the 34px that will not fit is painted 26px
+   * across the "Mark all" button beside it. */
+  overflow-wrap: anywhere;
 }
 
 /* Same gutter as the row above it: the bar must line up with its own label,

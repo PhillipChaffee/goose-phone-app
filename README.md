@@ -202,10 +202,11 @@ scripts/shoot-simulator.sh chat  # regenerate a README image from the simulator
 node scripts/make-og-card.js     # regenerate the project page's social preview
 ```
 
-`docs/audit.js` rebuilds every captured state as a standalone 402×874 document
-and checks each for overflow, clipped text, square-cornered surfaces,
-undersized tap targets, radius-nesting mistakes and text below the WCAG AA
-contrast threshold. It exits non-zero on a finding. The states it reads are
+`docs/audit.js` rebuilds every captured state as a standalone document, at five
+phone sizes from 320×568 to 440×956 and at four text sizes, and checks each for
+overflow, clipped text, text spilling a box that never clips, square-cornered
+surfaces, undersized tap targets, radius-nesting mistakes and text below the
+WCAG AA contrast threshold. It exits non-zero on a finding. The states it reads are
 captured from the running app, so it cannot drift from what ships. The rules
 it enforces, and why they are the rules, are in
 [`docs/design.md`](docs/design.md).
