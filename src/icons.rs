@@ -74,6 +74,13 @@ pub(crate) fn path_for(name: &str) -> Option<&'static str> {
         // mark, at a size where a literal star would be a blob.
         "sparkle" => "M12 3v6M12 15v6M3 12h6M15 12h6M6.5 6.5 9 9M15 15l2.5 2.5M17.5 6.5 15 9M9 15l-2.5 2.5",
         "archive" => "M3 5h18v4H3zM5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M9.5 13h5",
+        // The desktop nav's collapse control: a pane with its leading column
+        // ruled off. One glyph for both directions, because the button is a
+        // toggle and not two buttons — which side is "the panel" never
+        // changes, and an icon that flips is an icon you have to read. It is
+        // the same mark goose's own desktop app uses for this exact control
+        // (`PanelLeft`, ui/desktop/src/components/Layout/AppLayout.tsx).
+        "sidebar" => "M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM9.5 5v14",
         _ => return None,
     })
 }

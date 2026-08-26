@@ -9,9 +9,14 @@
 //!
 //! What it does not have, on purpose: no swipe tray (the rows carry their
 //! actions inline, `src/views/chrome.rs`), no pull-to-refresh (a mount
-//! re-fetch and ⌘R below), no hamburger (the nav is already on screen — the
-//! rule is in `assets/desktop.css`), and no collapse or drag-resize on the nav.
-//! Pinned means pinned.
+//! re-fetch and ⌘R below), no hamburger (the phone's is hidden by
+//! `assets/desktop.css`; the nav's own toggle is below), and no drag-resize on
+//! the nav.
+//!
+//! The nav DOES collapse, and that is the one thing about it the window gets a
+//! say in. It starts open every launch and nothing persists the choice: the
+//! default is the feature, and a nav that remembered being shut would open one
+//! day into a window with no navigation in it and no explanation.
 
 use dioxus::prelude::*;
 
@@ -144,6 +149,78 @@ const DISMISS_KEY: &str = r"
 })();
 ";
 
+/// ⌘/ shows and hides the nav. Ctrl+/ everywhere else.
+///
+/// The chord is goose's own: `toggleNavigation: 'CommandOrControl+/'`
+/// (`ui/desktop/src/utils/settings.ts`), bound there to a View ▸ Toggle
+/// Navigation menu item. Two apps that look like one product should not
+/// disagree about the key that hides the same panel.
+///
+/// JS rather than a Rust `onkeydown`, for `REFRESH_KEY`'s reason — a
+/// document-level keydown handler in Rust puts a blocking synchronous XHR on
+/// every character typed into the composer.
+///
+/// `e.code` is not consulted and `e.key` is, deliberately: on a US layout the
+/// slash is `Slash`, but on AZERTY it is Shift+colon and on a German layout it
+/// is Shift+7. Matching the CHARACTER is what makes the chord the same chord
+/// on every keyboard, and it is why the shift guard the other two listeners
+/// carry is absent here — reaching `/` at all requires Shift on most of
+/// Europe.
+///
+/// `preventDefault` only after the chord has been recognised, which is the
+/// same shape `REFRESH_KEY` uses and for a weaker reason: nothing in a web
+/// view claims ⌘/ today, so there is probably nothing to swallow. It is taken
+/// anyway because the alternative is a key that both toggles the nav and does
+/// whatever the platform decides ⌘/ means next.
+const NAV_KEY: &str = r"
+(() => {
+  if (window.__navKeyWired) return;
+  window.__navKeyWired = true;
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== '/') return;
+    if (!e.metaKey && !e.ctrlKey) return;
+    if (e.altKey) return;
+    e.preventDefault();
+    dioxus.send('toggle');
+  });
+})();
+";
+
+/// Wire ⌘/ to the nav's own open signal.
+fn use_nav_key(mut nav_open: Signal<bool>) {
+    use_effect(move || {
+        let mut eval = document::eval(NAV_KEY);
+        spawn(async move {
+            while eval.recv::<String>().await.is_ok() {
+                let now = *nav_open.peek();
+                nav_open.set(!now);
+            }
+        });
+    });
+}
+
+/// What the collapse control says it will do, which is never what it is.
+///
+/// A toggle's name is its ACTION, not its state — "Hide sidebar" while the
+/// sidebar is showing. Both `title` (the pointer's tooltip) and `aria-label`
+/// (the screen reader's name) take it, because with the nav shut the button
+/// is an unlabelled glyph in an empty corner and it is the only thing on
+/// screen that can bring the navigation back.
+///
+/// Data rather than a branch inside the component, following [`nav_tooltip`]
+/// and [`nav_is_active`] in `src/shell/mod.rs`: a rule taken as a value is a
+/// rule a test can hold.
+///
+/// [`nav_tooltip`]: crate::shell::nav_tooltip
+/// [`nav_is_active`]: crate::shell::nav_is_active
+const fn nav_toggle_label(open: bool) -> &'static str {
+    if open {
+        "Hide sidebar"
+    } else {
+        "Show sidebar"
+    }
+}
+
 /// Wire Escape to the cancel that is already on screen.
 fn use_dismiss_key() {
     use_effect(|| {
@@ -233,8 +310,27 @@ pub(crate) fn AppShell() -> Element {
     let ctx = crate::state::use_app_ctx();
     let dest = nav::current(&ctx);
 
+    // The nav's own state, held HERE rather than on `AppCtx`, and not
+    // `ctx.drawer_open`.
+    //
+    // Reusing the phone's signal was the obvious move and it is wrong twice.
+    // `shell::render_group` closes the drawer on every destination click, so
+    // the nav would shut itself the moment you navigated with it; and
+    // `views/scheduler.rs` treats an open drawer as an overlay and stops
+    // polling underneath it, so a pinned-open nav would silently freeze the
+    // schedule list for the life of the window. Both are correct readings of
+    // what that signal means on a phone — it is a panel COVERING the screen —
+    // and neither is true of a column beside one.
+    //
+    // A local `use_signal` and not a field on `AppCtx` because `AppShell`
+    // mounts once for the life of the process (`src/app.rs`) and nothing
+    // outside this file reads it: the toggle, the keyboard chord and the
+    // attribute the sheet keys off are all below.
+    let mut nav_open = use_signal(|| true);
+
     use_arrival_refresh(dest);
     use_refresh_key();
+    use_nav_key(nav_open);
     use_dismiss_key();
 
     // The destination's own answer to "is anything open", which is the fact
@@ -257,6 +353,34 @@ pub(crate) fn AppShell() -> Element {
         div {
             class: "shell",
             "data-detail": if detail_open { "open" } else { "empty" },
+            // The whole of the collapse, as far as Rust is concerned. Width
+            // still decides nothing here and neither does this: the sheet
+            // slides the column shut and slides the button across, and the
+            // only fact it cannot work out for itself is which way the toggle
+            // was last pressed.
+            "data-nav": if nav_open() { "open" } else { "closed" },
+
+            // OUTSIDE `.navpane`, and that is the whole reason it is a sibling
+            // of the panes rather than a child of the nav it belongs to: the
+            // column it would live in collapses to nothing, and a control that
+            // vanishes with the thing it reopens is a one-way door. It is
+            // absolutely positioned against `.shell` and the sheet moves it
+            // between two places — the nav card's top corner while the nav is
+            // open, the window's while it is shut. goose's own desktop app
+            // parks the identical button in the identical spot
+            // (`ui/desktop/src/components/Layout/AppLayout.tsx`), for what
+            // must be the same reason.
+            button {
+                class: "nav-toggle",
+                title: nav_toggle_label(nav_open()),
+                "aria-label": nav_toggle_label(nav_open()),
+                "aria-expanded": if nav_open() { "true" } else { "false" },
+                onclick: move |_| {
+                    let now = *nav_open.peek();
+                    nav_open.set(!now);
+                },
+                Icon { name: "sidebar" }
+            }
 
             // NOT `.drawer.open`. Three reasons, all load-bearing: `.drawer`
             // is `position: absolute` with `translateX(-100%)` and would have
@@ -266,11 +390,24 @@ pub(crate) fn AppShell() -> Element {
             // nothing has to move out of `assets/main.css`, because
             // `.drawer-brand`, `.drawer-nav`, `.drawer-item` and
             // `.drawer-group` are all independent of `.drawer` itself.
+            //
+            // Two elements where the first draft had one, and the inner one is
+            // what carries the look. `.navpane` is the COLUMN — it is what
+            // animates to zero width, and it clips — while `.navcard` is the
+            // rounded, outlined panel inside it, at a width that does not
+            // change while the column closes. One element cannot do both: a
+            // panel that shrinks reflows its own destination labels on the way
+            // out, so "Session History" rewraps to four lines and back again
+            // over 200ms. Clipping a card that never moves is the same slide
+            // with none of that, and it is the arrangement goose's own desktop
+            // app uses for this panel, down to the 8px of padding.
             aside { class: "navpane",
-                h2 { class: "drawer-brand", "goose" }
-                nav { class: "drawer-nav",
-                    for group in Group::ALL {
-                        {render_group(&ctx, group)}
+                div { class: "navcard",
+                    h2 { class: "drawer-brand", "goose" }
+                    nav { class: "drawer-nav",
+                        for group in Group::ALL {
+                            {render_group(&ctx, group)}
+                        }
                     }
                 }
             }
@@ -353,8 +490,14 @@ mod tests {
     /// composer's chip row is documented to fail.
     const CONTENT_MIN: u32 = 360;
 
-    /// The nav's width once it drops its labels.
-    const RAIL: u32 = 56;
+    /// The nav COLUMN's width once it drops its labels.
+    ///
+    /// 72 and not 56, and the extra 16 is not slack: the nav is a card inside
+    /// its column with `--shell-gap` of breathing room on each side, so the
+    /// rail the icons actually sit in is 72 - 8 - 8 = 56. That is the number
+    /// `assets/desktop.css` reaches by overriding `--nav-w`, and it is the
+    /// same 56 the labels were dropped for.
+    const RAIL: u32 = 72;
 
     /// Three columns need all three of them, so the breakpoint is their sum.
     ///
@@ -404,6 +547,42 @@ mod tests {
                  reflow where src/shell/desktop.rs says they do"
             );
         }
+    }
+
+    /// The collapse is two decisions in two languages again: Rust sets
+    /// `data-nav` and the sheet is the only thing that reads it. Nothing in
+    /// the compiler connects them, so a rename on either side leaves a button
+    /// that toggles an attribute nobody styles — a control that visibly does
+    /// nothing, with no error anywhere.
+    #[test]
+    fn the_stylesheet_acts_on_the_attribute_the_shell_sets() {
+        let sheet = include_str!("../../assets/desktop.css");
+        for rule in [r#"[data-nav="closed"]"#, ".nav-toggle", ".navcard"] {
+            assert!(
+                sheet.contains(rule),
+                "assets/desktop.css never mentions `{rule}`, so the nav's \
+                 collapse control changes an attribute nothing styles"
+            );
+        }
+    }
+
+    /// A toggle is named for what it will DO, not for what it is. Getting
+    /// this backwards is invisible to a sighted pointer user — the tooltip
+    /// just reads oddly — and actively misleading to a screen reader, where
+    /// this string is the button's whole identity.
+    #[test]
+    fn the_collapse_control_is_named_for_its_action() {
+        assert_eq!(super::nav_toggle_label(true), "Hide sidebar");
+        assert_eq!(super::nav_toggle_label(false), "Show sidebar");
+    }
+
+    /// The glyph the toggle asks for has to exist. `Icon` renders nothing at
+    /// all for a name it does not know (`src/icons.rs`), so a typo here is an
+    /// invisible button in an empty corner rather than a compile error — and
+    /// with the nav shut that button is the only way back to the navigation.
+    #[test]
+    fn the_collapse_control_has_a_glyph() {
+        assert!(crate::icons::path_for("sidebar").is_some());
     }
 
     /// Arriving at a destination is the desktop's whole refresh story, and it

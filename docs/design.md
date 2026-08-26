@@ -1132,13 +1132,33 @@ than round numbers:
 |------------|------------------------------------------------------|
 | ≥ 902      | nav 212 · list 330 · detail                          |
 | 572 – 901  | nav 212 · list **or** detail                         |
-| < 572      | nav collapses to a 56px icon rail · list or detail   |
+| < 572      | nav narrows to a 72px icon rail · list or detail     |
 
 Below 902 the list and the detail share a column and whichever has something
 in it wins — which is the arrangement goose's desktop app is in at every
 width. The rail keeps every destination on screen and one click away; the
 labels stay in the DOM at zero size, so each button keeps its name, and
-`title` gives the pointer a copy of it.
+`title` gives the pointer a copy of it. The nav *column* is 212 and 72; the
+card inside it is that minus 8 points of breathing room on each side, so the
+panel itself is 196 and the rail's icons sit in 56.
+
+**The nav is a floating card, and it collapses.** It is inset from the window
+by 8 points on three sides, rounded at `--radius-xl` and outlined — the phone's
+"chrome floats" grammar, and the same treatment goose's own desktop app gives
+the same panel ("a rounded outlined card floating on it with breathing room",
+`AppLayout.tsx`). The content beside it is the plain canvas: no card, no
+border.
+
+It starts **open on every launch** and nothing persists the choice. The toggle
+is `⌘/` — goose's own chord for this (`toggleNavigation`) — or the button, which
+is a sibling of the columns rather than a child of the nav, because a control
+that vanishes with the panel it reopens is a one-way door. It slides between
+the card's top corner and the window's. State lives in a `use_signal` local to
+`AppShell` and reaches the sheet as `data-nav`; it is deliberately *not*
+`ctx.drawer_open`, which on a phone means "a panel is covering the screen" and
+carries two behaviours that are wrong for a pinned column — `render_group`
+closes it on every navigation, and `views/scheduler.rs` stops polling while it
+is open.
 
 **The window's floor is 480 × 560 points**, set with
 `WindowBuilder::with_min_inner_size`. 480 is the rail plus 424 of content —
@@ -1177,12 +1197,37 @@ proved reads as *selected* (see the note over `.drawer-item.active`), and
 
 ### Deviations, desktop only
 
-**The pane header does not float.** Rule 3 — "each carries its own glass,
-nothing spans the width" — is the phone's identity and cannot survive three
-columns: `.topbar` is positioned against `.app`, so three of them would stack
-in one corner, and three glass pills abreast is three where the eye expects
-one. On the desktop the bar is static with a rule under it. The controls keep
-their shapes and lose their shadows.
+**The pane header does not float, and it draws no line.** Rule 3 — "each
+carries its own glass, nothing spans the width" — is the phone's identity and
+cannot survive three columns: `.topbar` is positioned against `.app`, so three
+of them would stack in one corner, and three glass pills abreast is three where
+the eye expects one. On the desktop the bar is static: the title sits on the
+canvas in a 4rem band of air, and the controls keep their shapes and lose their
+shadows.
+
+The first draft put a rule under it, on rule 6's reasoning that anything in
+normal flow separates with a hairline. That was a misreading of what the line
+had to separate: the bar and the pane under it are the same colour and nothing
+scrolls beneath it, so the rule separated nothing — while meeting the column
+divider at a right angle once per pane. A window whose structure is drawn in
+corners is exactly the "boxy" this system exists to avoid. goose's own desktop
+app draws no such divider either. The one line the shell still draws is
+between the two content columns, which are two different things.
+
+**Nav colour is split by theme, and it is measured.** The nav card paints
+`--bg-secondary` in light and `--bg-primary` in dark — i.e. in dark it paints
+nothing at all and the outline does the separating. Both directions come from
+the same measurement. One fill for both put a #3f434b panel on a #22252a page
+(1.53:1, a pale slab bolted to a dark window) and dragged the selected
+destination down with it: `--bg-tertiary` on that slab is 1.13:1, so the one
+pill whose job is to say where you are was the faintest thing in the column.
+Against the page it is 1.60:1 — which is where goose's own sidebar lands
+(sampled: identical sidebar and canvas fills, a 1px border, a 1.58:1 selected
+pill). Light has the opposite problem — #f4f6f7 on white is 1.09:1, a step you
+have to look for — so it keeps its fill and the selected pill gains an inset
+1px ring on top of it. **Light separates with fills, dark separates with
+lines.** `--shell-line` follows the same split so the card's edge and the
+column divider land at the same strength in both themes (1.44:1 and 1.42:1).
 
 **Row action buttons are 32px, not rule 9's 44.** 44 is the HIG's *touch*
 number and a pointer is not a thumb. 32 is not a taste either: it is the floor
