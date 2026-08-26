@@ -51,9 +51,9 @@ impl Group {
 
 /// One drawer destination and everything the shell needs to know about it.
 ///
-/// The four function pointers are what keep the table honest: a row that
-/// cannot say how to reach itself, whether it is showing, what to render and
-/// what to call the dump is not a destination, it is a button.
+/// The five function pointers are what keep the table honest: a row that
+/// cannot say how to reach itself, whether it is showing, what it lists, what
+/// it has open and what to call the dump is not a destination, it is a button.
 #[derive(Debug)]
 pub(crate) struct Destination {
     /// Stable identifier, and the stem of the dump keys this destination's
@@ -77,8 +77,28 @@ pub(crate) struct Destination {
     /// True only when this destination's own stack is at its root — which is
     /// what the drawer marks as active.
     pub at_root: fn(&AppCtx) -> bool,
-    /// Render whichever screen of this destination's stack is on top.
-    pub view: fn(&AppCtx) -> Element,
+    /// The screen at the BOTTOM of this destination's stack — the list the
+    /// desktop shell keeps in its middle column while a detail fills the
+    /// third.
+    ///
+    /// `None` is a destination with nothing to list. Settings is one screen, so
+    /// on the desktop it takes the content area whole rather than half of it,
+    /// and the shell draws two columns instead of three.
+    pub root: Option<fn(&AppCtx) -> Element>,
+    /// Whatever this destination has pushed ON TOP of its root, or `None` when
+    /// it is at its root.
+    ///
+    /// The pair is deliberately a root plus a detail rather than a root plus a
+    /// "render whichever is on top": those two would each carry their own copy
+    /// of the root arm, and the only thing keeping the copies equal would be
+    /// whoever edited the row last. Swapping a list component would then move
+    /// the phone and leave the desktop's middle column rendering the old one,
+    /// and no phone gate could see it. Here the root is written once and
+    /// [`Destination::screen`] composes the two, so they cannot disagree.
+    ///
+    /// A phone reads it only through `screen`, which is a destination's whole
+    /// stack collapsed to the one screen a phone shows.
+    pub detail: fn(&AppCtx) -> Option<Element>,
     /// The dump key for the mounted screen, or `None` when this destination's
     /// stack is not the one on screen.
     ///
@@ -86,6 +106,31 @@ pub(crate) struct Destination {
     /// because they are one lookup: two functions could disagree, and then
     /// the app would render one screen and file the dump under another.
     pub key: fn(&AppCtx) -> Option<&'static str>,
+}
+
+impl Destination {
+    /// This destination's whole stack collapsed to the one screen on top of it.
+    ///
+    /// The phone's answer, and only the phone's: the desktop reads `root` and
+    /// `detail` separately, because its whole point is that the two are on
+    /// screen at once and a closed detail is a column with a sentence in it
+    /// rather than the list repeated. So this is `cfg`-gated to the targets
+    /// that call it, the same way `desktop::MIN_INNER` is gated to the one
+    /// that has a window — an ungated helper with one caller behind a `cfg` is
+    /// dead code on every other target, and `cargo clippy -D warnings` is
+    /// right to say so.
+    ///
+    /// `cargo check --target aarch64-apple-ios` is what compiles it. A
+    /// destination with neither a detail nor a root would render nothing, and
+    /// no row of the table is one: the six with lists are covered by
+    /// `every_destination_but_settings_lists_something`, and the seventh is
+    /// Settings, whose detail is unconditional.
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    pub(crate) fn screen(&self, ctx: &AppCtx) -> Element {
+        (self.detail)(ctx)
+            .or_else(|| self.root.map(|root| root(ctx)))
+            .unwrap_or_else(|| rsx! {})
+    }
 }
 
 /// Chats: the goose session list and the chat pushed on top of it.
@@ -104,9 +149,10 @@ const CHATS: Destination = Destination {
         screen.set(Screen::Sessions);
     },
     at_root: |ctx| (ctx.tab)() == Tab::Home && (ctx.screen)() == Screen::Sessions,
-    view: |ctx| match (ctx.screen)() {
-        Screen::Chat => rsx! { views::chat::ChatView {} },
-        _ => rsx! { views::sessions::SessionsView {} },
+    root: Some(|_| rsx! { views::sessions::SessionsView {} }),
+    detail: |ctx| match (ctx.screen)() {
+        Screen::Chat => Some(rsx! { views::chat::ChatView {} }),
+        _ => None,
     },
     key: |ctx| {
         ((ctx.tab)() == Tab::Home)
@@ -140,12 +186,13 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         // anywhere inside the tab, which said "here" about a screen two
         // pushes away.
         at_root: |ctx| (ctx.tab)() == Tab::Code && (ctx.code_screen)() == CodeScreen::List,
-        view: |ctx| match (ctx.code_screen)() {
-            CodeScreen::List => rsx! { views::code::CodeSessionsView {} },
-            CodeScreen::New => rsx! { views::code::CodeNewView {} },
-            CodeScreen::Chat => rsx! { views::code::CodeChatView {} },
-            CodeScreen::Diff => rsx! { views::code::CodeDiffView {} },
-            CodeScreen::Pulls => rsx! { views::code::CodePullsView {} },
+        root: Some(|_| rsx! { views::code::CodeSessionsView {} }),
+        detail: |ctx| match (ctx.code_screen)() {
+            CodeScreen::List => None,
+            CodeScreen::New => Some(rsx! { views::code::CodeNewView {} }),
+            CodeScreen::Chat => Some(rsx! { views::code::CodeChatView {} }),
+            CodeScreen::Diff => Some(rsx! { views::code::CodeDiffView {} }),
+            CodeScreen::Pulls => Some(rsx! { views::code::CodePullsView {} }),
         },
         key: |ctx| ((ctx.tab)() == Tab::Code).then(|| code_key((ctx.code_screen)())),
     },
@@ -163,9 +210,10 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         at_root: |ctx| {
             (ctx.tab)() == Tab::Recipes && (ctx.recipes.screen)() == crate::recipes::Screen::List
         },
-        view: |ctx| match (ctx.recipes.screen)() {
-            crate::recipes::Screen::List => rsx! { views::recipes::RecipesView {} },
-            crate::recipes::Screen::Detail => rsx! { views::recipes::RecipeDetailView {} },
+        root: Some(|_| rsx! { views::recipes::RecipesView {} }),
+        detail: |ctx| match (ctx.recipes.screen)() {
+            crate::recipes::Screen::List => None,
+            crate::recipes::Screen::Detail => Some(rsx! { views::recipes::RecipeDetailView {} }),
         },
         // Spelled inline rather than as a `recipes_key` beside `code_key`:
         // one destination is one hunk, and five branches each adding a
@@ -191,9 +239,10 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         at_root: |ctx| {
             (ctx.tab)() == Tab::Skills && (ctx.skills.screen)() == crate::skills::Screen::List
         },
-        view: |ctx| match (ctx.skills.screen)() {
-            crate::skills::Screen::List => rsx! { views::skills::SkillsView {} },
-            crate::skills::Screen::Detail => rsx! { views::skills::SkillDetailView {} },
+        root: Some(|_| rsx! { views::skills::SkillsView {} }),
+        detail: |ctx| match (ctx.skills.screen)() {
+            crate::skills::Screen::List => None,
+            crate::skills::Screen::Detail => Some(rsx! { views::skills::SkillDetailView {} }),
         },
         // The key mapping lives in `crate::skills` rather than here, so that
         // adding this destination is one row in this table and not a row plus
@@ -220,10 +269,11 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
             (ctx.tab)() == Tab::Scheduler
                 && (ctx.scheduler.screen)() == crate::scheduler::Screen::List
         },
-        view: |ctx| match (ctx.scheduler.screen)() {
-            crate::scheduler::Screen::List => rsx! { views::scheduler::SchedulerView {} },
+        root: Some(|_| rsx! { views::scheduler::SchedulerView {} }),
+        detail: |ctx| match (ctx.scheduler.screen)() {
+            crate::scheduler::Screen::List => None,
             crate::scheduler::Screen::Detail => {
-                rsx! { views::scheduler::ScheduledJobView {} }
+                Some(rsx! { views::scheduler::ScheduledJobView {} })
             }
         },
         // The key mapping is a free function in `crate::scheduler`, next to the
@@ -250,10 +300,11 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
             (ctx.tab)() == Tab::Extensions
                 && (ctx.extensions.screen)() == crate::extensions::Screen::List
         },
-        view: |ctx| match (ctx.extensions.screen)() {
-            crate::extensions::Screen::List => rsx! { views::extensions::ExtensionsView {} },
+        root: Some(|_| rsx! { views::extensions::ExtensionsView {} }),
+        detail: |ctx| match (ctx.extensions.screen)() {
+            crate::extensions::Screen::List => None,
             crate::extensions::Screen::Detail => {
-                rsx! { views::extensions::ExtensionDetailView {} }
+                Some(rsx! { views::extensions::ExtensionDetailView {} })
             }
         },
         // The key mapping is a free function in `crate::extensions`, next to
@@ -274,7 +325,12 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
             screen.set(Screen::Settings);
         },
         at_root: |ctx| (ctx.tab)() == Tab::Home && (ctx.screen)() == Screen::Settings,
-        view: |_| rsx! { views::settings::SettingsView {} },
+        // One screen, no list. On the desktop that is a two-column shell:
+        // a placeholder column beside Settings would be a column of nothing.
+        // The screen is the detail, then — the one row where the detail is
+        // unconditional, which is the same fact said in the table's own terms.
+        root: None,
+        detail: |_| Some(rsx! { views::settings::SettingsView {} }),
         key: |ctx| {
             ((ctx.tab)() == Tab::Home && (ctx.screen)() == Screen::Settings).then_some("settings")
         },
@@ -367,6 +423,23 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), count, "two destinations share an id");
+    }
+
+    /// A destination with no root screen is a blank middle column on the
+    /// desktop, and nothing else would report it: the mobile shell never reads
+    /// the field, so every phone gate passes with the hole in place. Settings
+    /// is the one row that means it — one screen, nothing to list.
+    #[test]
+    fn every_destination_but_settings_lists_something() {
+        for dest in DESTINATIONS {
+            assert_eq!(
+                dest.root.is_some(),
+                dest.id != "settings",
+                "{} has no root screen, so the desktop shell has nothing to \
+                 keep in its list column while a detail is open",
+                dest.id
+            );
+        }
     }
 
     /// Every destination has to be reachable from the drawer: a row in a

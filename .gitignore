@@ -6,3 +6,7 @@
 # Playwright, used by docs/audit.js
 node_modules/
 package-lock.json
+
+# Scratch space for design mockups and one-off probes: never a build input,
+# and `git add -A` would otherwise commit whatever was last explored there.
+.probe-tmp/

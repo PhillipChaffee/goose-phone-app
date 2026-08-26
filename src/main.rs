@@ -39,6 +39,8 @@ mod recipes;
 
 mod scheduler;
 
+mod shell;
+
 mod skills;
 
 mod state;
@@ -52,5 +54,43 @@ fn main() {
     // getFilesDir() via JNI, iOS/desktop: the platform data dir).
     dioxus_sdk_storage::set_dir!();
     goose_acp_client::ensure_crypto_provider();
+    launch();
+}
+
+/// Open the window the desktop shell was designed for, and refuse to let it be
+/// dragged smaller than the shell can draw.
+///
+/// Both halves of the `cfg` are load-bearing. `feature = "desktop"` because
+/// the `dioxus::desktop` module only exists under it, and
+/// `not(ios/android)` because `cargo check --target aarch64-apple-ios` runs
+/// with DEFAULT features — which is `desktop` — and must not try to build a
+/// tao window for a phone.
+///
+/// The numbers, and where they come from, are in `crate::shell` beside the
+/// breakpoints they have to agree with; a test there checks that they do.
+/// The opening size clears the three-column breakpoint comfortably, so a first
+/// launch shows the layout the app was designed as rather than a fallback.
+#[cfg(all(
+    feature = "desktop",
+    not(any(target_os = "ios", target_os = "android"))
+))]
+fn launch() {
+    use dioxus::desktop::{Config, LogicalSize, WindowBuilder};
+
+    let (min_w, min_h) = shell::MIN_INNER;
+    let window = WindowBuilder::new()
+        .with_title("Goose")
+        .with_inner_size(LogicalSize::new(1180.0, 820.0))
+        .with_min_inner_size(LogicalSize::new(min_w, min_h));
+    dioxus::LaunchBuilder::desktop()
+        .with_cfg(Config::new().with_window(window))
+        .launch(app::App);
+}
+
+#[cfg(not(all(
+    feature = "desktop",
+    not(any(target_os = "ios", target_os = "android"))
+)))]
+fn launch() {
     dioxus::launch(app::App);
 }

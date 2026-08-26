@@ -118,8 +118,13 @@ to enter in the app.
 
 ```bash
 curl -sSL https://dioxus.dev/install.sh | bash   # the dx CLI
-dx serve --desktop                               # try it on your computer first
+dx serve --desktop                               # the desktop app (its own shell)
 ```
+
+`--desktop` builds the **desktop shell** — a pinned nav, a list and a detail
+pane, with row actions on every row instead of a swipe tray. The phone shell is
+compiled only for iOS and Android, so it is the simulator or a device that
+shows it. See [the desktop section of `docs/design.md`](docs/design.md).
 
 **iOS** — see [`docs/iphone-setup.md`](docs/iphone-setup.md) for the full walkthrough
 (signing is the fiddly part):

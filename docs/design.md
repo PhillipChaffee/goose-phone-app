@@ -1104,3 +1104,135 @@ computed styles back to Rust — that is how the spacing in this design was
 measured, and how the keyboard bug was finally diagnosed after two wrong
 guesses. Give it ~1500ms: WebKit applies `env(safe-area-inset-*)` after first
 paint, and an earlier read reports every bar 62px too high.
+
+---
+
+## The desktop shell
+
+The same design system, worn a second way. `assets/main.css` is untouched by
+it: everything below lives in `assets/desktop.css`, which `src/css.rs` embeds
+only in a desktop binary.
+
+**Platform and width are different axes.** The platform decides the
+*affordances* and it decides them at compile time — the desktop shell has
+always-visible row actions, no swipe tray and no pull-to-refresh; the phone
+shell has all three, unchanged. Width decides one thing and one thing only:
+how many columns are drawn. **A desktop window dragged narrow is a narrow
+desktop app, not the phone.** Nothing about how a control behaves changes with
+width. goose's own desktop app takes the same position — its single width
+threshold collapses the sidebar and changes nothing else.
+
+**The columns, and where the numbers come from.** Nav 212, list 330, and a
+content column no narrower than 360, which is this file's own floor (rule 14's
+note: 320 is a defensive width rather than a device) and the width
+`docs/measure-composer.js` is gated at. The breakpoints are their sums rather
+than round numbers:
+
+| width      | columns                                              |
+|------------|------------------------------------------------------|
+| ≥ 902      | nav 212 · list 330 · detail                          |
+| 572 – 901  | nav 212 · list **or** detail                         |
+| < 572      | nav collapses to a 56px icon rail · list or detail   |
+
+Below 902 the list and the detail share a column and whichever has something
+in it wins — which is the arrangement goose's desktop app is in at every
+width. The rail keeps every destination on screen and one click away; the
+labels stay in the DOM at zero size, so each button keeps its name, and
+`title` gives the pointer a copy of it.
+
+**The window's floor is 480 × 560 points**, set with
+`WindowBuilder::with_min_inner_size`. 480 is the rail plus 424 of content —
+wider than the 402 frame every gallery state is audited in — and it is also
+exactly what goose's own desktop app ships as its minimum. 560 is the nav's
+intrinsic height (seven destinations at 48px, plus the wordmark and the
+padding) with slack. A test in `src/shell/desktop.rs` checks the floor against
+the breakpoints, because only one of the two is compiled.
+
+**Nothing observes a resize.** The breakpoints are `@media` rules in a
+stylesheet a phone binary does not contain, so pane count needs no Rust at
+all. That is not tidiness — it is the synchronous-XHR rule above: a Rust
+resize handler would be a blocking round trip per frame of a drag. The one
+thing CSS cannot work out for itself is whether a detail is open, and that is
+a fact about the app rather than the window, so the shell states it in a
+`data-detail` attribute.
+
+**Refresh is arrival, plus a chord.** There is no refresh control, which is
+also goose's own desktop app's answer — `SessionListView.tsx` has none and does
+not poll. Arriving at a destination re-fetches its list, and ⌘R (Ctrl+R
+elsewhere) re-fetches whatever is mounted. Both go through the same
+`viewport::refresh_named` the phone's pull gesture uses, so a list cannot be
+refreshable one way and not another. The arrival half is the one a user meets;
+⌘R is deliberately undocumented in the UI, and registering it as a real menu
+item is the obvious next step for discoverability — it is not taken here
+because a menu accelerator *consumes* the key on macOS, so it would have to
+replace the JS listener rather than sit beside it, and that swap cannot be
+verified without a desktop run.
+
+**The row is the list's, the detail is beside it, and the row says so.** In
+three columns the list and what it opened are on screen together, which is the
+one arrangement where an unmarked list is confusing — the phone never had it.
+The open row takes `--bg-tertiary`, which is the token `assets/main.css` already
+proved reads as *selected* (see the note over `.drawer-item.active`), and
+`ListRow` refuses to paint it at all on the phone.
+
+### Deviations, desktop only
+
+**The pane header does not float.** Rule 3 — "each carries its own glass,
+nothing spans the width" — is the phone's identity and cannot survive three
+columns: `.topbar` is positioned against `.app`, so three of them would stack
+in one corner, and three glass pills abreast is three where the eye expects
+one. On the desktop the bar is static with a rule under it. The controls keep
+their shapes and lose their shadows.
+
+**Row action buttons are 32px, not rule 9's 44.** 44 is the HIG's *touch*
+number and a pointer is not a thumb. 32 is not a taste either: it is the floor
+`docs/audit.js` enforces (SMALL-TAP fires under 32px in either axis), and it
+is the size goose's own desktop rows use. The mockups' 26 would fail our own
+gate. The nav's rows keep 48px — nothing is gained by shrinking them.
+
+**Row actions are out of flow.** The icons are absolutely positioned in the
+row's top-right, and only the *title line* reserves a gutter for them
+(`:has()` counts the buttons, so a one-action row reserves one and a row with
+none reserves nothing). Left in the row's flex flow they take their width off
+the meta line and the quote as well: measured at a 1180-wide window, the quote
+came out 141px with 220px of text clamped into it. The agreed mockup puts the
+actions beside the title only and lets the quote span the card; this is that
+arrangement reached without changing the markup, which is what keeps the
+phone's DOM identical.
+
+**The app's first `:hover` and `:focus-visible` rules live here.**
+`assets/main.css` has none at all; it was written for a thumb. Hover changes
+colour and shows a button's border — it never *reveals* a control and never
+moves one. Two corollaries that are easy to get wrong and were:
+
+- **Hover may not borrow the selected colour.** `--bg-tertiary` is what
+  `.drawer-item.active` paints with, and main.css's own note says why ("at
+  1.08:1 against the light page the selected destination was indistinguishable
+  from the unselected ones"). Spending it on hover made two destinations look
+  selected at once. Hover gets its own step, halfway between the pane and the
+  selected fill.
+- **The focus ring is an outline and nothing else.** `border-radius` is not an
+  outline property: setting one in the `:focus-visible` rule squared off every
+  control the moment it took focus — the FAB went from a 9999px pill to a 4px
+  rectangle. WebKit and Chromium already draw the outline following the
+  element's own radius, so there is nothing to add.
+
+The ring itself is `--text-primary`, which is by construction the
+highest-contrast colour against every surface in the file; inventing an accent
+token is a decision this work had no mandate for.
+
+### What is not covered yet
+
+`docs/style-gallery.html` and `docs/audit.js` cover the **phone shell only**.
+The gallery holds no desktop state, so nothing in `assets/desktop.css` is
+audited — which is why `assets/desktop.css` is deliberately *not* in
+`assets/features/`, since the audit links that whole directory into 402×874
+phone frames and would measure every phone state against a layout no phone can
+produce. Capturing desktop states works and is easy — the desktop build is the
+default feature set, so `cargo run > /tmp/desktop.log` against
+`cargo run -p mock-goose-server` prints the same `@@DOM@@` dumps a device does
+— but `scripts/capture-gallery.py` writes the store wholesale from one log and
+`window.__dumpKey` is the bare screen name, so a desktop `chats` would
+overwrite the phone's. Two prerequisites before a desktop axis exists: the
+script has to take several logs in one invocation, and the dump key has to
+carry the shell.

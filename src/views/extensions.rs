@@ -44,8 +44,11 @@ pub(crate) fn ExtensionsView() -> Element {
 
         main {
             class: "scroll has-fab",
-            // Pull, not a button. A refresh control in the bar is a control
-            // that is wrong most of the time it is on screen.
+            // On the phone: pull, not a button. A refresh control in the bar
+            // is a control that is wrong most of the time it is on screen. The
+            // desktop has no pull and no button either — it re-fetches on
+            // arrival, and ⌘R sends this same name
+            // (`src/shell/desktop.rs`).
             "data-refresh": "extensions",
             "data-refreshing": "{loading}",
 
@@ -151,11 +154,16 @@ fn ExtensionRow(entry: GooseExtensionEntry, toggle: Option<crate::extensions::To
         )]
     });
 
+    // Which row the desktop's detail column came from. Ignored on the phone,
+    // where the list is not on screen beside it (`views::chrome::row_is_marked`).
+    let selected = ctx.extensions.open.read().as_deref() == Some(open.as_str());
+
     rsx! {
         ListRow {
             icon: "package",
             title: title_for(&entry.extension),
             actions,
+            selected,
             on_open: move |()| {
                 let (mut screen, mut showing) = (ctx.extensions.screen, ctx.extensions.open);
                 showing.set(Some(open.clone()));

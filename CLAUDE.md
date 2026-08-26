@@ -16,7 +16,7 @@ cargo clippy --workspace --all-targets -- -D warnings   # the CI lint gate
 cargo test --workspace               # all tests
 cargo fmt --all -- --check           # formatting gate
 cargo run -p mock-goose-server       # fake server on :3285 (secret "mock-secret")
-dx serve --desktop                   # run the app for development
+dx serve --desktop                   # the desktop shell (the phone's is iOS/Android only)
 ```
 
 Lint policy: `[workspace.lints]` in the root `Cargo.toml` turns on clippy's
@@ -53,6 +53,13 @@ running app by `scripts/capture-gallery.py` — never hand-edited — and
 that sweeps its whole default list of six widths in ~2min, and naming one
 narrows the run to that width) are the checks that read it. See the end of
 `docs/design.md` for how to re-capture.
+
+Two shells, chosen by `target_os` in `src/shell/`: `mobile.rs` is today's
+phone (swipe trays, pull-to-refresh, drawer over the page), `desktop.rs` is a
+pinned nav plus a list and a detail pane with row actions always on the row.
+Platform decides affordances; width decides only how many columns, entirely
+inside `assets/desktop.css` — so nothing in Rust listens to a resize. The
+desktop section at the end of `docs/design.md` is the whole story.
 
 The toolchain is pinned in `rust-toolchain.toml` and rustup honours it
 automatically, so a local `cargo clippy` sees exactly the lints CI sees.
