@@ -538,10 +538,20 @@ pub(crate) async fn poll_once(ctx: &AppCtx) {
 /// ever fire a second one. One fetch path, driven by the connection, has both
 /// cases: it does nothing while there is no client and runs the moment there
 /// is one.
+///
+/// It does arm the spinner, though, and that half has to happen here. An effect
+/// runs *after* the render that mounted it, so a slot left settled and empty
+/// would paint one committed frame of "No runs yet" — the exact sentence this
+/// arrangement exists to stop the screen saying — before the fetch it is about
+/// to make marks it. Claiming the slot synchronously, before the screen paints,
+/// is the difference between "we have not asked yet" and "there are none".
+/// Nothing can strand it: while there is no connection `list_state` answers
+/// `Offline` without consulting `loading` at all.
 pub(crate) fn open(ctx: &AppCtx, id: &str) {
     let (mut open, mut screen) = (ctx.scheduler.open, ctx.scheduler.screen);
     open.set(Some(id.to_owned()));
     screen.set(Screen::Detail);
+    ctx.scheduler.history.clone().write().begin();
 }
 
 /// Back to the list. The history goes with it: it belongs to a job that is no
