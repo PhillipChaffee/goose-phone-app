@@ -45,7 +45,10 @@ only filter being `is_tool_visible_to_app`, which returns `true` for any tool
 that declares no `_meta.ui.visibility` (`reply_parts.rs:787-801`).
 
 Three things are genuinely impossible, and none of the three is impossible
-because of Electron.
+because of Electron. Two of those three have since been struck as NON-GOALS
+rather than gaps — see the decision recorded under each — which leaves exactly
+ONE capability that is both wanted and out of reach. It has a design document of
+its own: `docs/push-notifications.md`.
 
 **1. A notification on iOS that an agent finished while the app is
 backgrounded.** The event that would fire it arrives on a WebSocket, and iOS
@@ -61,27 +64,32 @@ gap. It is a missing capability on both sides at once, and neither side is ours
 alone to add. The macOS half of the same capability is fine: a foreground
 process can raise a notification when a turn ends.
 
-**2. Local `goose serve` lifecycle on iOS and Android.** The mechanism is not
-exotic — goose's own Electron version is `child_process.spawn` plus a readiness
-poll, and `std::process::Command` is the same thing with no new dependency. But
-iOS forbids executing a binary that is not the app, so the capability does not
-exist on the platform. It is buildable on the desktop shell in an afternoon and
-is separately out of scope there, for a reason that is about this app's premise
-rather than its capability: the entire networking layer, `scripts/check-server.sh`
-("Run this ON the VPS that runs goose") and `docs/iphone-setup.md` exist because
-goose is somewhere else. Recording it as "trivial to build, dead on two of four
-targets, and deliberately declined on the other two" is more useful than a cost
-tier.
+**2. Local `goose serve` lifecycle on iOS and Android.** NOT A GAP — a NON-GOAL,
+decided by the product owner on 2026-08-26: "I actually don't want either the
+desktop client or the phone app to be able to work on their own. They should
+both assume that there's a server running somewhere else."
 
-**3. Auto-update on iOS and Android.** Store distribution. A signed, notarized
-macOS `.app` that rewrites its own bundle also invalidates its own signature
-unless something like Sparkle drives the replacement, so the honest shape is:
-an updater would be a macOS-only path duplicating what the two stores already
-do for the other two targets. `self_update` 0.42.0 would integrate in an
-afternoon — `reqwest`, `hyper`, `flate2` and `semver` are already in the
-lockfile — and the cost is entirely notarization round-trips and a distribution
-channel that does not exist. Filing this as "large" reads as "lots of code",
-which is the opposite of true.
+The mechanism was never exotic — goose's own Electron version is
+`child_process.spawn` plus a readiness poll, and `std::process::Command` is the
+same thing with no new dependency. iOS forbids executing a binary that is not
+the app, so it is impossible on two of the four targets; but the reason it is
+not being built on the other two is the decision above, not the platform. Every
+part of this app already says so out loud: `scripts/check-server.sh` opens with
+"Run this ON the VPS that runs goose", and `docs/iphone-setup.md` exists because
+goose is somewhere else. Building a local backend would be building a different
+product. This row should not appear on a future gap list.
+
+**3. Auto-update on iOS and Android.** NOT A GAP — a NON-GOAL, from the same
+decision. Store distribution owns the update channel on the two mobile targets;
+on macOS a notarized `.app` that rewrites its own bundle invalidates its own
+signature unless something like Sparkle drives the replacement.
+
+The code was never the cost — `self_update` 0.42.0 would integrate in an
+afternoon, with `reqwest`, `hyper`, `flate2` and `semver` already in the
+lockfile. The cost is notarization round-trips and a distribution channel that
+does not exist, against an app installed on one person's devices where
+TestFlight and a local build already do this. Filing it as "large" read as "lots
+of code", which was the opposite of true; filing it at all was the real error.
 
 A fourth item deserves naming even though it is not on the eleven. **The native
 file picker cannot browse the server.** `rfd`'s `pick_folder` picks a folder on
@@ -351,7 +359,7 @@ shipping binary and only the call site is missing.
 | Double-click titlebar to zoom | reachable | `toggle_maximized()` (`desktop_context.rs:169`) as `ondoubleclick` on the drag strip that already carries `onmousedown -> drag_window()` at `src/shell/desktop.rs:425-432`. One DOM event, inside the rule | trivial |
 | Mouse back button | reachable, **unverified on hardware** | Not via tao — `platform_impl/macos/view.rs:962-970` collapses every non-left/right button to `MouseButton::Middle`, and wry's WKWebView covers tao's content view anyway (the finding already recorded at `src/main.rs:129-137`). Via the DOM: `MouseButton::Fourth` from `button: 3` (`dioxus-html/src/input_data.rs:22`, `:42`). Whether WebKit dispatches button 3 for a real Magic Mouse back click needs a device | trivial code, device-gated |
 | Native notifications | needs a new dep, macOS only | Nothing in the lockfile does this; `notify-rust` is the candidate and **could not be verified against vendored source**, so no API is cited. Needs the bundle-ID plist work below. iOS half is impossible (see The impossible list) | medium |
-| Auto-update | declined | Distribution, not code. See The impossible list | small code, large ops |
+| Auto-update | non-goal | Struck 2026-08-26: the client assumes a server elsewhere and is installed by hand | — |
 
 ### Files and pickers
 
