@@ -223,6 +223,11 @@
  * unreachable on purpose. */
 
 .session-item {
+  /* The positioning context for the actions below. Nothing else in a row is
+   * positioned, and `.pane` already carries `position: relative` for the FAB,
+   * so this changes what `.session-actions` measures against and nothing
+   * else. */
+  position: relative;
   overflow-x: visible;
   overflow-y: visible;
   scroll-snap-type: none;
@@ -232,13 +237,42 @@
   flex: 1 1 auto;
 }
 
-/* Top-right of the row, which is the mockups' `.acts{margin-left:auto}` over
- * `.rowtop{align-items:flex-start}`. The top padding matches `.session-swipe`'s
- * so the icons sit on the title's line. */
+/* Top-right of the row, and OUT OF FLOW — which is the whole point.
+ *
+ * `.session-actions` is a flex sibling of `.session-swipe`, and `.session-swipe`
+ * holds the title, the meta line and the quote. Left in flow the two icons take
+ * 78px off all three: measured at the default 1180x820 window, a chat title's
+ * box was 111px against the 196px the same row gets with no actions on it, and
+ * the quote came out 141px wide with 220px of text clamped into 80px of box.
+ *
+ * The agreed mockups do not do that: they put the actions inside the row's TOP
+ * LINE, beside the title only, with the quote a sibling of that line spanning
+ * the whole card. Absolute is how the same arrangement is reached without
+ * touching the markup, which is what keeps every `RowAction` call site and the
+ * phone's DOM alike untouched — only the title line reserves the gutter, and
+ * the meta line and the quote get the row's full width. */
 .session-actions {
-  align-self: flex-start;
+  position: absolute;
+  top: 12px;
+  right: 12px;
   gap: 2px;
-  padding: 12px 12px 0 0;
+}
+
+/* The gutter the icons sit in, reserved on the title line and nowhere else.
+ *
+ * Counted rather than assumed: a row with one action reserves one 32px button,
+ * a row with two reserves two and the 2px between them, and a row with no
+ * actions at all — Skills, a scheduled run — renders no `.session-actions` and
+ * so matches neither rule and reserves nothing. `:has()` is what makes the
+ * count readable from the row; this sheet is in a macOS binary only, where the
+ * web view is WebKit 15.4 or newer. The 8px is the gap between the title and
+ * the first icon. */
+.session-item:has(> .session-actions) .session-head {
+  padding-right: 40px;
+}
+
+.session-item:has(> .session-actions > .row-action:nth-child(2)) .session-head {
+  padding-right: 74px;
 }
 
 /* Always visible, never revealed.
@@ -316,8 +350,44 @@
   border-color: var(--text-tertiary);
 }
 
-.drawer-item:hover {
+/* Hover gets a step of its own, and `--bg-tertiary` is not available for it.
+ *
+ * That token is what `.drawer-item.active` paints with in assets/main.css, and
+ * the comment above that rule is the reason it cannot be spent twice: "at
+ * 1.08:1 against the light page the selected destination was indistinguishable
+ * from the unselected ones". Tertiary was chosen BECAUSE it is the one value
+ * that reads as selected. Give it to hover as well and the pointer paints a
+ * second selected-looking pill, in a nav whose whole job is to say which
+ * destination you are on.
+ *
+ * A mix of the two surfaces rather than a third token: `--bg-secondary` is the
+ * pane's own background, so it would be no change at all, and the halfway point
+ * between the pane and the selected fill is a step by construction — in light
+ * and in dark, because both ends are. `.row-action.danger:hover` above mixes
+ * for the same reason. `:not(.active)` so hovering where you already are does
+ * not dim the highlight. */
+.drawer-item:hover:not(.active) {
+  background: color-mix(in srgb, var(--bg-tertiary) 50%, var(--bg-secondary));
+}
+
+/* Which row the detail column is showing.
+ *
+ * The one state a three-column layout needs that one column never did: on the
+ * phone the list is not on screen beside what it opened, so there was nothing
+ * to mark. Here they are side by side, and an unmarked list is a list that does
+ * not say where the pane beside it came from. It is the mockups' `.card.on`.
+ *
+ * `--bg-tertiary` because that is the token main.css already proved reads as
+ * selected (see `.drawer-item.active`), and it is free here in a way it is not
+ * in the nav: rows sit on `--bg-primary`, and hover on a row is a border rather
+ * than a fill, so nothing else in a list is wearing it. */
+.session-item.on {
   background: var(--bg-tertiary);
+  border-color: var(--text-tertiary);
+}
+
+.session-item.on .row-action {
+  border-color: var(--border-primary);
 }
 
 /* Keyboard focus, for every control in the app at once.
@@ -326,11 +396,19 @@
  * in dark, it is by construction the highest-contrast colour against every
  * surface in the file, and inventing an accent is a design decision this
  * branch has no mandate for. `:focus-visible` and not `:focus`, so a click
- * does not leave a ring behind it. */
+ * does not leave a ring behind it.
+ *
+ * Outline and offset, and deliberately NOT `border-radius`. That is not an
+ * outline property — it changes the element's own corners, so a `radius-sm`
+ * here squared off every focused control in the app: measured, the FAB went
+ * from a 9999px pill to a 4px rectangle the moment it took focus, and
+ * `.session-item` from 16px to 4px. It also bought nothing, because WebKit and
+ * Chromium already draw an outline following the element's existing radius.
+ * The rule eight lines above — never a shape that moves — is the one this
+ * broke. */
 :focus-visible {
   outline: 2px solid var(--text-primary);
   outline-offset: 2px;
-  border-radius: var(--radius-sm);
 }
 
 /* ── 5. the column with nothing in it ───────────────────────────────────

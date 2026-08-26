@@ -176,7 +176,25 @@ pub(crate) const fn row_action_words(
     }
 }
 
-/// One button in a row's swipe tray.
+/// Whether a row paints itself as the one the detail column is showing.
+///
+/// `false` on the phone whatever the caller passed, and that is the whole
+/// reason this is a function rather than the prop used directly. One screen is
+/// on the phone at a time, so a list is never beside what it opened and there
+/// is nothing to mark — but the state the lists key off (`ctx.chat.session_id`,
+/// `ctx.scheduler.open`, …) outlives the screen that set it, so a row could
+/// come back from a chat wearing a highlight the phone has never had. Deciding
+/// it here means every list gets that answer from one place, and the phone's
+/// class string stays the literal it was captured with.
+pub(crate) const fn row_is_marked(shell: Shell, selected: bool) -> bool {
+    match shell {
+        Shell::Mobile => false,
+        Shell::Desktop => selected,
+    }
+}
+
+/// One button of a row's actions: the phone's swipe tray, the desktop's icons
+/// on the row. [`row_action_words`] and [`RowFace::class`] are the difference.
 #[derive(Clone, PartialEq)]
 pub(crate) struct RowAction {
     pub face: RowFace,
@@ -195,7 +213,9 @@ impl RowAction {
 }
 
 /// A row in a list: leading tile, title, an optional trailing word, whatever
-/// the caller puts under it, and a swipe tray behind it.
+/// the caller puts under it, and — on the phone — a swipe tray behind it. On
+/// the desktop the same actions are icons on the row, and the row can say that
+/// it is the one the detail column is showing.
 ///
 /// The class names are the `.session-*` set on purpose, and the purpose is
 /// not brevity. Three things key off them and would otherwise have to be
@@ -204,10 +224,12 @@ impl RowAction {
 /// `docs/audit.js`'s longest-text stress map. Reusing the class is how four
 /// future lists get all three for free. Read `.session-*` as "list row".
 ///
-/// An empty `actions` renders no tray at all, so the row does not move: a row
-/// that swipes open onto nothing is worse than one that does not swipe, and
-/// two of the five features arriving after this one have nothing destructive
-/// to put behind a row.
+/// An empty `actions` renders no container at all. On the phone that means the
+/// row does not move, because a row that swipes open onto nothing is worse than
+/// one that does not swipe; on the desktop it means no icons and, through
+/// `assets/desktop.css`'s `:has()` rules, no gutter reserved for them. Two of
+/// the five features arriving after this one have nothing destructive to put on
+/// a row.
 #[component]
 pub(crate) fn ListRow(
     /// Name of the icon in the leading tile.
@@ -218,12 +240,25 @@ pub(crate) fn ListRow(
     #[props(default)]
     trailing: Option<String>,
     #[props(default)] actions: Vec<RowAction>,
+    /// True when the detail column is showing THIS row.
+    ///
+    /// Ignored on the phone (see [`row_is_marked`]), where the list is never on
+    /// screen beside what it opened. Defaulted, so a list with nothing to mark
+    /// — and every existing call site — says nothing.
+    #[props(default)]
+    selected: bool,
     on_open: EventHandler<()>,
     children: Element,
 ) -> Element {
+    let marked = row_is_marked(Shell::CURRENT, selected);
     rsx! {
         li {
-            class: "session-item",
+            // A conditional class rather than a literal, and the phone's value
+            // is byte-for-byte the literal it replaces. `render_group` already
+            // does this to `.drawer-item` and the captured gallery shows the
+            // result: `class` is still written before Dioxus's own
+            // `data-dioxus-id`, so the phone's rows are unchanged.
+            class: if marked { "session-item on" } else { "session-item" },
             // The whole row is the tap target (design rule 9); the tray's own
             // buttons stop propagation below.
             onclick: move |_| on_open.call(()),
@@ -400,11 +435,17 @@ mod tests {
     /// actually emitted — which is as close to "mobile rendering did not
     /// change" as anything can get without a device in the room.
     ///
-    /// Both halves matter. The opening tag proves no attribute was added: the
-    /// capture has `class` and then Dioxus's own `data-dioxus-id` and nothing
-    /// between them, so a `title` — which is exactly what the desktop arm adds
-    /// — would break this. The closing proves the word is still in the row and
-    /// still directly after the icon.
+    /// What each half actually proves, stated exactly, because a test whose
+    /// comment overclaims is a test a future reader trusts for the wrong
+    /// reason. `docs/gallery-states.json` was captured before this branch
+    /// existed and is never hand-edited, so NOTHING the new code emits can
+    /// change what is in it — the two `contains` are one-directional: they say
+    /// the strings this file builds are still findable in what the phone
+    /// shipped. What guards against a `title` reaching the phone is the plain
+    /// `assert_eq!(title, None, …)` below, and what guards against the desktop
+    /// class reaching it is the `!contains("row-action")` at the end. The
+    /// opening tag pins the class and the attribute that follows it; the
+    /// closing pins the word to the row, directly after the icon.
     #[test]
     fn the_phone_row_action_still_matches_the_markup_that_shipped() {
         let gallery = shipped_markup();
@@ -446,6 +487,27 @@ mod tests {
             serde_json::from_str(&raw).unwrap_or_default();
         assert!(!states.is_empty(), "{} parsed to nothing", path.display());
         states.into_values().collect::<Vec<_>>().join("\n")
+    }
+
+    /// The phone has no selected row, whatever a list passes.
+    ///
+    /// Not a tidiness point. The state the lists read — `ctx.chat.session_id`,
+    /// `ctx.scheduler.open`, `ctx.skills.open` — outlives the screen that set
+    /// it, so on the phone a row would come back from a chat wearing a
+    /// highlight the phone has never shipped, in the one place `docs/audit.js`
+    /// measures. The class string is the frozen literal, and this is the gate
+    /// on it.
+    #[test]
+    fn the_phone_has_no_selected_row() {
+        assert!(!row_is_marked(Shell::Mobile, true));
+        assert!(!row_is_marked(Shell::Mobile, false));
+        assert!(row_is_marked(Shell::Desktop, true));
+        assert!(!row_is_marked(Shell::Desktop, false));
+
+        assert!(
+            !shipped_markup().contains("session-item on"),
+            "a selected row reached the phone's captured markup"
+        );
     }
 
     /// A desktop row must not borrow the tray's class, or the tray's 84px

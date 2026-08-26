@@ -63,18 +63,31 @@ pub(crate) const MIN_INNER: (f64, f64) = (480.0, 560.0);
 /// Scheduler is the case that proves it — its list and its job detail both
 /// answer to `scheduler`, and the `Set` is what stops that being two fetches.
 ///
-/// `preventDefault` is load-bearing. Left alone, ⌘R is the web view's own
-/// reload, which would throw away the whole app — connection, drafts and all —
-/// to re-fetch a list.
+/// `preventDefault` is load-bearing, and it is taken for the WHOLE
+/// modifier+`r` family rather than just the plain chord. ⌘R and ⌘⇧R are both
+/// the web view's own reload, which would throw away the whole app —
+/// connection, drafts and all — to re-fetch a list; swallowing one and letting
+/// the other through would mean a stray Shift reloaded the app. So the guard
+/// on the other modifiers runs AFTER `preventDefault`, not before it, and the
+/// case-insensitive compare is what makes one test cover ⇧ and Caps Lock
+/// alike.
+///
+/// That is enough on macOS, which is what this app targets. On Windows it
+/// would not be: `WebView2` handles its browser accelerator keys ahead of web
+/// content, so Ctrl+R can reload before this listener is consulted, and the
+/// fix there is `AreBrowserAcceleratorKeysEnabled(false)` in the wry config
+/// rather than anything in this string. Written down rather than done, because
+/// Windows is "if it falls out for free" and there is no Windows run to check
+/// it against.
 const REFRESH_KEY: &str = r"
 (() => {
   if (window.__refreshKeyWired) return;
   window.__refreshKeyWired = true;
   document.addEventListener('keydown', (e) => {
-    if (e.key !== 'r' && e.key !== 'R') return;
+    if (!e.key || e.key.toLowerCase() !== 'r') return;
     if (!e.metaKey && !e.ctrlKey) return;
-    if (e.altKey || e.shiftKey) return;
     e.preventDefault();
+    if (e.altKey || e.shiftKey) return;
     const names = new Set();
     for (const el of document.querySelectorAll('[data-refresh]')) {
       if (el.dataset.refresh) names.add(el.dataset.refresh);
@@ -122,12 +135,42 @@ fn use_refresh_key() {
 /// a destination.
 fn use_arrival_refresh(dest: &'static Destination) {
     let ctx = crate::state::use_app_ctx();
-    let id = dest.id;
-    use_effect(move || {
+    use_arrival(dest.id, move |id| {
         if (ctx.conn)().is_connected() {
             crate::viewport::refresh_named(&ctx, id);
         }
     });
+}
+
+/// Run `arrive` with the destination's id whenever the destination changes —
+/// and whenever anything `arrive` itself reads changes.
+///
+/// The mirror into a signal is the whole hook, and it is not ceremony.
+/// `AppShell` is an unkeyed child of `.app` (`src/app.rs`), so it mounts once
+/// for the life of the process and navigating only re-renders it; a Dioxus
+/// effect re-runs only when a signal READ INSIDE THE CLOSURE changes
+/// (`dioxus-hooks-0.7.10/src/use_effect.rs` subscribes a `ReactiveContext` to
+/// exactly those reads). A `&'static str` captured by move is not a signal, so
+/// an effect that closed over the id directly would fire once, at launch, on
+/// whichever destination happened to be up — `state.rs` starts every run on
+/// Settings, which is the one id `refresh_named` has no arm for — and then
+/// never again. Arrival would refresh nothing, ever, with nothing to say so.
+///
+/// `src/domdump.rs` carries the same three lines for the same reason, and its
+/// comment is the one this hook was written from. The four views with mount
+/// effects of their own get away with capturing by move because those effects
+/// live in the VIEW, which really is unmounted and remounted on arrival.
+///
+/// It takes the closure rather than returning the signal so that the whole
+/// mechanism is in one place: the test below drives this function through a
+/// mount and three navigations with a recording closure, which is the only
+/// thing that can notice the bug above coming back.
+fn use_arrival(id: &'static str, mut arrive: impl FnMut(&'static str) + 'static) {
+    let mut current = use_signal(|| id);
+    if *current.peek() != id {
+        current.set(id);
+    }
+    use_effect(move || arrive(current()));
 }
 
 /// The desktop shell.
@@ -139,12 +182,13 @@ pub(crate) fn AppShell() -> Element {
     use_arrival_refresh(dest);
     use_refresh_key();
 
-    // `at_root` already means "nothing is selected" — it is the predicate the
-    // drawer has always highlighted with, and it needs no new state to serve
-    // as the third column's empty test. A destination with no list of its own
-    // (Settings) is one screen, so it takes the content area whole and the
-    // shell draws two columns rather than three.
-    let detail_open = dest.root.is_none() || !(dest.at_root)(&ctx);
+    // The destination's own answer to "is anything open", which is the fact
+    // the third column needs and needs no new state to hold. A destination
+    // with no list of its own (Settings) is one screen, so its detail is
+    // unconditional: it takes the content area whole and the shell draws two
+    // columns rather than three.
+    let detail = (dest.detail)(&ctx);
+    let detail_open = detail.is_some();
 
     rsx! {
         // `data-detail` is the one thing the CSS cannot work out for itself,
@@ -181,8 +225,8 @@ pub(crate) fn AppShell() -> Element {
             }
 
             section { class: "pane pane-detail",
-                if detail_open {
-                    {(dest.view)(&ctx)}
+                if let Some(detail) = detail {
+                    {detail}
                 } else {
                     {empty_detail(dest)}
                 }
@@ -211,7 +255,17 @@ fn empty_detail(dest: &'static Destination) -> Element {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test scaffolding: a harness that cannot start is the failing check"
+)]
 mod tests {
+    use std::cell::RefCell;
+    use std::time::Duration;
+
+    use dioxus::prelude::*;
+
     #[cfg(feature = "desktop")]
     use super::MIN_INNER;
     use crate::nav::DESTINATIONS;
@@ -311,5 +365,86 @@ mod tests {
                 dest.id
             );
         }
+    }
+
+    // ---- the arrival effect, driven through a real VirtualDom ----------
+    //
+    // The test above proves every id has somewhere to land. This one proves
+    // anything is ever thrown: the two halves are independent, and the bug
+    // this shell shipped its first draft with was entirely in the second.
+
+    thread_local! {
+        /// Every id `use_arrival` handed its closure, in order.
+        static ARRIVALS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+        /// The probe's "where am I", so the test can navigate it.
+        static WHEREABOUTS: RefCell<Option<Signal<&'static str>>> = const {
+            RefCell::new(None)
+        };
+    }
+
+    /// `AppShell` in miniature: one long-lived component that re-renders on
+    /// navigation and never unmounts, which is the whole reason the effect
+    /// needs a reactive dependency.
+    #[component]
+    fn ArrivalProbe() -> Element {
+        let here = use_signal(|| "chats");
+        WHEREABOUTS.with(|slot| *slot.borrow_mut() = Some(here));
+        super::use_arrival(here(), |id| {
+            ARRIVALS.with(|log| log.borrow_mut().push(id));
+        });
+        rsx! { div { "{here}" } }
+    }
+
+    /// Let the queued effects run. Dioxus queues an effect and re-runs it from
+    /// a task, so nothing fires without an executor to poll one — which is why
+    /// a plain `rebuild_in_place` sees the mount and no navigation at all.
+    fn settle(dom: &mut VirtualDom) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            for _ in 0..6 {
+                let _ = tokio::time::timeout(Duration::from_millis(20), dom.wait_for_work()).await;
+                dom.render_immediate_to_vec();
+            }
+        });
+    }
+
+    /// Arriving somewhere has to actually fire — every time, not once.
+    ///
+    /// This is the one thing no static check in this file can see. A Dioxus
+    /// effect re-runs only when a signal it READ changes, `AppShell` mounts
+    /// once for the life of the process, and a destination id is a
+    /// `&'static str`; close over it directly and the desktop's automatic
+    /// refresh runs at launch, on whichever screen happened to be up, and
+    /// never again. No panic, no warning, no failing test — just lists as old
+    /// as the window.
+    #[test]
+    fn arriving_somewhere_new_dispatches_every_time() {
+        let mut dom = VirtualDom::new(ArrivalProbe);
+        dom.rebuild_in_place();
+        settle(&mut dom);
+        let here = WHEREABOUTS
+            .with(|slot| *slot.borrow())
+            .expect("the probe rendered, so it published its signal");
+
+        for dest in ["code", "recipes", "skills"] {
+            dom.in_runtime(|| {
+                let mut here = here;
+                here.set(dest);
+            });
+            settle(&mut dom);
+        }
+
+        let seen = ARRIVALS.with(|log| log.borrow().clone());
+        assert_eq!(
+            seen,
+            vec!["chats", "code", "recipes", "skills"],
+            "the arrival effect fired {} time(s) across a mount and three \
+             navigations — it is not re-running on arrival, so the desktop's \
+             re-fetch-on-mount is dead and ⌘R is the only refresh there is",
+            seen.len()
+        );
     }
 }

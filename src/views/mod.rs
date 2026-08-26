@@ -108,8 +108,12 @@ pub fn ScrollToBottom(scroller: &'static str) -> Element {
     }
 }
 
-/// The confirmation a swipe earns, as a sheet rather than a row in the card.
-/// Say it plainly, then Cancel and the thing itself.
+/// The confirmation a destructive row action earns, as a sheet rather than a
+/// row in the card. Say it plainly, then Cancel and the thing itself.
+///
+/// A swipe on the phone, a click on an always-visible icon on the desktop
+/// (`views::chrome::ListRow`). The pointer's version is the easier one to hit
+/// by accident, so the sheet matters more there, not less.
 ///
 /// One component rather than one per action, because the difference between
 /// confirming a delete and confirming a merge is two strings and which colour
@@ -150,7 +154,9 @@ pub fn Confirm(
     }
 }
 
-/// The confirmation a swipe earns, as a sheet rather than a row in the card.
+/// The confirmation a destructive row action earns — a swipe on the phone, a
+/// click on a row icon on the desktop — as a sheet rather than a row in the
+/// card.
 ///
 /// Both planes delete for good: goose's `session/delete` is not a soft
 /// delete, and the code plane purges the container and the workspace with the

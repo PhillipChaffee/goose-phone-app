@@ -28,7 +28,7 @@ pub(crate) fn AppShell() -> Element {
     crate::viewport::use_close_open_row();
     crate::viewport::use_pull_to_refresh();
 
-    let body = (nav::current(&ctx).view)(&ctx);
+    let body = nav::current(&ctx).screen(&ctx);
 
     rsx! {
         {body}

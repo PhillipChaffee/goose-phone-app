@@ -23,26 +23,65 @@ use crate::scheduler::{
     self, cadence, close, detail_actions, facts, last_run_label, open, row_state, state_label,
     title_for, watch_target, Cadence, Sheet,
 };
+use crate::shell::Shell;
 use crate::state::{now_secs, relative_time, rfc3339_to_epoch, use_app_ctx, AppCtx, Remote, Tab};
 use crate::views::chrome::{ListRow, RowAction, RowFace, TopBar};
 use crate::views::recipes::{fact_row, CronSheet};
 use crate::views::session_settings::SettingRow;
 use crate::views::ConfirmDelete;
 
-/// The poll, scoped to whichever screen is up.
+/// Which of the Scheduler's two screens a [`use_poll`] call is on.
+///
+/// It exists because the answer to "does this call site start a loop" is a
+/// question about the SHELL, and the two screens are not interchangeable there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PollSite {
+    List,
+    Detail,
+}
+
+/// Whether a call site claims the poll epoch and runs the loop.
+///
+/// On the phone both screens do, and that is the hand-over the epoch was
+/// written for: one screen is mounted at a time, so the newer claim retires
+/// the older loop exactly as the older screen leaves.
+///
+/// On the desktop the two are mounted TOGETHER — `src/shell/desktop.rs` puts
+/// the list in one column and what it opened in the next — and hand-over
+/// becomes a bug. The later claimant (the detail) retires the list's loop; then
+/// closing the detail unmounts the only surviving loop, `use_future` does not
+/// re-run for a component that never unmounted, and the Scheduler simply stops
+/// polling until you leave the destination and come back. So on the desktop the
+/// list owns the loop outright: it is the column that cannot be closed while the
+/// destination is up, and `poll_once` already refreshes the open job's history,
+/// so the detail loses nothing by not having a timer of its own.
+///
+/// A `const fn` over the shell rather than a `cfg`, following
+/// `views::chrome::row_action_words`: `cargo test` runs the desktop arm on a
+/// host, so a `cfg` here would leave the phone's answer asserted by nothing.
+const fn claims_the_poll(site: PollSite, shell: Shell) -> bool {
+    !matches!((shell, site), (Shell::Desktop, PollSite::Detail))
+}
+
+/// The poll, scoped to whichever screen owns it.
 ///
 /// `use_future` rather than `spawn_forever` — the one documented exception in
 /// this app — because the loop should die with the screen: a phone in a pocket
 /// must not hold a timer for a list nobody is looking at. The generation epoch
-/// behind it is the belt to that pair of braces, and it is also what stops the
-/// two screens' loops from overlapping as one hands over to the other.
+/// behind it is the belt to that pair of braces, and on the phone it is also
+/// what stops the two screens' loops from overlapping as one hands over to the
+/// other.
 ///
-/// Both screens call it. The detail's dot is the same fact as the row's, and a
-/// detail that stopped polling would be the one screen showing a run that
-/// finished a minute ago.
-fn use_poll(ctx: &AppCtx) {
+/// Both screens call it, and [`claims_the_poll`] decides which of them starts a
+/// loop. The detail's dot is the same fact as the row's, so on the phone — where
+/// the list is not mounted behind it — the detail runs the loop itself rather
+/// than showing a run that finished a minute ago.
+fn use_poll(ctx: &AppCtx, site: PollSite) {
     let ctx = *ctx;
     use_future(move || async move {
+        if !claims_the_poll(site, Shell::CURRENT) {
+            return;
+        }
         // Claimed inside the future, not in the component body: a signal
         // written during a render is a render that asks for another one.
         let mut generation = ctx.scheduler.poll;
@@ -98,7 +137,7 @@ pub fn SchedulerView() -> Element {
     let remote = (ctx.scheduler.list)();
     let connected = (ctx.conn)().is_connected();
     let state = list_state(&remote, connected);
-    use_poll(&ctx);
+    use_poll(&ctx, PollSite::List);
 
     // Reactive rather than a one-shot mount hook: the list is worth fetching
     // the moment there is a connection to fetch it over, including one that
@@ -116,9 +155,11 @@ pub fn SchedulerView() -> Element {
         TopBar { title: "Scheduler", conn: true }
         main {
             class: "scroll",
-            // Pull, not a button. The list refreshes itself on a timer while
-            // you are looking at it; the gesture is for the moment you do not
-            // want to wait for the next tick.
+            // On the phone: pull, not a button. The list refreshes itself on
+            // a timer while you are looking at it; the gesture is for the
+            // moment you do not want to wait for the next tick. The desktop
+            // has the same timer — `claims_the_poll` above says which screen
+            // holds it — and ⌘R for that moment instead of a gesture.
             "data-refresh": "scheduler",
             "data-refreshing": "{remote.loading}",
 
@@ -181,6 +222,9 @@ fn row(ctx: &AppCtx, job: &ScheduledJob, started: &HashSet<String>, now: i64) ->
     let (id, tray_id) = (job.id.clone(), job.id.clone());
     let paused = job.paused;
     let mut sheet = ctx.scheduler.sheet;
+    // Which row the desktop's detail column came from. Ignored on the phone,
+    // where the list is not on screen beside it (`views::chrome::row_is_marked`).
+    let selected = ctx.scheduler.open.read().as_deref() == Some(job.id.as_str());
 
     rsx! {
         ListRow {
@@ -188,6 +232,7 @@ fn row(ctx: &AppCtx, job: &ScheduledJob, started: &HashSet<String>, now: i64) ->
             icon: "clock",
             title: title_for(&job.id),
             trailing: last_run_label(job),
+            selected,
             // Pause before Delete: the tray is a scroller, so a short drag
             // reveals the first button and a full one reaches the last, and
             // the destructive action should be the deeper pull.
@@ -224,7 +269,7 @@ fn row(ctx: &AppCtx, job: &ScheduledJob, started: &HashSet<String>, now: i64) ->
 #[component]
 pub fn ScheduledJobView() -> Element {
     let ctx = use_app_ctx();
-    use_poll(&ctx);
+    use_poll(&ctx, PollSite::Detail);
 
     // The same reactive fetch `SchedulerView` has, and for a sharper version of
     // the same reason. `list_state` keeps a list that loaded before the socket
@@ -522,7 +567,37 @@ fn overlays(ctx: &AppCtx) -> Element {
 
 #[cfg(test)]
 mod tests {
+    use super::{claims_the_poll, PollSite};
     use crate::scheduler::{dump_key, Screen};
+    use crate::shell::Shell;
+
+    /// Exactly one loop, whatever is mounted.
+    ///
+    /// On the phone one screen is up at a time, so both claim and the epoch
+    /// hands the loop over. On the desktop both are mounted at once and the
+    /// hand-over would be a silent stop: the detail's claim retires the list's
+    /// loop, and closing the detail then unmounts the only one left — after
+    /// which nothing polls the Scheduler until you leave the destination and
+    /// come back, because `use_future` does not re-run for a component that
+    /// never unmounted.
+    #[test]
+    fn the_desktop_detail_does_not_take_the_poll_off_the_list() {
+        assert!(claims_the_poll(PollSite::List, Shell::Desktop));
+        assert!(
+            !claims_the_poll(PollSite::Detail, Shell::Desktop),
+            "the detail is mounted BESIDE the list on the desktop, so a second \
+             claim retires the list's loop and closing the detail leaves none"
+        );
+    }
+
+    /// The phone's arm is unchanged, and this is the assertion that says so:
+    /// `cargo test` runs the desktop arm on a host, so a `cfg` in
+    /// `claims_the_poll` would leave this claim checked by nothing at all.
+    #[test]
+    fn the_phone_still_polls_from_whichever_screen_is_up() {
+        assert!(claims_the_poll(PollSite::List, Shell::Mobile));
+        assert!(claims_the_poll(PollSite::Detail, Shell::Mobile));
+    }
 
     /// The dump keys this destination files its states under. Stated here as
     /// well as in `crate::scheduler` because this is the file that has to be

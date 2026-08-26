@@ -1025,6 +1025,25 @@ thing CSS cannot work out for itself is whether a detail is open, and that is
 a fact about the app rather than the window, so the shell states it in a
 `data-detail` attribute.
 
+**Refresh is arrival, plus a chord.** There is no refresh control, which is
+also goose's own desktop app's answer — `SessionListView.tsx` has none and does
+not poll. Arriving at a destination re-fetches its list, and ⌘R (Ctrl+R
+elsewhere) re-fetches whatever is mounted. Both go through the same
+`viewport::refresh_named` the phone's pull gesture uses, so a list cannot be
+refreshable one way and not another. The arrival half is the one a user meets;
+⌘R is deliberately undocumented in the UI, and registering it as a real menu
+item is the obvious next step for discoverability — it is not taken here
+because a menu accelerator *consumes* the key on macOS, so it would have to
+replace the JS listener rather than sit beside it, and that swap cannot be
+verified without a desktop run.
+
+**The row is the list's, the detail is beside it, and the row says so.** In
+three columns the list and what it opened are on screen together, which is the
+one arrangement where an unmarked list is confusing — the phone never had it.
+The open row takes `--bg-tertiary`, which is the token `assets/main.css` already
+proved reads as *selected* (see the note over `.drawer-item.active`), and
+`ListRow` refuses to paint it at all on the phone.
+
 ### Deviations, desktop only
 
 **The pane header does not float.** Rule 3 — "each carries its own glass,
@@ -1040,10 +1059,34 @@ number and a pointer is not a thumb. 32 is not a taste either: it is the floor
 is the size goose's own desktop rows use. The mockups' 26 would fail our own
 gate. The nav's rows keep 48px — nothing is gained by shrinking them.
 
+**Row actions are out of flow.** The icons are absolutely positioned in the
+row's top-right, and only the *title line* reserves a gutter for them
+(`:has()` counts the buttons, so a one-action row reserves one and a row with
+none reserves nothing). Left in the row's flex flow they take their width off
+the meta line and the quote as well: measured at a 1180-wide window, the quote
+came out 141px with 220px of text clamped into it. The agreed mockup puts the
+actions beside the title only and lets the quote span the card; this is that
+arrangement reached without changing the markup, which is what keeps the
+phone's DOM identical.
+
 **The app's first `:hover` and `:focus-visible` rules live here.**
 `assets/main.css` has none at all; it was written for a thumb. Hover changes
 colour and shows a button's border — it never *reveals* a control and never
-moves one. The focus ring is `--text-primary`, which is by construction the
+moves one. Two corollaries that are easy to get wrong and were:
+
+- **Hover may not borrow the selected colour.** `--bg-tertiary` is what
+  `.drawer-item.active` paints with, and main.css's own note says why ("at
+  1.08:1 against the light page the selected destination was indistinguishable
+  from the unselected ones"). Spending it on hover made two destinations look
+  selected at once. Hover gets its own step, halfway between the pane and the
+  selected fill.
+- **The focus ring is an outline and nothing else.** `border-radius` is not an
+  outline property: setting one in the `:focus-visible` rule squared off every
+  control the moment it took focus — the FAB went from a 9999px pill to a 4px
+  rectangle. WebKit and Chromium already draw the outline following the
+  element's own radius, so there is nothing to add.
+
+The ring itself is `--text-primary`, which is by construction the
 highest-contrast colour against every surface in the file; inventing an accent
 token is a decision this work had no mandate for.
 

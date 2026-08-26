@@ -40,8 +40,12 @@ pub fn SkillsView() -> Element {
         TopBar { title: "Skills", conn: true }
         main {
             class: "scroll",
-            // Pull, not a button. A refresh control in the bar would be a
-            // 44px invitation to re-download every skill's full text.
+            // On the phone: pull, not a button. A refresh control in the bar
+            // would be a 44px invitation to re-download every skill's full
+            // text. The desktop has no pull; arriving here re-fetches, and ⌘R
+            // does the same re-download on demand (`src/shell/desktop.rs`) —
+            // which for Skills is the only refresh there is either way,
+            // because `ensure_loaded` is a cache.
             "data-refresh": "skills",
             "data-refreshing": "{loading}",
 
@@ -96,6 +100,14 @@ pub fn SkillsView() -> Element {
 /// because nothing on this screen writes — a row that swipes open onto an
 /// empty tray is worse than a row that does not swipe.
 fn skill_row(ctx: &AppCtx, entry: &SourceEntry) -> Element {
+    // Which row the desktop's detail column came from. Ignored on the phone,
+    // where the list is not on screen beside it (`views::chrome::row_is_marked`).
+    let selected = ctx
+        .skills
+        .open
+        .read()
+        .as_ref()
+        .is_some_and(|open| open.path == entry.path);
     let ctx = *ctx;
     let opened = entry.clone();
     rsx! {
@@ -104,6 +116,7 @@ fn skill_row(ctx: &AppCtx, entry: &SourceEntry) -> Element {
             icon: "sparkle",
             title: "{entry.name}",
             actions: vec![],
+            selected,
             on_open: move |()| skills::open(&ctx, opened.clone()),
             div { class: "session-meta",
                 for part in meta_parts(entry.scope_label(), entry.supporting_file_count()) {

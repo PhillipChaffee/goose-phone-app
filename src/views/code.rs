@@ -98,8 +98,10 @@ pub fn CodeSessionsView() -> Element {
         }
         main {
             class: "scroll has-fab",
-            // Named, so the pull-to-refresh listener knows this list has
-            // something to fetch and which fetch it is.
+            // Named, so the three things that refresh a list know this one
+            // has something to fetch and which fetch it is: the phone's pull
+            // gesture, and on the desktop ⌘R and arriving here. They meet in
+            // `viewport::refresh_named`.
             "data-refresh": "code",
             "data-refreshing": "{loading}",
             if let ConnState::Failed(error) = &conn {
@@ -900,7 +902,9 @@ pub fn CodeNewView() -> Element {
 
         // The page IS the field. Not a `.scroll`: the textarea is its own
         // scroller, so a long draft scrolls inside it rather than sliding
-        // under the pills, and there is nothing here to pull to refresh.
+        // under the pills, and there is nothing here to refresh — no
+        // `data-refresh`, so neither the phone's pull nor the desktop's ⌘R
+        // finds anything to fetch.
         main { class: "compose", "aria-label": "New code session",
             textarea {
                 class: "compose-field",

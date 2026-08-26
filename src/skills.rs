@@ -42,9 +42,11 @@ pub(crate) struct Ctx {
     pub screen: Signal<Screen>,
     pub list: Signal<Remote<SourceEntry>>,
     /// The skill the detail screen is showing. A clone rather than an index:
-    /// a pull-to-refresh that lands while the detail is open reorders the
-    /// list under it, and an index would then be pointing at a different
-    /// skill than the one whose name is in the title.
+    /// a refresh that lands while the detail is open reorders the list under
+    /// it, and an index would then be pointing at a different skill than the
+    /// one whose name is in the title. That is the phone's pull, and on the
+    /// desktop it is ⌘R and arriving here — where the list is on screen BESIDE
+    /// the detail, so the reorder is watched rather than merely survived.
     pub open: Signal<Option<SourceEntry>>,
 }
 
