@@ -56,13 +56,26 @@ fn use_poll(ctx: &AppCtx) {
                 scheduler::poll_interval(scheduler::any_running(&list.items, &started))
             };
             tokio::time::sleep(interval).await;
+            // Every overlay over this list, not just this feature's own. The
+            // reason written on `Sheet` — a list settling underneath re-renders
+            // and reorders the rows behind it, which on the native renderer is
+            // a visible reflow under something you are in the middle of
+            // deciding — is about being covered, and the drawer (300px of a
+            // 402pt screen, so the rows show past its edge) and the permission
+            // modal cover this list exactly as a sheet does. `app.rs` renders
+            // both over the view. The code plane's modal is not consulted
+            // because `open_chat_has_ask` is false off the Code tab, and this
+            // loop retires when the tab changes.
+            let overlay = ctx.scheduler.sheet.peek().is_open()
+                || *ctx.drawer_open.peek()
+                || !ctx.permission.peek().is_empty();
             let tick = scheduler::poll_tick(
                 mine,
                 *ctx.scheduler.poll.peek(),
                 *ctx.tab.peek(),
                 ctx.client.peek().is_some(),
                 ctx.scheduler.list.peek().loading,
-                ctx.scheduler.sheet.peek().is_open(),
+                overlay,
             );
             match tick {
                 scheduler::Tick::Retire => return,
@@ -213,6 +226,26 @@ pub fn ScheduledJobView() -> Element {
     let ctx = use_app_ctx();
     use_poll(&ctx);
 
+    // The same reactive fetch `SchedulerView` has, and for a sharper version of
+    // the same reason. `list_state` keeps a list that loaded before the socket
+    // died tappable — deliberately — so this screen opens fine while offline,
+    // and a fetch fired from `open` would have found no client and returned
+    // with nothing marked, nothing failed and nothing ever firing again. The
+    // history's only unprompted refetch is `poll_once`'s running→idle
+    // transition, which a job that is not running never makes, so the screen
+    // would have gone on saying "No runs yet" about a job with runs until
+    // somebody happened to pull. Hanging the fetch on the connection instead
+    // gives both cases one path: it does nothing while there is no client, and
+    // runs the moment there is one.
+    use_effect(move || {
+        if (ctx.conn)().is_connected() {
+            if let Some(id) = ctx.scheduler.open.peek().clone() {
+                scheduler::load_history(&ctx, &id);
+            }
+        }
+    });
+
+    let connected = (ctx.conn)().is_connected();
     let list = (ctx.scheduler.list)();
     let open_id = (ctx.scheduler.open)();
     let job = open_id
@@ -286,7 +319,7 @@ pub fn ScheduledJobView() -> Element {
             }
 
             label { class: "field-label job-runs", "Recent runs" }
-            {runs(&ctx, &history)}
+            {runs(&ctx, &history, connected)}
         }
 
         {overlays(&ctx)}
@@ -339,24 +372,45 @@ fn cadence_row(ctx: &AppCtx, job: &ScheduledJob) -> Element {
 
 /// The job's runs: the Chats list, unchanged, over the sessions the scheduler
 /// produced.
-fn runs(ctx: &AppCtx, history: &Remote<SessionInfo>) -> Element {
+///
+/// Through `list_state`, the same six-way answer every other list on this
+/// screen and the four beside it give — because the empty-looking states are
+/// where a run history can lie. "No runs yet" is a statement about the job, and
+/// it is true only when the server was asked and said none: a `-32601` on
+/// `schedules/sessions/list` (the cache is per *method*, so a goose with
+/// `schedules/list` and without this one is a real server) and a socket that
+/// died before the ask are both absences of an answer, not answers of
+/// absence. Writing them as one `if history.items.is_empty()` is exactly how
+/// this screen ended up asserting a job had never run.
+fn runs(ctx: &AppCtx, history: &Remote<SessionInfo>, connected: bool) -> Element {
     let ctx = *ctx;
-    if history.items.is_empty() {
+    match list_state(history, connected) {
+        ListState::Unsupported => {
+            return rsx! {
+                // Not an error and no Retry, for `SchedulerView`'s reason: the
+                // list works, so scheduling is on — this goose is simply older
+                // than the method that lists a job's sessions.
+                p { class: "hint",
+                    "This goose does not report a job's runs. Its sessions are on the Chats screen."
+                }
+            };
+        }
+        ListState::Offline => {
+            return rsx! {
+                p { class: "error-box", "Not connected. This job's runs live on your goose server." }
+            }
+        }
         // A failure gets said rather than dressed as an absence: "No runs yet"
         // over a call that failed is a wrong statement about the job, not a
         // missing one.
-        if let Some(error) = history.sticky.as_ref() {
-            return rsx! { p { class: "error-box", "{error}" } };
-        }
-        return rsx! {
-            p { class: "hint",
-                if history.loading {
-                    "Loading this job's runs…"
-                } else {
-                    "No runs yet. When it fires, the session it writes shows up here."
-                }
+        ListState::Failed(error) => return rsx! { p { class: "error-box", "{error}" } },
+        ListState::Loading => return rsx! { p { class: "hint", "Loading this job's runs…" } },
+        ListState::Empty => {
+            return rsx! {
+                p { class: "hint", "No runs yet. When it fires, the session it writes shows up here." }
             }
-        };
+        }
+        ListState::Rows => {}
     }
 
     rsx! {

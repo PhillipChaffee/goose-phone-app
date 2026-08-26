@@ -1,6 +1,6 @@
 /* ── skills ─────────────────────────────────────────────────────────────
  *
- * Two rules and a separator. Everything else on these screens is main.css
+ * Two rules. Everything else on these screens is main.css
  * doing its job: the rows are `.session-*`, the facts are the settings
  * sheet's `.setting-row.fact`, and the document is `.md`.
  */
@@ -13,14 +13,11 @@
   border-bottom: 1px solid var(--border-primary);
 }
 
-/* A skill's path is one unbroken 60-character token, and the note it lives in
- * is a flex item that will happily grow to hold it — pushing the whole screen
- * into a horizontal scroll. `anywhere` is right rather than `break-word`
- * because there is nothing to preserve: a path broken mid-segment is still a
- * path, and the alternative is not seeing the end of it at all. */
-.skill-facts .setting-note {
-  overflow-wrap: anywhere;
-}
+/* A skill's path used to be wrapped here, scoped to this screen. The Scheduler
+ * detail put a recipe path in the same `.setting-note` and broke the same way,
+ * so `overflow-wrap: anywhere` moved onto the base class in main.css — where
+ * `.setting-value`'s own overflow rule already was — and this scoped copy went
+ * with it. Nothing about a skill's path needed it that a fact note does not. */
 
 /* The document begins here, and it is prose: the same air a paragraph gets
  * after a rule, not the 2px gap a settings list uses between rows. */

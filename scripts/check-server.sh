@@ -62,8 +62,18 @@ fi
 
 if [ -n "$GOOSE_PID" ]; then
   ok "\`goose serve\` is running (pid $GOOSE_PID)"
+  # /proc first because it is exact, `ps -o args=` second because it is what
+  # macOS and the other BSDs have instead. The fallback is the point: this
+  # block used to be inside the `/proc` test alone, so on a Mac — the platform
+  # the README's quick start is written for — it printed nothing at all, and
+  # the --enable-scheduler check below never ran on the one machine whose flag
+  # it is about.
   if [ -r "/proc/$GOOSE_PID/cmdline" ]; then
     ARGS=$(tr '\0' ' ' < "/proc/$GOOSE_PID/cmdline")
+  else
+    ARGS=$(ps -o args= -p "$GOOSE_PID" 2>/dev/null)
+  fi
+  if [ -n "$ARGS" ]; then
     printf '        args: %s\n' "$ARGS"
     # A warn and never a failure: chat, recipes, skills and extensions all work
     # without it. It is checked at all because the Scheduler screen is
