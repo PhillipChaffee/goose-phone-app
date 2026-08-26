@@ -82,9 +82,73 @@ fn launch() {
         .with_title("Goose")
         .with_inner_size(LogicalSize::new(1180.0, 820.0))
         .with_min_inner_size(LogicalSize::new(min_w, min_h));
+    let window = integrate_titlebar(window);
     dioxus::LaunchBuilder::desktop()
         .with_cfg(Config::new().with_window(window))
         .launch(app::App);
+}
+
+/// Put the window chrome INSIDE the app instead of above it.
+///
+/// A stock macOS window puts a 28pt opaque bar over the content, in the
+/// system's grey rather than the app's, with the app's own surface starting
+/// underneath it — so the first thing on screen is a strip that belongs to
+/// nothing. goose's own desktop app does not have one: `titleBarStyle:
+/// 'hidden'` with `trafficLightPosition: { x: 20, y: 16 }`
+/// (`ui/desktop/src/main.ts:1285-1286`), which is the same three flags below
+/// plus an inset.
+///
+/// Three flags and they are not interchangeable. `fullsize_content_view` is
+/// what extends the web view up under the titlebar; `titlebar_transparent`
+/// stops the bar painting its own material over it; `title_hidden` removes
+/// the word "Goose", which would otherwise float over the app's content in a
+/// font the app does not own. NOT `titlebar_hidden`, which takes the traffic
+/// lights with it.
+///
+/// NO INSET, and that is a finding rather than a preference. tao exposes
+/// `with_traffic_light_inset`, goose sets the Electron equivalent to (20, 16),
+/// and under wry it does nothing at all: tao applies the inset from the
+/// content view's `drawRect:` (`tao-0.34.8/src/platform_impl/macos/view.rs:346`)
+/// and wry's `WKWebView` covers that view, so it never draws and the hook
+/// never runs. Measured on a real window at two different insets — (20, 18)
+/// and (31, 25) — the lights did not move: both put the close button at
+/// logical (9, 9). So the strip in `assets/desktop.css` is sized to where
+/// macOS actually puts them, and `--traffic-w` records where they end.
+///
+/// `src/shell/desktop.rs` renders the region that drags the window: with the
+/// bar gone, `AppKit` no longer has a strip of its own to drag by, and a
+/// window you cannot move is a worse bug than a grey bar.
+///
+/// macOS only. Two whole functions rather than one with a `cfg` block inside,
+/// because a `cfg`'d block that has to `return` so a `cfg`'d tail expression
+/// can follow it is a shape clippy's `needless_return` correctly rejects: on
+/// the platform being compiled, only one of the two ever exists.
+#[cfg(all(
+    feature = "desktop",
+    target_os = "macos",
+    not(any(target_os = "ios", target_os = "android"))
+))]
+fn integrate_titlebar(window: dioxus::desktop::WindowBuilder) -> dioxus::desktop::WindowBuilder {
+    use dioxus::desktop::tao::platform::macos::WindowBuilderExtMacOS;
+
+    window
+        .with_fullsize_content_view(true)
+        .with_titlebar_transparent(true)
+        .with_title_hidden(true)
+}
+
+/// Everywhere else the window keeps its native frame: a Windows or Linux
+/// window with no titlebar and no replacement for it is a window with no
+/// close button.
+#[cfg(all(
+    feature = "desktop",
+    not(target_os = "macos"),
+    not(any(target_os = "ios", target_os = "android"))
+))]
+const fn integrate_titlebar(
+    window: dioxus::desktop::WindowBuilder,
+) -> dioxus::desktop::WindowBuilder {
+    window
 }
 
 #[cfg(not(all(

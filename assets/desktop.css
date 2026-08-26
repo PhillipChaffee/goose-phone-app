@@ -60,6 +60,26 @@
   /* The breathing room around anything that floats. goose's own desktop app
    * spends exactly this on the same panel (`p-2` in AppLayout.tsx). */
   --shell-gap: 8px;
+  /* THE WINDOW'S OWN CHROME, now that it is inside the app.
+   *
+   * `src/main.rs` hides the titlebar, so the traffic lights are painted ON the
+   * app's own surface. WHERE they land is macOS's decision and not ours —
+   * tao's `with_traffic_light_inset` is a no-op under wry (the reason is
+   * written up in src/main.rs), so these two numbers are MEASURED off a real
+   * window rather than chosen: three discs at 20pt centres occupying
+   * x 9..63, y 9..22.5.
+   *
+   * `--chrome-h` is the band kept clear of anything the app wants to put at
+   * the top left, and the band the window is dragged by. 52 rather than the
+   * 23 the lights strictly need, because a control butted against them reads
+   * as a fourth one — goose leaves the same gap, its lights at y 16 and its
+   * first nav row at 78 (AppLayout.tsx + Navigation.tsx).
+   *
+   * `--traffic-w` is where the lights END plus breathing room, so the toggle
+   * beside them and the header indent when the nav is shut are both derived
+   * from one number rather than guessed twice. */
+  --chrome-h: 52px;
+  --traffic-w: 76px;
   /* WHAT THE NAV CARD PAINTS, and it is a different answer per theme because
    * the two themes separate surfaces by different means.
    *
@@ -153,7 +173,10 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 12px 8px;
+  /* The top padding is the chrome strip minus what the card is already inset
+   * from the window, so the wordmark clears the traffic lights sitting on it
+   * rather than the window's top edge. */
+  padding: calc(var(--chrome-h) - var(--shell-gap)) 8px 12px;
   background: var(--nav-fill);
   border: 1px solid var(--shell-line);
   border-radius: var(--radius-xl);
@@ -201,11 +224,20 @@
    * covered, which is invisible to every check that looks at one element at a
    * time. */
   z-index: calc(var(--z-chrome) + 1);
-  /* Centred on the wordmark it shares a line with, and inset from the card's
-   * trailing edge by the 12px `.drawer-brand` is inset from its leading one —
-   * so the two ends of that line have the same margin. */
-  top: 20px;
-  left: calc(var(--nav-w) - var(--shell-gap) - 44px);
+  /* IN the chrome strip, immediately right of the traffic lights, and it does
+   * not move when the nav closes.
+   *
+   * The first draft parked it at the nav card's top-right and slid it to the
+   * window's corner on collapse. Both of those positions are now the window's
+   * own: the corner is where the traffic lights are, and a control that
+   * animates INTO the close button is a control that gets misclicked. Fixed
+   * beside them is also what goose's own app does (AppLayout.tsx:108-122, a
+   * PanelLeft button absolutely positioned next to the lights), and it means
+   * the one control that brings the navigation back is in the same place
+   * whether or not the navigation is there — which is the property that
+   * matters most about it. */
+  top: 0px;
+  left: var(--traffic-w);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -234,28 +266,52 @@
   border-color: var(--border-secondary);
 }
 
-/* Shut, it sits where a pane header's own leading control would — 32px tall
- * centred in a 4rem bar is 16 from the top, and 14 lands it on the same
- * baseline as the back chevrons beside it. */
-.shell[data-nav="closed"] .nav-toggle {
-  top: 14px;
-  left: var(--shell-gap);
-}
-
-/* …and the header it is now sitting in front of gets out of its way.
+/* With the nav shut, the leftmost header is what the window chrome is sitting
+ * on top of, so it is what has to get out of the way.
  *
  * `max()` is what keeps this from being a layout: applied to every pane header
  * rather than to "the leftmost one", because which pane is leftmost depends on
  * the width tier AND on whether anything is open, and that is three selectors
  * to say what one arithmetic already says. Every header whose leading gutter
- * is already wider than the button — which at three columns is all of them but
- * the list's — is untouched. */
+ * is already wider than the chrome — which at three columns is all of them but
+ * the list's — is untouched.
+ *
+ * Derived from the two chrome numbers rather than typed: the traffic lights
+ * end at `--traffic-w`, the toggle is 32 wide and sits there, and 12 is the
+ * gap after it. Nothing here needs editing when the inset in src/main.rs
+ * moves. */
 .shell[data-nav="closed"] .topbar {
-  padding-left: max(var(--edge), 52px);
+  padding-left: max(var(--edge), calc(var(--traffic-w) + 44px));
 }
 
 .shell[data-nav="closed"] .pane-detail .topbar {
-  padding-left: max(var(--gutter), 52px);
+  padding-left: max(var(--gutter), calc(var(--traffic-w) + 44px));
+}
+
+/* The window's drag region, and it is a rectangle rather than the whole bar
+ * for one reason: everything else up there is a control.
+ *
+ * It spans the nav column when the nav is open, which is exactly the strip the
+ * traffic lights are painted on and the part of the top edge with nothing in
+ * it; when the nav is shut it keeps a fixed width, because the pane header
+ * behind it has a title and buttons that must still be clickable.
+ *
+ * `z-index: 0` is the point. It is a positioned sibling of the panes, so
+ * without one it would paint over the header beside it and swallow those
+ * clicks; at 0 it loses to `.topbar` (a flex item at `--z-chrome`, see the
+ * note on `.nav-toggle`) and to the toggle above it, and wins only where
+ * nothing else is. */
+.window-drag {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  left: 0;
+  width: var(--nav-w);
+  height: var(--chrome-h);
+}
+
+.shell[data-nav="closed"] .window-drag {
+  width: calc(var(--traffic-w) + 44px);
 }
 
 /* `position: relative` is load-bearing and is not about the pane's own

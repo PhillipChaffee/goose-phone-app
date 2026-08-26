@@ -360,6 +360,40 @@ pub(crate) fn AppShell() -> Element {
             // was last pressed.
             "data-nav": if nav_open() { "open" } else { "closed" },
 
+            // The strip the window is dragged by.
+            //
+            // `src/main.rs` takes the titlebar away so the chrome is part of
+            // the app, and that takes AppKit's own drag region with it: with
+            // `fullsize_content_view` the web view owns every pixel, so a
+            // window with no replacement for that strip cannot be moved at
+            // all. `-webkit-app-region: drag` is the web answer and it is not
+            // available to us — that is a Chromium property, and wry on macOS
+            // is WKWebView, which does not implement it. `drag_window()` is,
+            // and dioxus-desktop documents this exact call site
+            // (`desktop_context.rs:160`).
+            //
+            // A Rust `onmousedown` is allowed here where a Rust `onscroll` is
+            // not: the rule in `src/viewport.rs` is about events that fire per
+            // FRAME, because each one costs a synchronous XHR. This is one
+            // press. The drag itself is then AppKit's, at native speed, with
+            // nothing crossing the bridge until you let go.
+            //
+            // BEHIND everything (`z-index` below `.nav-toggle`, and the pane
+            // headers are above it too), so it only ever receives the presses
+            // nothing else wanted. That is also why it does not need a
+            // "no-drag" opt-out for the toggle sitting on top of it.
+            div {
+                class: "window-drag",
+                onmousedown: move |_| {
+                    // Dropped rather than handled: the only `Err` tao returns
+                    // here is "this platform cannot start a window drag", and
+                    // the honest response to that is the one already taken —
+                    // the native frame is still on, so the window has its own
+                    // titlebar to drag by and this strip is decoration.
+                    let _ = dioxus::desktop::window().drag_window();
+                },
+            }
+
             // OUTSIDE `.navpane`, and that is the whole reason it is a sibling
             // of the panes rather than a child of the nav it belongs to: the
             // column it would live in collapses to nothing, and a control that
