@@ -158,6 +158,15 @@ moment the bar went away and the controls started floating on their own. A
 label never goes inside a fixed-size circular button — it wraps and
 overflows.
 
+`.btn` — the text button — did **not** come with them, and still has
+`min-height: 40px`. It is under the floor in the height axis at every text
+size and on every screen that has one (a confirm's two buttons, the Scheduler
+detail's four, Settings). It is wide, so it is a much easier target than 40px
+in both axes would be, and `docs/audit.js`'s `SMALL-TAP` threshold is 32px and
+cannot see it. Recorded here as the open item it is rather than left to be
+read as a decision: raising it to 44 is a one-line change to a rule that
+reflows every screen at once, so it wants a pass of its own.
+
 A list row is tappable across its **whole** area, not just the text block
 inside it. The handler belongs on the `li`; anything else in the row that is
 itself a control stops propagation. With the handler on the inner block, 36%
@@ -692,12 +701,26 @@ Apple's controls do — and nothing measured breaks if they do not, so it is
 recorded here rather than defaulted into.
 
 **A pinned height is the bug, not the clipping.** Twenty-six rules set a height
-in px. Eleven of them held text or a 1em glyph and became `min-height`, or a
-`max(px, em)` square. The reason it matters more than it sounds: a chip, a
+in px. Fifteen of them held text or a 1em glyph and became `min-height`, or a
+`max(px, em)` square; the eleven that stayed pinned are a graphic on a graphic.
+The reason it matters more than it sounds: a chip, a
 swipe action and a floating action button set *no overflow at all*, so text too
 big for them is not clipped — it is painted outside the pill, over whatever is
 behind it, while every number the audit used to read stayed in range. That is
 what the `SPILL` check in `docs/audit.js` exists for.
+
+**An `em` on a form control needs `font-size: inherit` beside it, or it is not
+an em at all.** `input`, `button`, `select` and `textarea` take a font from the
+UA stylesheet — 13.333px in Chromium, a system control font in WebKit — and
+that font is what `em` resolves against, whatever the paragraph around them is
+set in. Two rules here are ems on a control (`.md input[type="checkbox"]`, the
+markdown task-list box; `.attach-remove`, the × on an attachment chip) and both
+declare `font-size: inherit` for that reason. The checkbox is the one that
+proves it: without the declaration it rendered at 13.3px inside a 16px
+paragraph — a 17% shrink on all three platforms — and stayed there at every
+Dynamic Type size, which is the exact opposite of what a rule written in ems is
+asking for. Nothing catches this: a shrink is not a spill, so no check in
+`docs/audit.js` can see it.
 
 **Where it stops: the monospace slabs.** See the Deviations section.
 

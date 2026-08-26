@@ -268,6 +268,22 @@ const EFFORTS = [
 (async () => {
   const browser = await chromium.launch();
   let bad = 0;
+  // A directory of this run's own, and a filename no navigation has used
+  // before, which is docs/audit.js's arrangement and for a reason this script
+  // learned the hard way. Every combination below used to write to one path
+  // keyed on the row and the width — so a second invocation running at the
+  // same time (two worktrees, or CI checking two branches) overwrote the file
+  // the first was mid-navigation to, and Chromium measured a document that
+  // was half of one page and half of another. It failed as
+  // `TypeError: Cannot read properties of null (reading 'closest')` on
+  // `document.querySelector('.send')`, on a tree that is clean: reproduced
+  // exactly by running two copies at once, 1 of 2 processes dying. The
+  // dangerous direction is the other one — the same mechanism can serve a
+  // stale PASSING page in place of a regressed one, so a green run did not
+  // establish what it claimed. A unique URL per measurement ends the whole
+  // class, including the same-process cache hit that a reused name invites.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'composer-'));
+  let nth = 0;
   // nameWidth for every composition, keyed by everything except the width, so
   // the same composition can be compared across widths afterwards.
   const namesByWidth = new Map();
@@ -280,7 +296,8 @@ const EFFORTS = [
       for (const { tier, capped } of EFFORTS) {
        for (const names of TRAYS) {
         for (const context of (ROWS[row].context ? CONTEXT : [null])) {
-        const file = path.join(os.tmpdir(), `composer-${row.replace(/\s+/g, '-')}-${WIDTH}.html`);
+        nth += 1;
+        const file = path.join(tmp, `composer-${row.replace(/\s+/g, '-')}-${WIDTH}-${ROOT}-${nth}.html`);
         fs.writeFileSync(file, page(row, label, tier, names, context, ROOT));
         await p.goto(`file://${file}`, { waitUntil: 'load' });
         const r = await p.evaluate(() => {
@@ -492,6 +509,7 @@ const EFFORTS = [
   }
   }
   await browser.close();
+  fs.rmSync(tmp, { recursive: true, force: true });
 
   // A bigger phone must never show less of the model name than a smaller one.
   // Nothing above can see this: every number is inside its range at every
