@@ -2645,12 +2645,22 @@ body.away-from-bottom .scroll-bottom {
 }
 
 /* Square around a 1em glyph, like .composer-chip.attach. The 32px floor is
- * also the audit's SMALL-TAP threshold, which this button sits exactly on. */
+ * also the audit's SMALL-TAP threshold, which this button sits exactly on.
+ *
+ * `font-size: inherit` for the reason spelled out on `.md input[type=checkbox]`
+ * — a form control takes the UA's own font, not its parent's, so without this
+ * the `1.5em` resolved against 13.3px, came to 20px, and lost to the 32px
+ * floor at every text size there is. The em term could never bind, which made
+ * this conversion a no-op wearing a comment that said otherwise. Inheriting
+ * the chip's --text-xs, the floor still wins at the shipping default (19.5px
+ * at a 16px root) and the square grows past it where the point was that it
+ * should. */
 .attach-remove {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  font-size: inherit;
   width: max(32px, 1.5em);
   height: max(32px, 1.5em);
   padding: 0;
@@ -2960,9 +2970,18 @@ body.away-from-bottom .scroll-bottom {
  * 16px root: this box sits INLINE in a paragraph, so it is the one graphic in
  * the file that has to track the text beside it rather than a tap target. The
  * tick is 0.75em of the box, and the baseline nudge that lines it up with the
- * text is 0.125em — 12px and 2px in a 16px paragraph. */
+ * text is 0.125em — 12px and 2px in a 16px paragraph.
+ *
+ * `font-size: inherit` is what makes that true, and without it every one of
+ * those ems is a lie. A form control does not inherit font-size: the UA
+ * stylesheet gives `input` a font of its own (13.333px in Chromium, a system
+ * control font in WebKit), so `1em` resolved against THAT — a 13.3px box in a
+ * 16px paragraph, a 17% shrink on every platform, and frozen there while the
+ * prose beside it goes to 53px. The one graphic in the file that must track
+ * the text was the one that could not. */
 .md input[type="checkbox"] {
   appearance: none;
+  font-size: inherit;
   width: 1em;
   height: 1em;
   margin: 0 8px 0 0;
