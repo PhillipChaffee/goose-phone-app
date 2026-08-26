@@ -33,6 +33,14 @@ rounding, borders vs shadows, tap targets). Read it before changing
 and dark, with `data-theme` on the root element overriding the system
 preference.
 
+Every size in it is a `rem`, because the root font-size is the reader's — on
+iOS `assets/platform/ios.css` sets it to `-apple-system-body` and the whole
+scale follows Dynamic Type. That sheet is the one platform-conditional
+stylesheet (`#[cfg(target_os = "ios")]` in `src/css.rs`), because macOS is
+WKWebView too and resolves the same keyword to a flat 13px. `docs/audit.js`
+and `docs/measure-composer.js` both walk four text sizes; design.md rule 14
+is the whole story.
+
 `docs/style-gallery.html` renders every state in a 402x874 frame against that
 stylesheet: open it in a browser after a CSS change and all of them are
 visible at once, with no build and no device. It is **generated** from the

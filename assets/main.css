@@ -111,14 +111,70 @@
   --font-serif: ui-serif, "New York", Charter, Georgia, serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
+  /* THE SCALE IS RELATIVE, AND THAT IS WHAT MAKES DYNAMIC TYPE ONE LINE.
+   *
+   * Every size below is a rem, and rem means the root's font-size. On iOS
+   * assets/platform/ios.css sets that root to `-apple-system-body`, so it IS
+   * the content size category the reader chose — 17px at Large, 23 at
+   * xxxLarge, 53 at AX5 — and the whole scale follows without a media query,
+   * a script or a second set of numbers. On Android and the desktop dev build
+   * that sheet is not compiled in and the root stays at the browser's 16px,
+   * which is what these values were authored against.
+   *
+   * The trap for anyone editing this block: `rem` used ON the root resolves
+   * against font-size's INITIAL value (16px), not against the root's computed
+   * value. These tokens are safe because a custom property substitutes at its
+   * point of USE, which is never the root — but a rule that set a font-size on
+   * html or :root from one of them would silently be pinned at 16px, and
+   * `html { font-size: clamp(16px, 1rem, 28px) }` evaluates to 16px always.
+   * Clamping the scale has to be done per token, with min(), off the root. */
   --text-xs: 0.75rem;
   --text-sm: 0.875rem;
   --text-md: 1rem;
   --text-lg: 1.125rem;
   --text-xl: 1.375rem;
+  --text-2xl: 1.5rem;
   --lh-xs: 1rem;
   --lh-sm: 1.25rem;
   --lh-md: 1.5rem;
+  /* The rung the scale was missing. --text-xl had nothing above --lh-md to
+   * pair with, a ratio of 1.09, and the audit measures the drawer's serif
+   * wordmark 2px outside its own line box at every text size because of it.
+   * There is no --lh-lg: --text-lg against --lh-md is 1.33 and measures
+   * clean, so a token for it would have no user. */
+  --lh-xl: 2rem;
+
+  /* ICONS ARE NOT TEXT, and this is the line between them.
+   *
+   * Every icon in the app is an SVG sized by `.icon { width: 1em }`, so a
+   * glyph inside a box that sets a font-size takes that size. Six rules set
+   * one in px, and all six are a glyph inside a FIXED tap target — a 44px
+   * circle, a 40px send button, a 40px tile. A target that does not grow
+   * cannot hold a glyph that does: 53px of chevron in a 44px circle is the
+   * failure, not the fix. So they get a scale of their own, with a ceiling
+   * the circle can hold (26 in 44 leaves a 9px ring; 34 in 44 leaves 5) and a
+   * floor at what they read as today. */
+  --icon-md: clamp(20px, 1.25rem, 26px);
+  --icon-lg: clamp(28px, 1.75rem, 34px);
+
+  /* CODE IS NOT PROSE, and a column count is part of its legibility.
+   *
+   * The one place the app stops following the system size, and it is one
+   * decision applied to all three monospace slabs — the review screen's body,
+   * a markdown code block and a tool's output — rather than three. Measured
+   * at 402pt with a 50-character probe inside .diff-code: 52 columns at a
+   * 16px root, 48 at the iOS default of 17, 36 at xxxLarge and 15 at AX5 —
+   * and at 15 every source line wraps three or four times with the 2ch
+   * hanging indent taking two of them. That is not a diff.
+   *
+   * 20px is the ceiling, which is where xxxLarge lands. The line-height is
+   * the same ratio the slabs have always had (20/12), so a capped slab is
+   * today's slab scaled up rather than a new set of proportions. Recorded in
+   * the Deviations section of docs/design.md. Everything else scales
+   * unbounded, INCLUDING inline `.md code`, which sits in a sentence and has
+   * to match the sentence around it. */
+  --text-code: min(var(--text-xs), 20px);
+  --lh-code: calc(var(--text-code) * 5 / 3);
 
   /* Code slabs stay this dark in both themes. */
   --code-bg: #282c34;
@@ -172,9 +228,23 @@
    * safe-area edge the padding was measured from. */
   --chrome-gap: 8px;
   /* Width of the tool card's leading icon column. The disclosure chevron
-   * below uses it too, so "Output" lines up with the tool title above it. */
-  --tool-gutter: 18px;
-  --topbar-h: 52px;
+   * below uses it too, so "Output" lines up with the tool title above it.
+   *
+   * rem, not px: the column holds a `.icon` at 1em of the body size, so
+   * pinned at 18 it is the FIRST thing in the app to break — measured 3px out
+   * at xxxLarge, which is a setting people use, and 18px at AX5 — and it
+   * takes that alignment promise with it, since the chevrons are set at
+   * --text-md. 1.125rem is 18px at a 16px root. */
+  --tool-gutter: 1.125rem;
+  /* One title line plus the air around it. 24 + 28 = 52, so this is exactly
+   * what it was as a constant at a 16px root and an expression above it.
+   *
+   * The bar is not the only thing derived from it: `.app::before` (the scrim)
+   * and every `.scroll`'s top padding read this token too, which is why the
+   * two-line variant below is stated on the ROOT rather than on .topbar —
+   * scoped to the bar, the scrim and the padding would stay sized for a
+   * one-line title while the bar grew. */
+  --topbar-h: calc(var(--lh-md) + 28px);
   --glass-blur: blur(20px) saturate(180%);
   /* Thin enough that the blur is visibly doing its job. Where the blur is
    * genuinely absent the answer is the prefers-reduced-transparency rule
@@ -540,6 +610,15 @@ pre {
 
 /* ── top bar ────────────────────────────────────────────────────────── */
 
+/* A two-line bar is two line boxes plus the air around them, and it has to be
+ * stated HERE rather than on .topbar: `.app::before` and every `.scroll` read
+ * --topbar-h off the root, and a value scoped to the bar would leave both of
+ * them sized for a one-line title with a two-line one in front of them.
+ * 24 + 16 + 12 is 52 — exactly what this was before it had to scale. */
+html:has(.titlegroup) {
+  --topbar-h: calc(var(--lh-md) + var(--lh-xs) + 12px);
+}
+
 .topbar {
   position: absolute;
   top: calc(var(--safe-top) + var(--chrome-gap));
@@ -549,7 +628,13 @@ pre {
   display: flex;
   align-items: center;
   gap: 4px;
-  height: var(--topbar-h);
+  /* min-height, so the box tells the truth. While this was `height` the bar
+   * measured exactly --topbar-h whatever was in it, which meant the audit's
+   * SCRIM check compared the scrim against a bottom edge that could not move
+   * and reported clean with the title painted outside the material that makes
+   * it readable — 5px over at xxxLarge, 14px at AX5. The audit's TITLE-TALLER
+   * check is what asks the question directly. */
+  min-height: var(--topbar-h);
 }
 
 /* Allowed to shrink before the controls do, so a long chat name never pushes
@@ -706,14 +791,18 @@ pre {
   align-items: center;
   justify-content: center;
   width: 44px;
-  height: 44px;
+  /* min-height, not height: .icon-btn.action below inherits this rule and is
+   * a LABELLED button, so its text would otherwise sit in a box pinned at 44
+   * however large the label got. The circle is unchanged — its glyph is
+   * capped at 26px, so 44 is still what the box comes to. */
+  min-height: 44px;
   flex-shrink: 0;
   padding: 0;
   border: 0;
   border-radius: var(--radius-full);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 20px;
+  font-size: var(--icon-md);
   line-height: 1;
   cursor: pointer;
   transition: background-color 120ms ease, color 120ms ease;
@@ -734,13 +823,18 @@ pre {
 }
 
 /* The back chevron carries a whole navigation gesture on one thin glyph, so
- * it gets the size and weight to look deliberate, and optical centring —
- * "‹" sits right of centre in most fonts. */
+ * it gets the size to look deliberate.
+ *
+ * It used to carry `padding-right: 3px` and a comment about optically
+ * centring "‹", which sits right of centre in most fonts. There is no "‹":
+ * `views::chrome::TopBar` renders `Icon { name: "chevron-left" }`, an SVG
+ * from src/icons.rs drawn on a 24 grid from x=8 to x=15 — so its ink is
+ * already half a pixel LEFT of centre, and the 3px was pushing it a further
+ * 3px the wrong way. `font-weight` went with it: an SVG has no weight, it has
+ * the icon set's 2px stroke. */
 .icon-btn.back {
   color: var(--text-primary);
-  font-size: 28px;
-  font-weight: 300;
-  padding-right: 3px;
+  font-size: var(--icon-lg);
 }
 
 .icon-btn:active:not(:disabled) {
@@ -848,9 +942,51 @@ pre {
  * their own labels left a ragged row of different widths against a page of
  * full-width cards. Two per row, and a row holding one button — or an odd
  * last one — takes the whole width. */
+/* Two per row until two per row stops fitting, and then one. Never three.
+ *
+ * `1fr 1fr` cannot say the first half of that. A grid item's automatic minimum
+ * size is its content, so a pair of tracks each demanding a whole label is a
+ * row that runs off the page rather than one that gives way — measured at AX5,
+ * the settings screen's primary button ends 100px past the right edge of the
+ * phone. `auto-fit` reflows instead, and the floor is what tells it when.
+ *
+ * The floor is a max() of two terms and each says one of those things.
+ *
+ * `(100% + 8px) / 3` is a third of the row plus its gap, and it is what makes
+ * "never three" arithmetic rather than hope: a third track needs 3S + 16px, so
+ * any S above (100% - 16px) / 3 forbids one, and this is above it by
+ * construction at every container width. Without it `auto-fit` does what its
+ * name says and packs in as many tracks as fit — the permission modal came out
+ * as three 115px buttons where it had always been two 176px ones.
+ *
+ * `6rem` is when the pair gives up. It is a proxy — CSS cannot ask whether the
+ * labels fit — but it is the right SHAPE of proxy, since what makes them stop
+ * fitting is the text size. 96px at a 16px root, which is under a third of
+ * every container this grid is used in down to a 320pt phone, so nothing at
+ * all moves at the sizes the layout was designed at; the stack arrives at AX2
+ * and above, which is where iOS stacks a paired alert too.
+ *
+ * `min(100%, …)` is what makes the stack reachable: without it a floor wider
+ * than the whole row still lays out two tracks.
+ *
+ * The odd-last-child rules still hold: `1 / -1` is the whole explicit row
+ * whether that row has one column or two. */
+.btn-row,
+.modal-actions,
+.session-ask-actions {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(6rem, (100% + 8px) / 3)), 1fr));
+}
+
+/* A grid item's automatic minimum is its content too, so a label longer than
+ * its track holds the track open even after the reflow above. */
+.btn-row > *,
+.modal-actions > *,
+.session-ask-actions > * {
+  min-width: 0;
+}
+
 .btn-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
   gap: 8px;
   margin-top: 16px;
 }
@@ -871,7 +1007,11 @@ pre {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 48px;
+  /* min-height: this is a labelled pill, and at AX5 its label is a 79px line
+   * box. Pinned at 48 the label was clipped by 31px — and clipped is the
+   * charitable reading, since nothing here sets an overflow, so it was
+   * painted straight through the pill onto the list behind it. */
+  min-height: 48px;
   padding: 0 20px 0 16px;
   border: 0;
   border-radius: var(--radius-full);
@@ -888,9 +1028,12 @@ pre {
   opacity: 0.9;
 }
 
-/* The list keeps clear of the floating action's landing zone. */
+/* The list keeps clear of the floating action's landing zone — which is now a
+ * box that grows, so the clearance has to. 24 + 36 is the 60 this was, and
+ * --lh-md is what sets the pill's height once its label outgrows 48px. */
 .scroll.has-fab {
-  padding-bottom: calc(var(--safe-bottom) + var(--chrome-gap) + 24px + 60px);
+  padding-bottom: calc(var(--safe-bottom) + var(--chrome-gap) + 24px
+    + max(60px, var(--lh-md) + 36px));
 }
 
 /* A lone refresh keeps its place in the bar rather than joining the fab. */
@@ -926,8 +1069,11 @@ pre {
   /* Wide enough for "goose-mock 1.47.0"; at 96px it ellipsised mid-version
    * ("goose-mock 1....") which reads as a rendering fault rather than as a
    * shortened name. The title beside it shrinks first — it has min-width 0
-   * and its own ellipsis, and a truncated title is normal. */
-  max-width: 148px;
+   * and its own ellipsis, and a truncated title is normal.
+   *
+   * rem, because the cap is stated in terms of a string: 9.25rem is the 148px
+   * this was at a 16px root, and it holds the same string at every root. */
+  max-width: 9.25rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -938,11 +1084,21 @@ pre {
  * height — the per-session status dot collapsed to nothing there. In the
  * flex contexts (.conn-badge, .error-box) the value is blockified anyway,
  * so one declaration covers both. */
+/* Rule 8's dot rides the text it reports on, so it is sized in em with a
+ * floor at the 8px it has always been. `vertical-align: 0.08em` already
+ * assumed that relationship; this finishes it. 0.5em of --text-xs is 6px at a
+ * 16px root, so the floor is what applies today and nothing moves — but at
+ * AX5 the alternative is an 8px speck beside 40px text, which is not a dot
+ * saying anything.
+ *
+ * The badges drawn on fixed graphics — .session-tile.attention::after on a
+ * 40px tile, .composer-chip.needed::after on a pill — are deliberately NOT
+ * this class, and stay pinned to what they sit on. */
 .dot {
   display: inline-block;
   vertical-align: 0.08em;
-  width: 8px;
-  height: 8px;
+  width: max(8px, 0.5em);
+  height: max(8px, 0.5em);
   flex-shrink: 0;
   border-radius: var(--radius-full);
   background: var(--text-tertiary);
@@ -1139,8 +1295,14 @@ select.field {
   background-repeat: no-repeat;
 }
 
+/* A hint names things: an environment variable, a hostname, a path. Those are
+ * unbreakable tokens, and `GOOSED_CERT_FINGERPRINT` is 538px of one at AX5 in
+ * a 336px column — it does not clip, it paints off the side of the card. The
+ * same `anywhere` `.md`, `.session-swipe` and `.skill-facts .setting-note`
+ * already use, for the same reason. */
 .hint {
   margin-top: 6px;
+  overflow-wrap: anywhere;
   color: var(--text-secondary);
   font-size: var(--text-xs);
   line-height: var(--lh-sm);
@@ -1156,6 +1318,10 @@ select.field {
   display: flex;
   align-items: flex-start;
   gap: 10px;
+  /* An error quotes what went wrong, and what went wrong is a server string —
+   * an extension name, a command, a URL. Unbreakable at any size, and past
+   * the tint's edge at the accessibility ones. */
+  overflow-wrap: anywhere;
   margin: 0 0 16px;
   padding: 12px 16px;
   background: color-mix(in srgb, var(--bg-danger) 12%, var(--bg-primary));
@@ -1169,12 +1335,17 @@ select.field {
 /* State rides on a dot here too, so the message reads as text rather than as
  * a painted band. Drawn rather than marked up, because .error-box is a bare
  * <p> in five places. */
+/* Same em relationship, same 8px floor, as `.dot` — this is the same rule 8
+ * dot drawn rather than marked up, because .error-box is a bare <p> in five
+ * places. The margin centres it on the FIRST line under `align-items:
+ * flex-start`, so it is the leftover half of that line box: (20 - 8) / 2 is
+ * the 6px it was, and both halves now follow the text. */
 .error-box::before {
   content: "";
   flex-shrink: 0;
-  width: 8px;
-  height: 8px;
-  margin-top: 6px;
+  width: max(8px, 0.5em);
+  height: max(8px, 0.5em);
+  margin-top: calc((var(--lh-sm) - max(8px, 0.5em)) / 2);
   border-radius: var(--radius-full);
   background: var(--bg-danger);
 }
@@ -1299,7 +1470,12 @@ select.field {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  width: 84px;
+  /* min-width: the tray holds a WORD, and "Delete" wants 98px at AX3 and
+   * 115px at AX5. In an 84px box it was not clipped — nothing here sets an
+   * overflow — it was painted onto the card behind it. The tray is the item
+   * after the card body in a snap scroller, so a wider action is simply a
+   * longer drag, and the snap point is `end` rather than a measurement. */
+  min-width: 84px;
   padding: 0 8px;
   border: 0;
   border-radius: 0 15px 15px 0;
@@ -1311,7 +1487,7 @@ select.field {
 }
 
 .swipe-action .icon {
-  font-size: 20px;
+  font-size: var(--icon-md);
 }
 
 .swipe-action.danger {
@@ -1334,7 +1510,10 @@ select.field {
   border-radius: var(--radius-lg);
   background: var(--bg-secondary);
   color: var(--text-secondary);
-  font-size: 20px;
+  /* Pinned, and so is the tile: this is a graphic mark on a row, not a
+   * control sized for a thumb and not text. The icon scale's ceiling is what
+   * keeps the glyph inside the square. */
+  font-size: var(--icon-md);
 }
 
 /* This chat is blocked waiting for an answer (rule 8: state is a dot). It
@@ -1473,7 +1652,6 @@ select.field {
  * screen's "Mark all" has to the progress row it sits in. */
 .session-ask-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
   gap: 8px;
   margin-top: 10px;
 }
@@ -1728,8 +1906,9 @@ details[open] > summary::before {
   background: var(--code-bg);
   color: var(--code-fg);
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: var(--lh-sm);
+  /* One of the three monospace slabs, capped together — see --text-code. */
+  font-size: var(--text-code);
+  line-height: var(--lh-code);
   white-space: pre;
   overflow-x: auto;
 }
@@ -1959,7 +2138,9 @@ details[open] > summary::before {
   border: 0;
   border-radius: var(--radius-full);
   color: var(--text-primary);
-  font-size: 20px;
+  /* Pinned, like every other fixed tap target: a circle that does not grow
+   * cannot hold a glyph that does. */
+  font-size: var(--icon-md);
   opacity: 0;
   pointer-events: none;
   transform: translate(-50%, 8px);
@@ -2100,7 +2281,11 @@ body.away-from-bottom .scroll-bottom {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 32px;
+  /* min-height, not height. A pill sets no overflow, so a label taller than
+   * it is not clipped — it is painted through the pill onto the composer.
+   * That starts the moment the app opts in: at the iOS default of 17px the
+   * chip's own content is 34px in a 32px box. */
+  min-height: 32px;
   /* Chips do not shrink by default. A flex item's automatic minimum size is
    * its content width, so a chip holding server-supplied text would otherwise
    * hold the row open at whatever the model happens to be called and push the
@@ -2146,7 +2331,12 @@ body.away-from-bottom .scroll-bottom {
  * chip: not what it may take, but what it must keep. */
 .composer-chip:has(.chip-model),
 .composer-chip:has(.chip-name) {
-  min-width: 44px;
+  /* Stated as the arithmetic it has always been rather than as the 44 that
+   * arithmetic came to at a 16px root: the gap and the glyph both follow the
+   * text size, so a floor that does not stops being the pill's own furniture
+   * — which is the only thing this comment claims it is — and a crushed pill
+   * goes back to painting its chevron outside itself. */
+  min-width: calc(2 * 12px + 2 * 1px + 6px + 1em);
 }
 
 /* Rule 8: state is a dot. The session cannot start until the model pill has a
@@ -2362,8 +2552,12 @@ body.away-from-bottom .scroll-bottom {
  * wraps and overflows (rule 9) — and 36px so it clears the 32px tap floor
  * with room, between the 32px chips beside it and the 40px send. */
 .composer-chip.attach {
-  width: 36px;
-  height: 36px;
+  /* Square around a 1em glyph, so both sides are stated the same way: 1.5em
+   * of --text-xs is 18px at a 16px root, so 36 is what applies today and the
+   * button is unchanged — and at AX5 the glyph is 40px, which a 36px box
+   * would have had ink 2px outside on both axes. */
+  width: max(36px, 1.5em);
+  height: max(36px, 1.5em);
   padding: 0;
   justify-content: center;
 }
@@ -2394,9 +2588,11 @@ body.away-from-bottom .scroll-bottom {
   gap: 8px;
   flex-shrink: 0;
   /* Wide enough for a name worth reading, narrow enough that three of them
-   * are visibly three. */
-  max-width: 200px;
-  height: 44px;
+   * are visibly three — so it is a cap on a STRING, and stated in rem.
+   * 12.5rem is the 200px this was at a 16px root. */
+  max-width: 12.5rem;
+  /* min-height: two stacked lines of --text-xs, which is 106px at AX5. */
+  min-height: 44px;
   padding: 4px;
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
@@ -2406,11 +2602,15 @@ body.away-from-bottom .scroll-bottom {
   line-height: var(--lh-xs);
 }
 
+/* The picture and the leading glyph occupy the same square, so a photo
+ * attachment and a file attachment line up in a tray holding both. 1em is
+ * what the glyph is drawn at, so the square has to be at least that; 32px is
+ * what it comes to at a 16px root and below. */
 .attach-thumb {
   flex-shrink: 0;
   display: block;
-  width: 32px;
-  height: 32px;
+  width: max(32px, 1em);
+  height: max(32px, 1em);
   object-fit: cover;
   border-radius: var(--radius-md);
 }
@@ -2420,7 +2620,7 @@ body.away-from-bottom .scroll-bottom {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
+  width: max(32px, 1em);
   color: var(--text-secondary);
 }
 
@@ -2444,13 +2644,15 @@ body.away-from-bottom .scroll-bottom {
   font-variant-numeric: tabular-nums;
 }
 
+/* Square around a 1em glyph, like .composer-chip.attach. The 32px floor is
+ * also the audit's SMALL-TAP threshold, which this button sits exactly on. */
 .attach-remove {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: max(32px, 1.5em);
+  height: max(32px, 1.5em);
   padding: 0;
   border: 0;
   background: transparent;
@@ -2533,7 +2735,9 @@ body.away-from-bottom .scroll-bottom {
   border-radius: var(--radius-full);
   background: var(--bg-inverse);
   color: var(--text-inverse);
-  font-size: 20px;
+  /* Pinned: a fixed circle, so the glyph in it takes the icon scale rather
+   * than the text one. */
+  font-size: var(--icon-md);
   cursor: pointer;
   transition: opacity 120ms ease;
 }
@@ -2556,7 +2760,12 @@ body.away-from-bottom .scroll-bottom {
 .input {
   width: 100%;
   min-width: 0;
-  max-height: 120px;
+  /* Six lines, then it scrolls — which is what 120px was at a 16px root, and
+   * what it stops being the moment the text grows: at AX5 one line is 66px,
+   * so a 120px cap closed the field below TWO lines and put 67px of a draft
+   * out of sight. The vh ceiling is the other half of the promise, since six
+   * lines at AX5 is 400px and the composer still has to leave a transcript. */
+  max-height: min(calc(var(--lh-sm) * 6), 40vh);
   padding: 4px 2px;
   background: transparent;
   border: 0;
@@ -2575,10 +2784,13 @@ body.away-from-bottom .scroll-bottom {
   outline: none;
 }
 
-/* Send and stop are round, sized to the composer's rhythm. */
+/* Send and stop are round, sized to the composer's rhythm.
+ *
+ * `height: 40px` is gone: it sat directly under a `min-height: 40px` and
+ * overrode it, so the minimum this rule appears to state was decorative and
+ * the label was in a pinned box. The minimum is the whole intent. */
 .composer .btn {
   min-height: 40px;
-  height: 40px;
   padding: 0 14px;
   border-radius: var(--radius-full);
   font-size: var(--text-xs);
@@ -2612,9 +2824,14 @@ body.away-from-bottom .scroll-bottom {
   line-height: 1.4;
 }
 
+/* The six sizes in this block were already rem, so they already followed the
+ * root and none of them was a Dynamic Type bug — putting them on the tokens
+ * is hygiene, and it is exactly lossless: 0.75/1/1.125rem ARE --text-xs,
+ * --text-md and --text-lg, and 1.5rem is the new --text-2xl. `.md h2` is the
+ * one that stays a literal, below, because it has no token to move to. */
 .md h5,
 .md h6 {
-  font-size: 1rem;
+  font-size: var(--text-md);
   color: var(--text-secondary);
 }
 
@@ -2628,19 +2845,23 @@ body.away-from-bottom .scroll-bottom {
 }
 
 .md h1 {
-  font-size: 1.5rem;
+  font-size: var(--text-2xl);
 }
 
+/* The one size in the scale with no token. --text-xl is 1.375rem, so mapping
+ * this to it would make every markdown h2 in the app 0.125rem bigger — a real
+ * visual change, and not one that belongs in a commit about text scaling.
+ * Left as the literal it has always been, deliberately. */
 .md h2 {
   font-size: 1.25rem;
 }
 
 .md h3 {
-  font-size: 1.125rem;
+  font-size: var(--text-lg);
 }
 
 .md h4 {
-  font-size: 1rem;
+  font-size: var(--text-md);
 }
 
 /* Code slabs stay dark in both themes. */
@@ -2656,8 +2877,9 @@ body.away-from-bottom .scroll-bottom {
   padding: 0;
   background: transparent;
   color: inherit;
-  font-size: var(--text-xs);
-  line-height: var(--lh-sm);
+  /* One of the three monospace slabs, capped together — see --text-code. */
+  font-size: var(--text-code);
+  line-height: var(--lh-code);
 }
 
 /* Inline code is a burnt-orange chip on light. On dark the chip disappears
@@ -2669,7 +2891,10 @@ body.away-from-bottom .scroll-bottom {
   border-radius: var(--radius-md);
   color: var(--code-chip-fg);
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  /* --text-xs, NOT --text-code: this chip sits inside a sentence, and a
+   * 20px-capped word in the middle of 40px prose is a rendering fault. The
+   * cap is for slabs, where a column count is the thing being protected. */
+  font-size: var(--text-xs);
 }
 
 .md ul,
@@ -2731,15 +2956,20 @@ body.away-from-bottom .scroll-bottom {
  * paints as a small hard-cornered grey square, off-palette in both themes.
  * Drawn here instead: the tick is one dark stroke, legible on both the light
  * and the dark theme's green without needing a second asset. */
+/* Every number here is em, and every one of them is exactly what it was at a
+ * 16px root: this box sits INLINE in a paragraph, so it is the one graphic in
+ * the file that has to track the text beside it rather than a tap target. The
+ * tick is 0.75em of the box, and the baseline nudge that lines it up with the
+ * text is 0.125em — 12px and 2px in a 16px paragraph. */
 .md input[type="checkbox"] {
   appearance: none;
-  width: 16px;
-  height: 16px;
+  width: 1em;
+  height: 1em;
   margin: 0 8px 0 0;
-  vertical-align: -2px;
+  vertical-align: -0.125em;
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-sm);
-  background: var(--bg-secondary) no-repeat center / 12px 12px;
+  background: var(--bg-secondary) no-repeat center / 0.75em 0.75em;
 }
 
 .md input[type="checkbox"]:checked {
@@ -2844,7 +3074,6 @@ body.away-from-bottom .scroll-bottom {
  * a hole beside it. */
 .modal-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
 
@@ -2883,7 +3112,12 @@ body.away-from-bottom .scroll-bottom {
   z-index: var(--z-modal);
   display: flex;
   flex-direction: column;
-  width: min(300px, 82%);
+  /* The panel grows with the type it holds, and stops at the page. 18rem is
+   * 288px at a 16px root, so the 300px floor is what applies on Android and
+   * on the desktop build and nothing moves there; at AX5 the panel takes the
+   * 92% instead, which is 370px of a 402pt phone. Without this the
+   * destinations simply ran out through the side — measured 55px at AX5. */
+  width: min(max(300px, 18rem), 92%);
   padding: calc(var(--safe-top) + 20px) 16px calc(var(--safe-bottom) + 20px);
   background: var(--bg-primary);
   box-shadow: var(--shadow-lg);
@@ -2934,7 +3168,12 @@ body.away-from-bottom .scroll-bottom {
   font-family: var(--font-serif);
   font-size: var(--text-xl);
   font-weight: 600;
-  line-height: var(--lh-md);
+  /* --lh-xl, not --lh-md. --text-xl against --lh-md is a ratio of 1.09, and
+   * this word is set in a serif and has a descender in it: the audit measures
+   * the wordmark's ink 2px outside its own line box, at every text size
+   * including the default. It is the one pairing in the file where the scale
+   * was short a rung rather than the value being wrong. */
+  line-height: var(--lh-xl);
 }
 
 .drawer-nav {
@@ -2948,6 +3187,14 @@ body.away-from-bottom .scroll-bottom {
   align-items: center;
   gap: 14px;
   min-height: 48px;
+  /* A destination's label is a bare text node, so it is an anonymous flex
+   * item whose automatic minimum is its longest word — and at AX5 one word is
+   * wider than the panel. `anywhere` lowers that minimum so the label wraps
+   * inside the row (which is min-height, so it grows) instead of running out
+   * through the side of the drawer. Nothing to preserve: a wrapped
+   * destination name is still the destination name. */
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 0 12px;
   border: 0;
   border-radius: var(--radius-lg);
@@ -3110,8 +3357,20 @@ body.away-from-bottom .scroll-bottom {
   gap: 0 12px;
 }
 
+/* Never shrinks — the value beside it wraps to its own line instead, which is
+ * what .setting-main's `flex-wrap` is for. But once it is alone on that line
+ * and still does not fit, there is nothing left to give and the name simply
+ * ran out of the row: measured 78px past it at AX5 in the extensions sheet.
+ *
+ * A maximum rather than a shrink factor, the same argument .diff-name makes:
+ * a factor would take something off the name from the first pixel and defeat
+ * the rule above, while a cap at the row's own width only ever binds in the
+ * case this exists for. `anywhere` is what lets the capped box wrap rather
+ * than clip — a settings name can be an MCP server's id. */
 .setting-name {
   flex-shrink: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .setting-value {
@@ -3235,7 +3494,11 @@ body.away-from-bottom .scroll-bottom {
 .toast {
   position: fixed;
   left: 50%;
-  bottom: calc(var(--safe-bottom) + var(--chrome-gap) + 80px);
+  /* The 80px is a clearance over the composer, and the composer is a box that
+   * grows now — its field, its chips and the air between them are all text.
+   * Four line boxes is the 80px this was at a 16px root and tracks it after
+   * that. */
+  bottom: calc(var(--safe-bottom) + var(--chrome-gap) + max(80px, var(--lh-sm) * 4));
   z-index: var(--z-toast);
   transform: translateX(-50%);
   max-width: calc(100% - 32px);
@@ -3295,11 +3558,13 @@ body.away-from-bottom .scroll-bottom {
   text-align: center;
 }
 
+/* Rule 8's dot again, sized like `.dot`. Centred by the row, so unlike
+ * .error-box's it needs no margin of its own. */
 .banner::before {
   content: "";
   flex-shrink: 0;
-  width: 8px;
-  height: 8px;
+  width: max(8px, 0.5em);
+  height: max(8px, 0.5em);
   border-radius: var(--radius-full);
   background: var(--bg-info);
 }
@@ -3423,10 +3688,18 @@ body.away-from-bottom .scroll-bottom {
  * trailing control's height turns out to be; with today's 44px checkbox it is
  * a no-op and the head measures 56px — unchanged from the card, and unchanged
  * from the two-line head, because the 44px tap target was always the tallest
- * thing in it. */
+ * thing in it.
+ *
+ * `flex-wrap` is the scale valve, and it is scale-triggered: four rigid items
+ * on one line overflow this row by 47px at AX5, and at 17 and 23 they all
+ * still fit, so the head stays one line at every size it was measured at and
+ * .diff-name's promise — that the path gives way directory-first — is
+ * untouched there. Above that the Viewed control takes a line of its own,
+ * which is the only thing that can happen once the path has been spent. */
 .diff-file-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
   min-height: 44px;
@@ -3623,7 +3896,10 @@ body.away-from-bottom .scroll-bottom {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 44px;
+  /* min-height: the 44px is the tap target, and a tap target is a floor. This
+   * holds the word "Viewed", which is a 49px line box at AX5 — ink 5px below
+   * a pinned box, on a button with no overflow to clip it. */
+  min-height: 44px;
   flex-shrink: 0;
   border: 0;
   background: transparent;
@@ -3635,10 +3911,15 @@ body.away-from-bottom .scroll-bottom {
   transition: color 120ms ease;
 }
 
-/* The box and the tick occupy the same 18px square, so checking the box moves
+/* The box and the tick occupy the same square, so checking the box moves
  * nothing beside it. Both are 1em icons, so the square is stated here rather
  * than through font-size on the button: --text-xs would draw them at 12px
- * beside 12px text — a mark, not a checkbox. */
+ * beside 12px text — a mark, not a checkbox.
+ *
+ * 1.5em, which IS 18px at --text-xs on a 16px root, so nothing moves at the
+ * default and the box keeps its relationship to the word beside it as that
+ * word grows. This one is not a tap target — .diff-seen is — so it is text's
+ * to follow, not the icon scale's. */
 /* The box itself. --text-secondary, not --border-secondary: a hairline reads
  * as an edge, and this is a control. The audit measured that reflex at 1.42:1
  * against the head's own surface, where a graphical object needs 3. This
@@ -3649,14 +3930,15 @@ body.away-from-bottom .scroll-bottom {
   display: inline-flex;
   flex-shrink: 0;
   box-sizing: border-box;
-  width: 18px;
-  height: 18px;
+  width: 1.5em;
+  height: 1.5em;
   border: 2px solid var(--text-secondary);
   /* There is no pill left to nest inside, so rule 4's concentric argument
    * needs a different footing: 12px — the control tier — on an 18px box is a
    * circle, and a checkbox that reads as a radio button is the wrong control.
-   * 5px keeps the tier's *proportion* instead, 5/18 being 12/44. */
-  border-radius: 5px;
+   * 5px keeps the tier's *proportion* instead, 5/18 being 12/44 — so it is
+   * stated as that proportion, and stays 5px on an 18px box. */
+  border-radius: calc(1.5em * 5 / 18);
 }
 
 .diff-seen .cbox .icon {
@@ -3664,8 +3946,8 @@ body.away-from-bottom .scroll-bottom {
   /* Back out the border so the tick fills the box rather than the box's
    * content area, which the 2px edge would otherwise inset it into. */
   inset: -2px;
-  width: 18px;
-  height: 18px;
+  width: 1.5em;
+  height: 1.5em;
   /* Heavier than the app's 2: this one is drawn at 18px inside a filled box
    * rather than at its natural size on a flat surface. */
   stroke-width: 3;
@@ -3697,12 +3979,16 @@ body.away-from-bottom .scroll-bottom {
 
 /* The code surface, edge to edge: the width is the whole point of this
  * screen, and there is no card corner left for it to take. */
+/* The whole slab is capped, not just the code in it: the skip bands and the
+ * per-file notes sit ON this surface and would read as a rendering fault at
+ * twice the size of the lines they are annotating. --text-code is where the
+ * argument is written down. */
 .diff-body {
   background: var(--code-bg);
   color: var(--code-fg);
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: var(--lh-sm);
+  font-size: var(--text-code);
+  line-height: var(--lh-code);
 }
 
 /* A row, not a surface: full-bleed inside the slab above, which is what
@@ -3716,8 +4002,12 @@ body.away-from-bottom .scroll-bottom {
    * the file simply vanished, closing up the gaps the author put there. The
    * blank rows in an *added* file survived only because "+" is a real glyph,
    * which is what made the loss look like a parser bug rather than a layout
-   * one. One line's worth of height, whatever the row holds. */
-  min-height: var(--lh-sm);
+   * one. One line's worth of height, whatever the row holds.
+   *
+   * --lh-code, not --lh-sm: this has to be the height of a line of THIS slab,
+   * and the slab is capped. Wired to --lh-sm it would make every blank row
+   * taller than every row with code in it the moment the cap bit. */
+  min-height: var(--lh-code);
   padding-right: 8px;
   border-left: 3px solid transparent;
 }
@@ -3738,7 +4028,12 @@ body.away-from-bottom .scroll-bottom {
  * normally breaks. */
 .diff-sign {
   flex-shrink: 0;
-  width: 15px;
+  /* A cell holding one monospace glyph, so it is stated in that glyph's own
+   * unit. 2ch is 14.4px at --text-code on a 16px root, and 15 is what this
+   * has always been, so the floor is what applies and the column does not
+   * move; pinned at 15 the glyph's advance was 3px outside it at AX3 and 9px
+   * at AX5. */
+  width: max(15px, 2ch);
   text-align: center;
   color: var(--code-muted);
   -webkit-user-select: none;
@@ -3834,7 +4129,8 @@ body.away-from-bottom .scroll-bottom {
   background: color-mix(in srgb, var(--code-fg) 8%, var(--code-bg));
   color: var(--code-muted);
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  /* On the slab, so capped with it. */
+  font-size: var(--text-code);
   line-height: var(--lh-xs);
   text-align: left;
   cursor: pointer;
@@ -3862,8 +4158,10 @@ body.away-from-bottom .scroll-bottom {
   padding: 8px 12px 8px 18px;
   color: var(--code-muted);
   font-family: var(--font-sans);
-  font-size: var(--text-xs);
-  line-height: var(--lh-sm);
+  /* On the slab, so capped with it — even though it is prose in the interface
+   * voice, because what it is annotating is capped code. */
+  font-size: var(--text-code);
+  line-height: var(--lh-code);
 }
 
 /* ── pull requests ──────────────────────────────────────────────────── */

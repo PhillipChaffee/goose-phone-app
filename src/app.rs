@@ -37,6 +37,11 @@ pub fn App() -> Element {
 
     rsx! {
         document::Style { {crate::css::STYLES} }
+        // After the design system, not before it: the Dynamic Type opt-in is
+        // a rule on `html` and main.css has one of its own, so cascade order
+        // is what decides. Empty on every platform but iOS, where it is the
+        // one declaration that makes `rem` mean the reader's chosen text size.
+        document::Style { {crate::css::PLATFORM} }
         document::Meta {
             name: "viewport",
             // interactive-widget=resizes-content: when the keyboard opens, shrink
