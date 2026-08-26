@@ -1,6 +1,6 @@
 // Does the composer row survive a long, server-supplied model name?
 //
-//   node docs/measure-composer.js [width…]
+//   node docs/measure-composer.js [width…] [--root=px…]
 //
 // The chip block is ONE LINE and never more. That is the first thing this
 // checks, because it is the rule the stylesheet now states and because a
@@ -40,6 +40,13 @@
 // it is true by construction — the deficit falls monotonically as the viewport
 // grows and the name absorbs all of it — which makes it a cheap regression
 // guard rather than dead weight.
+//
+// TEXT SIZE IS THE SECOND AXIS, and on this row it is almost the same axis as
+// width: what the chips are dividing is not pixels but COLUMNS, and a 402pt
+// phone at AX5 has the columns of a 121pt one at the browser default. So the
+// numbers below are stated per rem rather than per pixel — three of them were
+// px assertions about ch-based rules, and at an accessibility size they failed
+// on layouts that were behaving exactly as the stylesheet says they should.
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -51,19 +58,45 @@ const CSS = fs.readFileSync(path.join(__dirname, '..', 'assets', 'main.css'), 'u
 // in the default list for that reason: they are the two the earlier list
 // (280/320/360/375/402) stepped straight over, and they are where the model
 // chip was at its worst.
-const WIDTHS = process.argv.length > 2
-  ? process.argv.slice(2).map((w) => parseInt(w, 10))
+const ARGS = process.argv.slice(2);
+const WIDTHS = ARGS.filter((a) => !a.startsWith('--')).length
+  ? ARGS.filter((a) => !a.startsWith('--')).map((w) => parseInt(w, 10))
   : [320, 360, 375, 390, 393, 402];
 
-// What .chip-effort's max-width comes to at --text-xs, plus a couple of
-// pixels of font-metric slack. No tier may cost the name more than this.
-const TIER_CAP = 40;
+// The root font-size, in px, at each text size the app really runs at — the
+// same list docs/audit.js walks, and for the same reason: 16 is what Android's
+// WebView and the desktop build give, and 17/23/53 are iOS at Large, at
+// xxxLarge and at AX5. The app opts into those through `-apple-system-body`
+// (assets/platform/ios.css), which Chromium cannot parse; setting the root in
+// px is that opt-in stated in the only form this browser can hear.
+const ROOTS = ARGS.filter((a) => a.startsWith('--root=')).length
+  ? ARGS.filter((a) => a.startsWith('--root=')).map((a) => parseInt(a.slice(7), 10))
+  : [16, 17, 23, 53];
+
+// Everything below is stated per rem — as a multiple of the root — because
+// every rule it is asserting about is itself relative. Written as the pixel
+// value each came to at a 16px root over the 16 it was measured against, so
+// the number that was here is still visible in it.
+
+// What .chip-effort's max-width comes to at --text-xs, plus a couple of pixels
+// of font-metric slack. No tier may cost the name more than this.
+//
+// It is an assertion about a 5ch cap, so it was never really 40px: at AX5 a
+// correct tier measures about 100px against a 40px constant, and this failed
+// with "the tier takes 100px" on a layout doing exactly what the stylesheet
+// says. Per rem it is the same claim at every size.
+const TIER_CAP = (root) => (40 / 16) * root;
 
 // The narrowest viewport a shipping phone gives this app. 320 is a defensive
 // width, not a device, and it is the only one where any rule has to be
 // relaxed — kept in the default list because a run that never sees the tight
 // case is not a test of the tight case.
+//
+// Measured in EFFECTIVE width — the columns the row has, not the points — for
+// the reason at the top of this file: a 402pt phone at AX5 is a 121pt phone
+// as far as this row is concerned, which is well inside the defensive band.
 const REAL_PHONE = 375;
+const effective = (width, root) => (width * 16) / root;
 
 // The width floor the stylesheet owes the model name on a real phone. Below
 // this you are not reading a truncation, you are reading an absence.
@@ -78,7 +111,10 @@ const REAL_PHONE = 375;
 // assertion to meet it would be pinning the gate to today's measurement rather
 // than to the rule, which is that the chip must still be a name and not a
 // chevron.
-const NAME_FLOOR = 30;
+//
+// Three characters is the rule; 30px was only ever what three characters
+// measured at a 16px root, so the floor follows the text like the text does.
+const NAME_FLOOR = (root) => (30 / 16) * root;
 
 const icon = '<svg class="icon" viewBox="0 0 24 24"></svg>';
 // The attach button. Fixed width, and first in the row, so it comes off the
@@ -184,11 +220,12 @@ const tray = (names) =>
 // start scrolling rather than stretching the composer.
 const TRAYS = [[], [FILES[0]], FILES];
 
-const page = (row, label, effort, names, context) => {
+const page = (row, label, effort, names, context, root) => {
   const spec = ROWS[row];
   const hasField = spec.field !== false;
   return `<!doctype html><html><head><meta charset="utf-8">
-<style>${CSS}</style></head><body><div class="app">
+<style>${CSS}</style>
+<style>html{font-size:${root}px}</style></head><body><div class="app">
 ${hasField ? '' : '<main class="compose"><textarea class="compose-field"></textarea></main>'}
 <footer class="composer${spec.bare ? ' bare' : ''}">
 ${names && names.length ? tray(names) : ''}
@@ -235,15 +272,16 @@ const EFFORTS = [
   // the same composition can be compared across widths afterwards.
   const namesByWidth = new Map();
   for (const WIDTH of WIDTHS) {
+  for (const ROOT of ROOTS) {
   const p = await browser.newPage({ viewport: { width: WIDTH, height: 874 } });
   for (const row of Object.keys(ROWS)) {
-    console.log(`\n  ${row} composer @ ${WIDTH}pt`);
+    console.log(`\n  ${row} composer @ ${WIDTH}pt, root ${ROOT}px`);
     for (const label of LABELS) {
       for (const { tier, capped } of EFFORTS) {
        for (const names of TRAYS) {
         for (const context of (ROWS[row].context ? CONTEXT : [null])) {
         const file = path.join(os.tmpdir(), `composer-${row.replace(/\s+/g, '-')}-${WIDTH}.html`);
-        fs.writeFileSync(file, page(row, label, tier, names, context));
+        fs.writeFileSync(file, page(row, label, tier, names, context, ROOT));
         await p.goto(`file://${file}`, { waitUntil: 'load' });
         const r = await p.evaluate(() => {
           const rowEl = document.querySelector('.composer-row');
@@ -331,9 +369,15 @@ const EFFORTS = [
               ? box.width > 0.5 && box.right > clipBox.right + 0.5
               : false,
             tierWidth: tierEl ? Math.round(box.width * 10) / 10 : 0,
-            tierCut: tierEl ? tierEl.scrollWidth > tierEl.clientWidth + 0.5 : false,
+            // A pixel of tolerance, not half of one, because `scrollWidth`
+            // and `clientWidth` are both rounded to integers and a text size
+            // off the 16px grid puts these boxes on halves: at the iOS
+            // default a 31.5px tier reports client 31 and scroll 32 and reads
+            // as ellipsised while nothing at all is cut. One px is the same
+            // tolerance docs/audit.js uses on the same pair of properties.
+            tierCut: tierEl ? tierEl.scrollWidth > tierEl.clientWidth + 1 : false,
             nameWidth: model ? model.clientWidth : null,
-            nameCut: model ? model.scrollWidth > model.clientWidth + 0.5 : false,
+            nameCut: model ? model.scrollWidth > model.clientWidth + 1 : false,
             // Every server-supplied name's own box must be what clips it, so
             // what is cut says it was cut. A parent narrower than the box
             // inside it produces a hard cut mid-glyph and `text-overflow`
@@ -347,7 +391,7 @@ const EFFORTS = [
             sendOffCentre: Math.abs((sendBox.top + sendBox.bottom) / 2
               - (blockTop + blockBottom) / 2) > 1,
             modeHardClip: modeLabel
-              ? modeLabel.scrollWidth > modeLabel.clientWidth + 0.5
+              ? modeLabel.scrollWidth > modeLabel.clientWidth + 1
                 && getComputedStyle(modeLabel).textOverflow !== 'ellipsis'
               : false,
             sendRight: Math.round(sendBox.right),
@@ -366,9 +410,24 @@ const EFFORTS = [
         }
         // The 320pt four-chip row is over budget by 7-35px however the space
         // is divided, and the scroller is what stands between those chips and
-        // the send button. Everywhere else the row must not need to scroll at
-        // all, so a fifth chip cannot quietly slide off the edge.
-        const mayScroll = ROWS[row].crowded && WIDTH < 360;
+        // the send button. Above the width the arrangement was designed down
+        // to, the row must not need to scroll at all, so a fifth chip cannot
+        // quietly slide off the edge.
+        //
+        // In EFFECTIVE width, not raw points: the exemption is about how many
+        // columns the chips have to divide, and text size takes columns away
+        // exactly as a narrower phone does. At a 16px root this is word for
+        // word the rule that was here — 320 is not less than 320, so no
+        // non-crowded row in the default sweep is exempted, and the crowded
+        // one is exempted at 320 alone.
+        //
+        // Where each row actually reaches for the valve, measured at 402pt:
+        // the four-chip row at AX1 (root 28, 230 effective points, 27px over),
+        // the two chat rows at AX3 (root 40, 161 points, 12px over), the
+        // new-session context row at AX4 (root 47, 137 points, 31px over).
+        // Nothing overflows at xxxLarge at any width in the sweep.
+        const designedDownTo = ROWS[row].crowded ? 360 : 320;
+        const mayScroll = effective(WIDTH, ROOT) < designedDownTo;
         if (r.overflow > 0 && !mayScroll) {
           problems.push(`the chip block overflows by ${r.overflow}px`);
         }
@@ -394,20 +453,27 @@ const EFFORTS = [
         // but once the name is at zero the chip is a bare control and
         // everything in it is under water together.
         if (r.lost && r.nameWidth > 0) problems.push('the effort tier was clipped away');
-        if (r.tierWidth > TIER_CAP) {
-          problems.push(`the tier takes ${r.tierWidth}px, over the ${TIER_CAP}px it is allowed`);
+        if (r.tierWidth > TIER_CAP(ROOT)) {
+          problems.push(`the tier takes ${r.tierWidth}px,`
+            + ` over the ${Math.round(TIER_CAP(ROOT))}px it is allowed`);
         }
         if (r.tierCut && !capped && r.nameWidth > 0) problems.push('the tier is ellipsised');
-        // The floor the stylesheet owes on a real phone. Below 375 none is
-        // asserted: 320 is a defensive width where one line costs the name
-        // everything, which is the trade docs/design.md records.
-        if (WIDTH >= REAL_PHONE && !ROWS[row].crowded && r.nameWidth !== null
-            && r.nameWidth < NAME_FLOOR) {
+        // The floor the stylesheet owes on a real phone. Below 375 effective
+        // points none is asserted: 320 is a defensive width where one line
+        // costs the name everything, which is the trade docs/design.md
+        // records — and at an accessibility text size every phone is inside
+        // that band, because the columns are what ran out.
+        if (effective(WIDTH, ROOT) >= REAL_PHONE && !ROWS[row].crowded && r.nameWidth !== null
+            && r.nameWidth < NAME_FLOOR(ROOT)) {
           problems.push(`the name is down to ${r.nameWidth}px, which identifies nothing`);
         }
         if (problems.length) bad += problems.length;
         const ctxKey = context ? ` | ${context[0]}@${context[1]}` : '';
-        const key = `${row} | ${label}${tier ? ` + ${tier}` : ''} | tray ${names.length}${ctxKey}`;
+        // The root is part of the key, not part of what is compared: the
+        // monotonicity check below is "a wider phone shows more of the name",
+        // and a wider phone at a bigger text size legitimately shows less.
+        const key = `${row} | ${label}${tier ? ` + ${tier}` : ''} | tray ${names.length}`
+          + `${ctxKey} | root ${ROOT}`;
         if (!namesByWidth.has(key)) namesByWidth.set(key, []);
         namesByWidth.get(key).push([WIDTH, r.nameWidth]);
         console.log(
@@ -423,6 +489,7 @@ const EFFORTS = [
     }
   }
   await p.close();
+  }
   }
   await browser.close();
 
@@ -458,8 +525,9 @@ const EFFORTS = [
     process.exit(1);
   }
   console.log(
-    `\nClean at ${WIDTHS.join('/')}pt: every chip block is one line, send stays on screen`
-    + ' and centred on its own row, nothing spills a pill, a cut name and a cut mode both'
-    + ' say they were cut, and the name never shrinks as the phone grows.',
+    `\nClean at ${WIDTHS.join('/')}pt x root ${ROOTS.join('/')}px: every chip block is one`
+    + ' line, send stays on screen and centred on its own row, nothing spills a pill, a cut'
+    + ' name and a cut mode both say they were cut, and the name never shrinks as the phone'
+    + ' grows.',
   );
 })();
