@@ -1,0 +1,963 @@
+{
+ "_source": "3810898a7447ec3299be72e223d3570a7aabf0ab",
+ "methods": {
+  "_goose/unstable/session/extensions/add": {
+   "keys": [
+    "extension",
+    "sessionId"
+   ],
+   "required": [
+    "extension",
+    "sessionId"
+   ]
+  },
+  "_goose/unstable/session/extensions/remove": {
+   "keys": [
+    "name",
+    "sessionId"
+   ],
+   "required": [
+    "name",
+    "sessionId"
+   ]
+  },
+  "_goose/unstable/tools/list": {
+   "keys": [
+    "extensionName",
+    "sessionId"
+   ],
+   "required": [
+    "sessionId"
+   ]
+  },
+  "_goose/unstable/tools/permissions/set": {
+   "keys": [
+    "toolPermissions"
+   ],
+   "required": [
+    "toolPermissions"
+   ]
+  },
+  "_goose/unstable/tools/call": {
+   "keys": [
+    "arguments",
+    "name",
+    "sessionId"
+   ],
+   "required": [
+    "name",
+    "sessionId"
+   ]
+  },
+  "_goose/unstable/resources/read": {
+   "keys": [
+    "extensionName",
+    "sessionId",
+    "uri"
+   ],
+   "required": [
+    "extensionName",
+    "sessionId",
+    "uri"
+   ]
+  },
+  "_goose/unstable/apps/list": {
+   "keys": [
+    "sessionId"
+   ],
+   "required": []
+  },
+  "_goose/unstable/apps/export": {
+   "keys": [
+    "name"
+   ],
+   "required": [
+    "name"
+   ]
+  },
+  "_goose/unstable/apps/import": {
+   "keys": [
+    "html"
+   ],
+   "required": [
+    "html"
+   ]
+  },
+  "_goose/unstable/apps/delete": {
+   "keys": [
+    "name"
+   ],
+   "required": [
+    "name"
+   ]
+  },
+  "_goose/unstable/session/working-dir/update": {
+   "keys": [
+    "sessionId",
+    "workingDir"
+   ],
+   "required": [
+    "sessionId",
+    "workingDir"
+   ]
+  },
+  "_goose/unstable/session/system-prompt/set": {
+   "keys": [
+    "key",
+    "mode",
+    "sessionId",
+    "text"
+   ],
+   "required": [
+    "sessionId",
+    "text"
+   ]
+  },
+  "_goose/unstable/session/steer": {
+   "keys": [
+    "expectedRunId",
+    "prompt",
+    "sessionId"
+   ],
+   "required": [
+    "expectedRunId",
+    "sessionId"
+   ]
+  },
+  "_goose/unstable/diagnostics/get": {
+   "keys": [
+    "level",
+    "sessionId"
+   ],
+   "required": [
+    "sessionId"
+   ]
+  },
+  "_goose/unstable/config/prompts/list": {
+   "keys": [],
+   "required": []
+  },
+  "_goose/unstable/config/prompts/get": {
+   "keys": [
+    "name"
+   ],
+   "required": [
+    "name"
+   ]
+  },
+  "_goose/unstable/config/prompts/save": {
+   "keys": [
+    "content",
+    "name"
+   ],
+   "required": [
+    "content",
+    "name"
+   ]
+  },
+  "_goose/unstable/config/prompts/reset": {
+   "keys": [
+    "name"
+   ],
+   "required": [
+    "name"
+   ]
+  },
+  "session/delete": {
+   "keys": [
+    "sessionId"
+   ],
+   "required": [
+    "sessionId"
+   ]
+  },
+  "_goose/unstable/config/extensions/list": {
+   "keys": [],
+   "required": []
+  },
+  "_goose/unstable/extensions/available": {
+   "keys": [],
+   "required": []
+  },
+  "_goose/unstable/config/extensions/add": {
+   "keys": [
+    "enabled",
+    "extension"
+   ],
+   "required": [
+    "extension"
+   ]
+  },
+  "_goose/unstable/config/extensions/remove": {
+   "keys": [
+    "configKey"
+   ],
+   "required": [
+    "configKey"
+   ]
+  },
+  "_goose/unstable/config/extensions/set-enabled": {
+   "keys": [
+    "configKey",
+    "enabled"
+   ],
+   "required": [
+    "configKey",
+    "enabled"
+   ]
+  },
+  "_goose/unstable/session/extensions/list": {
+   "keys": [
+    "sessionId"
+   ],
+   "required": [
+    "sessionId"
+   ]
+  },
+  "_goose/unstable/providers/list": {
+   "keys": [
+    "providerIds"
+   ],
+   "required": []
+  },
+  "_goose/unstable/providers/supported-models/list": {
+   "keys": [
+    "providerId"
+   ],
+   "required": [
+    "providerId"
+   ]
+  },
+  "_goose/unstable/providers/catalog/list": {
+   "keys": [
+    "format"
+   ],
+   "required": []
+  },
+  "_goose/unstable/providers/setup/catalog/list": {
+   "keys": [],
+   "required": []
+  },
+  "_goose/unstable/providers/catalog/template": {
+   "keys": [
+    "providerId"
+   ],
+   "required": [
+    "providerId"
+   ]
+  },
+  "_goose/unstable/providers/custom/create": {
+   "keys": [
+    "apiKey",
+    "apiUrl",
+    "basePath",
+    "catalogProviderId",
+    "displayName",
+    "engine",
+    "headers",
+    "models",
+    "preservesThinking",
+    "requiresAuth",
+    "supportsStreaming"
+   ],
+   "required": [
+    "apiUrl",
+    "displayName",
+    "engine",
+    "requiresAuth"
+   ]
+  },
+  "_goose/unstable/providers/custom/read": {
+   "keys": [
+    "providerId"
+   ],
+   "required": [
+    "providerId"
+   ]
+  },
+  "_goose/unstable/providers/custom/update": {
+   "keys": [
+    "apiKey",
+    "apiUrl",
+    "basePath",
+    "catalogProviderId",
+    "displayName",
+    "engine",
+    "headers",
+    "models",
+    "preservesThinking",
+    "providerId",
+    "requiresAuth",
+    "supportsStreaming"
+   ],
+   "required": [
+    "apiUrl",
+    "displayName",
+    "engine",
+    "providerId",
+    "requiresAuth"
+   ]
+  },
+  "_goose/unstable/providers/custom/delete": {
+   "keys": [
+    "providerId"
+   ],
+   "required": [
+    "providerId"
+   ]
+  },
+  "_goose/unstable/providers/inventory/refresh": {
+   "keys": [
+    "providerIds"
+   ],
+   "required": []
+  },
+  "_goose/unstable/providers/readiness/check": {
+   "keys": [
+    "providerId"
+   ],
+   "required": [
+    "providerId"
+   ]
+  },
+  "_goose/unstable/providers/config/read": {
+   "keys": [
+    "providerId"
+   ],
+   "required": [
+    "providerId"
+   ]
+  },
+  "_goose/unstable/providers/config/status": {
+   "keys": [
+    "providerIds"
+   ],
+   "required": []
+  },
+  "_goose/unstable/providers/config/save": {
+   "keys": [
+    "fields",
+    "providerId"
+   ],
+   "required": [
+    "fields",
+    "providerId"
+   ]
+  },
+  "_goose/unstable/providers/config/delete": {
+   "keys": [
+    "providerId"
+   ],
+   "required": [
+    "providerId"
+   ]
+  },
+  "_goose/unstable/providers/config/authenticate": {
+   "keys": [
+    "providerId"
+   ],
+   "required": [
+    "providerId"
+   ]
+  },
+  "_goose/unstable/providers/secrets/list": {
+   "keys": [],
+   "required": []
+  },
+  "_goose/unstable/providers/secrets/delete": {
+   "keys": [
+    "id"
+   ],
+   "required": [
+    "id"
+   ]
+  },
+  "_goose/unstable/providers/canonical-model-info": {
+   "keys": [
+    "model",
+    "provider"
+   ],
+   "required": [
+    "model",
+    "provider"
+   ]
+  },
+  "_goose/unstable/preferences/read": {
+   "keys": [
+    "keys"
+   ],
+   "required": []
+  },
+  "_goose/unstable/preferences/save": {
+   "keys": [
+    "values"
+   ],
+   "required": []
+  },
+  "_goose/unstable/preferences/remove": {
+   "keys": [
+    "keys"
+   ],
+   "required": []
+  },
+  "_goose/unstable/config/read": {
+   "keys": [
+    "isSecret",
+    "key"
+   ],
+   "required": [
+    "key"
+   ]
+  },
+  "_goose/unstable/config/upsert": {
+   "keys": [
+    "isSecret",
+    "key",
+    "value"
+   ],
+   "required": [
+    "key",
+    "value"
+   ]
+  },
+  "_goose/unstable/config/remove": {
+   "keys": [
+    "isSecret",
+    "key"
+   ],
+   "required": [
+    "key"
+   ]
+  },
+  "_goose/unstable/config/read-all": {
+   "keys": [],
+   "required": []
+  },
+  "_goose/unstable/defaults/read": {
+   "keys": [],
+   "required": []
+  },
+  "_goose/unstable/defaults/save": {
+   "keys": [
+    "modelId",
+    "providerId"
+   ],
+   "required": [
+    "providerId"
+   ]
+  },
+  "_goose/unstable/defaults/clear": {
+   "keys": [],
+   "required": []
+  },
+  "_goose/unstable/onboarding/import/scan": {
+   "keys": [
+    "sources"
+   ],
+   "required": []
+  },
+  "_goose/unstable/onboarding/import/apply": {
+   "keys": [
+    "candidateIds",
+    "enableImportedExtensions"
+   ],
+   "required": []
+  },
+  "_goose/unstable/session/export": {
+   "keys": [
+    "format",
+    "sessionId"
+   ],
+   "required": [
+    "sessionId"
+   ]
+  },
+  "_goose/unstable/session/import": {
+   "keys": [
+    "input",
+    "source"
+   ],
+   "required": [
+    "input",
+    "source"
+   ]
+  },
+  "_goose/unstable/session/share/nostr": {
+   "keys": [
+    "relays",
+    "sessionId"
+   ],
+   "required": [
+    "relays",
+    "sessionId"
+   ]
+  },
+  "_goose/unstable/recipes/encode": {
+   "keys": [
+    "recipe"
+   ],
+   "required": [
+    "recipe"
+   ]
+  },
+  "_goose/unstable/recipes/decode": {
+   "keys": [
+    "deeplink"
+   ],
+   "required": [
+    "deeplink"
+   ]
+  },
+  "_goose/unstable/recipes/scan": {
+   "keys": [
+    "recipe"
+   ],
+   "required": [
+    "recipe"
+   ]
+  },
+  "_goose/unstable/recipes/list": {
+   "keys": [],
+   "required": []
+  },
+  "_goose/unstable/recipes/delete": {
+   "keys": [
+    "id"
+   ],
+   "required": [
+    "id"
+   ]
+  },
+  "_goose/unstable/recipes/schedule": {
+   "keys": [
+    "cron_schedule",
+    "id"
+   ],
+   "required": [
+    "id"
+   ]
+  },
+  "_goose/unstable/recipes/slash-command": {
+   "keys": [
+    "id",
+    "slash_command"
+   ],
+   "required": [
+    "id"
+   ]
+  },
+  "_goose/unstable/recipes/save": {
+   "keys": [
+    "id",
+    "recipe"
+   ],
+   "required": [
+    "recipe"
+   ]
+  },
+  "_goose/unstable/recipes/parse": {
+   "keys": [
+    "content"
+   ],
+   "required": [
+    "content"
+   ]
+  },
+  "_goose/unstable/recipes/to-yaml": {
+   "keys": [
+    "recipe"
+   ],
+   "required": [
+    "recipe"
+   ]
+  },
+  "_goose/unstable/schedules/list": {
+   "keys": [],
+   "required": []
+  },
+  "_goose/unstable/schedules/sessions/list": {
+   "keys": [
+    "limit",
+    "scheduleId"
+   ],
+   "required": [
+    "limit",
+    "scheduleId"
+   ]
+  },
+  "_goose/unstable/schedules/create": {
+   "keys": [
+    "cron",
+    "id",
+    "recipe"
+   ],
+   "required": [
+    "cron",
+    "id",
+    "recipe"
+   ]
+  },
+  "_goose/unstable/schedules/delete": {
+   "keys": [
+    "scheduleId"
+   ],
+   "required": [
+    "scheduleId"
+   ]
+  },
+  "_goose/unstable/schedules/pause": {
+   "keys": [
+    "scheduleId"
+   ],
+   "required": [
+    "scheduleId"
+   ]
+  },
+  "_goose/unstable/schedules/unpause": {
+   "keys": [
+    "scheduleId"
+   ],
+   "required": [
+    "scheduleId"
+   ]
+  },
+  "_goose/unstable/schedules/update": {
+   "keys": [
+    "cron",
+    "scheduleId"
+   ],
+   "required": [
+    "cron",
+    "scheduleId"
+   ]
+  },
+  "_goose/unstable/schedules/run-now": {
+   "keys": [
+    "scheduleId"
+   ],
+   "required": [
+    "scheduleId"
+   ]
+  },
+  "_goose/unstable/schedules/running-job/kill": {
+   "keys": [
+    "jobId"
+   ],
+   "required": [
+    "jobId"
+   ]
+  },
+  "_goose/unstable/schedules/running-job/inspect": {
+   "keys": [
+    "jobId"
+   ],
+   "required": [
+    "jobId"
+   ]
+  },
+  "_goose/unstable/session/info": {
+   "keys": [
+    "sessionId"
+   ],
+   "required": [
+    "sessionId"
+   ]
+  },
+  "_goose/unstable/session/conversation/truncate": {
+   "keys": [
+    "sessionId",
+    "truncateFrom"
+   ],
+   "required": [
+    "sessionId",
+    "truncateFrom"
+   ]
+  },
+  "_goose/unstable/session/project/update": {
+   "keys": [
+    "projectId",
+    "sessionId"
+   ],
+   "required": [
+    "sessionId"
+   ]
+  },
+  "_goose/unstable/session/rename": {
+   "keys": [
+    "sessionId",
+    "title"
+   ],
+   "required": [
+    "sessionId",
+    "title"
+   ]
+  },
+  "_goose/unstable/session/archive": {
+   "keys": [
+    "sessionId"
+   ],
+   "required": [
+    "sessionId"
+   ]
+  },
+  "_goose/unstable/session/unarchive": {
+   "keys": [
+    "sessionId"
+   ],
+   "required": [
+    "sessionId"
+   ]
+  },
+  "_goose/unstable/sources/create": {
+   "keys": [
+    "content",
+    "description",
+    "name",
+    "properties",
+    "target",
+    "type"
+   ],
+   "required": [
+    "content",
+    "description",
+    "name",
+    "target",
+    "type"
+   ]
+  },
+  "_goose/unstable/sources/list": {
+   "keys": [
+    "includeProjectSources",
+    "projectDir",
+    "type"
+   ],
+   "required": []
+  },
+  "_goose/unstable/agent-mentions/list": {
+   "keys": [
+    "cwd",
+    "sessionId"
+   ],
+   "required": []
+  },
+  "_goose/unstable/slash-commands/list": {
+   "keys": [
+    "cwd",
+    "sessionId"
+   ],
+   "required": []
+  },
+  "_goose/unstable/sources/update": {
+   "keys": [
+    "content",
+    "description",
+    "name",
+    "path",
+    "properties",
+    "type"
+   ],
+   "required": [
+    "content",
+    "description",
+    "name",
+    "path",
+    "type"
+   ]
+  },
+  "_goose/unstable/sources/delete": {
+   "keys": [
+    "path",
+    "type"
+   ],
+   "required": [
+    "path",
+    "type"
+   ]
+  },
+  "_goose/unstable/sources/export": {
+   "keys": [
+    "path",
+    "type"
+   ],
+   "required": [
+    "path",
+    "type"
+   ]
+  },
+  "_goose/unstable/sources/import": {
+   "keys": [
+    "data",
+    "target"
+   ],
+   "required": [
+    "data",
+    "target"
+   ]
+  },
+  "_goose/unstable/dictation/transcribe": {
+   "keys": [
+    "audio",
+    "mimeType",
+    "provider"
+   ],
+   "required": [
+    "audio",
+    "mimeType",
+    "provider"
+   ]
+  },
+  "_goose/unstable/dictation/config": {
+   "keys": [],
+   "required": []
+  },
+  "_goose/unstable/dictation/secret/save": {
+   "keys": [
+    "provider",
+    "value"
+   ],
+   "required": [
+    "provider",
+    "value"
+   ]
+  },
+  "_goose/unstable/dictation/secret/delete": {
+   "keys": [
+    "provider"
+   ],
+   "required": [
+    "provider"
+   ]
+  },
+  "_goose/unstable/dictation/models/list": {
+   "keys": [],
+   "required": []
+  },
+  "_goose/unstable/dictation/models/download": {
+   "keys": [
+    "modelId"
+   ],
+   "required": [
+    "modelId"
+   ]
+  },
+  "_goose/unstable/dictation/models/download/progress": {
+   "keys": [
+    "modelId"
+   ],
+   "required": [
+    "modelId"
+   ]
+  },
+  "_goose/unstable/dictation/models/cancel": {
+   "keys": [
+    "modelId"
+   ],
+   "required": [
+    "modelId"
+   ]
+  },
+  "_goose/unstable/dictation/models/delete": {
+   "keys": [
+    "modelId"
+   ],
+   "required": [
+    "modelId"
+   ]
+  },
+  "_goose/unstable/dictation/models/select": {
+   "keys": [
+    "modelId",
+    "provider"
+   ],
+   "required": [
+    "modelId",
+    "provider"
+   ]
+  },
+  "_goose/unstable/local-inference/models/list": {
+   "keys": [],
+   "required": []
+  },
+  "_goose/unstable/local-inference/models/download": {
+   "keys": [
+    "backendId",
+    "spec",
+    "variantId"
+   ],
+   "required": [
+    "spec"
+   ]
+  },
+  "_goose/unstable/local-inference/models/download/progress": {
+   "keys": [
+    "modelId"
+   ],
+   "required": [
+    "modelId"
+   ]
+  },
+  "_goose/unstable/local-inference/models/download/cancel": {
+   "keys": [
+    "modelId"
+   ],
+   "required": [
+    "modelId"
+   ]
+  },
+  "_goose/unstable/local-inference/models/delete": {
+   "keys": [
+    "modelId"
+   ],
+   "required": [
+    "modelId"
+   ]
+  },
+  "_goose/unstable/local-inference/models/evict": {
+   "keys": [
+    "modelId"
+   ],
+   "required": [
+    "modelId"
+   ]
+  },
+  "_goose/unstable/local-inference/models/settings/read": {
+   "keys": [
+    "modelId"
+   ],
+   "required": [
+    "modelId"
+   ]
+  },
+  "_goose/unstable/local-inference/models/settings/update": {
+   "keys": [
+    "modelId",
+    "settings"
+   ],
+   "required": [
+    "modelId",
+    "settings"
+   ]
+  },
+  "_goose/unstable/local-inference/huggingface/search": {
+   "keys": [
+    "limit",
+    "query"
+   ],
+   "required": [
+    "query"
+   ]
+  },
+  "_goose/unstable/local-inference/huggingface/repo/variants": {
+   "keys": [
+    "repoId"
+   ],
+   "required": [
+    "repoId"
+   ]
+  },
+  "_goose/unstable/local-inference/chat-templates/builtin/list": {
+   "keys": [],
+   "required": []
+  }
+ }
+}

@@ -36,6 +36,9 @@ mod markdown;
 mod nav;
 
 mod recipes;
+
+mod scheduler;
+
 mod skills;
 
 mod state;

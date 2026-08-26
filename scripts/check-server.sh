@@ -65,6 +65,17 @@ if [ -n "$GOOSE_PID" ]; then
   if [ -r "/proc/$GOOSE_PID/cmdline" ]; then
     ARGS=$(tr '\0' ' ' < "/proc/$GOOSE_PID/cmdline")
     printf '        args: %s\n' "$ARGS"
+    # A warn and never a failure: chat, recipes, skills and extensions all work
+    # without it. It is checked at all because the Scheduler screen is
+    # otherwise a sentence with no way to act on it — goose answers -32601 to
+    # every schedules/* method, the app states the fact, and nothing anywhere
+    # tells you the fix is a flag on this machine.
+    if printf '%s' "$ARGS" | grep -q -- '--enable-scheduler'; then
+      ok "server was started with --enable-scheduler"
+    else
+      warn "server has no --enable-scheduler — the Scheduler screen will be empty"
+      fix "restart with: goose serve --enable-scheduler ..."
+    fi
   fi
 elif [ -n "$(find_pids 'goose')" ]; then
   warn "a goose process is running, but not \`goose serve\`"

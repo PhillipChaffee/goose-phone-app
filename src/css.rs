@@ -19,7 +19,7 @@ pub(crate) const STYLES: &str = concat!(
     include_str!("../assets/main.css"),
     include_str!("../assets/features/recipes.css"),
     include_str!("../assets/features/skills.css"),
-    // scheduler — PR 5 replaces this line
+    include_str!("../assets/features/scheduler.css"),
     include_str!("../assets/features/extensions.css"),
     // session history (PR 7): the search box above the chats list, and the
     // rename sheet's field

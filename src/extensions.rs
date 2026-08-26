@@ -242,7 +242,13 @@ fn display_name(extension: &GooseExtension) -> Option<&str> {
 /// `mail-imap` → `Mail imap`. Separators become spaces and the first letter
 /// is capitalised; nothing else is guessed at, because a wrong expansion of
 /// someone's extension name is worse than a plain one.
-fn humanize(raw: &str) -> String {
+///
+/// `pub(crate)` because a scheduled job's id is the other thing that reaches
+/// a screen as a file stem — `nightly-dependency-audit` — and a second copy
+/// of a string-shaping rule is a second thing to keep in step. The copy in
+/// `views/session_settings.rs` splits only on `_`, so it is not the one to
+/// share.
+pub(crate) fn humanize(raw: &str) -> String {
     let mut words = raw.replace(['_', '-'], " ");
     if let Some(first) = words.get_mut(..1) {
         first.make_ascii_uppercase();

@@ -37,7 +37,11 @@ use serde_json::{json, Value};
 use crate::rpc::Out;
 use crate::state::{Fixtures, Shared};
 
-use super::Handled;
+// `scheduler_disabled` is shared with `features::scheduler`: `recipes/schedule`
+// and every `schedules/*` method go through the same `require_scheduler` on
+// the real server, so the sentence they answer with is one contract string and
+// not two copies.
+use super::{scheduler_disabled, Handled};
 
 /// Cheap gate so the two locks below are only taken for a method that could
 /// possibly be ours: `handle` sits on the path of every request `core` did not
@@ -250,22 +254,6 @@ impl Store {
         entry["schedule_cron"] = cron.map_or(Value::Null, |cron| Value::String(cron.to_string()));
         Ok(json!({}))
     }
-}
-
-/// What a goose started without `--enable-scheduler` answers every scheduler
-/// method with, string for string: `require_scheduler` returns
-/// `method_not_found().data("Scheduled recipe execution is not enabled")`.
-///
-/// `-32601` and not an error code of its own, because that is the whole point
-/// of the branch it exists to exercise: the client turns a `-32601` into
-/// `AcpError::Unsupported`, carrying goose's sentence, and the app stops
-/// offering the Schedule row rather than showing a failure. A mock that said
-/// `-32603` here would test the failure path instead.
-fn scheduler_disabled() -> (i64, String) {
-    (
-        -32601,
-        "Scheduled recipe execution is not enabled".to_string(),
-    )
 }
 
 /// What goose answers for an id that resolves to no file: `invalid_params`

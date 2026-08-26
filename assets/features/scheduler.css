@@ -1,0 +1,32 @@
+/* ── scheduler ──────────────────────────────────────────────────────── */
+
+/* Three rules. The banner is .banner, the dots are .dot, the facts are
+ * .setting-row.fact, the buttons are .btn-row and the run history is the
+ * chats list — this screen is mostly main.css doing its job. */
+
+/* The line under a job's title is a sentence — "Runs every weekday at
+ * 9:00 AM", "running 4m" — where .session-meta was built for ids and counts
+ * and sets them in the mono face. A humanised schedule in monospace reads as
+ * the cron string it exists to replace.
+ *
+ * Deliberately the same two declarations as .recipe-meta rather than a shared
+ * class: a third screen wanting this is the signal to promote it into
+ * main.css, which is PR 0's to widen and not a feature's to fork again. */
+.job-meta {
+  font-family: var(--font-sans);
+  align-items: baseline;
+}
+
+/* The runs are a second list, under a card and a row of buttons — not more of
+ * the same panel, so they get the air a new section wants. */
+.job-runs {
+  margin-top: 24px;
+}
+
+/* .empty centres one paragraph in the space between the two bars. This screen
+ * is the only empty state with somewhere to send you — schedules are born on
+ * the Recipes screen, and there is nothing here that could make one — so it
+ * has a second child, and two grid rows need a gap between them. */
+.empty.job-empty {
+  gap: 20px;
+}

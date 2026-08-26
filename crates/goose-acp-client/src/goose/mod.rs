@@ -60,7 +60,8 @@ mod recipes;
 
 // skills — PR 4 replaces this line
 
-// scheduler — PR 5 replaces this line
+mod scheduler;
+pub use scheduler::*;
 
 mod extensions;
 pub use extensions::*;

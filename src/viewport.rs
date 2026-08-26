@@ -410,6 +410,11 @@ pub(crate) fn use_pull_to_refresh() {
                     // unclaimed one is a pull that spins and fetches
                     // nothing.
                     "recipes" => crate::recipes::refresh(&ctx),
+                    // The Scheduler has two scrollers and one name: pulling on
+                    // a job's detail refreshes that job's runs *and* the list
+                    // behind it, because the dot on the row it came from is the
+                    // same fact as the buttons on the screen it is on.
+                    "scheduler" => crate::scheduler::pull_refresh(&ctx),
                     _ => {}
                 }
             }

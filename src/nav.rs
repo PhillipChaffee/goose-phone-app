@@ -202,7 +202,37 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
             ((ctx.tab)() == Tab::Skills).then(|| crate::skills::dump_key((ctx.skills.screen)()))
         },
     },
-    // scheduler — PR 5 replaces this line
+    Destination {
+        id: "scheduler",
+        label: "Scheduler",
+        icon: "clock",
+        // Library, beside Recipes, because a schedule is a thing you made out
+        // of a recipe rather than a setting of the machine: Recipes is where
+        // one is born, Scheduler is where it is watched.
+        group: Group::Library,
+        // Nothing to name: Scheduler owns its own screen signal, so the drawer
+        // leaves it where it was left — including on a job's detail.
+        go: |ctx| {
+            let mut tab = ctx.tab;
+            tab.set(Tab::Scheduler);
+        },
+        at_root: |ctx| {
+            (ctx.tab)() == Tab::Scheduler
+                && (ctx.scheduler.screen)() == crate::scheduler::Screen::List
+        },
+        view: |ctx| match (ctx.scheduler.screen)() {
+            crate::scheduler::Screen::List => rsx! { views::scheduler::SchedulerView {} },
+            crate::scheduler::Screen::Detail => {
+                rsx! { views::scheduler::ScheduledJobView {} }
+            }
+        },
+        // The key mapping is a free function in `crate::scheduler`, next to the
+        // enum it reads, so it can be tested without a Dioxus runtime.
+        key: |ctx| {
+            ((ctx.tab)() == Tab::Scheduler)
+                .then(|| crate::scheduler::dump_key((ctx.scheduler.screen)()))
+        },
+    },
     Destination {
         id: "extensions",
         label: "Extensions",

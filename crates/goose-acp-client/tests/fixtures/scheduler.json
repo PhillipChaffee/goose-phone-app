@@ -1,0 +1,44 @@
+{
+  "jobs": [
+    {
+      "id": "nightly-dependency-audit",
+      "source": "/home/demo/.config/goose/scheduled-recipes/nightly-dependency-audit.yaml",
+      "cron": "0 30 2 * * *",
+      "lastRun": "2026-08-25T09:34:12.881204+00:00",
+      "currentlyRunning": true,
+      "paused": false,
+      "currentSessionId": "20260825_9",
+      "jobStartTime": "2026-08-25T09:34:12.881204+00:00"
+    },
+    {
+      "id": "weekly-changelog-digest",
+      "source": "/home/demo/.config/goose/scheduled-recipes/weekly-changelog-digest.yaml",
+      "cron": "0 0 9 * * 1",
+      "lastRun": "2026-08-19T09:00:04.220118+00:00",
+      "currentlyRunning": false,
+      "paused": true,
+      "currentSessionId": null,
+      "jobStartTime": null
+    },
+    {
+      "id": "quarterly-dependency-licence-and-security-audit-across-every-workspace-crate",
+      "source": "/home/demo/.config/goose/scheduled-recipes/quarterly-dependency-licence-and-security-audit-across-every-workspace-crate.yaml",
+      "cron": "0 0 6 1 * *",
+      "lastRun": null,
+      "currentlyRunning": false,
+      "paused": false,
+      "currentSessionId": null,
+      "jobStartTime": null
+    },
+    {
+      "id": "staging-smoke-tests-during-office-hours",
+      "source": "/home/demo/.config/goose/scheduled-recipes/staging-smoke-tests-during-office-hours.yaml",
+      "cron": "*/15 9-17 * * 1-5",
+      "lastRun": "2026-08-25T09:15:00.104882+00:00",
+      "currentlyRunning": false,
+      "paused": false,
+      "currentSessionId": null,
+      "jobStartTime": null
+    }
+  ]
+}
