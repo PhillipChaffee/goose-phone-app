@@ -528,12 +528,20 @@ pub(crate) async fn poll_once(ctx: &AppCtx) {
     }
 }
 
-/// Push the detail screen for one job, and fetch its runs.
+/// Push the detail screen for one job.
+///
+/// It does **not** fetch. The detail's own connection-reactive effect owns
+/// that, exactly as the list's effect owns [`ensure_loaded`] — which is what
+/// makes the history recover on its own. `list_state` keeps a loaded list
+/// tappable after the socket dies, so a job can be opened while offline; a
+/// fetch fired from here would find no client and return, and nothing would
+/// ever fire a second one. One fetch path, driven by the connection, has both
+/// cases: it does nothing while there is no client and runs the moment there
+/// is one.
 pub(crate) fn open(ctx: &AppCtx, id: &str) {
     let (mut open, mut screen) = (ctx.scheduler.open, ctx.scheduler.screen);
     open.set(Some(id.to_owned()));
     screen.set(Screen::Detail);
-    load_history(ctx, id);
 }
 
 /// Back to the list. The history goes with it: it belongs to a job that is no
@@ -551,7 +559,6 @@ pub(crate) fn close(ctx: &AppCtx) {
     ctx.scheduler.history_of.clone().set(None);
 }
 
-/// Fetch one job's run history.
 /// Fetch one job's run history.
 ///
 /// The one fetch in this app that does **not** go through `load_remote`, and
@@ -660,6 +667,31 @@ pub(crate) fn delete(ctx: &AppCtx, id: &str) {
     });
 }
 
+/// The re-list a mutation to `id` earns, and the history refetch that goes
+/// with it — each under the guard that decides whether it is wanted.
+///
+/// One function so the two callers cannot disagree, which they did: `kill`
+/// refetched unconditionally. Both guards matter.
+///
+/// **The tab**, because a mutation can resolve long after the screen is gone —
+/// `run_now` answers when the run ends, minutes later — and a phone in a
+/// pocket must not fetch because something finished in the background.
+///
+/// **The open job's identity**, because [`load_history`] claims `history_of`
+/// as its first act. Firing it for a job whose detail has already been closed
+/// undoes [`close`]'s `history_of = None` and settles a closed job's runs into
+/// the shared slot — re-arming the identity check against an id that is not on
+/// screen, which is the one thing that check exists to get right.
+async fn refetch(ctx: &AppCtx, id: &str) {
+    if *ctx.tab.peek() != Tab::Scheduler {
+        return;
+    }
+    poll_once(ctx).await;
+    if ctx.scheduler.open.peek().as_deref() == Some(id) {
+        load_history(ctx, id);
+    }
+}
+
 /// Stop the run in flight. The schedule stays, and it fires again at its next
 /// time.
 pub(crate) fn kill(ctx: &AppCtx, id: &str) {
@@ -675,8 +707,7 @@ pub(crate) fn kill(ctx: &AppCtx, id: &str) {
                 // outlives the request that set it, so it has to be told.
                 ctx.scheduler.started_here.clone().write().remove(&id);
                 show_toast(&ctx, "Stopped. The schedule is still on.");
-                poll_once(&ctx).await;
-                load_history(&ctx, &id);
+                refetch(&ctx, &id).await;
             }
             Err(e) => show_toast(&ctx, format!("Could not stop it: {e}")),
         }
@@ -732,15 +763,7 @@ pub(crate) fn run_now(ctx: &AppCtx, id: &str) {
             | Err(AcpError::Closed | AcpError::Timeout) => {}
             Err(e) => show_toast(&ctx, format!("Run failed: {e}")),
         }
-        // Mutations re-list — but only while this is still the screen on
-        // screen. A phone in a pocket must not fetch because something
-        // finished in the background.
-        if *ctx.tab.peek() == Tab::Scheduler {
-            poll_once(&ctx).await;
-            if ctx.scheduler.open.peek().as_deref() == Some(id.as_str()) {
-                load_history(&ctx, &id);
-            }
-        }
+        refetch(&ctx, &id).await;
     });
 }
 

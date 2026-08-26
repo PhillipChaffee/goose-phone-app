@@ -3140,10 +3140,24 @@ body.away-from-bottom .scroll-bottom {
 
 /* Secondary, not tertiary: this line is the whole reason a fact row exists —
  * it says why the setting is stuck — so it has to be as readable as `.hint`,
- * not as quiet as a divider label. */
+ * not as quiet as a divider label.
+ *
+ * `overflow-wrap: anywhere` because the note is where a *path* goes — a
+ * skill's directory, a scheduled job's recipe file — and a path is one
+ * unbreakable token with nothing but slashes to break at, which no browser
+ * treats as a break opportunity. The note is a flex item that will happily
+ * grow to hold it, so without this a job at
+ * `/home/x/.local/share/goose/scheduled_recipes/nightly_audit.yaml` measures
+ * 470px in a 320pt phone and runs off the right edge of the screen.
+ * `anywhere` rather than `break-word` because there is nothing to preserve: a
+ * path broken mid-segment is still a path, and the alternative is not seeing
+ * the end of it at all. It sits here rather than on one feature because
+ * `.setting-value` beside it already takes responsibility for a long value
+ * (it ellipsises); the note was the half of the same component that did not. */
 .setting-note {
   flex-basis: 100%;
   margin-top: 4px;
+  overflow-wrap: anywhere;
   color: var(--text-secondary);
   font-size: var(--text-xs);
   line-height: var(--lh-sm);
