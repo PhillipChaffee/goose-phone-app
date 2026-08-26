@@ -27,9 +27,10 @@ pub(crate) const STYLES: &str = concat!(
     include_str!("../assets/features/session-history.css"),
 );
 
-/// The one platform-conditional sheet, emitted after [`STYLES`].
+/// The platform-conditional sheet, emitted after [`STYLES`]. One per
+/// platform that has one, and never more than one in a binary.
 ///
-/// iOS only, because it opts the web view into Dynamic Type through
+/// iOS opts the web view into Dynamic Type through
 /// `font: -apple-system-body` — a keyword macOS's WKWebView also parses, and
 /// resolves to a flat 13px, which would shrink `dx serve --desktop` by about
 /// 19%. Android and the desktop build get an empty string and therefore the
@@ -37,18 +38,30 @@ pub(crate) const STYLES: &str = concat!(
 /// authored against. The `cargo check --target aarch64-apple-ios` gate is what
 /// keeps the iOS arm compiling.
 ///
+/// macOS carries the window-chrome reservation instead, because `src/main.rs`
+/// hides the titlebar on macOS and nowhere else. `assets/desktop.css` defaults
+/// `--chrome-h` and `--traffic-w` to zero and this is the only thing that
+/// raises them — so a Windows or Linux desktop build, which keeps its native
+/// frame, does not also hold 52 points empty for traffic lights it does not
+/// have. The two sheets are mutually exclusive by construction: nothing is
+/// both iOS and macOS.
+///
 /// A second const rather than another line in the `concat!` above because
 /// `concat!` takes literals only, so a `cfg` cannot go inside it.
 ///
 /// Deliberately NOT in `assets/features/`: `docs/audit.js` links that whole
-/// directory, and this sheet must not reach it. The audit runs in Chromium,
-/// which cannot parse the keyword at all — it simulates Dynamic Type by
-/// setting the root font-size in px, at four sizes, which is the same claim in
-/// the only form that browser can hear.
+/// directory, and neither sheet must reach it. The audit runs in Chromium,
+/// which cannot parse `-apple-system-body` at all — it simulates Dynamic Type
+/// by setting the root font-size in px, at four sizes, which is the same claim
+/// in the only form that browser can hear; and the macOS sheet describes a
+/// window a phone frame does not have.
 #[cfg(target_os = "ios")]
 pub(crate) const PLATFORM: &str = include_str!("../assets/platform/ios.css");
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(target_os = "macos")]
+pub(crate) const PLATFORM: &str = include_str!("../assets/platform/macos.css");
+
+#[cfg(not(any(target_os = "ios", target_os = "macos")))]
 pub(crate) const PLATFORM: &str = "";
 
 /// The desktop shell's sheet, emitted after [`PLATFORM`].

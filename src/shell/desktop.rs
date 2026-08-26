@@ -332,6 +332,10 @@ pub(crate) fn AppShell() -> Element {
     use_refresh_key();
     use_nav_key(nav_open);
     use_dismiss_key();
+    // The chrome strip is only real while the traffic lights are on screen;
+    // fullscreen takes them away. JS-owned and message-free — see the note on
+    // `use_fullscreen_class`.
+    crate::viewport::use_fullscreen_class();
 
     // The destination's own answer to "is anything open", which is the fact
     // the third column needs and needs no new state to hold. A destination
@@ -581,6 +585,70 @@ mod tests {
                  reflow where src/shell/desktop.rs says they do"
             );
         }
+    }
+
+    /// Every class name the shell renders that only a stylesheet gives
+    /// meaning to. Rust writes them, CSS is the only thing that reads them,
+    /// and nothing in the compiler connects the two — so a rename on either
+    /// side leaves a control that visibly does nothing, with no error
+    /// anywhere. `.window-drag` is the worst of them: rename it and the
+    /// window silently stops being draggable, because `src/main.rs` has taken
+    /// the titlebar away and that strip is the only replacement.
+    #[test]
+    fn every_class_the_shell_renders_is_styled_somewhere() {
+        let shell = include_str!("desktop.rs");
+        let sheets = concat!(
+            include_str!("../../assets/desktop.css"),
+            include_str!("../../assets/platform/macos.css"),
+        );
+        // A selector, not a substring. `.contains(".window-drag")` is
+        // satisfied by `.window-draggg`, so the first draft of this test
+        // passed against a deliberately broken stylesheet — proved by
+        // renaming the class and watching it go green. A class name ends
+        // where a CSS identifier ends.
+        let styled = |name: &str| {
+            let needle = format!(".{name}");
+            sheets.match_indices(&needle).any(|(at, _)| {
+                sheets[at + needle.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !(c.is_alphanumeric() || c == '-' || c == '_'))
+            })
+        };
+
+        for class in ["window-drag", "nav-toggle", "navcard", "navpane"] {
+            assert!(
+                shell.contains(&format!("class: \"{class}\"")),
+                "src/shell/desktop.rs no longer renders .{class}"
+            );
+            assert!(
+                styled(class),
+                "nothing styles .{class}, which the shell still renders"
+            );
+        }
+    }
+
+    /// The chrome reservation is macOS's alone, because `src/main.rs` hides
+    /// the titlebar there and nowhere else. Defaulted to zero in the shared
+    /// desktop sheet and raised only by the platform sheet — otherwise a
+    /// native-frame build gets its own titlebar AND a 52pt strip held empty
+    /// for traffic lights it does not have.
+    #[test]
+    fn the_window_chrome_is_reserved_only_where_the_titlebar_is_hidden() {
+        let desktop = include_str!("../../assets/desktop.css");
+        let macos = include_str!("../../assets/platform/macos.css");
+        assert!(
+            desktop.contains("--chrome-h: 0px") && desktop.contains("--traffic-w: 0px"),
+            "assets/desktop.css must default the chrome reservation to zero"
+        );
+        assert!(
+            macos.contains("--chrome-h: 52px") && macos.contains("--traffic-w: 76px"),
+            "assets/platform/macos.css is the only thing that may raise it"
+        );
+        assert!(
+            macos.contains(r#"[data-fullscreen="true"]"#),
+            "fullscreen hides the traffic lights, so it must drop the reservation"
+        );
     }
 
     /// The collapse is two decisions in two languages again: Rust sets

@@ -1,0 +1,57 @@
+/* ═══ macOS window chrome ════════════════════════════════════════════════
+ *
+ * The second platform-conditional sheet, and it exists for the same reason
+ * `assets/platform/ios.css` does: these rules describe a capability of ONE
+ * platform, and a build for any other must not contain them.
+ *
+ * `src/main.rs` hides the titlebar on macOS and nowhere else — a Windows or
+ * Linux window with no titlebar and no replacement for it is a window with no
+ * close button. So `assets/desktop.css` defaults the two chrome numbers to
+ * ZERO and this sheet is the only thing that raises them. Without the split
+ * the reservation was unconditional: a native-frame platform got its own
+ * titlebar AND a 52px strip held empty for traffic lights that are not there.
+ *
+ * WHERE the lights land is macOS's decision and not ours. tao exposes
+ * `with_traffic_light_inset` and it is a no-op under wry — tao applies it from
+ * the content view's `drawRect:` and wry's WKWebView covers that view, so it
+ * never draws. Measured at two different insets, the close button did not
+ * move: logical (9, 9) both times, three discs at 20pt centres ending at 63.
+ * So both numbers below are measured off a real window rather than requested.
+ *
+ * Deliberately NOT in `assets/features/`, for `ios.css`'s reason: `docs/audit.js`
+ * links that whole directory into 402x874 phone frames.
+ */
+
+.app > .shell {
+  /* The band kept clear of anything the app puts at the top left, and the band
+   * the window is dragged by. 52 rather than the 23 the lights strictly need,
+   * because a control butted against them reads as a fourth one — goose leaves
+   * the same gap, its lights at y 16 and its first nav row at 78
+   * (ui/desktop/src/components/Layout/AppLayout.tsx). */
+  --chrome-h: 52px;
+  /* Where the lights END plus breathing room. The toggle beside them and the
+   * header indent when the nav is shut are both derived from this one number
+   * rather than guessed twice. */
+  --traffic-w: 76px;
+}
+
+/* FULLSCREEN TAKES THE LIGHTS WITH IT, so the strip has to go too.
+ *
+ * In fullscreen macOS hides the traffic lights entirely (they return on hover
+ * near the top edge, in an overlay AppKit draws over the content). Holding 52
+ * points and a 76-point indent for controls that are not on screen is 52
+ * points of nothing at the top of a window someone just asked to be as large
+ * as possible.
+ *
+ * Detected in JS and applied in CSS, with NOTHING crossing into Rust —
+ * `src/viewport.rs` `use_fullscreen_class` sets the attribute directly. That
+ * is the rule working as intended rather than an exception to it: a resize
+ * STREAM must be JS-owned because each listened-to event costs a synchronous
+ * XHR, and here the listener never sends a message at all. The reference does
+ * the same thing over IPC (`fullscreen-change`, main.ts:1555) because Electron
+ * gives it a real event; we infer it, which is why the JS compares against the
+ * screen height rather than trusting a flag. */
+.app[data-fullscreen="true"] > .shell {
+  --chrome-h: 0px;
+  --traffic-w: 0px;
+}

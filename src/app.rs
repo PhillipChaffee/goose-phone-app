@@ -40,16 +40,22 @@ pub fn App() -> Element {
 
     rsx! {
         document::Style { {crate::css::STYLES} }
-        // After the design system, not before it: the Dynamic Type opt-in is
-        // a rule on `html` and main.css has one of its own, so cascade order
-        // is what decides. Empty on every platform but iOS, where it is the
-        // one declaration that makes `rem` mean the reader's chosen text size.
-        document::Style { {crate::css::PLATFORM} }
-        // Last, so it is the last word — the same cascade reason PLATFORM
-        // comes after STYLES. Empty on iOS and Android; on a desktop build it
-        // is the pinned nav, the panes and the width breakpoints that reflow
-        // them. See `crate::css::SHELL`.
+        // After the design system: the shell is the pinned nav, the panes and
+        // the width breakpoints that reflow them. Empty on iOS and Android.
+        // See `crate::css::SHELL`.
         document::Style { {crate::css::SHELL} }
+        // LAST, so the platform genuinely has the last word.
+        //
+        // It used to sit between the two, and that was wrong in a way only the
+        // second platform sheet could expose. iOS did not care — `SHELL` is
+        // empty in a phone binary, so there was nothing after it to lose to.
+        // macOS did: `assets/desktop.css` defaults `--chrome-h`/`--traffic-w`
+        // to zero on `.app > .shell` and `assets/platform/macos.css` raises
+        // them on the same selector, so at equal specificity the later sheet
+        // won and the reservation was always zero — measured, the nav toggle
+        // was painted on top of the close button at the rail width. A platform
+        // rule that a shared sheet can silently outrank is not a platform rule.
+        document::Style { {crate::css::PLATFORM} }
         document::Meta {
             name: "viewport",
             // interactive-widget=resizes-content: when the keyboard opens, shrink
