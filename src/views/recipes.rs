@@ -349,7 +349,12 @@ fn schedule_row(ctx: &AppCtx, entry: &RecipeListEntry, mut sheet_open: Signal<bo
 /// is private to the sheet it drives and whose control rows push a drill-in
 /// signal rather than opening an overlay. Same classes, same two shapes, so
 /// the card reads as the sheet does.
-fn fact_row(row: &SettingRow) -> Element {
+///
+/// `pub(crate)` because the Scheduler's detail draws the same card: a job's
+/// recipe, its last run and a cadence it cannot edit are facts in exactly this
+/// grammar, and a second copy of eight lines of markup is a second thing to
+/// keep in step with the stylesheet.
+pub(crate) fn fact_row(row: &SettingRow) -> Element {
     rsx! {
         div { key: "{row.id}", class: "setting-row fact",
             span { class: "setting-main",
@@ -375,11 +380,29 @@ fn fact_row(row: &SettingRow) -> Element {
 /// spells the string, and nothing here can be typed. That is also why the
 /// sheet keeps a draft and saves once — five taps to say "weekly, Monday,
 /// 9:30" is one schedule, not five round trips.
+///
+/// Shared with the Scheduler's detail screen, which edits an existing job's
+/// cadence through the same rows and the same `crate::cron` grammar. The only
+/// difference is which method Save calls — and which questions get asked, for
+/// which see `rows`.
 #[component]
-fn CronSheet(
+pub(crate) fn CronSheet(
     title: String,
     /// The schedule as it stands, or `None` when the recipe has none.
     current: Option<Schedule>,
+    /// Whether "Never" is one of the answers.
+    ///
+    /// It is here on a recipe, whose schedule can be removed with a null cron,
+    /// and not on a scheduled job, where `schedules/update` takes a required
+    /// cron and there is no null to send. A job with no cadence is not a job
+    /// with a blank one; it is a deleted one, which is a different question
+    /// with a confirm of its own. Offering the choice anyway would be a
+    /// control with no method behind it — design rule 11.
+    ///
+    /// A prop rather than two sheets, because the difference is one entry in
+    /// one list and everything else about the two is identical.
+    #[props(default = true)]
+    allow_never: bool,
     on_save: EventHandler<Option<String>>,
     on_close: EventHandler<()>,
 ) -> Element {
@@ -387,7 +410,11 @@ fn CronSheet(
     let mut on = use_signal(|| current.is_some());
     let mut open_row = use_signal(|| None::<String>);
 
-    let rows = schedule_rows(schedule(), on());
+    let rows = if allow_never {
+        schedule_rows(schedule(), on())
+    } else {
+        crate::scheduler::cadence_rows(schedule(), on())
+    };
     let drilled = open_row().and_then(|id| rows.iter().find(|row| row.id == id).cloned());
 
     let body = match drilled {

@@ -48,6 +48,8 @@ LABELS = {
     "skill": "Skill detail",
     "recipes-list": "Recipes",
     "recipes-detail": "Recipe detail",
+    "scheduler": "Scheduler",
+    "scheduler-detail": "Scheduled job",
     "settings": "Settings",
 }
 

@@ -7,9 +7,11 @@
 // 402x874 document — the gallery's <iframe> gives clean style isolation, but
 // this needs the states as top-level pages — and then walked for:
 //
-//   geometry  overflow past the viewport, text clipped without an ellipsis,
-//             filled or fully-bordered boxes left at radius 0, buttons under
-//             32px, and any child rounded more than the parent clipping it.
+//   geometry  overflow past the viewport, text clipped without an ellipsis or
+//             spilling a box that does not clip at all, filled or
+//             fully-bordered boxes left at radius 0, buttons under 32px, any
+//             child rounded more than the parent clipping it, and a bar title
+//             taller than the bar.
 //   contrast  every element carrying its own text, composited against the
 //             first opaque background behind it, against 4.5:1 (3:1 for large
 //             or bold text) — and every icon, which carries no text of its
@@ -20,7 +22,9 @@
 //
 // Each state is also repeated with server-supplied text swapped for the
 // longest plausible value, because a captured state only ever shows the one
-// string the app happened to be holding.
+// string the app happened to be holding — and the geometry walk is repeated at
+// every iOS text size, because a captured state was also only ever rendered at
+// one of those.
 //
 // Exits non-zero if anything is found, so it can gate a change.
 //
@@ -30,10 +34,11 @@
 // rather than to iOS's. Positions and text metrics are what the simulator is
 // for.
 //
-// What it is structurally blind to, and what covers it instead: text spilling
-// out of a chip is an anonymous text node with no box to measure, and no chip
-// sets overflow-x, so neither the overflow walk nor the clipped-text check can
-// see it — docs/measure-composer.js measures that, at several widths.
+// What it is structurally blind to, and what covers it instead: this renders
+// at 402pt alone, and the composer's chip row is decided by width — so
+// docs/measure-composer.js builds that row at several widths and at several
+// text sizes. The text spilling out of a chip that SPILL below now catches is
+// the check that script had and this one did not.
 
 const fs = require('fs');
 const os = require('os');
@@ -54,6 +59,34 @@ const STYLESHEETS = [
       .map((f) => path.join(FEATURE_CSS, f))
     : []),
 ];
+
+// ── text scale ──────────────────────────────────────────────────────────
+// The root font-size, in px, at each text size the app really runs at. Every
+// --text-* and --lh-* token is a rem and rem means the root, so this one
+// number moves the whole scale — which is the entire design of the Dynamic
+// Type opt-in in assets/platform/ios.css.
+//
+//   16  what a browser gives by default, and therefore what Android's WebView
+//       and the desktop dev build run at: the opt-in is iOS-only, so this is a
+//       real shipping size, not a control.
+//   17  iOS at Large, the default content size category. The app is 6.25%
+//       bigger the moment it opts in, before anyone touches a slider.
+//   23  iOS at xxxLarge — the largest NON-accessibility size, so the one a
+//       reader reaches without going near the accessibility settings. It is
+//       where --tool-gutter and the two-line bar title broke first.
+//   53  iOS at AX5, the top of the scale.
+//
+// Set on the root directly rather than through `font: -apple-system-body`,
+// which is what the app ships: Chromium cannot parse that keyword and leaves
+// the root at 16px, and the fact the opt-in rests on is exactly that the
+// root's px IS the body size — so stating it as a number is the same claim in
+// the only form this browser can hear.
+//
+// GEOMETRY runs at every one of them; CONTRAST runs at the first alone.
+// Contrast is not size-independent, but it is monotone: audit.js drops the
+// required ratio from 4.5 to 3 above 18.66px, so the smallest scale is the
+// binding case and the larger ones can only re-report what it found.
+const SCALES = [16, 17, 23, 53];
 
 // ── stress ──────────────────────────────────────────────────────────────
 // A captured state only ever shows the one string the app happened to be
@@ -188,6 +221,98 @@ const GEOMETRY = () => {
       out.push(`CLIPPED-X    ${name(el)} scroll=${el.scrollWidth} client=${el.clientWidth}`);
     }
 
+    // The vertical half, which is the axis growing text moves. There is no
+    // `text-overflow` escape here — nothing draws an ellipsis at the foot of a
+    // box — so a clipping box whose content is taller than it has simply cut
+    // the bottom off something.
+    //
+    // The line clamp exemption is load-bearing and not a softening: four
+    // .session-* elements are -webkit-box line clamps, which work BY clipping
+    // vertically, and they say so in the stylesheet. Anything else that clips
+    // this axis did not mean to.
+    if (/hidden|clip/.test(cs.overflowY)
+        && cs.webkitLineClamp === 'none'
+        && el.scrollHeight > el.clientHeight + 1) {
+      out.push(`CLIPPED-Y    ${name(el)} scroll=${el.scrollHeight} client=${el.clientHeight}`);
+    }
+
+    // Ink outside a box that never clips.
+    //
+    // This is the whole class of failure the two checks above cannot see. A
+    // chip, a swipe action and a floating action button all pin a height and
+    // set no overflow at all, so text too big for them is not clipped — it is
+    // painted outside the pill, over whatever is behind it, and every number
+    // the other walks read stays in range. docs/measure-composer.js has had
+    // this check for the composer since the day a crushed pill pushed its
+    // chevron through its own side; this is the same question asked of every
+    // box on every screen.
+    //
+    // Only in-flow children count. An absolutely positioned child leaving its
+    // parent is usually the point — the bar's centred title, the badge on a
+    // tile, the button hanging out of the zero-height slot above the composer
+    // — and a pseudo-element is not in `children` at all, which is why the
+    // dots drawn by ::before and ::after do not have to be exempted here.
+    if (cs.overflowX === 'visible' && cs.overflowY === 'visible') {
+      let ink = null;
+      const add = (b) => {
+        if (b.width === 0 && b.height === 0) return;
+        ink = ink
+          ? {
+            left: Math.min(ink.left, b.left),
+            right: Math.max(ink.right, b.right),
+            top: Math.min(ink.top, b.top),
+            bottom: Math.max(ink.bottom, b.bottom),
+          }
+          : { left: b.left, right: b.right, top: b.top, bottom: b.bottom };
+      };
+      for (const kid of el.children) {
+        const ks = getComputedStyle(kid);
+        if (ks.position !== 'static' || ks.float !== 'none') continue;
+        // `checkVisibility`, not a `display` test: a CLOSED <details> still
+        // lays its <pre> out — Chromium hides it with `content-visibility`
+        // rather than `display: none` — so it reports a real rect 80px below
+        // a tool card that is showing nothing but its summary.
+        if (!kid.checkVisibility()) continue;
+        add(kid.getBoundingClientRect());
+      }
+      // A bare text node has no box, which is exactly how "Delete" paints
+      // outside an 84px swipe action with nothing reporting it. A Range is
+      // the only handle on it.
+      //
+      // Trimmed to the text itself. `white-space: pre-wrap` — which the diff
+      // body is, so that a source line's own indentation survives — preserves
+      // trailing spaces and lets them HANG past the end of the line, by
+      // specification. A range over the whole node measures that hang as ink
+      // and reports 7px of spill on every wrapped line of every diff.
+      for (const node of el.childNodes) {
+        if (node.nodeType !== 3) continue;
+        const raw = node.textContent;
+        const from = raw.length - raw.trimStart().length;
+        const to = raw.trimEnd().length;
+        if (from >= to) continue;
+        const range = document.createRange();
+        range.setStart(node, from);
+        range.setEnd(node, to);
+        add(range.getBoundingClientRect());
+      }
+      if (ink) {
+        // `pre-wrap` hangs a space that lands at a soft wrap past the end of
+        // the line — by specification, and invisibly, since it is a space.
+        // The diff body is pre-wrap so that a source line's own indentation
+        // survives, and every wrapped line of every diff reports one space of
+        // ink outside its box. The inline axis is the only one that can hang;
+        // the block axis, which is the one growing text moves, still counts.
+        const hangs = /^pre-wrap|^preserve$/.test(cs.whiteSpace);
+        const over = Math.max(
+          r.top - ink.top, ink.bottom - r.bottom,
+          ...(hangs ? [] : [r.left - ink.left, ink.right - r.right]),
+        );
+        if (over > 1) {
+          out.push(`SPILL        ${name(el)} content leaves the box by ${over.toFixed(0)}px`);
+        }
+      }
+    }
+
     // A surface is something with a fill or a box of borders. A lone
     // border-top is a rule, not a box, and is meant to be square.
     const filled = cs.backgroundColor !== 'rgba(0, 0, 0, 0)';
@@ -225,6 +350,19 @@ const GEOMETRY = () => {
     const heading = bar.querySelector(':scope > .title, :scope > .titlegroup');
     if (heading) {
       const h = heading.getBoundingClientRect();
+      // The other axis, and the one the SCRIM check below is blind to. The
+      // scrim is `--topbar-h` tall and the scroll padding is derived from the
+      // same token, so both are sized for a bar of that height — but the bar
+      // is the only one of the three that has a title inside it. While the
+      // bar's height was pinned, its bottom edge never moved whatever the
+      // title did, so SCRIM compared against a number that could not go wrong
+      // and reported clean with the title painted outside the material that
+      // makes it readable.
+      const b = bar.getBoundingClientRect();
+      if (h.top < b.top - 0.5 || h.bottom > b.bottom + 0.5) {
+        out.push(`TITLE-TALLER ${name(heading)} ${h.top.toFixed(0)}..${h.bottom.toFixed(0)}`
+          + ` outside the bar's ${b.top.toFixed(0)}..${b.bottom.toFixed(0)}`);
+      }
       for (const group of bar.querySelectorAll(':scope > .icon-btn, :scope > .topbar-actions')) {
         const g = group.getBoundingClientRect();
         const over = Math.min(h.right, g.right) - Math.max(h.left, g.left);
@@ -436,11 +574,27 @@ const CONTRAST = () => {
           if (el) el.scrollTop = want === 'bottom' ? el.scrollHeight : (parseInt(want, 10) || 0);
         }, state.scroll);
       }
-      const issues = [...new Set([...await page.evaluate(GEOMETRY), ...await page.evaluate(CONTRAST)])];
-      if (issues.length) {
-        findings += issues.length;
-        console.log(`\n${state.label}  [${theme}]`);
-        issues.forEach((s) => console.log(`  ${s}`));
+      // One document, walked once per text size. The root's font-size is set
+      // from here rather than written into the document because the state is
+      // otherwise identical — same markup, same swap, same scroll offset — and
+      // a reflow is cheaper than a navigation. An inline style on <html> beats
+      // every stylesheet rule, which is what makes it a simulation of the
+      // opt-in rather than a rule competing with one.
+      for (const [s, scale] of SCALES.entries()) {
+        await page.evaluate((px) => {
+          document.documentElement.style.fontSize = `${px}px`;
+        }, scale);
+        const issues = [...new Set([
+          ...await page.evaluate(GEOMETRY),
+          // Contrast at the smallest scale only: the 18.66px large-text
+          // threshold makes every larger scale strictly more permissive.
+          ...(s === 0 ? await page.evaluate(CONTRAST) : []),
+        ])];
+        if (issues.length) {
+          findings += issues.length;
+          console.log(`\n${state.label}  [${theme}, root ${scale}px]`);
+          issues.forEach((str) => console.log(`  ${str}`));
+        }
       }
     }
     await page.close();
@@ -449,7 +603,8 @@ const CONTRAST = () => {
   await browser.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 
-  const scope = `${states.length} states x ${themes.length} theme${themes.length > 1 ? 's' : ''}`;
+  const scope = `${states.length} states x ${themes.length} theme${themes.length > 1 ? 's' : ''}`
+    + ` x ${SCALES.length} text sizes (${SCALES.join('/')}px)`;
   if (findings) {
     console.log(`\n${findings} finding${findings > 1 ? 's' : ''} across ${scope}.`);
     process.exit(1);

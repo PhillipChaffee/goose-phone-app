@@ -39,7 +39,7 @@ pub(crate) enum Tab {
     Code,
     Recipes,
     Skills,
-    // scheduler — PR 5 replaces this line
+    Scheduler,
     Extensions,
     // Session history (PR 7) gets no variant: it is the Chats list growing
     // kinds, rename and search, not a destination of its own.
@@ -478,7 +478,7 @@ pub(crate) struct AppCtx {
     // struct merge, five branches adding thirty do not.
     pub recipes: crate::recipes::Ctx,
     pub skills: crate::skills::Ctx,
-    // scheduler — PR 5 replaces this line
+    pub scheduler: crate::scheduler::Ctx,
     pub extensions: crate::extensions::Ctx,
     // Session history (PR 7) contributes no struct: its state is the chats
     // list, which was already here as `sessions*` above. A second home for
@@ -546,6 +546,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         // in this same hunk and resolves by keeping both lines.
         skills: crate::skills::use_ctx(),
         recipes: crate::recipes::use_recipes(),
+        scheduler: crate::scheduler::use_ctx(),
     };
     use_context_provider(|| ctx);
     ctx

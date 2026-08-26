@@ -1,0 +1,44 @@
+/* ── scheduler ──────────────────────────────────────────────────────── */
+
+/* Three rules. The banner is .banner, the dots are .dot, the facts are
+ * .setting-row.fact, the buttons are .btn-row and the run history is the
+ * chats list — this screen is mostly main.css doing its job. */
+
+/* The line under a job's title is a sentence — "Runs every weekday at
+ * 9:00 AM", "running 4m" — where .session-meta was built for ids and counts
+ * and sets them in the mono face. A humanised schedule in monospace reads as
+ * the cron string it exists to replace.
+ *
+ * Deliberately the same two declarations as .recipe-meta rather than a shared
+ * class: a third screen wanting this is the signal to promote it into
+ * main.css, which is PR 0's to widen and not a feature's to fork again. */
+.job-meta {
+  font-family: var(--font-sans);
+  align-items: baseline;
+}
+
+/* The runs are a second list, under a card and a row of buttons — not more of
+ * the same panel, so they get the air a new section wants. */
+.job-runs {
+  margin-top: 24px;
+}
+
+/* .empty centres one paragraph in the space between the two bars. This screen
+ * is the only empty state with somewhere to send you — schedules are born on
+ * the Recipes screen, and there is nothing here that could make one — so it
+ * has a second child, and two grid rows need a gap between them.
+ *
+ * `align-content` is the half that makes the gap real, and it is the half that
+ * is easy to leave out. `.empty` sets `place-items: center`, which is
+ * `align-items` + `justify-items` — it centres each child WITHIN its own
+ * track, and says nothing about the tracks. `align-content` stays at `normal`,
+ * which for a grid means `stretch`, so two auto rows in a 758px box are
+ * stretched to 337px each and the 20px gap between them is inert: measured,
+ * the button landed 317px below the sentence it belongs to, marooned in the
+ * lower half of the screen. Centring the CONTENT collapses both tracks to the
+ * height of what is in them, which is what makes the pair read as one block
+ * and the 20px the real spacing. */
+.empty.job-empty {
+  align-content: center;
+  gap: 20px;
+}

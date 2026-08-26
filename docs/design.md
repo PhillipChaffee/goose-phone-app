@@ -99,7 +99,8 @@ card for exactly that reason.
 own edge has already cut the corner; curving it there notches the band rather
 than rounding it. The review screen's file bands are the only place this
 applies today — code is the only content on this phone worth the whole width
-(47 monospace columns inside a card at 402pt, 52 without one) — and the head of
+(47 monospace columns inside a card at 402pt and a 16px root, 52 without one;
+rule 14 and the Deviations section have the count at every text size) — and the head of
 each band keeps the page's 16pt gutter, because the head is chrome and only
 the code is content. `docs/audit.js` reads the exemption off the geometry
 rather than off that list: full width, or full height, is a page or a panel
@@ -156,6 +157,15 @@ surrounding bar padding made up the difference, which stopped being true the
 moment the bar went away and the controls started floating on their own. A
 label never goes inside a fixed-size circular button — it wraps and
 overflows.
+
+`.btn` — the text button — did **not** come with them, and still has
+`min-height: 40px`. It is under the floor in the height axis at every text
+size and on every screen that has one (a confirm's two buttons, the Scheduler
+detail's four, Settings). It is wide, so it is a much easier target than 40px
+in both axes would be, and `docs/audit.js`'s `SMALL-TAP` threshold is 32px and
+cannot see it. Recorded here as the open item it is rather than left to be
+read as a decision: raising it to 44 is a one-line change to a rule that
+reflows every screen at once, so it wants a pass of its own.
 
 A list row is tappable across its **whole** area, not just the text block
 inside it. The handler belongs on the `li`; anything else in the row that is
@@ -652,6 +662,68 @@ while the app is away. Nothing to poll, and nothing to catch up on.
 So the Chats list gets nothing — not a placeholder, not a greyed dot. Anything
 there would be a lie or a duplicate.
 
+### 14. The app follows the system text size
+
+Every size in `assets/main.css` is a `rem`, and `rem` means the root's
+font-size. On iOS `assets/platform/ios.css` sets that root to
+`font: -apple-system-body`, which resolves through `UIFont`'s preferred body
+font — so the root's computed size **is** the content size category the reader
+chose, and WebKit re-resolves it when they change it. One declaration moves the
+whole scale.
+
+**Every number written in this file is at a 16px root unless it says
+otherwise.** That is what a browser gives by default, so it is what Android's
+WebView and `dx serve --desktop` render at; iOS starts at 17 and goes to 53.
+
+The three platforms, since the app builds for all of them from one file:
+
+| | root | how |
+| --- | --- | --- |
+| iOS | 17–53px, live | `assets/platform/ios.css`, compiled in by `#[cfg(target_os = "ios")]` in `src/css.rs` |
+| Android | 16px | that sheet is not compiled in; the WebView's `textZoom` is the platform answer and is not wired up yet |
+| desktop | 16px | not compiled in — and this is the point of the `cfg`, because macOS is WKWebView too and resolves the *same keyword* to a flat 13px |
+
+**Opting in is itself a layout change.** iOS body at Large is 17px against the
+16 these values were authored at, so the app is 6.25% bigger before anyone
+touches a slider: the review screen goes from 52 monospace columns to 48, and
+the composer chip's content went 2px past a pill that used to be pinned at 32.
+That is the cost, taken deliberately, rather than normalising it away with a
+`--text-md: 0.941rem` that would permanently hand back 6% of what the system
+was asked for.
+
+**Text grows; tap targets do not, and neither do the glyphs inside them.** Six
+rules in the stylesheet set a font-size in px and not one of them sets text —
+every one sizes an SVG through `.icon { width: 1em }` inside a fixed circle or
+square. They take `--icon-md` / `--icon-lg`, which are clamps: a chevron may
+grow a little, but 53px of it in a 44px circle is the failure, not the fix.
+Whether the *targets* should grow with the type is a genuine open question —
+Apple's controls do — and nothing measured breaks if they do not, so it is
+recorded here rather than defaulted into.
+
+**A pinned height is the bug, not the clipping.** Twenty-six rules set a height
+in px. Fifteen of them held text or a 1em glyph and became `min-height`, or a
+`max(px, em)` square; the eleven that stayed pinned are a graphic on a graphic.
+The reason it matters more than it sounds: a chip, a
+swipe action and a floating action button set *no overflow at all*, so text too
+big for them is not clipped — it is painted outside the pill, over whatever is
+behind it, while every number the audit used to read stayed in range. That is
+what the `SPILL` check in `docs/audit.js` exists for.
+
+**An `em` on a form control needs `font-size: inherit` beside it, or it is not
+an em at all.** `input`, `button`, `select` and `textarea` take a font from the
+UA stylesheet — 13.333px in Chromium, a system control font in WebKit — and
+that font is what `em` resolves against, whatever the paragraph around them is
+set in. Two rules here are ems on a control (`.md input[type="checkbox"]`, the
+markdown task-list box; `.attach-remove`, the × on an attachment chip) and both
+declare `font-size: inherit` for that reason. The checkbox is the one that
+proves it: without the declaration it rendered at 13.3px inside a 16px
+paragraph — a 17% shrink on all three platforms — and stayed there at every
+Dynamic Type size, which is the exact opposite of what a rule written in ems is
+asking for. Nothing catches this: a shrink is not a spill, so no check in
+`docs/audit.js` can see it.
+
+**Where it stops: the monospace slabs.** See the Deviations section.
+
 ## Deviations, and why
 
 All commented at the point of use in the stylesheet:
@@ -672,6 +744,20 @@ All commented at the point of use in the stylesheet:
   which asks for the preference instead of guessing at it.
 - **`.chip` reads one step brighter** than comparable secondary text, because
   secondary-on-secondary is unreadable at phone size.
+- **The three monospace slabs stop growing at 20px** (`--text-code`), while
+  everything else follows Dynamic Type without a ceiling. Code is not prose,
+  and a column count is part of its legibility. Measured at 402pt with a
+  50-character probe inside `.diff-code`, uncapped: **52** columns at a 16px
+  root, **48** at the iOS default of 17, **36** at xxxLarge, **20** at AX3 and
+  **15** at AX5 — and at 15 every source line wraps three or four times with
+  the 2ch hanging indent taking two of them. Capped, the same measurement
+  reads 52 / 48 / 35 / 30 / 30: the floor is 30 columns from xxxLarge up. (The
+  36 → 35 is `.diff-sign` becoming `max(15px, 2ch)`, which is half a column
+  wider once the glyph in it is bigger than the cell was.) It is one decision
+  applied to all three slabs rather than to the review screen alone, because
+  the argument does not distinguish them — but **inline `.md code` is
+  deliberately not capped**, because it sits in a sentence and a 20px word in
+  the middle of 40px prose is a rendering fault.
 - **`--diff-add` / `--diff-del` / `--code-muted` do not swap with the theme**,
   because the surface they sit on (`--code-bg`) does not either. Reaching for
   `--bg-danger` gives a deletion marker measuring 5.0:1 in dark and 2.9:1 in
@@ -703,6 +789,12 @@ and prints the URL and password.
 mistakes in the stylesheet are contrast mistakes, and they only ever show up
 in one of them.
 
+**Check both ends of the text scale.**
+`xcrun simctl ui booted content_size accessibility-extra-extra-extra-large`,
+and `large` to put it back. Rule 14 makes the root font-size the reader's
+choice, so a screen that only holds together at the default is a screen that
+has not been checked.
+
 Some things are easier to measure than to see, and `node docs/audit.js both`
 checks them: contrast against the first opaque background behind each element,
 icon contrast against 3:1 (icons carry no text, so the contrast walk skips
@@ -710,6 +802,34 @@ them), geometry (overflow, clipped text, square corners, undersized tap
 targets, radius nesting), the scrim still being opaque where the title sits,
 and rows that render nothing and so measure nothing. It exits non-zero on a
 finding.
+
+It walks the geometry **at four text sizes** — 16px (Android and the desktop
+build), 17 (iOS at Large), 23 (xxxLarge, the largest non-accessibility size)
+and 53 (AX5) — by setting the root font-size directly on each captured state.
+That is the right simulation rather than a shortcut: Chromium cannot parse
+`-apple-system-body` at all and leaves the root at 16px, and the whole design
+of the opt-in is that the root's px *is* the body size, so stating it as a
+number is the same claim in the only form this browser can hear. It needs no
+re-capture, which is what makes it compatible with never hand-editing the
+gallery. Contrast runs at the smallest size alone, because the 18.66px
+large-text threshold makes every larger one strictly more permissive.
+
+Three of its checks only mean something on that axis. **`CLIPPED-Y`** is the
+vertical half of the clipped-text walk, with anything carrying a
+`-webkit-line-clamp` exempted, because four `.session-*` elements clip
+vertically on purpose. **`SPILL`** is ink outside a box that never clips —
+which is the entire class of failure the other walks are blind to, since a chip
+sets no overflow and so paints its text over the composer rather than cutting
+it; `docs/measure-composer.js` has had that check for the composer for a while
+and the audit did not have it at all. **`TITLE-TALLER`** is the bar's heading
+leaving the bar, which the `SCRIM` check could not see while `.topbar` had a
+pinned height: its bottom edge never moved, so the comparison could not go
+wrong and reported clean with the title painted outside the glass.
+
+Against the stylesheet as it stood before rule 14 landed, that pass reports
+**844 findings** — 36 at 16px, 36 at 17, 84 at 23 and 688 at 53 — and it is
+clean against the one in the tree. A check you cannot make fail is worth
+nothing.
 
 It also repeats every state with the server-supplied strings swapped for the
 longest plausible value, because a captured state only shows the one string the
@@ -756,6 +876,27 @@ cut by a box that cannot say so.
 The width floor that remains is banded — 30px of name at 375pt and above, on a
 row that is not carrying the context readout — because below 375 one line costs
 the name everything and 320 is a defensive width rather than a device.
+
+It runs the **same four text sizes the audit does**, and three of its constants
+had to stop being pixels first, because at an accessibility size they failed on
+layouts doing exactly what the stylesheet says. The tier's 40px allowance is an
+assertion about a `5ch` cap, so at AX5 a correct tier measured ~100px against
+it; the 30px name floor is three characters, which no name can be at 53px; and
+the exemption that lets `.chip-row`'s valve engage was keyed to raw viewport
+px. All three are now per-rem, and the valve's exemption is in **effective
+width** — `width x 16 / root` — because what the chips divide is columns, and a
+402pt phone at AX5 has the columns of a 121pt one. At a 16px root every one of
+them is word for word the rule that was there.
+
+**Larger text genuinely cannot hold the row in pills that all fit, and the
+valve is what happens instead.** Measured at 402pt, this is where each row
+first needs to scroll: the four-chip goose row at **AX1** (root 28, 230
+effective points, 27px over), the two chat rows at **AX3** (root 40, 161
+points, 12px over), and the new-session context row at **AX4** (root 47, 137
+points, 31px over). Nothing overflows at xxxLarge at any width in the sweep.
+What still holds at every size, and is still asserted: the block is **one
+line**, send is on screen and centred on its own row, nothing paints outside a
+pill, and every cut says it was one.
 
 The row's overflow is `.chip-row`'s, not `.composer-row`'s, and it is now how far
 the scroller would have to scroll. It must be 0 everywhere except the one family

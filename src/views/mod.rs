@@ -10,7 +10,7 @@ pub(crate) mod recipes;
 
 pub(crate) mod skills;
 
-// scheduler — PR 5 replaces this line
+pub(crate) mod scheduler;
 
 pub(crate) mod extensions;
 
