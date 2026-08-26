@@ -79,6 +79,32 @@ pub(crate) struct Destination {
     pub at_root: fn(&AppCtx) -> bool,
     /// Render whichever screen of this destination's stack is on top.
     pub view: fn(&AppCtx) -> Element,
+    /// The screen at the BOTTOM of this destination's stack — the list the
+    /// desktop shell keeps in its middle column while a detail fills the
+    /// third.
+    ///
+    /// `view` cannot answer this and no amount of CSS can either: `view` is a
+    /// `match` that returns whichever screen is on top, and on the desktop the
+    /// list and the thing it opened are on screen at the same time. Two screens
+    /// mounted at once is the one thing three columns need that one column
+    /// never did.
+    ///
+    /// `None` is a destination with nothing to list. Settings is one screen, so
+    /// on the desktop it takes the content area whole rather than half of it,
+    /// and the shell draws two columns instead of three.
+    ///
+    /// Unread on a phone, where one screen is on screen at a time: the mobile
+    /// shell calls `view` and nothing else. `expect` rather than `allow`, and
+    /// conditional rather than blanket, so that it holds for exactly the
+    /// targets where it is true — on a desktop build the field IS read, and an
+    /// unconditional exemption would rot there without the compiler saying so.
+    /// CI runs the iOS check with `RUSTFLAGS: -D warnings`, which is what makes
+    /// this a build failure rather than a note.
+    #[cfg_attr(
+        any(target_os = "ios", target_os = "android"),
+        expect(dead_code, reason = "the phone shows one screen at a time")
+    )]
+    pub root: Option<fn(&AppCtx) -> Element>,
     /// The dump key for the mounted screen, or `None` when this destination's
     /// stack is not the one on screen.
     ///
@@ -108,6 +134,7 @@ const CHATS: Destination = Destination {
         Screen::Chat => rsx! { views::chat::ChatView {} },
         _ => rsx! { views::sessions::SessionsView {} },
     },
+    root: Some(|_| rsx! { views::sessions::SessionsView {} }),
     key: |ctx| {
         ((ctx.tab)() == Tab::Home)
             .then(|| chats_key((ctx.screen)()))
@@ -147,6 +174,7 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
             CodeScreen::Diff => rsx! { views::code::CodeDiffView {} },
             CodeScreen::Pulls => rsx! { views::code::CodePullsView {} },
         },
+        root: Some(|_| rsx! { views::code::CodeSessionsView {} }),
         key: |ctx| ((ctx.tab)() == Tab::Code).then(|| code_key((ctx.code_screen)())),
     },
     Destination {
@@ -167,6 +195,7 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
             crate::recipes::Screen::List => rsx! { views::recipes::RecipesView {} },
             crate::recipes::Screen::Detail => rsx! { views::recipes::RecipeDetailView {} },
         },
+        root: Some(|_| rsx! { views::recipes::RecipesView {} }),
         // Spelled inline rather than as a `recipes_key` beside `code_key`:
         // one destination is one hunk, and five branches each adding a
         // free function to the bottom of this file is five overlapping ones.
@@ -195,6 +224,7 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
             crate::skills::Screen::List => rsx! { views::skills::SkillsView {} },
             crate::skills::Screen::Detail => rsx! { views::skills::SkillDetailView {} },
         },
+        root: Some(|_| rsx! { views::skills::SkillsView {} }),
         // The key mapping lives in `crate::skills` rather than here, so that
         // adding this destination is one row in this table and not a row plus
         // a function plus a test.
@@ -226,6 +256,7 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
                 rsx! { views::scheduler::ScheduledJobView {} }
             }
         },
+        root: Some(|_| rsx! { views::scheduler::SchedulerView {} }),
         // The key mapping is a free function in `crate::scheduler`, next to the
         // enum it reads, so it can be tested without a Dioxus runtime.
         key: |ctx| {
@@ -256,6 +287,7 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
                 rsx! { views::extensions::ExtensionDetailView {} }
             }
         },
+        root: Some(|_| rsx! { views::extensions::ExtensionsView {} }),
         // The key mapping is a free function in `crate::extensions`, next to
         // the enum it reads, so it can be tested without a Dioxus runtime.
         key: |ctx| {
@@ -275,6 +307,9 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         },
         at_root: |ctx| (ctx.tab)() == Tab::Home && (ctx.screen)() == Screen::Settings,
         view: |_| rsx! { views::settings::SettingsView {} },
+        // One screen, no list. On the desktop that is a two-column shell:
+        // a placeholder column beside Settings would be a column of nothing.
+        root: None,
         key: |ctx| {
             ((ctx.tab)() == Tab::Home && (ctx.screen)() == Screen::Settings).then_some("settings")
         },
@@ -367,6 +402,23 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), count, "two destinations share an id");
+    }
+
+    /// A destination with no root screen is a blank middle column on the
+    /// desktop, and nothing else would report it: the mobile shell never reads
+    /// the field, so every phone gate passes with the hole in place. Settings
+    /// is the one row that means it — one screen, nothing to list.
+    #[test]
+    fn every_destination_but_settings_lists_something() {
+        for dest in DESTINATIONS {
+            assert_eq!(
+                dest.root.is_some(),
+                dest.id != "settings",
+                "{} has no root screen, so the desktop shell has nothing to \
+                 keep in its list column while a detail is open",
+                dest.id
+            );
+        }
     }
 
     /// Every destination has to be reachable from the drawer: a row in a

@@ -13,6 +13,7 @@ use std::time::Duration;
 use dioxus::prelude::*;
 
 use crate::icons::Icon;
+use crate::shell::Shell;
 use crate::views::ConnBadge;
 
 /// The floating top bar: a leading control, the title, and whatever the
@@ -117,12 +118,61 @@ impl RowFace {
 
     /// Design rule 7 exempts the destructive control that is already being
     /// pressed: it takes the saturated fill, where everything else tints.
-    pub(crate) const fn class(self) -> &'static str {
-        if self.danger {
-            "swipe-action danger"
-        } else {
-            "swipe-action"
+    ///
+    /// Two shells, two classes, and deliberately not one class with a desktop
+    /// override: `.swipe-action` is a full-height 84px slab with the card's
+    /// curve on its trailing edge, which is the right shape for the last item
+    /// of a snap scroller and the wrong shape for anything else. A row that
+    /// does not swipe should not be wearing the swipe's clothes with three
+    /// declarations taken back off.
+    pub(crate) const fn class(self, shell: Shell) -> &'static str {
+        match (shell, self.danger) {
+            (Shell::Mobile, true) => "swipe-action danger",
+            (Shell::Mobile, false) => "swipe-action",
+            (Shell::Desktop, true) => "row-action danger",
+            (Shell::Desktop, false) => "row-action",
         }
+    }
+}
+
+/// The word beside a row action's icon, and the button's `title`. One or the
+/// other, never both, and which one is a question about the shell.
+///
+/// On a phone the tray is a labelled column: the row has been dragged aside to
+/// reveal it, the buttons are 84px wide, and the word is the whole reason the
+/// drag was worth making. A `title` there would be an attribute nothing can
+/// read — there is no pointer to hover.
+///
+/// On the desktop the same action is a 32px icon sitting on every row all the
+/// time, and a word beside it on every row would be a second list running down
+/// the right-hand side. So the label becomes the accessible name instead,
+/// which is the arrangement goose's own desktop app uses for the identical
+/// control (`ui/desktop/src/components/sessions/SessionListView.tsx` puts
+/// `title` on every icon-only row button; `ExtensionItem.tsx` uses
+/// `aria-label`). The icon is always painted — `opacity-0
+/// group-hover:opacity-100` exists in that codebase, but on secondary chrome,
+/// and a delete you cannot see until you find it is not an affordance.
+///
+/// Returned as data rather than as two `rsx!` arms so the rule can be tested:
+/// the whole promise of this branch is that the mobile arm is unchanged, and
+/// an `Element` is not something a test can hold.
+///
+/// The word is `""` on the desktop rather than an `if` around the text node,
+/// and that is not a shortcut — it is what keeps the phone's markup provably
+/// identical. `"{word}"` with `word` bound to the label is the same rsx
+/// construct emitting the same text node as the bare `"{face.label}"` it
+/// replaces, whereas a conditional makes the node a branch: Dioxus writes an
+/// HTML comment where a false branch would have been, and the phone's DOM
+/// would then differ from the one every captured gallery state holds. An empty
+/// text node generates no flex item, so on the desktop it contributes nothing
+/// at all.
+pub(crate) const fn row_action_words(
+    shell: Shell,
+    face: RowFace,
+) -> (&'static str, Option<&'static str>) {
+    match shell {
+        Shell::Mobile => (face.label, None),
+        Shell::Desktop => ("", Some(face.label)),
     }
 }
 
@@ -190,17 +240,29 @@ pub(crate) fn ListRow(
                 }
             }
             if !actions.is_empty() {
+                // The container, its class and its place in the row are the
+                // same on both shells; `assets/desktop.css` re-flexes
+                // `.session-swipe` from `flex: 0 0 100%` to `flex: 1 1 auto`,
+                // which brings this element from past the row's right edge to
+                // inside it without a single change to the markup. That is why
+                // every `RowAction` call site in the app is untouched.
                 div { class: "session-actions",
                     for action in actions {
-                        button {
-                            key: "{action.face.label}",
-                            class: action.face.class(),
-                            onclick: move |e: Event<MouseData>| {
-                                e.stop_propagation();
-                                action.on_pick.call(());
-                            },
-                            Icon { name: action.face.icon }
-                            "{action.face.label}"
+                        {
+                            let (word, title) = row_action_words(Shell::CURRENT, action.face);
+                            rsx! {
+                                button {
+                                    key: "{action.face.label}",
+                                    class: action.face.class(Shell::CURRENT),
+                                    title,
+                                    onclick: move |e: Event<MouseData>| {
+                                        e.stop_propagation();
+                                        action.on_pick.call(());
+                                    },
+                                    Icon { name: action.face.icon }
+                                    "{word}"
+                                }
+                            }
                         }
                     }
                 }
@@ -269,6 +331,10 @@ pub(crate) fn SearchField(
     }
 }
 
+/// Everything here takes `Shell` as an argument and nothing reads
+/// `Shell::CURRENT`. `cargo test` runs with the default features on a host, so
+/// `CURRENT` is always `Desktop` there — a mobile assertion that read it would
+/// be asserting about the desktop arm and passing.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,7 +345,7 @@ mod tests {
         assert_eq!(face.label, "Delete");
         assert_eq!(face.icon, "trash");
         assert!(face.danger);
-        assert_eq!(face.class(), "swipe-action danger");
+        assert_eq!(face.class(Shell::Mobile), "swipe-action danger");
     }
 
     /// The saturated fill is the destructive exemption, not the default: a
@@ -288,6 +354,112 @@ mod tests {
     fn an_ordinary_tray_button_is_not_painted_as_a_danger() {
         let face = RowFace::plain("Archive", "archive");
         assert!(!face.danger);
-        assert_eq!(face.class(), "swipe-action");
+        assert_eq!(face.class(Shell::Mobile), "swipe-action");
+    }
+
+    /// The phone's arm is FROZEN. These four strings are what
+    /// `assets/main.css` styles, what `src/viewport.rs`'s tap-to-close handler
+    /// and `src/domdump.rs`'s `swiped` detector look for, and what all 49
+    /// captured gallery states contain. A change to any of them is a change to
+    /// mobile rendering, which is the one thing the desktop shell promised not
+    /// to make — so this is the assertion that turns the promise into a gate.
+    #[test]
+    fn the_phone_row_action_is_exactly_what_shipped() {
+        let delete = RowFace::DELETE;
+        let rename = RowFace::plain("Rename", "pencil");
+        assert_eq!(delete.class(Shell::Mobile), "swipe-action danger");
+        assert_eq!(rename.class(Shell::Mobile), "swipe-action");
+        // A labelled button and no `title`, exactly as before: the tray's
+        // buttons have always carried their word, and they have never carried
+        // an attribute.
+        assert_eq!(row_action_words(Shell::Mobile, delete), ("Delete", None));
+        assert_eq!(row_action_words(Shell::Mobile, rename), ("Rename", None));
+    }
+
+    /// The desktop's arm: an icon with the label as its accessible name, and
+    /// no word in the row.
+    #[test]
+    fn the_desktop_row_action_names_itself_without_a_word_in_the_row() {
+        for face in [RowFace::DELETE, RowFace::plain("Rename", "pencil")] {
+            let (word, title) = row_action_words(Shell::Desktop, face);
+            assert_eq!(word, "");
+            assert_eq!(
+                title,
+                Some(face.label),
+                "an icon-only button with no accessible name is a control \
+                 nobody can identify"
+            );
+        }
+    }
+
+    /// The literals above are pinned to this file. This pins them to the
+    /// SHIPPED MARKUP: `docs/gallery-states.json` is 49 states dumped out of
+    /// the running app on a device, it is what `docs/audit.js` measures, and
+    /// it is never hand-edited. So the phone's tray button is reconstructed
+    /// here from what the code says it emits and looked up in what the phone
+    /// actually emitted — which is as close to "mobile rendering did not
+    /// change" as anything can get without a device in the room.
+    ///
+    /// Both halves matter. The opening tag proves no attribute was added: the
+    /// capture has `class` and then Dioxus's own `data-dioxus-id` and nothing
+    /// between them, so a `title` — which is exactly what the desktop arm adds
+    /// — would break this. The closing proves the word is still in the row and
+    /// still directly after the icon.
+    #[test]
+    fn the_phone_row_action_still_matches_the_markup_that_shipped() {
+        let gallery = shipped_markup();
+        for face in [RowFace::DELETE, RowFace::plain("Rename", "pencil")] {
+            let (word, title) = row_action_words(Shell::Mobile, face);
+            let class = face.class(Shell::Mobile);
+            assert_eq!(title, None, "the tray has never carried an attribute");
+            let opening = format!("<button class=\"{class}\" data-dioxus-id=\"");
+            assert!(
+                gallery.contains(&opening),
+                "no captured state contains `{opening}` — the phone's tray \
+                 button is no longer the one the gallery was captured from"
+            );
+            let closing = format!("</svg>{word}</button>");
+            assert!(
+                gallery.contains(&closing),
+                "no captured state contains `{closing}` — the phone's tray \
+                 button has lost its word, or gained something between the \
+                 icon and it"
+            );
+        }
+        assert!(
+            !gallery.contains("row-action"),
+            "a desktop class reached the phone's captured markup"
+        );
+    }
+
+    /// The 49 states the phone was captured in, unescaped.
+    ///
+    /// Read from disk rather than `include_str!`ed, following
+    /// `src/viewport.rs`'s own fixture test: it is 352K, and a test does not
+    /// need it in the binary.
+    fn shipped_markup() -> String {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/gallery-states.json");
+        let raw = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(!raw.is_empty(), "cannot read {}", path.display());
+        let states: std::collections::BTreeMap<String, String> =
+            serde_json::from_str(&raw).unwrap_or_default();
+        assert!(!states.is_empty(), "{} parsed to nothing", path.display());
+        states.into_values().collect::<Vec<_>>().join("\n")
+    }
+
+    /// A desktop row must not borrow the tray's class, or the tray's 84px
+    /// min-width, its full-row height and the card's curve on its trailing
+    /// edge all follow it onto a row that does not swipe.
+    ///
+    /// Iterating the faces rather than naming two is the habit that keeps this
+    /// honest: a `RowFace` added later is one line in this array away from
+    /// being covered.
+    #[test]
+    fn no_desktop_row_class_is_a_phone_class() {
+        for face in [RowFace::DELETE, RowFace::plain("Archive", "archive")] {
+            assert_ne!(face.class(Shell::Desktop), face.class(Shell::Mobile));
+            assert!(!face.class(Shell::Desktop).contains("swipe"));
+        }
     }
 }

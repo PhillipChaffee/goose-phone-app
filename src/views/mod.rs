@@ -26,6 +26,7 @@ pub(crate) mod settings;
 use dioxus::prelude::*;
 
 use crate::icons::Icon;
+use crate::shell::Shell;
 use crate::state::{AppCtx, ConnState};
 
 /// Small colored dot + label reflecting the connection state.
@@ -53,18 +54,29 @@ pub fn ConnBadge() -> Element {
 /// always-visible destructive control on a list you scroll with your thumb.
 /// The tap stops propagating because the row itself is the tap target
 /// (design rule 9), and "Delete" is not "open".
+///
+/// The second tray renderer in the app, and the reason it has to know about
+/// the shell too: `views/code.rs` builds its session rows by hand rather than
+/// through `ListRow`, so this is the ONLY delete a Code session has. Left
+/// alone it would be the one list on the desktop with no row action at all.
+/// Converting that row to `ListRow` is the tidier end state and would delete
+/// this component, but it changes the phone's markup, so it belongs to a pass
+/// that re-captures the gallery.
 #[component]
 pub fn SwipeDelete(on_delete: EventHandler<()>) -> Element {
+    let face = crate::views::chrome::RowFace::DELETE;
+    let (word, title) = crate::views::chrome::row_action_words(Shell::CURRENT, face);
     rsx! {
         div { class: "session-actions",
             button {
-                class: "swipe-action danger",
+                class: face.class(Shell::CURRENT),
+                title,
                 onclick: move |e: Event<MouseData>| {
                     e.stop_propagation();
                     on_delete.call(());
                 },
-                Icon { name: "trash" }
-                "Delete"
+                Icon { name: face.icon }
+                "{word}"
             }
         }
     }

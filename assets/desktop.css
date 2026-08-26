@@ -1,0 +1,377 @@
+/* ═══ the desktop shell ══════════════════════════════════════════════════
+ *
+ * Compiled into a desktop binary and nothing else (`src/css.rs`, SHELL). Two
+ * things follow from that, and both are the point:
+ *
+ *  - The `@media (max-width: …)` rules below are the ENTIRE width mechanism.
+ *    A phone binary does not contain this file, so they are unreachable from
+ *    one — which is why no Rust in this app observes a window resize, and why
+ *    the rule in src/viewport.rs (the native renderer sends every listened-to
+ *    event through a synchronous XHR) is honoured by having nothing to listen
+ *    to.
+ *
+ *  - Width decides pane count and NOTHING else. A narrow desktop window is a
+ *    narrow desktop app: the rows keep their inline action icons at every
+ *    width, there is no swipe tray and no pull-to-refresh at any width, and
+ *    the nav never becomes a panel you have to open. That is the same position
+ *    goose's own desktop app takes — its one width threshold
+ *    (NavigationContext.tsx, 700px) collapses the sidebar and changes nothing
+ *    else about how anything behaves.
+ *
+ * It is additive: assets/main.css is not edited by this branch, and every
+ * colour here is a token that exists in light and in dark.
+ *
+ * NOT in assets/features/, deliberately. docs/audit.js links that whole
+ * directory into 402x874 PHONE frames, and these rules would restyle every
+ * audited phone state into a layout no phone binary can produce. The exclusion
+ * is the same one assets/platform/ios.css takes, for a different reason. The
+ * cost is stated plainly: nothing in this file is audited yet, because the
+ * gallery holds no desktop state to audit. Capturing them needs a desktop run.
+ */
+
+/* ── 1. the shell and its columns ───────────────────────────────────────
+ *
+ * The widths are the mockups' and the breakpoints are their sum, which is the
+ * difference between a breakpoint and a round number:
+ *
+ *   three columns  212 + 330 + 360 = 902   (the mockups' "900", worked out)
+ *   two columns    212       + 360 = 572
+ *   one column     the nav drops to a 56px rail
+ *
+ * 360 is not a taste either: docs/design.md records that "320pt is a defensive
+ * width rather than a device; the narrowest this app really meets is 360", and
+ * `node docs/measure-composer.js 360` is a gate. The numbers are stated once,
+ * in src/shell/desktop.rs, and a test there checks this file against them. */
+
+.app > .shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.navpane {
+  flex: 0 0 212px;
+  width: 212px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 16px 8px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-primary);
+}
+
+/* `position: relative` is load-bearing and is not about the pane's own
+ * painting. `.fab` and anything else a view positions absolutely measure
+ * against the nearest positioned ancestor, which without this is `.app` — so
+ * the list's "New chat" pill would float in the bottom-right corner of the
+ * WINDOW, over the detail column, rather than over the list it belongs to.
+ * Modals are unaffected: `.modal-backdrop` and `.toast` are `position: fixed`
+ * already, and nothing here introduces a transform for them to be trapped by
+ * (the same property `.app` deliberately preserves for backdrop-filter). */
+.pane {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.pane-list {
+  flex: 0 0 330px;
+  width: 330px;
+  border-right: 1px solid var(--border-primary);
+}
+
+/* Two columns. Below the three-column sum the list and the detail share one,
+ * and `data-detail` — set in src/shell/desktop.rs from the same `at_root` the
+ * nav highlights with — says which of them has something in it. This is the
+ * layout goose's own desktop app is in at EVERY width: SchedulesView returns
+ * the detail INSTEAD of the list. It is the reference arrangement, not a
+ * degraded one. */
+@media (max-width: 901px) {
+  .pane-list {
+    flex: 1 1 auto;
+    width: auto;
+    border-right: 0;
+  }
+
+  .shell[data-detail="open"] .pane-list {
+    display: none;
+  }
+
+  .shell[data-detail="empty"] .pane-detail {
+    display: none;
+  }
+}
+
+/* One column. The nav keeps every destination and loses its words.
+ *
+ * It does not become an overlay and it does not gain a hamburger: that is the
+ * phone's answer, and a narrow desktop window is not a phone. A rail is the
+ * desktop answer — the destinations stay on screen, reachable in one click,
+ * and `title` (src/shell/mod.rs, nav_tooltip) gives the pointer their names
+ * back. */
+@media (max-width: 571px) {
+  .navpane {
+    flex: 0 0 56px;
+    width: 56px;
+    padding: 12px 4px;
+  }
+
+  /* A destination's label is a bare text node — `render_group` emits it with
+   * no element around it, because that is the phone's markup and the phone's
+   * markup does not change on this branch. So it is COLLAPSED rather than
+   * hidden: an anonymous inline box at zero font-size has no metrics, and the
+   * icon takes its own size back below. The text stays in the accessibility
+   * tree, which is what keeps each button's name. */
+  .navpane .drawer-item {
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .navpane .drawer-item .icon {
+    font-size: var(--icon-md);
+  }
+
+  /* A wordmark and two section headers do not fit in 56px, and neither is a
+   * control: nothing is lost but the labelling of a list that is now four
+   * icons long. */
+  .navpane .drawer-brand,
+  .navpane .drawer-group {
+    display: none;
+  }
+}
+
+/* ── 2. chrome that no longer floats ────────────────────────────────────
+ *
+ * On the phone the top of the screen is a row of detached glass controls over
+ * the page (docs/design.md: "Each carries its own glass. Nothing spans the
+ * width"). Three columns cannot have that. `.topbar` is `position: absolute`
+ * against `.app`, so three of them would stack in the same corner; and a
+ * floating pill per column, three abreast, is three pills where the eye
+ * expects one. A pane header is a flat bar with a rule under it, which is what
+ * the agreed mockups show. This deviation is written up in docs/design.md. */
+
+.topbar {
+  position: static;
+  min-height: 0;
+  padding: 10px var(--edge);
+  border-bottom: 1px solid var(--border-primary);
+  background: var(--bg-primary);
+}
+
+/* Out of flow, centred and reserving room for controls at both ends — all
+ * three are answers to a floating bar. In a pane header the title starts at
+ * the leading edge and takes what is left. */
+.topbar > .title,
+.topbar > .titlegroup {
+  position: static;
+  transform: none;
+  max-width: none;
+  text-align: left;
+}
+
+/* The glass belonged to the floating controls. On a bar that is itself a
+ * surface, a shadowed pill around each button is a second material for no
+ * reason. */
+.topbar > .icon-btn,
+.topbar-actions {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* The nav is already on screen, so a control that opens it does nothing —
+ * design rule 11. One rule rather than a branch in Rust, because there are two
+ * hamburgers: `views::chrome::TopBar` renders one for all twelve of its call
+ * sites, and `views/code.rs` hand-rolls a second. `display: none` takes it out
+ * of the tab order and the accessibility tree as well as off the screen. */
+.topbar > .icon-btn.menu {
+  display: none;
+}
+
+/* The band of material behind the status bar, and the padding that kept
+ * content out from under a bar that floated over it. Neither has anything to
+ * do here. */
+.app::before {
+  display: none;
+}
+
+.scroll,
+.compose {
+  padding-top: 12px;
+}
+
+/* ── 3. rows that do not swipe ──────────────────────────────────────────
+ *
+ * The row's markup does not change — this is the same `.session-item`,
+ * `.session-swipe` and `.session-actions` the phone renders, and that is why
+ * every `RowAction` call site in the app is untouched. What changes is one
+ * flex basis. `.session-swipe` is `flex: 0 0 100%` on the phone, which is what
+ * pushes the tray past the row's right edge and out of sight; letting it
+ * shrink brings the same element back inside the row.
+ *
+ * It also fixes a real bug rather than a wrong affordance. `.session-item` is
+ * `overflow-x: auto; scroll-snap-type: x mandatory` with the scrollbar hidden
+ * — on macOS a trackpad's two-finger swipe drives that natively, with no
+ * affordance to say so. Today the tray is reachable by accident and
+ * unreachable on purpose. */
+
+.session-item {
+  overflow-x: visible;
+  overflow-y: visible;
+  scroll-snap-type: none;
+}
+
+.session-swipe {
+  flex: 1 1 auto;
+}
+
+/* Top-right of the row, which is the mockups' `.acts{margin-left:auto}` over
+ * `.rowtop{align-items:flex-start}`. The top padding matches `.session-swipe`'s
+ * so the icons sit on the title's line. */
+.session-actions {
+  align-self: flex-start;
+  gap: 2px;
+  padding: 12px 12px 0 0;
+}
+
+/* Always visible, never revealed.
+ *
+ * goose's own desktop app hover-reveals the actions on a session CARD in a
+ * grid and shows them outright in a LIST row — ExtensionItem.tsx renders its
+ * gear unconditionally with `hover:text-text-primary`, and SchedulesView.tsx
+ * renders pause/resume/delete outright. A 330px column of rows is a list, so
+ * the icons are painted always and hover changes only their colour and their
+ * border. A delete you cannot see until you find it is not an affordance.
+ *
+ * 32px, not the mockups' 26. Two reasons that agree: docs/audit.js reports
+ * SMALL-TAP on any button under 32px in either axis, so 32 is this repo's own
+ * floor and desktop states will pass it when they are captured; and goose's
+ * own row buttons are `h-8`, which is 32. The 44px in docs/design.md is the
+ * HIG's TOUCH number and does not describe a pointer — the exception is
+ * written up there. */
+.row-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--icon-md);
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.row-action.danger {
+  color: var(--text-danger);
+}
+
+/* ── 4. the pointer tier ────────────────────────────────────────────────
+ *
+ * assets/main.css contains no `:hover` and no `:focus-visible` rule at all —
+ * the design system is `:active`-only, because it was written for a thumb.
+ * Every one of them is here, which is also what stops iOS inheriting sticky
+ * hover: the sheet is not in that binary.
+ *
+ * Colour and a border, never a reveal, and never a shape that moves: an icon
+ * that grows under the cursor is a target that moves while you are aiming. */
+
+/* The row shows its buttons' edges when the pointer is over it — the mockups'
+ * `.card:hover .act{border-color}`. The icons were already there; this only
+ * says they are pressable. */
+.session-item:hover .row-action {
+  border-color: var(--border-primary);
+}
+
+.row-action:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-color: var(--border-primary);
+}
+
+/* Destructive keeps its own colour under the cursor rather than resolving to
+ * the ordinary one — the reference's `text-red-500 hover:text-red-600`, in the
+ * token that already holds exactly that value (--text-danger is #c62828 light,
+ * #ff8080 dark). */
+.row-action.danger:hover {
+  color: var(--text-danger);
+  border-color: var(--border-danger);
+  background: color-mix(in srgb, var(--bg-danger) 10%, var(--bg-primary));
+}
+
+.session-item:hover {
+  border-color: var(--text-tertiary);
+}
+
+.drawer-item:hover {
+  background: var(--bg-tertiary);
+}
+
+/* Keyboard focus, for every control in the app at once.
+ *
+ * `--text-primary` rather than a new accent token: it is defined in light and
+ * in dark, it is by construction the highest-contrast colour against every
+ * surface in the file, and inventing an accent is a design decision this
+ * branch has no mandate for. `:focus-visible` and not `:focus`, so a click
+ * does not leave a ring behind it. */
+:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ── 5. the column with nothing in it ───────────────────────────────────
+ *
+ * The state a three-column app is in the moment it launches, and the one state
+ * with no precedent to copy: goose's own desktop app never has it, because
+ * there a detail replaces its list rather than sitting beside it. */
+
+.pane-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+/* Secondary, not tertiary. Measured against `--bg-primary` in a browser,
+ * `--text-tertiary` is 2.20:1 in light and 2.87:1 in dark — under the 3:1 that
+ * meaningful non-text has to meet, at both. docs/design.md's Deviations
+ * section already records that number and reserves tertiary for dots and
+ * rules; a 40px glyph that is the only thing in an empty column is not one of
+ * those. */
+.pane-empty > .icon {
+  font-size: 40px;
+  color: var(--text-secondary);
+}
+
+.pane-empty-line {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: var(--text-lg);
+  line-height: var(--lh-md);
+  color: var(--text-primary);
+}
+
+.pane-empty-hint {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}

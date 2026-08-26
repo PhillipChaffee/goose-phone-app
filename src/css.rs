@@ -50,3 +50,44 @@ pub(crate) const PLATFORM: &str = include_str!("../assets/platform/ios.css");
 
 #[cfg(not(target_os = "ios"))]
 pub(crate) const PLATFORM: &str = "";
+
+/// The desktop shell's sheet, emitted after [`PLATFORM`].
+///
+/// Everything the pinned nav, the panes and the pointer tier need — hover,
+/// focus rings, inline row actions — and, in two `@media (min-width: …)`
+/// rules, the whole of the width story: three columns become two and then
+/// one as the window narrows.
+///
+/// That those rules live HERE is the reason no Rust in this app observes a
+/// window resize. This string is only concatenated into a desktop binary, so
+/// a width breakpoint inside it is physically unreachable from a phone — which
+/// means pane count needs no bridge, no `document::eval` and no extension to
+/// `src/viewport.rs`, and the rule that every listened-to event costs a
+/// synchronous XHR is honoured by having nothing to listen to.
+///
+/// A separate const rather than another line in the `concat!` above for
+/// [`PLATFORM`]'s reason: `concat!` takes literals only, so a `cfg` cannot go
+/// inside it.
+///
+/// Deliberately NOT in `assets/features/`, also for [`PLATFORM`]'s reason:
+/// `docs/audit.js` links that whole directory into 402x874 PHONE frames. A
+/// desktop sheet there would restyle every audited phone state into a layout
+/// no phone binary can produce, and the audit would then report on it.
+///
+/// `target_os` and not `feature`, following [`PLATFORM`] again: the
+/// `cargo check --target aarch64-apple-ios` gate runs with default features,
+/// which is `desktop`.
+#[cfg(any(target_os = "ios", target_os = "android"))]
+pub(crate) const SHELL: &str = "";
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+pub(crate) const SHELL: &str = include_str!("../assets/desktop.css");
+
+// The phone's stylesheet is exactly what it was, and this is the whole of that
+// claim in one line: `STYLES` and `PLATFORM` are untouched by the desktop
+// branch, so if `SHELL` is empty on a phone then the string the web view is
+// handed is byte-for-byte the one it was handed before. Checked at COMPILE
+// time on the targets it is about, which is the only place it can be checked —
+// `cargo test` runs the desktop arm.
+#[cfg(any(target_os = "ios", target_os = "android"))]
+const _: () = assert!(SHELL.is_empty());

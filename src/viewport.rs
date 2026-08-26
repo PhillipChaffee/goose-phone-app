@@ -71,6 +71,15 @@ pub(crate) fn use_visual_viewport() {
 /// costs nothing per frame: the native renderer sends every listened-to event
 /// through a synchronous XHR, so an `onscroll` handler would put a blocking
 /// round-trip on each frame of a drag.
+///
+/// Phone only, and the `cfg` is the point rather than a tidy-up. This and
+/// `PULL_TO_REFRESH` below are the two gestures, and "the desktop shell has no
+/// swipe tray and no pull-to-refresh" is a claim worth making structural: a
+/// desktop binary does not contain the script, so it cannot install four touch
+/// listeners and append a spinner to `document.body` by accident. The only
+/// caller of either is `src/shell/mobile.rs`, which is itself compiled for
+/// exactly these targets.
+#[cfg(any(target_os = "ios", target_os = "android"))]
 const CLOSE_OPEN_ROW: &str = r"
 document.addEventListener('click', (e) => {
   const row = e.target.closest && e.target.closest('.session-item');
@@ -85,6 +94,7 @@ document.addEventListener('click', (e) => {
 ";
 
 /// Install the tap-to-close behaviour for swiped-open rows.
+#[cfg(any(target_os = "ios", target_os = "android"))]
 pub(crate) fn use_close_open_row() {
     use_effect(move || {
         document::eval(CLOSE_OPEN_ROW);
@@ -260,6 +270,7 @@ fn jump_script(id: &str) -> String {
 /// the swipe handler does not expect them; instead the indicator animates down
 /// from behind the chrome on its own, which also works for a list too short to
 /// rubber-band at all.
+#[cfg(any(target_os = "ios", target_os = "android"))]
 const PULL_TO_REFRESH: &str = r#"
 (() => {
   if (window.__ptrWired) return;
@@ -368,58 +379,73 @@ pub(crate) fn use_file_picker() {
 ///
 /// The scroller names its own refresh in `data-refresh`, so a list that has
 /// nothing to fetch simply does not set it and the gesture never starts.
+#[cfg(any(target_os = "ios", target_os = "android"))]
 pub(crate) fn use_pull_to_refresh() {
     let ctx = crate::state::use_app_ctx();
     use_effect(move || {
         let mut eval = document::eval(PULL_TO_REFRESH);
         spawn(async move {
             while let Ok(which) = eval.recv::<String>().await {
-                match which.as_str() {
-                    "chats" => {
-                        spawn_forever(
-                            async move { crate::state::refresh_sessions(&ctx, false).await },
-                        );
-                    }
-                    "code" => {
-                        spawn_forever(async move {
-                            crate::code::refresh_code_chats(&ctx).await;
-                            // The asks are part of what this list says, so a
-                            // pull refreshes them too rather than leaving the
-                            // cards up to ten seconds behind the rows.
-                            crate::code::refresh_code_permissions(&ctx).await;
-                        });
-                    }
-                    "diff" => crate::code::load_code_diff(&ctx),
-                    "pulls" => crate::code::refresh_pulls(&ctx),
-                    // The extensions list has no refresh button on purpose
-                    // (`views/extensions.rs` says why), so this arm is the
-                    // only way back to the server that a reader has.
-                    // `refresh` drives both the list and the warnings through
-                    // `load_remote`, so `loading` toggles and the spinner
-                    // clears itself.
-                    "extensions" => {
-                        spawn_forever(async move { crate::extensions::refresh(&ctx).await });
-                    }
-                    "skills" => crate::skills::refresh(&ctx),
-                    // ---- one arm per feature that owns a list ----
-                    //
-                    // A feature's scroller sets `data-refresh` to its own
-                    // name and claims that name here. The gesture and the
-                    // lists it serves were written on different branches:
-                    // the name is the whole contract between them, and an
-                    // unclaimed one is a pull that spins and fetches
-                    // nothing.
-                    "recipes" => crate::recipes::refresh(&ctx),
-                    // The Scheduler has two scrollers and one name: pulling on
-                    // a job's detail refreshes that job's runs *and* the list
-                    // behind it, because the dot on the row it came from is the
-                    // same fact as the buttons on the screen it is on.
-                    "scheduler" => crate::scheduler::pull_refresh(&ctx),
-                    _ => {}
-                }
+                refresh_named(&ctx, &which);
             }
         });
     });
+}
+
+/// Re-fetch the list a scroller's `data-refresh` names.
+///
+/// Three routes arrive here and there is one `match` for exactly that reason:
+/// the phone's pull gesture above, and on the desktop ⌘R and arriving at a
+/// destination (`src/shell/desktop.rs`). A list that could be refreshed by one
+/// route and not the others is a list that is stale depending on how you
+/// asked.
+///
+/// An unrecognised name is deliberately not an error: `.scroll` elements that
+/// set no `data-refresh` at all are the majority, and a destination with
+/// nothing to fetch — Settings — reaches this by id and should do nothing.
+/// What catches a name with no arm is the test at the bottom of this file,
+/// which reads the views for the names they emit and this file for the arms
+/// that answer them.
+pub(crate) fn refresh_named(ctx: &crate::state::AppCtx, which: &str) {
+    let ctx = *ctx;
+    match which {
+        "chats" => {
+            spawn_forever(async move { crate::state::refresh_sessions(&ctx, false).await });
+        }
+        "code" => {
+            spawn_forever(async move {
+                crate::code::refresh_code_chats(&ctx).await;
+                // The asks are part of what this list says, so a pull
+                // refreshes them too rather than leaving the cards up to ten
+                // seconds behind the rows.
+                crate::code::refresh_code_permissions(&ctx).await;
+            });
+        }
+        "diff" => crate::code::load_code_diff(&ctx),
+        "pulls" => crate::code::refresh_pulls(&ctx),
+        // The extensions list has no refresh button on purpose
+        // (`views/extensions.rs` says why), so this arm is the only way back
+        // to the server that a reader has. `refresh` drives both the list and
+        // the warnings through `load_remote`, so `loading` toggles and the
+        // spinner clears itself.
+        "extensions" => {
+            spawn_forever(async move { crate::extensions::refresh(&ctx).await });
+        }
+        "skills" => crate::skills::refresh(&ctx),
+        // ---- one arm per feature that owns a list ----
+        //
+        // A feature's scroller sets `data-refresh` to its own name and claims
+        // that name here. The gesture and the lists it serves were written on
+        // different branches: the name is the whole contract between them, and
+        // an unclaimed one is a pull that spins and fetches nothing.
+        "recipes" => crate::recipes::refresh(&ctx),
+        // The Scheduler has two scrollers and one name: pulling on a job's
+        // detail refreshes that job's runs *and* the list behind it, because
+        // the dot on the row it came from is the same fact as the buttons on
+        // the screen it is on.
+        "scheduler" => crate::scheduler::pull_refresh(&ctx),
+        _ => {}
+    }
 }
 
 #[cfg(test)]

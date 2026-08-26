@@ -76,6 +76,11 @@ app works against your server from the Mac:
 dx serve --desktop
 ```
 
+That builds the **desktop shell**, not the phone one — same connection, same
+server, different arrangement. It is a fine way to prove the server is
+reachable; it is not a preview of the iPhone UI, which only the simulator and
+the device render.
+
 Enter your `https://<machine>.<tailnet>.ts.net` URL, secret, and working
 directory, and tap Test connection. (The Mac must be on the tailnet.) If this
 works, everything after here is purely an iOS packaging problem.
@@ -160,8 +165,10 @@ On first launch, if iOS says **Untrusted Developer**, go to
 
 > **Device mode is deploy-only.** Hot reload and app logs do not work over
 > `devicectl` in dx 0.7.10 — the dev-server address is never passed to the
-> device. Iterate with `dx serve --desktop` or the simulator, and read device
+> device. Iterate in the **simulator** — `dx serve --ios` — and read device
 > logs in **Console.app** with the iPhone selected in the sidebar.
+> `dx serve --desktop` builds the desktop shell and will not show you the
+> phone's layout, its swipe trays or its pull-to-refresh.
 
 ---
 
