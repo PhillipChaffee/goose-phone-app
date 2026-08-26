@@ -97,6 +97,60 @@ const REFRESH_KEY: &str = r"
 })();
 ";
 
+/// Escape closes what is open over the page.
+///
+/// The one keyboard expectation a Mac user brings to a dialog, and the app had
+/// no answer for it: with "Delete this chat?" up, Escape did nothing at all.
+///
+/// Entirely in JS, with no message back to Rust, and that is the design rather
+/// than a shortcut. Every sheet in this app owns its own `use_signal` in its
+/// own view — `ctx.scheduler.sheet`, a `confirm_delete` local, a `menu` local —
+/// so a Rust-side Escape would mean a registry of open dialogs for the shell to
+/// close, which is state this shell does not have and should not grow. What it
+/// does instead is press the control that is already on screen and already
+/// means cancel, which is why a dialog that gains a third button gets this for
+/// free and a dialog that removes its cancel correctly stops answering.
+///
+/// WHICH control is the whole care in this string. A `.modal-actions` button
+/// cannot be picked by position: the permission prompt's buttons come from the
+/// backend in the backend's order, and `views/chat.rs`'s
+/// `permission_button_class` paints "Always allow" as `.btn.secondary` — so
+/// "click the secondary" would answer a permission request with the broadest
+/// possible grant. `p.modal-body` is rendered by `views::mod::Confirm` and by
+/// nothing else in the app, so it is the discriminator: inside a Confirm,
+/// Cancel is `.btn.secondary` and is the first action; anywhere else the only
+/// safe move is the backdrop, which dismisses the sheets that opted into it
+/// (rename, the overflow menu, the pickers) and correctly does nothing to a
+/// permission prompt, which is a question that has to be answered.
+///
+/// `preventDefault` only when something was actually dismissed, so Escape
+/// keeps whatever meaning it has elsewhere — a native `<select>`, an IME —
+/// when no dialog is up.
+const DISMISS_KEY: &str = r"
+(() => {
+  if (window.__dismissKeyWired) return;
+  window.__dismissKeyWired = true;
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const back = document.querySelector('.modal-backdrop');
+    if (!back) return;
+    const dialog = back.querySelector('.modal');
+    const cancel = dialog && dialog.querySelector('.modal-body')
+      ? dialog.querySelector('.modal-actions > .btn.secondary')
+      : null;
+    e.preventDefault();
+    if (cancel) cancel.click(); else back.click();
+  });
+})();
+";
+
+/// Wire Escape to the cancel that is already on screen.
+fn use_dismiss_key() {
+    use_effect(|| {
+        document::eval(DISMISS_KEY);
+    });
+}
+
 /// Wire ⌘R to the same dispatch the pull gesture uses.
 fn use_refresh_key() {
     let ctx = crate::state::use_app_ctx();
@@ -181,6 +235,7 @@ pub(crate) fn AppShell() -> Element {
 
     use_arrival_refresh(dest);
     use_refresh_key();
+    use_dismiss_key();
 
     // The destination's own answer to "is anything open", which is the fact
     // the third column needs and needs no new state to hold. A destination
@@ -281,7 +336,13 @@ mod tests {
     /// `NavigationContext.tsx`) — so 212 is a measured width rather than a taste.
     const NAV: u32 = 212;
 
-    /// The list column's width, from the mockups.
+    /// The list column's FLOOR, from the mockups.
+    ///
+    /// The column is `clamp(330px, 30%, 460px)` in `assets/desktop.css` — at a
+    /// flat 330 the widest window was the one a list read worst in, with every
+    /// title ellipsised beside a detail pane that was mostly empty. 330 is
+    /// still the number the breakpoint is built from, because the clamp is at
+    /// its floor everywhere near it.
     const LIST: u32 = 330;
 
     /// The narrowest a content column is allowed to get.

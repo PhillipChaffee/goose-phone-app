@@ -250,7 +250,28 @@ pub(crate) fn ListRow(
     on_open: EventHandler<()>,
     children: Element,
 ) -> Element {
-    let marked = row_is_marked(Shell::CURRENT, selected);
+    // `selected` is a fact about the DATA — which id this destination has
+    // open — and every list gets it from a signal that outlives the screen
+    // that set it (`ctx.chat.session_id`, `ctx.scheduler.open`, …). So a row
+    // came back from a detail still wearing the highlight, and the two columns
+    // then said opposite things at the same time: the list painted a row as
+    // the one being shown while the pane beside it read "Nothing open — pick
+    // something from Chats to see it here". One click reproduced it (open a
+    // row, press the back chevron) and a fresh launch could show it unprompted.
+    //
+    // The missing half is whether the detail column is showing ANYTHING, and
+    // the app already knows: `at_root` is a destination's own answer to "is my
+    // stack at its root", which is exactly "nothing is open". `nav::current`
+    // resolves to the destination whose stack is on screen, which is the one
+    // whose list this row is in.
+    //
+    // The `&&` short-circuits, and that is the mobile proof rather than a
+    // micro-optimisation: `row_is_marked` is `false` on the phone whatever it
+    // is passed, so `nav::current` is never called there and the phone's rows
+    // subscribe to no signal they did not already read.
+    let ctx = crate::state::use_app_ctx();
+    let marked =
+        row_is_marked(Shell::CURRENT, selected) && !(crate::nav::current(&ctx).at_root)(&ctx);
     rsx! {
         li {
             // A conditional class rather than a literal, and the phone's value

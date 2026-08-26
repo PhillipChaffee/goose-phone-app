@@ -103,6 +103,39 @@ pub(crate) const fn nav_tooltip(shell: Shell, label: &'static str) -> Option<&'s
     }
 }
 
+/// Whether a destination paints itself as where you are.
+///
+/// Two shells, two questions, because the two shells put the nav in different
+/// relationships to the screen.
+///
+/// On the PHONE the drawer is an overlay over one screen, and the rule
+/// `src/nav.rs` states is that a destination is "here" only when its stack is
+/// at its root: from a chat, Chats is somewhere to go *back* to. Unchanged —
+/// the mobile arm is `at_root` and nothing else, which is the expression this
+/// replaces, verbatim.
+///
+/// On the DESKTOP the nav is pinned beside the columns it navigates, and
+/// `at_root` said something false there. Open anything and the pill went out:
+/// Chats' own list was still on screen, the chat it opened was in the column
+/// beside it, and NO destination in the nav was marked — while the list, one
+/// column over, was marking the open row. Highlight where you are not, no
+/// highlight where you are. So the desktop asks the question its layout can
+/// answer: is this destination's stack the one on screen, at whatever depth.
+/// That is `Destination::key`, which is already the app's answer to "which
+/// destination is showing" (`nav::current` finds the current one with it), so
+/// the pill cannot disagree with the columns.
+///
+/// Two `bool`s rather than the destination and the context, for
+/// [`nav_tooltip`]'s reason: a rule taken as data is a rule a test can hold,
+/// and the promise this branch is under is about the arm that no test run on
+/// this host ever executes.
+pub(crate) const fn nav_is_active(shell: Shell, at_root: bool, on_screen: bool) -> bool {
+    match shell {
+        Shell::Mobile => at_root,
+        Shell::Desktop => on_screen,
+    }
+}
+
 /// One labelled band of destinations.
 ///
 /// Moved here from `app.rs` unchanged, because the overlay drawer and the
@@ -135,7 +168,11 @@ pub(crate) fn render_group(ctx: &AppCtx, group: Group) -> Element {
         for dest in items {
             button {
                 key: "{dest.id}",
-                class: if (dest.at_root)(&ctx) { "drawer-item active" } else { "drawer-item" },
+                class: if nav_is_active(
+                    Shell::CURRENT,
+                    (dest.at_root)(&ctx),
+                    (dest.key)(&ctx).is_some(),
+                ) { "drawer-item active" } else { "drawer-item" },
                 title: nav_tooltip(Shell::CURRENT, dest.label),
                 onclick: move |_| {
                     (dest.go)(&ctx);
@@ -151,7 +188,28 @@ pub(crate) fn render_group(ctx: &AppCtx, group: Group) -> Element {
 
 #[cfg(test)]
 mod tests {
-    use super::{nav_tooltip, Shell};
+    use super::{nav_is_active, nav_tooltip, Shell};
+
+    /// The phone's rule is `at_root` and only `at_root` — a destination one
+    /// push deep is somewhere to go back to, not where you are — and the
+    /// desktop's is "this stack is the one on screen", at any depth. The
+    /// interesting row is the last one: one push into a destination, which is
+    /// where the two shells part company and where the desktop's pill used to
+    /// go out.
+    #[test]
+    fn the_phone_marks_a_root_and_the_desktop_marks_a_section() {
+        // Somewhere else entirely: neither marks it.
+        assert!(!nav_is_active(Shell::Mobile, false, false));
+        assert!(!nav_is_active(Shell::Desktop, false, false));
+
+        // At this destination's root: both mark it.
+        assert!(nav_is_active(Shell::Mobile, true, true));
+        assert!(nav_is_active(Shell::Desktop, true, true));
+
+        // Here, one push deep. The phone says "back", the desktop says "here".
+        assert!(!nav_is_active(Shell::Mobile, false, true));
+        assert!(nav_is_active(Shell::Desktop, false, true));
+    }
 
     /// The drawer's markup is frozen: `None` is how a Dioxus attribute is
     /// omitted entirely, so the phone's destination buttons gain nothing.
