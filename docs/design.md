@@ -813,29 +813,41 @@ number is the same claim in the only form this browser can hear. It needs no
 re-capture, which is what makes it compatible with never hand-editing the
 gallery.
 
-It walks a second axis too — **five phone sizes**, width *and* height:
-320×568, 375×667, 390×844, 402×874 and 440×956. Height travels with width
-because a phone is not a column, and that is not a detail. Both failures this
-axis found are "content taller than the space it was given", so holding the
-height at the reference 874 while narrowing invents a tall thin phone nobody
-owns and understates every one of them: at 375×874 the drawer reported 24
-findings, and at 375×667 — the size an SE 3rd gen actually is — it reported
+It walks a second axis too — **six phone sizes**, width *and* height:
+320×568, 360×800, 375×667, 390×844, 402×874 and 440×956. Height travels with
+width because a phone is not a column, and that is not a detail. Both failures
+this axis found are "content taller than the space it was given", so holding
+the height at the reference 874 while narrowing invents a tall thin phone
+nobody owns and understates every one of them: at 375×874 the drawer reported
+24 findings, and at 375×667 — the size an SE 3rd gen actually is — it reported
 116. 402×874 stays as the **reference size**, because it is what the gallery is
 captured at and what every measurement in this document was made against;
 contrast runs there and at the smallest text size alone, since the 18.66px
 large-text threshold makes every larger one strictly more permissive and a
 wider phone moves boxes rather than colours. 320×568 is in the list because
 `docs/measure-composer.js` already gates 320 as a defensive floor, and an audit
-that gave up at 375 would gate a narrower band than the composer script does —
-the two now share a floor, which is what stops them drifting apart. 393×852 is
-deliberately absent: three points from 390 is a question about how many columns
-one elastic chip has, which is that script's subject, not a question about the
-geometry of 98 screens.
+that gave up at 375 would gate a narrower band than the composer script does.
+360×800 is in it because this app ships to Android as well, WebView's CSS px is
+a dp, and 360dp is the width most Android phones report — a list of iPhones
+alone would gate half the codebase. It is the only entry here that is not an
+iPhone, and root 16px is the text size that goes with it, since the Dynamic
+Type opt-in is iOS-only.
 
-Adding that axis turned the gate red with **284 findings**, every one of them
-at AX5 and none of them at 390, 402 or 440. They were five causes, and both of
-the real ones had been on screen the whole time the audit reported clean at one
-size.
+The rest of the Android band is absent because it was measured rather than
+assumed: 393×852, 412×915 and 360×640 added to that list all report clean, and
+all three together would cost half again the runtime to restate what the six
+already say. 393×852 has a second reason — three points from 390 is a question
+about how many columns one elastic chip has, which is `measure-composer.js`'s
+subject, and that script does sweep 393. The two width lists are not the same
+list and are not meant to be: they share the 320 floor and the 360/375/390/402
+middle, and each holds one width the other does not (393 there, 440 here) for a
+reason stated where it is declared.
+
+Adding that axis turned the gate red with **308 findings**, every one of them
+at AX5 and none of them at 390, 402 or 440 — 148 at 320×568, 116 at 375×667 and
+24 at 360×800. They were six causes: five in the stylesheet, accounting for 288
+of them, and one in the check itself. Both of the real ones had been on screen
+the whole time the audit reported clean at one size.
 
 The first was the drawer, and it is the more instructive. `.drawer-nav` was
 given `flex: 1; min-height: 0; overflow-y: auto` precisely so the destinations
@@ -859,10 +871,11 @@ at 320×568: `streamable_http` 277px in a 256px `.banner`, `reviewed` 152px in a
 `Credentials` — uppercase with 0.06em of tracking, which is what makes it the
 worst of the four — 290px in a 254px card head, whose ink lands 3px past the
 right edge of the *screen* and is saved only by `.app`'s own overflow. All four
-are the second half of an idiom this stylesheet already states eleven times,
-and two of them already carried the first half (`min-width: 0`): the flex
-minimum had been lowered without the `overflow-wrap: anywhere` that lets the
-word actually break. `anywhere` rather than `break-word`, because only
+are the second half of an idiom this stylesheet already states nine times (ten
+counting the feature sheets; the tenth line a grep for it finds in `main.css`
+is a comment), and two of them already carried the first half (`min-width: 0`):
+the flex minimum had been lowered without the `overflow-wrap: anywhere` that
+lets the word actually break. `anywhere` rather than `break-word`, because only
 `anywhere` also lowers the min-content size the box is being sized from.
 
 The remaining 20 were the check being wrong, and are the one place this axis
@@ -890,9 +903,27 @@ the viewport *narrows*: the first walk afterwards reads the previous size's
 numbers. Reading `document.body.offsetHeight` does not clear it, because a
 page-level reflow is precisely what a locked subtree skips. It does not bite in
 the order the list is actually in, since that list only ever widens — but
-reverse the list with that line deleted and the run reports 300 findings
-against a true 284. It costs nothing measurable, because the walk was going to
-force that layout a moment later anyway.
+against the stylesheet in the tree, which the audit reports clean, reverse the
+list with that line deleted and the run reports **16 findings against a true
+zero**: the code card's `<pre>` at 423 in a 402 viewport, stale from 440, and
+at 343 in a 320, stale from 360. Put the line back and the reversed list is
+clean again. It costs nothing measurable, because the walk was going to force
+that layout a moment later anyway.
+
+Two coverage claims are asserted rather than assumed, because both had already
+been demonstrated to fail quietly. The contrast walk runs at one cell of the
+grid — the reference size, the smallest text size — so the entry carrying that
+flag *is* the scope of one of the two walks: delete the flag and, against a
+deliberately broken stylesheet, 158 real contrast failures are reported as
+`Clean`. It is now a startup error to have anything but exactly one, and the
+summary line names the cell rather than folding contrast into the whole
+product. Separately, every stylesheet is checked non-empty at startup, because
+a zero-byte `<link>` fires the load event and `document.styleSheets` counts a
+link that 404s — so nothing inside the page can tell a styled document from an
+unstyled one. Emptying `assets/features/skills.css` and running the gate
+reports **Clean**; emptying `assets/main.css` reports 73664 findings about
+`<textarea>`'s default 182×21 box and buttons at radius 0, which reads as a
+design regression rather than as a missing file.
 
 Three of its checks only mean something on the text-size axis. **`CLIPPED-Y`** is the
 vertical half of the clipped-text walk, with anything carrying a
@@ -916,10 +947,15 @@ width makes the bar taller and the scrim stops reaching it, which
 bar. Moving them is also what makes it honest to run the contrast walk at the
 reference size alone; what is left in that function is provably colour-only.
 
-Against the stylesheet as it stood before rule 14 landed, that pass reports
-**844 findings** — 36 at 16px, 36 at 17, 84 at 23 and 688 at 53 — and it is
-clean against the one in the tree. A check you cannot make fail is worth
-nothing.
+Against the stylesheet as it stood before rule 14 landed (`22a91ca^`), that
+pass reports **6424 findings** — 240 at 16px, 240 at 17, 600 at 23 and 5344 at
+53 — and it is clean against the one in the tree. A check you cannot make fail
+is worth nothing. Those are the numbers the whole grid gives, and the grid is
+what has to be restated whenever it grows: this figure read 844 (36/36/84/688)
+when it was written, measured at 402×874 alone and over the 43 states captured
+then. Pinning today's pass back to 402×874 gives 980 (40/40/96/804) — the same
+walk, six more captured screens. Re-measure it when either axis changes; a
+calibration number is only worth its date.
 
 It also repeats every state with the server-supplied strings swapped for the
 longest plausible value, because a captured state only shows the one string the
@@ -1053,9 +1089,14 @@ What the gallery still cannot tell you: safe-area insets are zero in a
 browser, so the floating chrome sits higher than it does on a device, and the
 font stack resolves to whatever is installed locally rather than to iOS's, so
 every text measurement is approximate. Positions and material are what the
-simulator is for. (Headless Chromium *does* composite `backdrop-filter` — a
-controlled test measured a stdev of 7.03 with the blur against 47.11 without,
-so a tint tuned as if the blur were absent comes out flat on a device.)
+simulator is for. Two more, both of them heights: the **keyboard-up viewport**
+is a real height this app renders at and no headless browser reports it, and
+every state is captured and measured **at rest** — `scripts/capture-gallery.py`
+records markup at the top of its scroller and no offset, so a screen scrolled
+under the chrome is a state that would have to be captured as one. (Headless
+Chromium *does* composite `backdrop-filter` — a controlled test measured a
+stdev of 7.03 with the blur against 47.11 without, so a tint tuned as if the
+blur were absent comes out flat on a device.)
 
 If you want numbers out of the real DOM rather than pixels, `document::eval`
 reaches into the live WKWebView and can send `getBoundingClientRect` and

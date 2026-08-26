@@ -4307,7 +4307,18 @@ body.away-from-bottom .scroll-bottom {
  * Secondary, not tertiary. This is normal-weight text, which the audit holds
  * to 4.5:1, and tertiary measures 2.20:1 in light (see the Deviations
  * section of docs/design.md). Tertiary stays for dots and rules, which are
- * non-text and only need 3:1. */
+ * non-text and only need 3:1.
+ *
+ * The only other rule in this file built from uppercase + 0.06em is
+ * `.settings h2`, and that pair is exactly what put "Credentials" 36px outside
+ * its card — so the absence of `overflow-wrap: anywhere` here is deliberate,
+ * not an oversight. This heading is the one place the idiom does not need it:
+ * `Group::header()` in src/nav.rs returns a `&'static str`, so the text is the
+ * app's own and not a server's. Measured at AX5 on a 320pt screen, the worst
+ * case this app can produce: "LIBRARY" is 177px in a 238px box, 62px of slack,
+ * which is about two more characters. A group named longer than that needs the
+ * declaration adding, and the audit does say so — SPILL fires on this box,
+ * because nothing clips it either. */
 .drawer-group {
   margin: 16px 12px 6px;
   color: var(--text-secondary);

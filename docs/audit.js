@@ -39,10 +39,11 @@
 // by how many COLUMNS it has rather than by which phone it is on — so
 // docs/measure-composer.js sweeps that one row across six widths at one
 // height, including two (390, 393) that are three points apart and were where
-// the model chip was at its worst. Both scripts now gate the same floor, 320
-// effective points; that is what stops them drifting apart. The text spilling
-// out of a chip that SPILL below now catches is the check that script had and
-// this one did not.
+// the model chip was at its worst. The two lists are not the same list and are
+// not meant to be: they share the 320 floor and the 360/375/390/402 middle,
+// and each holds one width the other does not (393 there, 440 here) for a
+// reason stated where it is declared. The text spilling out of a chip that
+// SPILL below now catches is the check that script had and this one did not.
 
 const fs = require('fs');
 const os = require('os');
@@ -63,6 +64,23 @@ const STYLESHEETS = [
       .map((f) => path.join(FEATURE_CSS, f))
     : []),
 ];
+// A sheet that is present but EMPTY is the same fault stated quietly, and this
+// walk cannot see it from the inside: `<link>`ing a zero-byte file fires the
+// load event, and `document.styleSheets` counts a link that 404s too, so
+// neither the wait nor the count can tell a styled document from an unstyled
+// one. Measured: empty assets/features/skills.css and the run still reports
+// **Clean**, because the two selectors it carries are the whole difference
+// between a styled `.skill-body` and an unstyled one. Empty assets/main.css
+// and it is the loud version of the same fault — 73664 findings about
+// `<textarea>`'s default 182x21 box and buttons at radius 0, which read as a
+// design regression rather than as a missing file. One stat each, at startup,
+// so neither outcome has to be diagnosed from the findings.
+for (const sheet of STYLESHEETS) {
+  if (!fs.existsSync(sheet) || fs.statSync(sheet).size === 0) {
+    console.error(`${sheet} is missing or empty — every screen it styles would be measured against the UA defaults`);
+    process.exit(1);
+  }
+}
 
 // ── text scale ──────────────────────────────────────────────────────────
 // The root font-size, in px, at each text size the app really runs at. Every
@@ -93,14 +111,15 @@ const STYLESHEETS = [
 const SCALES = [16, 17, 23, 53];
 
 // ── phone size ──────────────────────────────────────────────────────────
-// Every point size the app runs at, ascending. Height travels with width
-// because a phone is not a column: the two failures this axis found are both
-// "content is taller than the space it was given", and holding the height at
-// the reference 874 while narrowing invents a tall thin phone nobody owns and
-// understates every one of them. Measured, before the fixes that came with
-// this list: 375x874 reported 24 findings and 375x667 — the size an SE 3rd gen
-// actually is — reported 116, with two destination names painted on top of
-// each other.
+// A phone size the app runs at, ascending, on BOTH platforms it ships to —
+// this app is iOS and Android from one codebase, and a list of iPhones alone
+// would gate half of it. Height travels with width because a phone is
+// not a column: the two failures this axis found are both "content is taller
+// than the space it was given", and holding the height at the reference 874
+// while narrowing invents a tall thin phone nobody owns and understates every
+// one of them. Measured, before the fixes that came with this list: 375x874
+// reported 24 findings and 375x667 — the size an SE 3rd gen actually is —
+// reported 116, with two destination names painted on top of each other.
 //
 //   320x568  what a 4.7" phone (SE 2nd/3rd gen, 8) reports with Display Zoom
 //            set to Larger Text, and the layout of the retired 4" phones.
@@ -110,24 +129,37 @@ const SCALES = [16, 17, 23, 53];
 //            ("a run that never sees the tight case is not a test of the tight
 //            case"), and an audit that gave up at 375 would gate a narrower
 //            band than the composer script does.
+//   360x800  Android's modal size: WebView's CSS px is a dp, and 360dp is the
+//            width most Android phones in the field report. It is the one size
+//            here that is not an iPhone, and root 16px above is the text size
+//            that goes with it (the Dynamic Type opt-in is iOS-only). Clean
+//            today — but so is 390, and it is in this list for the same
+//            reason: "between two clean sizes" is not a proof on this axis.
 //   375x667  SE (3rd gen), sold new until 2025 — the narrowest size a phone
 //            Apple supports gives at the default zoom, and where the drawer
 //            failure below is 38px rather than the 2px a tall 375 shows.
-//   390x844  12 / 13 / 14 / 16e — the size most phones in the field report.
+//   390x844  12 / 13 / 14 / 16e — the size most iPhones in the field report.
 //            It finds nothing today; it is here because the failure
 //            docs/measure-composer.js was written for was a width rendering
-//            LESS than a narrower one, so "between two clean sizes" is not a
-//            proof of anything on this axis.
+//            LESS than a narrower one.
 //   402x874  17 Pro / 16 Pro. The reference: what docs/style-gallery.html is
 //            captured at and what every measurement in docs/design.md was made
 //            against. CONTRAST runs here alone — see the walk below.
 //   440x956  17 Pro Max / 16 Pro Max, the widest.
 //
-// 393x852 (14 Pro / 15 / 16) is deliberately absent: three points from 390 is
-// a question about how many columns one elastic chip has, which is
-// docs/measure-composer.js's subject, not a question about the geometry of 98
-// screens. 375x812 (13 mini) is absent because 375x667 is the same width and
-// strictly harsher in the axis that turned out to matter.
+// 393x852 (14 Pro / 15 / 16, and Pixel) is deliberately absent: three points
+// from 390 is a question about how many columns one elastic chip has, which is
+// docs/measure-composer.js's subject — that script does sweep 393 — not a
+// question about the geometry of 98 screens. 375x812 (13 mini) is absent
+// because 375x667 is the same width and strictly harsher in the axis that
+// turned out to matter. And the rest of the Android band is absent because it
+// was measured rather than assumed: adding 393x852, 412x915 and 360x640 to
+// this list reports Clean, so all three would cost half again the runtime to
+// restate what the six below already say.
+//
+// What is still uncovered, and cannot be covered here: the keyboard-up
+// viewport, which is a real height this app renders at and which no headless
+// browser reports.
 //
 // A fixed list rather than argv, unlike measure-composer.js's widths: that
 // script's are a sweep for a comparison, while these are a COVERAGE CLAIM
@@ -135,11 +167,25 @@ const SCALES = [16, 17, 23, 53];
 // when someone passes an argument is not a claim.
 const SIZES = [
   { width: 320, height: 568 },
+  { width: 360, height: 800 },
   { width: 375, height: 667 },
   { width: 390, height: 844 },
   { width: 402, height: 874, reference: true },
   { width: 440, height: 956 },
 ];
+
+// CONTRAST runs at the reference size alone, so that flag is not a label: it
+// is the entire scope of one of this script's two walks. Drop the key while
+// rewriting the list and the colour walk stops running while the summary goes
+// on saying it found nothing — measured, with `.session-title, .setting-value,
+// .banner { color: #bbbbbb }` appended to main.css: 158 real contrast failures
+// reported as Clean. Asserted rather than defaulted, because "whichever one
+// happens to be first" is not a reference size.
+const REFERENCE = SIZES.filter((size) => size.reference);
+if (REFERENCE.length !== 1) {
+  console.error(`exactly one SIZES entry must carry \`reference\` — it is where CONTRAST runs; found ${REFERENCE.length}`);
+  process.exit(1);
+}
 
 // ── stress ──────────────────────────────────────────────────────────────
 // A captured state only ever shows the one string the app happened to be
@@ -198,7 +244,6 @@ const stressed = (states) => states.flatMap((state) => {
   if (!hits.length) return [];
   return [{
     label: `${state.label} (long text)`,
-    scroll: state.scroll,
     body: state.body,
     swap: Object.fromEntries(hits),
   }];
@@ -607,8 +652,14 @@ const CONTRAST = () => {
     console.error(`no ${STATES}; run scripts/capture-gallery.py first`);
     process.exit(1);
   }
+  // Every state is measured at rest. scripts/capture-gallery.py captures a
+  // screen at the top of its scroller and records markup alone, so there is no
+  // offset to replay — a scrolled state would have to be captured as one, and
+  // the machinery for replaying an offset here was carrying a comment about
+  // behaviour no run could produce. What that leaves uncovered is named in
+  // docs/design.md with the rest of this script's blind spots.
   const states = Object.entries(JSON.parse(fs.readFileSync(STATES, 'utf8')))
-    .map(([label, body]) => ({ label, body, scroll: '' }));
+    .map(([label, body]) => ({ label, body }));
   if (states.length === 0) {
     console.error(`${STATES} is empty`);
     process.exit(1);
@@ -651,7 +702,7 @@ const CONTRAST = () => {
       // within that. Both are set from here rather than written into the
       // document because the state is otherwise identical — same markup, same
       // swap — and a reflow is far cheaper than a navigation: this list costs
-      // 980 resizes and no extra page loads.
+      // 1176 resizes and no extra page loads.
       //
       // Size outside scale rather than inside, so the flush below runs once
       // per size instead of once per size and scale.
@@ -673,12 +724,15 @@ const CONTRAST = () => {
         // It does not bite in the order SIZES is actually in, because that
         // list only ever widens and the narrowing step back to the front of it
         // lands on a document that has just been navigated and never measured.
-        // That is a property of the list, not of the walk. Reverse SIZES with
-        // this line deleted and the run reports 300 findings against a true
-        // 284; put it back and it reports 284 again. Measured at no cost —
-        // the walk was going to force that layout a moment later anyway — so
-        // it buys the result's independence from the order of a list somebody
-        // will eventually reorder.
+        // That is a property of the list, not of the walk. Against the
+        // stylesheet in the tree, which this reports Clean: reverse SIZES with
+        // this line deleted and the run reports 16 findings against a true
+        // zero — the <pre> at 423 in a 402 viewport it is stale from 440, and
+        // at 343 in a 320 it is stale from 360 — and put it back and the
+        // reversed list is Clean again. Measured at no cost, because the walk
+        // was going to force that layout a moment later anyway, so it buys the
+        // result's independence from the order of a list somebody will
+        // eventually reorder.
         //
         // Do not delete it as a no-op. Without it the walk still reports; it
         // reports the wrong size, and on the steps where the stale value is
@@ -686,15 +740,6 @@ const CONTRAST = () => {
         await page.evaluate(() => {
           for (const el of document.querySelectorAll('*')) el.getBoundingClientRect();
         });
-        if (state.scroll) {
-          // Inside the size loop, not before it: a resize re-clamps scrollTop
-          // against the new scrollHeight, so a state scrolled once at the top
-          // would be measured un-scrolled at four of the five sizes.
-          await page.evaluate((want) => {
-            const el = document.querySelector('.scroll');
-            if (el) el.scrollTop = want === 'bottom' ? el.scrollHeight : (parseInt(want, 10) || 0);
-          }, state.scroll);
-        }
         // An inline style on <html> beats every stylesheet rule, which is what
         // makes it a simulation of the Dynamic Type opt-in rather than a rule
         // competing with one.
@@ -729,13 +774,20 @@ const CONTRAST = () => {
   fs.rmSync(tmp, { recursive: true, force: true });
 
   // The sizes are named rather than counted: an unnamed count is exactly how a
-  // coverage claim rots.
+  // coverage claim rots. The two walks are stated separately for the same
+  // reason — GEOMETRY runs the whole product below, CONTRAST runs one cell of
+  // it, and one sentence over both would claim 24x the colour coverage this
+  // script has.
   const scope = `${states.length} states x ${themes.length} theme${themes.length > 1 ? 's' : ''}`
     + ` x ${SIZES.length} phone sizes (${SIZES.map((z) => `${z.width}x${z.height}`).join('/')})`
     + ` x ${SCALES.length} text sizes (${SCALES.join('/')}px)`;
+  const [ref] = REFERENCE;
+  const contrastScope = `${ref.width}x${ref.height} at root ${SCALES[0]}px`;
   if (findings) {
-    console.log(`\n${findings} finding${findings > 1 ? 's' : ''} across ${scope}.`);
+    console.log(`\n${findings} finding${findings > 1 ? 's' : ''} across ${scope}`
+      + ` (contrast at ${contrastScope} only).`);
     process.exit(1);
   }
-  console.log(`Clean: ${scope}, no geometry or contrast findings.`);
+  console.log(`Clean: no geometry findings across ${scope};`
+    + ` no contrast findings at ${contrastScope}, which is where that walk runs.`);
 })();

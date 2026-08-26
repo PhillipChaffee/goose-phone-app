@@ -23,10 +23,11 @@
 // docs/audit.js cannot see any of it. Its overflow walk visits elements, and
 // spilling text is an anonymous text node; its clipped-text check requires
 // overflow-x: hidden, which a chip never sets. That audit walks whole screens
-// at five whole phone sizes now, down to the same 320pt floor this file uses,
-// but the sizes below are still a finer sweep at one height — 390 and 393 are
-// three points apart, and this row's worst case is a column count rather than
-// a phone.
+// at six whole phone sizes now, and the two lists overlap on five of them —
+// the 320 floor and the 360/375/390/402 middle — but they are not the same
+// list and are not meant to be. It holds 440 because a phone that wide is a
+// screen layout; these hold 393 because 390 and 393 are three points apart and
+// this row's worst case is a column count rather than a phone.
 //
 // Two failures were invisible to this script as well, and both were on screen
 // the whole time it reported Clean. A label that clips itself makes `spill`
