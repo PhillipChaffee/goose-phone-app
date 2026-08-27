@@ -42,13 +42,11 @@ use crate::shell::render_group;
 /// `overflow-y: auto` and simply scrolls — but it is the first thing to give,
 /// so it is where the floor belongs. goose ships 400; the extra is the
 /// composer, which that app does not put in a column.
-/// `feature = "desktop"` as well as the module's own target gate: this is a
-/// number about a WINDOW, and there is only a window under that feature.
-/// Without it, `cargo check --no-default-features --features mobile` on a
-/// Mac — a real thing to type, and a configuration no gate covers — compiles
-/// this module for `target_os = "macos"` while `main.rs` takes the launch
-/// arm that never asks for it.
-#[cfg(feature = "desktop")]
+/// No gate of its own: this module is compiled only where a window exists,
+/// because `src/shell/mod.rs` declares it under
+/// `not(any(target_os = "ios", target_os = "android"))` and `Cargo.toml`
+/// gives `dioxus` its `desktop` feature under that same predicate. There is
+/// no longer a flag that can put the two out of step.
 pub(crate) const MIN_INNER: (f64, f64) = (480.0, 560.0);
 
 /// Refresh what is on screen. ⌘R on a Mac, Ctrl+R everywhere else.
@@ -514,7 +512,6 @@ mod tests {
 
     use dioxus::prelude::*;
 
-    #[cfg(feature = "desktop")]
     use super::MIN_INNER;
     use crate::nav::DESTINATIONS;
 
@@ -570,7 +567,6 @@ mod tests {
     /// floor above the two-column breakpoint and the narrowest layout becomes
     /// unreachable — designed, styled, and impossible to see; lower it and the
     /// window opens onto a width no tier covers.
-    #[cfg(feature = "desktop")]
     #[test]
     fn the_window_floor_lands_inside_the_narrowest_tier() {
         let (width, height) = MIN_INNER;

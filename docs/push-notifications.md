@@ -250,7 +250,7 @@ with its own reason, not a line buried in a feature branch.
 
 **The sharp edge:** CI's clippy gate is Linux-only
 (`.github/workflows/ci.yml:37`) and the iOS job runs `cargo check --package
-goose-mobile` (`ci.yml:127`), not clippy and not the whole workspace. As
+goose-mobile` (`ci.yml:131`), not clippy and not the whole workspace. As
 written, **the one crate holding every unsafe line in the repo would be the one
 crate no lint gate ever inspects.** Extend the iOS job to
 `cargo clippy --target aarch64-apple-ios ... -- -D warnings` and drop the

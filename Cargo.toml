@@ -69,6 +69,14 @@ description = "Mobile client (iOS/Android) for a remote goose AI agent server, w
 license = "MIT"
 
 [dependencies]
+# Featureless, and LOAD-BEARING even though it is compile-redundant — the two
+# target-conditional tables below cover every triple, so nothing needs this
+# entry to build. `dx` needs it. `dioxus-cli-0.7.10/src/build/renderer.rs:17`
+# does `dependencies.iter().find(|dep| dep.name == "dioxus")` with no target
+# filter and reads only that first entry's features, so this featureless one
+# has to be the first one it meets. Deleting the line was tried: `dx check`
+# then finds the `mobile` table instead and fails with "Could not autodetect
+# mobile platform. Use --ios or --android instead." Do not tidy it away.
 dioxus = { version = "0.7.10", features = [] }
 dioxus-sdk-storage = "0.7.0"
 goose-acp-client = { path = "crates/goose-acp-client" }
@@ -79,13 +87,56 @@ tokio = { version = "1", features = ["sync", "time", "macros"] }
 futures-util = "0.3"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 
+# ------------------------------------------------------- the renderer choice
+#
+# PLATFORM picks the renderer, at compile time, from the target triple — not
+# from a cargo feature anybody has to remember to pass. `dioxus`'s `desktop`
+# and `mobile` features are the SAME re-export of the SAME crate
+# (`dioxus-0.7.10/src/lib.rs:107-113`: both are `pub use dioxus_desktop`), and
+# `dioxus-desktop` already gates its platform-only surface on `target_os`
+# using this repo's own predicate (`lib.rs:43-49`). So the feature added
+# nothing the target did not already say, while costing every `cfg` in this
+# crate a second clause and costing CI an argument
+# (`--no-default-features --features mobile`) that had to be typed correctly
+# on a job nobody watches.
+#
+# The guarantee is now stronger than a flag: on an iOS or Android target the
+# `dioxus/desktop` feature is not enabled at all, so `dioxus::desktop` is
+# unnameable there — a `cargo check --target aarch64-apple-ios` with DEFAULT
+# features catches a stray window call as `error[E0433]`.
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+dioxus = { version = "0.7.10", features = ["desktop"] }
+
+[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
+dioxus = { version = "0.7.10", features = ["mobile"] }
+
 [lints]
 workspace = true
 
+# A MARKER for `dx`, not a switch. It enables nothing, and the real selection
+# is the two target-conditional [dependencies] tables above. Three things
+# about it were measured, because all three are easy to get wrong:
+#
+# 1. It cannot be DELETED. `dioxus-cli-0.7.10/src/build/renderer.rs:7-30`
+#    reads these keys to autodetect a platform; with the table gone,
+#    `dx check` fails with "Could not automatically detect target triple".
+#    That cost an earlier pass a round.
+# 2. It cannot be RENAMED. `dioxus-cli-0.7.10/src/platform.rs:188-196` matches
+#    only web/desktop/mobile/native/liveview/server; renaming the key to
+#    `shell` reproduces the same "target triple" failure, and renaming it to
+#    `mobile` — the other name this repo would reach for — fails differently,
+#    with "Could not autodetect mobile platform. Use --ios or --android".
+# 3. It is ON EVERYWHERE, phones included, so `feature = "desktop"` is TRUE in
+#    an iOS build and the name lies. (Measured: a `compile_error!` under
+#    `cfg(all(feature = "desktop", target_os = "ios"))` fires under
+#    `cargo check --target aarch64-apple-ios`. Under `dx` too, which always
+#    passes `--no-default-features` and then re-adds `desktop` alongside
+#    `dioxus/mobile` — `request.rs:1675-1685`.) Nothing reads it and nothing
+#    may start to: `src/shell/mod.rs`'s `no_cfg_reads_the_dx_marker_feature`
+#    test fails the build if any `cfg` in `src/` ever does.
 [features]
 default = ["desktop"]
-desktop = ["dioxus/desktop"]
-mobile = ["dioxus/mobile"]
+desktop = []
 
 [profile.release]
 opt-level = "z"

@@ -16,8 +16,11 @@
 //!
 //! `target_os` rather than `feature`, following `src/css.rs`: the
 //! `cargo check --target aarch64-apple-ios` gate runs with DEFAULT features,
-//! which is `desktop`, so a `feature`-gated mobile arm would compile nowhere
-//! that gate can see.
+//! so a `feature`-gated mobile arm would compile nowhere that gate can see.
+//! `Cargo.toml` now says the same thing about the renderer itself — the
+//! `dioxus/desktop` feature is turned on by a target-conditional dependency
+//! table rather than by a flag on the command line — so there is no
+//! configuration in which the two disagree.
 
 use dioxus::prelude::*;
 
@@ -37,10 +40,7 @@ pub(crate) use desktop::AppShell;
 /// The window's floor, re-exported for `main.rs`, which is where a window is
 /// built. The number and its derivation live beside the breakpoints it has to
 /// agree with — and beside the test that checks that it does.
-#[cfg(all(
-    feature = "desktop",
-    not(any(target_os = "ios", target_os = "android"))
-))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub(crate) use desktop::MIN_INNER;
 
 /// Which shell is compiled in, as a VALUE.
@@ -49,9 +49,9 @@ pub(crate) use desktop::MIN_INNER;
 /// The presentation rules that hang off the platform are not: they are total
 /// functions of this enum, so `cargo test` runs BOTH arms in one process on
 /// any host. A `#[cfg]` at each of those leaves would mean the mobile arm was
-/// verified by nothing at all — `cargo test` takes the default features
-/// (`desktop`), and the iOS gate is a `cargo check`, which proves only that
-/// the arm parses.
+/// verified by nothing at all — `cargo test` builds for the host, which is a
+/// desktop target, and the iOS gate is a `cargo check`, which proves only
+/// that the arm parses.
 ///
 /// That matters more here than it usually would: the promise this whole branch
 /// makes is that mobile rendering does not change, and a claim no test can
@@ -256,5 +256,119 @@ mod tests {
     #[test]
     fn a_test_run_is_the_desktop_arm_so_mobile_rules_must_be_passed_the_shell() {
         assert_eq!(Shell::CURRENT, Shell::Desktop);
+    }
+
+    /// `Cargo.toml`'s `[features]` table is a MARKER for `dx`, not a switch,
+    /// and it is enabled in every build — phones included. Measured two ways:
+    /// a `compile_error!` under `cfg(all(feature = <marker>, target_os =
+    /// "ios"))` fires under `cargo check --target aarch64-apple-ios`, and
+    /// `dx build --platform ios --verbose` reports
+    /// `features: ["desktop", "dioxus/mobile"]`. So a `cfg` on that feature
+    /// name is TRUE on an iPhone: it says the opposite of what it reads as.
+    ///
+    /// That is a trap with precedent baked in. Until this commit, eight
+    /// `cfg`s in this crate were spelled with exactly that feature name, so
+    /// `git log` makes the wrong thing look like house style — and the arm it
+    /// would silently enable is the window-building one. The name cannot be
+    /// changed out of the trap either: `dioxus-cli-0.7.10/src/platform.rs:188`
+    /// matches only `web`/`desktop`/`mobile`/`native`/`liveview`/`server`, and
+    /// renaming the key to anything else breaks `dx check` outright. A test is
+    /// the only ceiling on offer, and this is it — platform is `target_os`,
+    /// full stop.
+    #[test]
+    fn no_cfg_reads_the_dx_marker_feature() {
+        // Spelled in halves so this file is not its own first hit; comment
+        // lines are dropped below so the prose above is free to say it plainly.
+        let quote = '"';
+        let needles = [
+            format!("feature = {quote}desktop{quote}"),
+            format!("feature = {quote}mobile{quote}"),
+        ];
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![root.clone()];
+        let mut scanned = 0_usize;
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                scanned += 1;
+                let source = std::fs::read_to_string(&path).unwrap_or_default();
+                let code = source
+                    .lines()
+                    .filter(|line| !line.trim_start().starts_with("//"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                for needle in &needles {
+                    assert!(
+                        !code.contains(needle.as_str()),
+                        "{} reads `{needle}`. Cargo.toml's [features] table is \
+                         a marker for dx that is enabled in EVERY build, \
+                         phones included, so that cfg is true on an iPhone. \
+                         Gate on `target_os` instead.",
+                        path.display(),
+                    );
+                }
+            }
+        }
+        assert!(
+            scanned > 10,
+            "only walked {scanned} files under {} — the scan found nothing to \
+             guard, which is a broken test rather than a clean tree",
+            root.display(),
+        );
+    }
+
+    /// The two manifest lines that only `dx` reads, held in place by the one
+    /// gate that can see them. Neither has a compiler behind it: every cargo
+    /// gate in CI passes with both deleted, and the damage only shows up in
+    /// `dx check` — which CI does not run and a contributor meets as a broken
+    /// dev loop.
+    ///
+    /// Both failures were reproduced rather than reasoned about. Delete the
+    /// featureless `dioxus` entry and `dx check` says "Could not autodetect
+    /// mobile platform. Use --ios or --android instead.", because
+    /// `dioxus-cli-0.7.10/src/build/renderer.rs:17` does
+    /// `dependencies.iter().find(|dep| dep.name == "dioxus")` with no target
+    /// filter and lands on the `mobile` table instead. Delete `[features]` and
+    /// it says "Could not automatically detect target triple". The first cost
+    /// an earlier pass a round; the second is the one that reads as dead
+    /// weight, since it enables nothing.
+    #[test]
+    fn the_manifest_lines_that_only_dx_reads_are_still_there() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let manifest = std::fs::read_to_string(&path).unwrap_or_default();
+        let code = manifest
+            .lines()
+            .filter(|line| !line.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let first_dioxus = code
+            .lines()
+            .find(|line| line.trim_start().starts_with("dioxus ="))
+            .unwrap_or_default();
+        assert!(
+            first_dioxus.contains("features = []"),
+            "the first `dioxus =` entry in {} is `{first_dioxus}` — dx reads \
+             that one entry to autodetect a platform and must find it \
+             featureless, or `dx check` and bare `dx build` stop working",
+            path.display(),
+        );
+
+        let quote = '"';
+        assert!(
+            code.contains(&format!("default = [{quote}desktop{quote}"))
+                && code.contains("desktop = []"),
+            "{} has lost the dx marker feature; `dx check` now fails with \
+             \"Could not automatically detect target triple\"",
+            path.display(),
+        );
     }
 }

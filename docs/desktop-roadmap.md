@@ -297,6 +297,30 @@ With that line present, `dx check`, bare `dx build`, `dx build --desktop` and
 fallback recorded here — enable both features unconditionally — is not needed
 and is strictly worse, since it would leave `dioxus::desktop` nameable on iOS.
 
+**LANDED.** Everything above this paragraph is the plan as it was written; read
+it in the past tense. The file:line citations are pre-change and now stale —
+`ci.yml:127-128` is one line, `ci.yml:131`, and carries no flags. Two things
+the plan did not anticipate, both measured on the shipped manifest:
+
+- **The marker feature is enabled on phones too**, so `feature = "desktop"` is
+  TRUE in an iOS build and the name says the opposite of what it means. Before
+  the change the iOS job passed `--no-default-features`, so it was false there;
+  now nothing turns it off, and `dx` re-adds it as well
+  (`dx build --platform ios --verbose` → `features: ["desktop",
+  "dioxus/mobile"]`). Renaming out of the trap is not available —
+  `dioxus-cli-0.7.10/src/platform.rs:188` matches only
+  web/desktop/mobile/native/liveview/server — so the ceiling is a test:
+  `shell::tests::no_cfg_reads_the_dx_marker_feature` scans `src/` and fails the
+  build if any `cfg` reads it.
+- **The featureless `dioxus` entry in `[dependencies]` is load-bearing too**,
+  which nothing here predicted. It is compile-redundant, since the two target
+  tables cover every triple, so it reads as leftover — but `renderer.rs:17`
+  finds the *first* `dioxus` entry with no target filter, and deleting the line
+  makes that the `mobile` table: `dx check` then fails with "Could not
+  autodetect mobile platform. Use --ios or --android instead." Every cargo gate
+  still passes in that state, so `the_manifest_lines_that_only_dx_reads_are_
+  still_there` holds both lines instead.
+
 ### Why not three crates
 
 The separate-tree proposal's two headline benefits — killing the feature pair

@@ -150,9 +150,11 @@ From the repo root on the Mac, with the iPhone connected and unlocked:
 dx serve --ios --device
 ```
 
-`dx` builds for `aarch64-apple-ios`, enables the crate's `mobile` feature,
-signs the bundle with your Apple Development identity and profile, then
-installs and launches via `xcrun devicectl`. Useful variants:
+`dx` builds for `aarch64-apple-ios`, signs the bundle with your Apple
+Development identity and profile, then installs and launches via
+`xcrun devicectl`. There is no feature flag to pass or remember: `Cargo.toml`
+gives `dioxus` its `mobile` feature from a target-conditional `[dependencies]`
+table, so the triple is the whole instruction. Useful variants:
 
 ```bash
 dx serve --ios --device "Phillip's iPhone"   # pick a specific device

@@ -60,20 +60,16 @@ fn main() {
 /// Open the window the desktop shell was designed for, and refuse to let it be
 /// dragged smaller than the shell can draw.
 ///
-/// Both halves of the `cfg` are load-bearing. `feature = "desktop"` because
-/// the `dioxus::desktop` module only exists under it, and
-/// `not(ios/android)` because `cargo check --target aarch64-apple-ios` runs
-/// with DEFAULT features — which is `desktop` — and must not try to build a
-/// tao window for a phone.
+/// One gate, and it is the target: `Cargo.toml` gives `dioxus` its `desktop`
+/// feature only under this same predicate, so `dioxus::desktop` does not
+/// exist on a phone and this arm could not compile there even if the `cfg`
+/// were forgotten.
 ///
 /// The numbers, and where they come from, are in `crate::shell` beside the
 /// breakpoints they have to agree with; a test there checks that they do.
 /// The opening size clears the three-column breakpoint comfortably, so a first
 /// launch shows the layout the app was designed as rather than a fallback.
-#[cfg(all(
-    feature = "desktop",
-    not(any(target_os = "ios", target_os = "android"))
-))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 fn launch() {
     use dioxus::desktop::{Config, LogicalSize, WindowBuilder};
 
@@ -123,11 +119,7 @@ fn launch() {
 /// because a `cfg`'d block that has to `return` so a `cfg`'d tail expression
 /// can follow it is a shape clippy's `needless_return` correctly rejects: on
 /// the platform being compiled, only one of the two ever exists.
-#[cfg(all(
-    feature = "desktop",
-    target_os = "macos",
-    not(any(target_os = "ios", target_os = "android"))
-))]
+#[cfg(target_os = "macos")]
 fn integrate_titlebar(window: dioxus::desktop::WindowBuilder) -> dioxus::desktop::WindowBuilder {
     use dioxus::desktop::tao::platform::macos::WindowBuilderExtMacOS;
 
@@ -140,21 +132,17 @@ fn integrate_titlebar(window: dioxus::desktop::WindowBuilder) -> dioxus::desktop
 /// Everywhere else the window keeps its native frame: a Windows or Linux
 /// window with no titlebar and no replacement for it is a window with no
 /// close button.
-#[cfg(all(
-    feature = "desktop",
-    not(target_os = "macos"),
-    not(any(target_os = "ios", target_os = "android"))
-))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
 const fn integrate_titlebar(
     window: dioxus::desktop::WindowBuilder,
 ) -> dioxus::desktop::WindowBuilder {
     window
 }
 
-#[cfg(not(all(
-    feature = "desktop",
-    not(any(target_os = "ios", target_os = "android"))
-)))]
+/// The phone's launch: `dioxus::launch` picks the mobile renderer, which is
+/// the same crate the arm above builds a window with, reached through the
+/// `mobile` feature `Cargo.toml` gives it on exactly these two targets.
+#[cfg(any(target_os = "ios", target_os = "android"))]
 fn launch() {
     dioxus::launch(app::App);
 }

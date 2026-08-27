@@ -122,7 +122,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # No feature flags: the renderer is chosen by target-conditional
+      # [dependencies] tables in Cargo.toml, so the triple is the whole
+      # instruction. That is the point of the arrangement — this job used to
+      # be the only place `--features mobile` was typed, which made the
+      # iOS/desktop split depend on a line in a YAML file nobody reads.
       - name: Check the iOS build
-        run: >
-          cargo check --package goose-mobile --no-default-features
-          --features mobile --target aarch64-apple-ios
+        run: cargo check --package goose-mobile --target aarch64-apple-ios
