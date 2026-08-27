@@ -26,6 +26,45 @@ static SERVER_REQ_ID: AtomicU64 = AtomicU64::new(1);
 /// the JSON-encoded request id the client echoes back.
 pub(crate) type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>;
 
+/// Rounds running on this connection right now, keyed by the `session/prompt`
+/// id that started them. A turn removes its own entry when it finishes; what
+/// is left when the socket dies is what [`abandon`] is handed.
+pub(crate) type InFlight = Arc<Mutex<HashMap<String, Abandoned>>>;
+
+/// What a round leaves behind when the client goes away in the middle of it.
+///
+/// The prompt and the title, and nothing else. That is not a simplification:
+/// it is what goose 1.46.0 was measured doing (`docs/permission-durability.md`
+/// section 0), and the session coming back named after work with no trace of
+/// having happened is the whole failure.
+pub(crate) struct Abandoned {
+    sid: String,
+    user_text: String,
+    /// The `user_message_chunk` records for the prompt, in the order the
+    /// blocks arrived — an attachment is one of these too.
+    prompt: Vec<Value>,
+}
+
+/// Write down the only part of an abandoned round that survives.
+///
+/// Deliberately NOT symmetric with [`finish`]: no round updates, no snippet
+/// worth reading, `message_count` up by the one message that exists. A mock
+/// that also wrote a `failed` tool call, or a "declined" note, would be
+/// reproducing the account section 0 falsified rather than what it measured.
+pub(crate) fn abandon(state: &Shared, round: Abandoned) {
+    let now = stamp(now_epoch()).rfc3339;
+    let mut s = state.lock().unwrap();
+    if let Some(data) = s.sessions.get_mut(&round.sid) {
+        data.conversation.extend(round.prompt);
+        data.message_count += 1;
+        data.updated_at = now.clone();
+        data.sort_at = now;
+        if !data.user_set_name && data.title.is_empty() {
+            data.title = auto_title(&round.user_text);
+        }
+    }
+}
+
 /// One scripted turn in flight: where its updates go, how it is cancelled,
 /// and the transcript accumulated for replay on `session/load`.
 struct Turn {
@@ -183,6 +222,7 @@ pub(crate) async fn run_turn(
     state: Shared,
     pending: Pending,
     cancel: Arc<Notify>,
+    in_flight: InFlight,
 ) {
     let sid = params
         .get("sessionId")
@@ -231,10 +271,25 @@ pub(crate) async fn run_turn(
     // block, not just the text one: replaying an attachment is how the
     // transcript gets it back after a reconnect, and a mock that dropped them
     // would make that path untestable without a real server.
-    for content in prompt {
-        turn.record
-            .push(json!({"sessionUpdate": "user_message_chunk", "content": content}));
-    }
+    let prompt_record: Vec<Value> = prompt
+        .into_iter()
+        .map(|content| json!({"sessionUpdate": "user_message_chunk", "content": content}))
+        .collect();
+    turn.record.extend(prompt_record.iter().cloned());
+
+    // Registered before the first await, so a socket that dies at any point
+    // from here on finds this round rather than missing it by a scheduling
+    // hair. `finish` takes it back out; an aborted turn never reaches that.
+    let round_key = request_id.to_string();
+    in_flight.lock().unwrap().insert(
+        round_key.clone(),
+        Abandoned {
+            sid: turn.sid.clone(),
+            user_text: user_text.clone(),
+            prompt: prompt_record,
+        },
+    );
+
     notify(
         &turn.out,
         "_goose/unstable/session/update",
@@ -256,6 +311,9 @@ pub(crate) async fn run_turn(
     } else {
         "cancelled"
     };
+
+    // The round reached its own end, so there is nothing to abandon.
+    in_flight.lock().unwrap().remove(&round_key);
 
     let Turn {
         out, sid, record, ..

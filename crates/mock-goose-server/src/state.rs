@@ -129,6 +129,50 @@ pub(crate) struct State {
     /// scheduler methods answer `-32601` with the reason in `data`. Same
     /// story: plumbed here so a scheduler branch has somewhere to read it.
     pub(crate) no_scheduler: bool,
+    /// What happens to a round that is still running when its client goes
+    /// away. See [`DieOnClose`].
+    pub(crate) die_on_close: DieOnClose,
+}
+
+/// What the mock does with an in-flight round when the socket dies under it.
+///
+/// This exists because the default is *wrong in a way that hides a real bug*.
+/// `Turn::ask_permission` waits on a oneshot whose sender lives in a map the
+/// turn task itself keeps alive, so a dead socket leaves the turn parked
+/// forever: the mock behaves the way we wish goose behaved, and a regression
+/// test written against it passes on a server that never had the failure.
+///
+/// [`DieOnClose::Abort`] is the measured behaviour of goose 1.46.0
+/// (`docs/permission-durability.md` section 0): the round is discarded, and
+/// the prompt and the generated title are all that survive.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DieOnClose {
+    /// Park the turn forever. Not faithful; kept as the default so every test
+    /// written before this switch existed still means what it meant.
+    #[default]
+    Park,
+    /// Drop the round: kill the turn, keep the prompt and the title.
+    Abort,
+}
+
+impl DieOnClose {
+    /// `MOCK_DIE_ON_CLOSE`, defaulting to [`DieOnClose::Park`]. Only `abort`
+    /// is recognised; a `cancel` mode was designed as a hedge against the
+    /// account that said goose answers its own ask with `Permission::Cancel`,
+    /// and that account was falsified, so there is nothing for it to model.
+    fn from_env() -> Self {
+        match std::env::var("MOCK_DIE_ON_CLOSE").as_deref() {
+            Ok("abort") => Self::Abort,
+            _ => Self::Park,
+        }
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Park => "park",
+            Self::Abort => "abort",
+        }
+    }
 }
 
 /// The four options goose routes in `session/set_config_option`. Anything
@@ -156,6 +200,7 @@ impl Default for State {
             skills_broken_spent: false,
             session_list_failed: false,
             no_scheduler: false,
+            die_on_close: DieOnClose::Park,
         }
     }
 }
@@ -173,6 +218,7 @@ impl State {
             // from nothing and says what it wants out loud.
             extensions: crate::features::extensions::Store::new(fixtures),
             no_scheduler: std::env::var("MOCK_NO_SCHEDULER").is_ok_and(|v| v == "1"),
+            die_on_close: DieOnClose::from_env(),
             ..Self::default()
         }
     }
