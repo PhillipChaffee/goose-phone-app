@@ -78,8 +78,16 @@
    * `--traffic-w` is where the lights END plus breathing room, so the toggle
    * beside them and the header indent when the nav is shut are both derived
    * from one number rather than guessed twice. */
-  --chrome-h: 0px;
+  --chrome-h: 44px;
   --traffic-w: 0px;
+  /* How far down the bar its controls sit. NOT `align-items: center`, because
+   * on macOS the bar's controls have to line up with the traffic lights, and
+   * the lights are not centred in it — AppKit paints them at logical y 9..22.5
+   * (centre 16) in a 52pt bar whose centre is 26. Ten points out is exactly
+   * the misalignment this token exists to remove. Where there are no lights,
+   * centring in the bar is right and this is half of what is left after a
+   * 32pt control. */
+  --chrome-pad: 6px;
   /* WHAT THE NAV CARD PAINTS, and it is a different answer per theme because
    * the two themes separate surfaces by different means.
    *
@@ -112,13 +120,40 @@
   --shell-line: var(--border-secondary);
   flex: 1;
   min-height: 0;
+  /* A COLUMN: the window's own bar, then the columns of content. It was a row
+   * with the bar's contents absolutely positioned over it, and that could not
+   * be made to work — the traffic lights land at logical (9, 9) and the nav
+   * card is inset 8 with a 16px radius, so the two fought over one corner no
+   * matter how the paddings were arranged. A band that spans the window is
+   * what gives the lights somewhere of their own to be. */
+  display: flex;
+  flex-direction: column;
+}
+
+/* The bar. Height is a token because two other things read it, and it exists
+ * on every platform — `--traffic-w` is zero where the titlebar was not hidden,
+ * so the bar simply starts with the toggle instead of leaving room first. */
+.shell-chrome {
+  flex: 0 0 var(--chrome-h);
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding-left: 6px;
+}
+
+/* Where AppKit paints the traffic lights. Nothing renders them and nothing may
+ * cover them — this box is empty on purpose, and it is `flex: 0 0` so it holds
+ * its width rather than being squeezed by the drag region beside it. */
+.traffic-slot {
+  flex: 0 0 var(--traffic-w);
+  align-self: stretch;
+}
+
+.shell-body {
+  flex: 1;
+  min-height: 0;
   display: flex;
   align-items: stretch;
-  /* The containing block for `.nav-toggle`, which is the one thing in this
-   * shell that is not in a column. Safe to add: no transform and no filter, so
-   * nothing `position: fixed` (`.modal-backdrop`, `.toast`) is trapped by it —
-   * the same property `.app` deliberately preserves for backdrop-filter. */
-  position: relative;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -173,11 +208,9 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  /* The top padding is the chrome strip minus what the card is already inset
-   * from the window, so the wordmark clears the traffic lights sitting on it
-   * rather than the window's top edge — and `max()` because on a platform that
-   * kept its native frame the strip is 0 and the card wants its own 12 back. */
-  padding: max(12px, calc(var(--chrome-h) - var(--shell-gap))) 8px 12px;
+  /* Plain padding again. The card used to hold the traffic lights clear of its
+   * own wordmark; the bar above it does that now, so this is just a card. */
+  padding: 12px 8px;
   background: var(--nav-fill);
   border: 1px solid var(--shell-line);
   border-radius: var(--radius-xl);
@@ -200,45 +233,22 @@
   transition: visibility 0s 200ms;
 }
 
-/* The collapse control, in two places and one element.
+/* The collapse control. In flow in the bar, immediately after the room the
+ * traffic lights need — so it is in the same place on every platform and at
+ * every width, which is the property that matters most about the one control
+ * that brings the navigation back.
  *
- * It cannot live in the nav — that is the thing it reopens — so it is a
- * sibling of the columns, out of flow, and the sheet slides it between the
- * card's top corner and the window's. `left` is transitioned on the same curve
- * as the column, so the button travels with the panel instead of teleporting
- * when it lands.
+ * It used to be absolutely positioned against `.shell` and slid between the
+ * nav card's corner and the window's. Both of those positions turned out to be
+ * the window's own once the titlebar was hidden, and a control that animates
+ * into the close button is a control that gets misclicked. goose's own app
+ * parks the identical button in the identical spot
+ * (`ui/desktop/src/components/Layout/AppLayout.tsx:112`).
  *
  * A pill, per docs/design.md's tier: an icon button's shape is its identity. */
 .nav-toggle {
-  position: absolute;
-  /* ABOVE the chrome tier, not on it, and the +1 is load-bearing.
-   *
-   * `.topbar` is `z-index: var(--z-chrome)` and `position: static`, which
-   * normally means the z-index is ignored entirely — except that `.pane` is a
-   * flex container, and CSS Flexbox §5.4 says z-index applies to a flex ITEM
-   * even when it is statically positioned. So the pane header is a real
-   * stacking context at 20, it paints an opaque `--bg-primary`, and it comes
-   * later in tree order than this button. At an equal 20 it wins, and the one
-   * control that brings the navigation back is painted over by the header
-   * beside it: measured with `elementsFromPoint` at the button's own centre,
-   * the top hit was HEADER.topbar. Not clipped, not hidden, not transparent —
-   * covered, which is invisible to every check that looks at one element at a
-   * time. */
-  z-index: calc(var(--z-chrome) + 1);
-  /* IN the chrome strip, immediately right of the traffic lights, and it does
-   * not move when the nav closes.
-   *
-   * The first draft parked it at the nav card's top-right and slid it to the
-   * window's corner on collapse. Both of those positions are now the window's
-   * own: the corner is where the traffic lights are, and a control that
-   * animates INTO the close button is a control that gets misclicked. Fixed
-   * beside them is also what goose's own app does (AppLayout.tsx:108-122, a
-   * PanelLeft button absolutely positioned next to the lights), and it means
-   * the one control that brings the navigation back is in the same place
-   * whether or not the navigation is there — which is the property that
-   * matters most about it. */
-  top: 0px;
-  left: max(var(--shell-gap), var(--traffic-w));
+  flex: 0 0 auto;
+  margin-top: var(--chrome-pad);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -254,8 +264,6 @@
   line-height: 1;
   cursor: pointer;
   transition:
-    top 200ms cubic-bezier(0.32, 0.72, 0, 1),
-    left 200ms cubic-bezier(0.32, 0.72, 0, 1),
     background-color 120ms ease,
     color 120ms ease,
     border-color 120ms ease;
@@ -267,52 +275,16 @@
   border-color: var(--border-secondary);
 }
 
-/* With the nav shut, the leftmost header is what the window chrome is sitting
- * on top of, so it is what has to get out of the way.
+/* The rest of the bar drags the window.
  *
- * `max()` is what keeps this from being a layout: applied to every pane header
- * rather than to "the leftmost one", because which pane is leftmost depends on
- * the width tier AND on whether anything is open, and that is three selectors
- * to say what one arithmetic already says. Every header whose leading gutter
- * is already wider than the chrome — which at three columns is all of them but
- * the list's — is untouched.
- *
- * Derived from the two chrome numbers rather than typed: the traffic lights
- * end at `--traffic-w`, the toggle is 32 wide and sits there, and 12 is the
- * gap after it. Nothing here needs editing when the inset in src/main.rs
- * moves. */
-.shell[data-nav="closed"] .topbar {
-  padding-left: max(var(--edge), calc(var(--traffic-w) + 44px));
-}
-
-.shell[data-nav="closed"] .pane-detail .topbar {
-  padding-left: max(var(--gutter), calc(var(--traffic-w) + 44px));
-}
-
-/* The window's drag region, and it is a rectangle rather than the whole bar
- * for one reason: everything else up there is a control.
- *
- * It spans the nav column when the nav is open, which is exactly the strip the
- * traffic lights are painted on and the part of the top edge with nothing in
- * it; when the nav is shut it keeps a fixed width, because the pane header
- * behind it has a title and buttons that must still be clickable.
- *
- * `z-index: 0` is the point. It is a positioned sibling of the panes, so
- * without one it would paint over the header beside it and swallow those
- * clicks; at 0 it loses to `.topbar` (a flex item at `--z-chrome`, see the
- * note on `.nav-toggle`) and to the toggle above it, and wins only where
- * nothing else is. */
+ * A sibling of the toggle rather than the bar itself, so pressing the toggle
+ * cannot also start a drag — the reference needs a `no-drag` class for exactly
+ * this and the box tree gives it to us instead. It stretches, so the whole top
+ * edge is grabbable rather than a 212px patch of it. */
 .window-drag {
-  position: absolute;
-  z-index: 0;
-  top: 0;
-  left: 0;
-  width: var(--nav-w);
-  height: var(--chrome-h);
-}
-
-.shell[data-nav="closed"] .window-drag {
-  width: calc(var(--traffic-w) + 44px);
+  flex: 1;
+  align-self: stretch;
+  min-width: 0;
 }
 
 /* `position: relative` is load-bearing and is not about the pane's own
@@ -404,36 +376,9 @@
    * `max()` against the chrome strip, because on macOS the traffic lights are
    * in that same corner and are taller than the toggle alone needs. */
   .navcard {
-    padding: max(54px, calc(var(--chrome-h) + 12px)) 4px 12px;
+    padding: 12px 4px;
   }
 
-  /* The toggle does NOT re-centre in the rail, and that is the fix for a
-   * collision rather than a preference: centring a 32px button in a 72px
-   * column puts it at x=20, which is exactly where macOS paints the close
-   * button. Measured on a real window — the two overlapped. It keeps the one
-   * position it holds at every other width, which is also the property that
-   * makes it findable.
-   *
-   * Which means it now overhangs the pane beside it: the rail column is 72
-   * and the button ends at `--traffic-w` + 32, so the leftmost header takes
-   * the difference as a lead. Same `max()` shape as the collapsed rule above,
-   * for the same reason — which pane is leftmost depends on the tier and on
-   * whether anything is open, and every header whose gutter already clears
-   * the button is untouched. On a native-frame platform `--traffic-w` is 0,
-   * the expression goes negative, and `--edge` wins. */
-  /* `.shell` in the selector is not decoration: the base `.topbar` rule in
-   * section 2 uses the `padding` SHORTHAND and appears later in this file, so
-   * a bare `.topbar` here is overwritten by it at equal specificity. The
-   * collapsed rules above got away with it only because
-   * `.shell[data-nav="closed"]` already outranks it. Measured: without this,
-   * the title still started under the toggle. */
-  .shell .topbar {
-    padding-left: max(var(--edge), calc(var(--traffic-w) + 44px - var(--nav-w)));
-  }
-
-  .shell .pane-detail .topbar {
-    padding-left: max(var(--gutter), calc(var(--traffic-w) + 44px - var(--nav-w)));
-  }
 
   /* A destination's label is a bare text node — `render_group` emits it with
    * no element around it, because that is the phone's markup and the phone's

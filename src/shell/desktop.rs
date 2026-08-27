@@ -364,61 +364,77 @@ pub(crate) fn AppShell() -> Element {
             // was last pressed.
             "data-nav": if nav_open() { "open" } else { "closed" },
 
-            // The strip the window is dragged by.
+            // THE WINDOW'S OWN BAR, full width, above the columns.
             //
-            // `src/main.rs` takes the titlebar away so the chrome is part of
-            // the app, and that takes AppKit's own drag region with it: with
-            // `fullsize_content_view` the web view owns every pixel, so a
-            // window with no replacement for that strip cannot be moved at
-            // all. `-webkit-app-region: drag` is the web answer and it is not
-            // available to us — that is a Chromium property, and wry on macOS
-            // is WKWebView, which does not implement it. `drag_window()` is,
-            // and dioxus-desktop documents this exact call site
-            // (`desktop_context.rs:160`).
+            // The first draft did not have one: the traffic lights were left
+            // where macOS puts them, at logical (9, 9), and the nav card was
+            // inset 8 — so the lights landed ON the card's 16px corner radius,
+            // tangled in the curve. There is no arrangement of paddings that
+            // fixes that, because two things were claiming the same corner.
+            // A band that spans the window is what gives the lights a place of
+            // their own, and it is also the structure the reference has:
+            // goose's own app puts the lights, the sidebar toggle AND the
+            // current view's title in one strip across the top
+            // (`ui/desktop/src/components/Layout/AppLayout.tsx:99-122`).
             //
-            // A Rust `onmousedown` is allowed here where a Rust `onscroll` is
-            // not: the rule in `src/viewport.rs` is about events that fire per
-            // FRAME, because each one costs a synchronous XHR. This is one
-            // press. The drag itself is then AppKit's, at native speed, with
-            // nothing crossing the bridge until you let go.
-            //
-            // BEHIND everything (`z-index` below `.nav-toggle`, and the pane
-            // headers are above it too), so it only ever receives the presses
-            // nothing else wanted. That is also why it does not need a
-            // "no-drag" opt-out for the toggle sitting on top of it.
-            div {
-                class: "window-drag",
-                onmousedown: move |_| {
-                    // Dropped rather than handled: the only `Err` tao returns
-                    // here is "this platform cannot start a window drag", and
-                    // the honest response to that is the one already taken —
-                    // the native frame is still on, so the window has its own
-                    // titlebar to drag by and this strip is decoration.
-                    let _ = dioxus::desktop::window().drag_window();
-                },
+            // It exists on every platform, not only where the titlebar is
+            // hidden: `--traffic-w` is zero elsewhere, so the bar simply
+            // starts with the toggle. That is what keeps the toggle in one
+            // place — the property that matters most about the control that
+            // brings the navigation back — instead of it moving per platform.
+            header { class: "shell-chrome",
+                // Empty, sized, and not a spacer for spacing's sake: it is the
+                // room the traffic lights are painted in. They are drawn by
+                // AppKit over the web view, so nothing here renders them and
+                // nothing here may cover them.
+                div { class: "traffic-slot" }
+
+                button {
+                    class: "nav-toggle",
+                    title: nav_toggle_label(nav_open()),
+                    "aria-label": nav_toggle_label(nav_open()),
+                    "aria-expanded": if nav_open() { "true" } else { "false" },
+                    onclick: move |_| {
+                        let now = *nav_open.peek();
+                        nav_open.set(!now);
+                    },
+                    Icon { name: "sidebar" }
+                }
+
+                // Everything to the right of the toggle drags the window.
+                //
+                // `src/main.rs` takes the titlebar away, and that takes
+                // AppKit's own drag region with it: with `fullsize_content_view`
+                // the web view owns every pixel, so a window with no
+                // replacement cannot be moved at all.
+                // `-webkit-app-region: drag` is the web answer and is not
+                // available to us — that is a Chromium property, and wry on
+                // macOS is WKWebView. `drag_window()` is, and dioxus-desktop
+                // documents this exact call site (`desktop_context.rs:160`).
+                //
+                // A Rust `onmousedown` is allowed here where a Rust `onscroll`
+                // is not: the rule in `src/viewport.rs` is about events that
+                // fire per FRAME, because each costs a synchronous XHR. This is
+                // one press, after which the drag is AppKit's own.
+                //
+                // A SIBLING of the toggle rather than the bar itself, so that
+                // pressing the toggle cannot also start a drag — the reference
+                // needs a `no-drag` class for exactly this and we get it from
+                // the box tree instead.
+                div {
+                    class: "window-drag",
+                    onmousedown: move |_| {
+                        // Dropped rather than handled: the only `Err` tao
+                        // returns is "this platform cannot start a window
+                        // drag", and the response to that is the one already
+                        // taken — the native frame is still on there, so the
+                        // window has a titlebar of its own to drag by.
+                        let _ = dioxus::desktop::window().drag_window();
+                    },
+                }
             }
 
-            // OUTSIDE `.navpane`, and that is the whole reason it is a sibling
-            // of the panes rather than a child of the nav it belongs to: the
-            // column it would live in collapses to nothing, and a control that
-            // vanishes with the thing it reopens is a one-way door. It is
-            // absolutely positioned against `.shell` and the sheet moves it
-            // between two places — the nav card's top corner while the nav is
-            // open, the window's while it is shut. goose's own desktop app
-            // parks the identical button in the identical spot
-            // (`ui/desktop/src/components/Layout/AppLayout.tsx`), for what
-            // must be the same reason.
-            button {
-                class: "nav-toggle",
-                title: nav_toggle_label(nav_open()),
-                "aria-label": nav_toggle_label(nav_open()),
-                "aria-expanded": if nav_open() { "true" } else { "false" },
-                onclick: move |_| {
-                    let now = *nav_open.peek();
-                    nav_open.set(!now);
-                },
-                Icon { name: "sidebar" }
-            }
+            div { class: "shell-body",
 
             // NOT `.drawer.open`. Three reasons, all load-bearing: `.drawer`
             // is `position: absolute` with `translateX(-100%)` and would have
@@ -460,6 +476,8 @@ pub(crate) fn AppShell() -> Element {
                 } else {
                     {empty_detail(dest)}
                 }
+            }
+
             }
         }
     }
@@ -616,7 +634,14 @@ mod tests {
             })
         };
 
-        for class in ["window-drag", "nav-toggle", "navcard", "navpane"] {
+        for class in [
+            "shell-chrome",
+            "traffic-slot",
+            "window-drag",
+            "nav-toggle",
+            "navcard",
+            "navpane",
+        ] {
             assert!(
                 shell.contains(&format!("class: \"{class}\"")),
                 "src/shell/desktop.rs no longer renders .{class}"
@@ -638,11 +663,12 @@ mod tests {
         let desktop = include_str!("../../assets/desktop.css");
         let macos = include_str!("../../assets/platform/macos.css");
         assert!(
-            desktop.contains("--chrome-h: 0px") && desktop.contains("--traffic-w: 0px"),
-            "assets/desktop.css must default the chrome reservation to zero"
+            desktop.contains("--traffic-w: 0px"),
+            "assets/desktop.css must default the traffic-light slot to zero — \
+             only the platform sheet may claim room for lights"
         );
         assert!(
-            macos.contains("--chrome-h: 52px") && macos.contains("--traffic-w: 76px"),
+            macos.contains("--traffic-w: 76px"),
             "assets/platform/macos.css is the only thing that may raise it"
         );
         assert!(

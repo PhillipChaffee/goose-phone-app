@@ -33,9 +33,14 @@
    * header indent when the nav is shut are both derived from this one number
    * rather than guessed twice. */
   --traffic-w: 76px;
+  /* Zero, so a 32pt control's centre lands at 16 — which is where AppKit's
+   * close button already is (measured: the disc spans logical 9..22.5). The
+   * bar is 52 tall for spacing, so centring in it would sit the toggle ten
+   * points below the lights it is meant to line up with. */
+  --chrome-pad: 0px;
 }
 
-/* FULLSCREEN TAKES THE LIGHTS WITH IT, so the strip has to go too.
+/* FULLSCREEN TAKES THE LIGHTS WITH IT, so their slot has to go too.
  *
  * In fullscreen macOS hides the traffic lights entirely (they return on hover
  * near the top edge, in an overlay AppKit draws over the content). Holding 52
@@ -52,6 +57,9 @@
  * gives it a real event; we infer it, which is why the JS compares against the
  * screen height rather than trusting a flag. */
 .app[data-fullscreen="true"] > .shell {
-  --chrome-h: 0px;
+  /* The bar stays — it holds the toggle on every platform — but the room the
+   * lights needed goes back to the layout, and with the lights gone the
+   * toggle centres in the bar like it does everywhere else. */
   --traffic-w: 0px;
+  --chrome-pad: 10px;
 }
