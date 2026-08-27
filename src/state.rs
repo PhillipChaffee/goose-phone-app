@@ -13,8 +13,9 @@ use std::time::Duration;
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use goose_acp_client::{
-    AcpClient, AcpError, AcpEvent, ConfigOption, ConnectConfig, MessageChunk, PermissionRequest,
-    SessionInfo, SessionKind, SessionListResponse, SessionQuery, SessionUpdate, ToolCallUpdate,
+    AcpClient, AcpError, AcpEvent, ConfigOption, ConnectConfig, DisconnectCause, MessageChunk,
+    PermissionRequest, SessionInfo, SessionKind, SessionListResponse, SessionQuery, SessionUpdate,
+    ToolCallUpdate,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -322,6 +323,20 @@ pub(crate) struct AppCtx {
     /// MUST eventually be answered (or the transport dropped) — the agent's
     /// turn blocks on it.
     pub permission: Signal<Vec<PermissionRequest>>,
+    /// Asks whose answer never reached goose, and what became of the round
+    /// they belonged to.
+    ///
+    /// Written when an ask ARRIVES, not when it is lost. See
+    /// [`crate::ask_journal`] for why that is the whole design, and
+    /// `docs/permission-durability.md` section 0 for the measurement it is
+    /// built against: the round is destroyed on the server, nothing here
+    /// recovers it, and this exists so the loss is stated rather than silent.
+    ///
+    /// The one signal in this struct backed by a real file. Its own storage
+    /// key, never merged into `settings`: the backing rewrites a key's whole
+    /// file with no fsync and no atomic rename, so the blast radius of a torn
+    /// write has to be the journal.
+    pub lost_asks: Signal<Vec<crate::ask_journal::AskRecord>>,
     pub usage: Signal<Option<Usage>>,
     /// Session config the agent offers — provider, model, mode, thinking
     /// effort — with the model list already in it. Arrives with session/new
@@ -490,6 +505,36 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
     let settings = dioxus_sdk_storage::use_persistent("settings", Settings::default);
     let code_cache =
         dioxus_sdk_storage::use_persistent("code_cache", crate::code::CodeCache::default);
+    // `use_synced_storage::<LocalStorage, _>`, and NOT `use_persistent` like
+    // the two above, because `use_persistent` does not persist on this app's
+    // targets. It builds over `SessionStorage`, which on every non-wasm
+    // target is an in-memory `HashMap` hung off the root context
+    // (dioxus-sdk-storage `persistence.rs:34`, `client_storage/mod.rs:32-41`,
+    // `client_storage/memory.rs:13-28`); `LocalStorage` is the fs-backed one.
+    // Corroborated rather than merely read: `set_dir!()` in `main` points the
+    // backing at `~/Library/Application Support/goose-mobile` and `fs::set`
+    // does `create_dir_all` on its first write, and on a machine where this
+    // app has run — `~/Library/WebKit/goose-mobile` and
+    // `~/Library/Caches/goose-mobile` both exist — that directory does not.
+    //
+    // Which means `settings` and `code_cache` do not survive a restart
+    // either. That is a separate bug with separate consequences (a saved
+    // secret would start being written to disk), so it is deliberately NOT
+    // fixed in this change.
+    let lost_asks = dioxus_sdk_storage::use_synced_storage::<
+        dioxus_sdk_storage::LocalStorage,
+        Vec<crate::ask_journal::AskRecord>,
+    >("lost_asks".to_owned(), Vec::new);
+    // An entry still `Open` here was written by a process that never got to
+    // say what happened to it — the app was killed, so the `Disconnected` arm
+    // below never ran. That is the measured case, and this is the only thing
+    // that catches it.
+    use_hook(move || {
+        let mut entries = lost_asks.peek().clone();
+        if crate::ask_journal::reconcile_at_startup(&mut entries, now_secs()) {
+            lost_asks.clone().set(entries);
+        }
+    });
     let ctx = AppCtx {
         // Always start on Settings; connecting is an explicit user action.
         screen: use_signal(|| Screen::Settings),
@@ -505,6 +550,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         chat: use_signal(ChatState::default),
         running_sessions: use_signal(HashSet::new),
         permission: use_signal(Vec::new),
+        lost_asks,
         usage: use_signal(|| None),
         config_options: use_signal(Vec::new),
         chat_draft: use_signal(String::new),
@@ -657,20 +703,79 @@ async fn pump(ctx: &AppCtx, mut events: mpsc::Receiver<AcpEvent>) {
                 }
             }
             AcpEvent::Permission(request) => {
+                // Written down BEFORE it is queued, and that ordering is the
+                // whole design: the case this journal exists for is the app
+                // being killed, and nothing in this process runs at that
+                // moment. See `crate::ask_journal`.
+                let record = ask_record(ctx, &request);
+                let mut journal = ctx.lost_asks;
+                crate::ask_journal::note(&mut journal.write(), record, now_secs());
                 // Queue, never replace: every request must be answered or the
                 // agent's turn hangs.
                 permission.write().push(request);
             }
             AcpEvent::RequestCancelled { request_id } => {
+                // The agent took its own question back, so there is nothing
+                // left to tell anyone about it. Read before the retain, so
+                // the entry can be found by the id the journal is keyed on.
+                let withdrawn: Vec<String> = permission
+                    .peek()
+                    .iter()
+                    .filter(|p| p.request_id == request_id)
+                    .map(|p| p.tool_call.tool_call_id.clone())
+                    .collect();
                 permission.write().retain(|p| p.request_id != request_id);
+                let mut journal = ctx.lost_asks;
+                let mut entries = journal.write();
+                for id in &withdrawn {
+                    crate::ask_journal::resolve(&mut entries, id);
+                }
             }
-            AcpEvent::Disconnected { reason } => {
+            AcpEvent::Disconnected { reason, cause } => {
                 client_slot.set(None);
                 chat.write().running = false;
                 running_sessions.write().clear();
-                // Transport is gone; the server resolves its own pending
-                // permission requests via the transport-error path.
+
+                // MEASURED (docs/permission-durability.md section 0): the
+                // round is DISCARDED on the server, within 75 seconds, even
+                // when the socket was never closed. There is no declined
+                // tool, no Failed status, no note in the transcript — the
+                // user's prompt and the generated title survive and nothing
+                // else does. The comment that used to stand here said the
+                // server "resolves its own pending permission requests via
+                // the transport-error path", which is the account that run
+                // falsified.
+                //
+                // So clearing the queue is still right — those asks are
+                // unanswerable and a modal over them would be a lie — but it
+                // is local cleanup, not a mirror of anything the server does.
+                // What the journal records, on the other hand, is the loss.
+                //
+                // The journal is marked rather than the queue read, because
+                // by the time this runs the queue is usually already empty:
+                // the transport drains its pending replies before it sends
+                // this event, so `send_prompt`'s post-turn sweep is woken
+                // first and clears the entries for the session it was
+                // running. Reading the queue here would report nothing at all
+                // in the single-session, turn-in-flight case, which is the
+                // whole bug.
                 permission.write().clear();
+                {
+                    let mut journal = ctx.lost_asks;
+                    let mut entries = journal.write();
+                    match cause {
+                        // The user pressed Disconnect, or pressed Connect over
+                        // a live connection. They chose it; nothing to narrate.
+                        DisconnectCause::Local => {
+                            crate::ask_journal::forget_open(&mut entries);
+                        }
+                        DisconnectCause::Transport => crate::ask_journal::lose_open(
+                            &mut entries,
+                            crate::ask_journal::LostCause::Connection,
+                            now_secs(),
+                        ),
+                    }
+                }
                 if *ctx.want_connected.peek() {
                     conn.set(ConnState::Failed(format!("Connection lost: {reason}")));
                     let ctx = *ctx;
@@ -682,6 +787,48 @@ async fn pump(ctx: &AppCtx, mut events: mpsc::Receiver<AcpEvent>) {
             }
         }
     }
+}
+
+/// What the journal keeps about an ask, resolved at the moment it arrives.
+///
+/// Both strings are computed here rather than looked up later, because later
+/// is after a reconnect that rebuilt the chat and re-fetched the list. The
+/// title uses the same fallback chain as [`crate::views::chat::PermissionModal`]
+/// so the card names the ask the way the modal named it, and the session name
+/// is resolved the way the modal resolves a foreign session.
+fn ask_record(ctx: &AppCtx, request: &PermissionRequest) -> crate::ask_journal::AskRecord {
+    let title = request
+        .tool_call
+        .title
+        .clone()
+        .or_else(|| request.tool_call.tool_name().map(str::to_string))
+        .unwrap_or_else(|| "Run a tool".to_string());
+    let chat = ctx.chat.peek();
+    let session_title = if chat.session_id.as_deref() == Some(request.session_id.as_str()) {
+        chat.title.clone()
+    } else {
+        ctx.sessions
+            .peek()
+            .iter()
+            .find(|s| s.session_id == request.session_id)
+            .map_or_else(
+                || request.session_id.clone(),
+                goose_acp_client::SessionInfo::display_title,
+            )
+    };
+    crate::ask_journal::AskRecord::open(
+        request.session_id.clone(),
+        session_title,
+        request.tool_call.tool_call_id.clone(),
+        title,
+        now_secs(),
+    )
+}
+
+/// Stop reporting a loss the reader has read.
+pub(crate) fn dismiss_lost_ask(ctx: &AppCtx, tool_call_id: &str) {
+    let mut journal = ctx.lost_asks;
+    crate::ask_journal::acknowledge(&mut journal.write(), tool_call_id, now_secs());
 }
 
 /// Retry until connected or the user disconnects: quick ramp, then a steady
@@ -704,10 +851,19 @@ async fn reconnect_loop(ctx: &AppCtx) {
                 let chat = ctx.chat.peek();
                 (chat.session_id.clone(), chat.cwd.clone())
             };
+            // Reloaded whatever screen is showing, and the guard that used to
+            // be here — only when `Screen::Chat` — is gone deliberately. A
+            // phone coming back is usually locked on the Chats list, and
+            // `session/load` is the ONE channel through which goose could
+            // ever re-raise an ask it still holds
+            // (`resend_pending_tool_permissions`). Skipping it there closed
+            // the only door that could ever let a parked round be recovered.
+            // It buys nothing today, because today the round is already gone
+            // (docs/permission-durability.md section 0), and it costs one
+            // request; the day an upstream fix makes goose hold the ask, it
+            // is the difference between recovering the turn and not.
             if let Some(session_id) = session_id {
-                if *ctx.screen.peek() == Screen::Chat {
-                    reload_chat(ctx, session_id, cwd).await;
-                }
+                reload_chat(ctx, session_id, cwd).await;
             }
             return;
         }
@@ -1334,9 +1490,16 @@ pub(crate) fn send_prompt(
         if chat.peek().session_id.as_deref() == Some(session_id.as_str()) {
             chat.write().running = false;
         }
-        // The turn is over; answer any permission prompt it left behind
-        // (covers error paths where the run dies with a request outstanding).
-        answer_pending_permissions(&ctx, &client, &session_id);
+        // The turn is over; deal with any permission prompt it left behind.
+        // Which of the two ways depends on whether there is still a socket:
+        // `AcpError::Closed` is exactly what the transport's own drain sends
+        // when it is shutting down, and answering into that is theatre.
+        // Everything else — an RPC error, a timeout, an unsupported method —
+        // leaves a live connection, and those keep today's behaviour.
+        match &result {
+            Err(AcpError::Closed) => abandon_pending_permissions(&ctx, &session_id),
+            _ => answer_pending_permissions(&ctx, &client, &session_id),
+        }
 
         match result {
             Ok(stop) => match stop.as_str() {
@@ -1384,11 +1547,17 @@ pub(crate) fn stop_turn(ctx: &AppCtx) {
 
 /// Respond "cancelled" to every queued permission request for `session_id`
 /// and drop them from the queue.
+///
+/// A deliberate answer, so the journal forgets these: the ask got a reply and
+/// the round can finish. Only reached over a live socket — see
+/// [`abandon_pending_permissions`] for the other case.
 fn answer_pending_permissions(ctx: &AppCtx, client: &AcpClient, session_id: &str) {
     let mut permission = ctx.permission;
+    let mut journal = ctx.lost_asks;
     permission.write().retain(|req| {
         if req.session_id == session_id {
             client.respond_permission(req.request_id.clone(), None);
+            crate::ask_journal::resolve(&mut journal.write(), &req.tool_call.tool_call_id);
             false
         } else {
             true
@@ -1396,15 +1565,50 @@ fn answer_pending_permissions(ctx: &AppCtx, client: &AcpClient, session_id: &str
     });
 }
 
+/// Drop `session_id`'s queued asks without answering them, because there is
+/// nothing to answer *into*.
+///
+/// The distinction from [`answer_pending_permissions`] is not cosmetic.
+/// `respond_permission` on a dead transport pushes a command into a channel
+/// whose receiver is gone; it looks like an answer and is not one. Worse, the
+/// old code path cleared the queue on this route with no record of what had
+/// been in it, which is the silence this branch exists to end.
+///
+/// The journal is deliberately NOT marked here. This runs on whichever of two
+/// tasks the runtime wakes first and it cannot tell a dropped tailnet from a
+/// user pressing Disconnect; the pump's `Disconnected` arm can, because the
+/// transport tells it, so that arm is the single place the decision is made.
+fn abandon_pending_permissions(ctx: &AppCtx, session_id: &str) {
+    let mut permission = ctx.permission;
+    permission
+        .write()
+        .retain(|req| req.session_id != session_id);
+}
+
 /// Answer the front-of-queue permission request and remove it.
 pub(crate) fn answer_permission(ctx: &AppCtx, request_id: &Value, option_id: Option<String>) {
     if let Some(client) = ctx.client.peek().clone() {
         client.respond_permission(request_id.clone(), option_id);
     }
+    // Read before the retain: the journal is keyed on the tool call, not on
+    // the JSON-RPC id, because the id belongs to a socket that is gone by the
+    // time any of this matters.
+    let answered: Vec<String> = ctx
+        .permission
+        .peek()
+        .iter()
+        .filter(|req| req.request_id == *request_id)
+        .map(|req| req.tool_call.tool_call_id.clone())
+        .collect();
     let mut permission = ctx.permission;
     permission
         .write()
         .retain(|req| req.request_id != *request_id);
+    let mut journal = ctx.lost_asks;
+    let mut entries = journal.write();
+    for id in &answered {
+        crate::ask_journal::resolve(&mut entries, id);
+    }
 }
 
 /// A pause long enough that the reader wants to know when things resumed.

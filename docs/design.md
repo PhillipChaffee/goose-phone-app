@@ -659,13 +659,40 @@ ask is therefore *always already on your screen*, and a dot in the list could
 only ever be drawn behind the modal covering it.
 
 The case the Code list exists for cannot arise there either. An ask lives only
-as an outstanding request on a live socket: drop the connection and the server
-resolves it as a transport error and the turn unwinds with it, which is why the
-app clears that queue on disconnect. A goose session cannot be sitting blocked
-while the app is away. Nothing to poll, and nothing to catch up on.
+as an outstanding request on a live socket, and dropping the connection takes
+the round with it — **measured**, not read: goose 1.46.0, sessions
+`20260827_3` and `20260827_4`, replayed the user's message and nothing else
+(`docs/permission-durability.md` section 0). A goose session cannot be sitting
+blocked while the app is away. Nothing to poll, and nothing to catch up on.
 
-So the Chats list gets nothing — not a placeholder, not a greyed dot. Anything
-there would be a lie or a duplicate.
+> This paragraph used to give a mechanism — "the server resolves it as a
+> transport error and the turn unwinds with it" — and that mechanism was
+> falsified. There is no declined tool and no transcript record of any kind;
+> the round is discarded whole. The *conclusion* survived the measurement and
+> the reason for it did not, which is the failure mode a rule like this has:
+> right for a wrong reason, and then defended on the wrong reason when it
+> changes.
+
+So a **live** ask gets nothing in the Chats list — not a placeholder, not a
+greyed dot. Anything there would be a lie or a duplicate.
+
+**A dead one is a different claim, and it does get a row.** An ask whose
+answer never reached the agent is not waiting for you and cannot be
+answered: the round it belonged to is already gone, and the session comes
+back named after work that has no trace of having happened. That is neither a
+lie nor a duplicate — nothing else on any screen says it — so it is reported
+in the two registers rule 8 gives it, and no others. A dot on the tile
+(`.session-tile.attention`, the same badge the Code list draws) and one
+sentence in the panel under the row, in the past tense: *"An answer never
+reached goose. That round was discarded."* Not "waiting on you", which is the
+one thing that is definitely not true, and **no buttons**, because there is
+nothing to press. The row opens the chat, where the loss appears again at the
+tail of the transcript with a Dismiss.
+
+Amber for both, deliberately, and it is the argument `.session-ask` already
+makes: a lost answer is the same fact as the question it belonged to, so it
+is the same colour. Red would rank it with a failed request, and nothing
+failed — the work was thrown away.
 
 ### 14. The app follows the system text size
 

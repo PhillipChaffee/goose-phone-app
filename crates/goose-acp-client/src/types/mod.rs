@@ -330,6 +330,25 @@ pub struct InitializeInfo {
     pub raw: Value,
 }
 
+/// Who ended the connection.
+///
+/// The distinction is not cosmetic and it is not derivable upstack. An app
+/// that reports a lost turn has to be certain it is not reporting one the
+/// user threw away, and the app's own `want_connected` flag cannot tell it:
+/// reconnecting from Settings closes the live client while that flag is still
+/// true, so "we wanted to be connected and are not" covers both a dropped
+/// tailnet and a deliberate press of Connect. The transport is the only layer
+/// that knows, so it is the layer that says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisconnectCause {
+    /// This side asked: [`crate::AcpClient::close`], or the last handle being
+    /// dropped.
+    Local,
+    /// The socket ended under us — EOF, a stream error, a Close frame from
+    /// the server, a failed send, or the keepalive giving up.
+    Transport,
+}
+
 /// Events surfaced to the application from the connection.
 #[derive(Debug)]
 pub enum AcpEvent {
@@ -348,7 +367,10 @@ pub enum AcpEvent {
     /// (`$/cancel_request`), e.g. a permission prompt that timed out.
     RequestCancelled { request_id: Value },
     /// The connection is gone. No further events will arrive.
-    Disconnected { reason: String },
+    Disconnected {
+        reason: String,
+        cause: DisconnectCause,
+    },
 }
 
 #[cfg(test)]

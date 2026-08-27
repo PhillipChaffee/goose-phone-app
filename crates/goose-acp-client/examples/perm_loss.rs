@@ -234,8 +234,8 @@ async fn ask_and_park(client: &AcpClient, events: &mut tokio::sync::mpsc::Receiv
             AcpEvent::Update { update, .. } => {
                 println!("update: {}", short(&update));
             }
-            AcpEvent::Disconnected { reason } => {
-                println!("disconnected: {reason}");
+            AcpEvent::Disconnected { reason, cause } => {
+                println!("disconnected ({cause:?}): {reason}");
                 return;
             }
             other => println!("event: {other:?}"),
@@ -300,7 +300,7 @@ async fn readback(
                 }
                 other => println!("readback update: {}", short(&other)),
             },
-            Ok(Some(AcpEvent::Disconnected { reason })) => {
+            Ok(Some(AcpEvent::Disconnected { reason, .. })) => {
                 println!("readback disconnected: {reason}");
                 break;
             }
@@ -423,8 +423,8 @@ async fn side_effect(
                 }
                 println!("update: {}", short(&update));
             }
-            AcpEvent::Disconnected { reason } => {
-                println!("disconnected: {reason}");
+            AcpEvent::Disconnected { reason, cause } => {
+                println!("disconnected ({cause:?}): {reason}");
                 return;
             }
             other => println!("event: {other:?}"),

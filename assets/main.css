@@ -1413,6 +1413,44 @@ select.field {
   background: var(--bg-danger);
 }
 
+/* The same box in the warning register, for the one thing that wears it: a
+ * permission ask whose answer never reached the agent, reported in the
+ * transcript where the round would have been.
+ *
+ * Amber and not red, deliberately, and it is the same argument `.session-ask`
+ * makes on the Code list: a lost answer is the same fact as the question it
+ * belonged to, so it is the same colour. Red would rank it with a failed
+ * request, and nothing failed — the round was thrown away.
+ *
+ * A modifier on `.error-box` rather than a box of its own because rule 7 is
+ * one shape (12% tint, 45% hairline, coloured text, a dot) and this is that
+ * shape in a second colour. Three declarations and the dot; nothing existing
+ * moves. */
+.error-box.warn {
+  background: color-mix(in srgb, var(--bg-warning) 12%, var(--bg-primary));
+  border-color: color-mix(in srgb, var(--bg-warning) 45%, transparent);
+  color: var(--text-warning);
+}
+
+.error-box.warn::before {
+  background: var(--bg-warning);
+}
+
+/* The card's contents, so the box can hold a sentence AND the control that
+ * dismisses it. `min-width: 0` for the same reason every other grid and flex
+ * child in here has it: the automatic minimum is the content's, and a tool
+ * title is an unbreakable server string.
+ *
+ * `.btn.small` and not the full 40px, matching `.session-ask-actions`: the
+ * transcript is what you are reading and this is subordinate to it. */
+.lost-ask {
+  min-width: 0;
+}
+
+.lost-ask > .btn {
+  margin-top: 10px;
+}
+
 .about {
   margin-top: 24px;
   color: var(--text-secondary);

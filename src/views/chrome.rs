@@ -247,6 +247,13 @@ pub(crate) fn ListRow(
     /// — and every existing call site — says nothing.
     #[props(default)]
     selected: bool,
+    /// This row wants the reader. Rule 8's dot, on the tile, so a scroll down
+    /// the list answers "which one" without reading a word — the same badge
+    /// the Code list already draws for a chat blocked on a permission.
+    ///
+    /// Defaulted, so every list that has nothing to flag says nothing.
+    #[props(default)]
+    attention: bool,
     on_open: EventHandler<()>,
     children: Element,
 ) -> Element {
@@ -284,7 +291,10 @@ pub(crate) fn ListRow(
             // buttons stop propagation below.
             onclick: move |_| on_open.call(()),
             div { class: "session-swipe",
-                div { class: "session-tile", Icon { name: icon } }
+                div {
+                    class: if attention { "session-tile attention" } else { "session-tile" },
+                    Icon { name: icon }
+                }
                 div { class: "session-main",
                     div { class: "session-head",
                         div { class: "session-title", "{title}" }

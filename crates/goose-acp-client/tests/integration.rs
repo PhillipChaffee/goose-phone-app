@@ -20,8 +20,8 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use goose_acp_client::{
     assert_round_trip, probe, AcpClient, AcpError, AcpEvent, ConfigExtensions, ConnectConfig,
-    ContentBlock, Feature, GooseExtension, McpServer, ProbeOutcome, SessionKind, SessionQuery,
-    SessionUpdate, StdioMcpServer,
+    ContentBlock, DisconnectCause, Feature, GooseExtension, McpServer, ProbeOutcome, SessionKind,
+    SessionQuery, SessionUpdate, StdioMcpServer,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1434,9 +1434,48 @@ async fn closing_the_client_reports_disconnected() {
     client.close();
 
     match tokio::time::timeout(Duration::from_secs(5), events.recv()).await {
-        Ok(Some(AcpEvent::Disconnected { reason })) => {
+        Ok(Some(AcpEvent::Disconnected { reason, cause })) => {
             assert!(reason.contains("closed"), "unexpected reason: {reason}");
+            assert_eq!(cause, DisconnectCause::Local, "we are the ones who closed");
         }
         other => panic!("expected Disconnected, got {other:?}"),
+    }
+}
+
+/// The other half of the pair, and the one the app leans on: a socket that
+/// dies under a running turn must not look like a user pressing Disconnect.
+///
+/// The app's own `want_connected` flag cannot tell them apart — `establish`
+/// closes a live client while that flag is still true, so reconnecting from
+/// Settings arrives at the pump looking exactly like a dropped tailnet — and
+/// on the strength of that difference the app decides whether to tell the
+/// reader a turn was thrown away. A wrong answer here is a phantom report
+/// every time somebody presses Connect.
+#[tokio::test]
+async fn a_socket_that_dies_under_us_is_not_a_local_close() {
+    let addr = spawn_ws_stub(PromptBehavior::Disconnect).await;
+    let (client, mut events, _) = AcpClient::connect(&config(addr, SECRET)).await.unwrap();
+    let session = client.session_new("/tmp").await.unwrap().session_id;
+    // The stub drops the connection in the middle of this turn.
+    let _ = client
+        .prompt(&session, &[ContentBlock::text("hello")])
+        .await;
+
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .unwrap();
+        match event {
+            Some(AcpEvent::Disconnected { cause, reason }) => {
+                assert_eq!(
+                    cause,
+                    DisconnectCause::Transport,
+                    "a dropped connection reported as a local close ({reason})"
+                );
+                return;
+            }
+            Some(_) => {}
+            None => panic!("event stream ended without a Disconnected"),
+        }
     }
 }

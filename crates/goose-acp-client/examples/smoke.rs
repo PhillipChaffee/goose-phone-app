@@ -104,7 +104,7 @@ async fn main() {
                         // client handle unavailable here; answered by main task below
                         return Some(p);
                     }
-                    AcpEvent::Disconnected { reason } => {
+                    AcpEvent::Disconnected { reason, .. } => {
                         println!("\n[disconnected: {reason}]");
                         return None;
                     }
@@ -144,7 +144,7 @@ async fn watch(base_url: String, secret: String) {
     let (_client, mut events, info) = AcpClient::connect(&cfg).await.expect("connect");
     println!("connected to {} — idling", info.agent_name);
     while let Some(event) = events.recv().await {
-        if let AcpEvent::Disconnected { reason } = event {
+        if let AcpEvent::Disconnected { reason, .. } = event {
             println!(
                 "disconnected after {:.0}s: {reason}",
                 started.elapsed().as_secs_f64()

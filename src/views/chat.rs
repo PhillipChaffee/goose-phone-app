@@ -7,8 +7,8 @@ use crate::attach::AttachTarget;
 use crate::icons::Icon;
 use crate::markdown;
 use crate::state::{
-    answer_permission, new_session, send_prompt, show_toast, stop_turn, use_app_ctx, ChatItem,
-    Screen, Usage,
+    answer_permission, new_session, send_prompt, show_toast, stop_turn, use_app_ctx, AppCtx,
+    ChatItem, Screen, Usage,
 };
 use crate::views::attach::{attachment_list, AttachButton, AttachTray};
 use crate::views::session_settings::{
@@ -132,6 +132,7 @@ pub fn ChatView() -> Element {
                 p { class: "empty", "Loading history…" }
             }
             {render_transcript(&chat.items, &chat.marks)}
+            {render_lost_asks(&ctx, chat.session_id.as_deref())}
             if running {
                 div { class: "typing",
                     span { class: "dot-anim" }
@@ -429,6 +430,45 @@ fn goose_setting_rows(
         ),
     });
     rows
+}
+
+/// The tail of the transcript: asks this chat lost, and what that cost.
+///
+/// Rendered FROM THE JOURNAL, not pushed into `chat.items`, and that is not a
+/// stylistic choice. `reload_chat` clears `items` and rebuilds them from
+/// `session/load`, so a stored transcript item would be wiped by the very
+/// reconnect that reveals the loss. Derived and appended after the items loop,
+/// it is also immune to `ChatState::marks` and `CodeChatState::part_index`,
+/// both of which hold indices into that vector.
+///
+/// It says what was measured rather than what was believed. There is no
+/// declined tool in the transcript and no "you declined this" note — the round
+/// was discarded whole (`docs/permission-durability.md` section 0) — so the
+/// card points at the prompt, which survived, and at asking again, which is
+/// the only thing the reader can actually do.
+fn render_lost_asks(ctx: &AppCtx, session_id: Option<&str>) -> Element {
+    let Some(session_id) = session_id else {
+        return rsx! {};
+    };
+    // `losses_in` hands back owned pairs, which is what lets the read guard
+    // end on this line: holding it across the rsx! below would put a read
+    // borrow of the journal underneath a button whose handler writes it.
+    let lost = crate::ask_journal::losses_in(&ctx.lost_asks.read(), session_id);
+    let ctx = *ctx;
+    rsx! {
+        for (id, sentence) in lost {
+            div { key: "{id}", class: "error-box warn",
+                div { class: "lost-ask",
+                    "{sentence}"
+                    button {
+                        class: "btn small secondary",
+                        onclick: move |_| crate::state::dismiss_lost_ask(&ctx, &id),
+                        "Dismiss"
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Render a whole transcript, folding runs of tool calls into one line.
