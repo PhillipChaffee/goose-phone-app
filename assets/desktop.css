@@ -1,0 +1,1024 @@
+/* ═══ the desktop shell ══════════════════════════════════════════════════
+ *
+ * Compiled into a desktop binary and nothing else (`src/css.rs`, SHELL). Two
+ * things follow from that, and both are the point:
+ *
+ *  - The `@media (max-width: …)` rules below are the ENTIRE width mechanism.
+ *    A phone binary does not contain this file, so they are unreachable from
+ *    one — which is why no Rust in this app observes a window resize, and why
+ *    the rule in src/viewport.rs (the native renderer sends every listened-to
+ *    event through a synchronous XHR) is honoured by having nothing to listen
+ *    to.
+ *
+ *  - Width decides pane count and NOTHING else. A narrow desktop window is a
+ *    narrow desktop app: the rows keep their inline action icons at every
+ *    width, there is no swipe tray and no pull-to-refresh at any width, and
+ *    the nav never becomes an overlay you have to dismiss. That is the same
+ *    position goose's own desktop app takes — its one width threshold
+ *    (NavigationContext.tsx, 700px) collapses the sidebar and changes nothing
+ *    else about how anything behaves.
+ *
+ *    The nav's own collapse is not a width response and is not decided here:
+ *    it is a button, `data-nav` on `.shell` is what it sets, and the sheet
+ *    reads that attribute the way it reads `data-detail`. Width still tells
+ *    Rust nothing.
+ *
+ * It is additive: assets/main.css is not edited by this branch, and every
+ * colour here is a token that exists in light and in dark.
+ *
+ * NOT in assets/features/, deliberately. docs/audit.js links that whole
+ * directory into 402x874 PHONE frames, and these rules would restyle every
+ * audited phone state into a layout no phone binary can produce. The exclusion
+ * is the same one assets/platform/ios.css takes, for a different reason. The
+ * cost is stated plainly: nothing in this file is audited yet, because the
+ * gallery holds no desktop state to audit. Capturing them needs a desktop run.
+ */
+
+/* ── 1. the shell and its columns ───────────────────────────────────────
+ *
+ * The widths are the mockups' and the breakpoints are their sum, which is the
+ * difference between a breakpoint and a round number:
+ *
+ *   three columns  212 + 330 + 360 = 902   (the mockups' "900", worked out)
+ *   two columns    212       + 360 = 572
+ *   one column     the nav column drops to 72, which is a 56px card
+ *
+ * Those are COLUMN widths and the card inside each is the column minus two
+ * `--shell-gap`s, which is why the sums did not move when the nav started
+ * floating: the breathing room came out of the panel, not out of the layout.
+ *
+ * 360 is not a taste either: docs/design.md records that "320pt is a defensive
+ * width rather than a device; the narrowest this app really meets is 360", and
+ * `node docs/measure-composer.js 360` is a gate. The numbers are stated once,
+ * in src/shell/desktop.rs, and a test there checks this file against them. */
+
+.app > .shell {
+  /* The nav COLUMN, gap included. The card inside it is this minus two gaps,
+   * which is 196 — inside goose's own 160..400 band for the same panel, so the
+   * breakpoint arithmetic in src/shell/desktop.rs is unchanged by the inset. */
+  --nav-w: 212px;
+  /* The breathing room around anything that floats. goose's own desktop app
+   * spends exactly this on the same panel (`p-2` in AppLayout.tsx). */
+  --shell-gap: 8px;
+  /* THE WINDOW'S OWN CHROME, now that it is inside the app.
+   *
+   * `src/main.rs` hides the titlebar, so the traffic lights are painted ON the
+   * app's own surface. WHERE they land is macOS's decision and not ours —
+   * tao's `with_traffic_light_inset` is a no-op under wry (the reason is
+   * written up in src/main.rs), so these two numbers are MEASURED off a real
+   * window rather than chosen: three discs at 20pt centres occupying
+   * x 9..63, y 9..22.5.
+   *
+   * `--chrome-h` is the band kept clear of anything the app wants to put at
+   * the top left, and the band the window is dragged by. 52 rather than the
+   * 23 the lights strictly need, because a control butted against them reads
+   * as a fourth one — goose leaves the same gap, its lights at y 16 and its
+   * first nav row at 78 (AppLayout.tsx + Navigation.tsx).
+   *
+   * `--traffic-w` is where the lights END plus breathing room, so the toggle
+   * beside them and the header indent when the nav is shut are both derived
+   * from one number rather than guessed twice. */
+  --chrome-h: 44px;
+  --traffic-w: 0px;
+  /* How far down the bar its controls sit. NOT `align-items: center`, because
+   * on macOS the bar's controls have to line up with the traffic lights, and
+   * the lights are not centred in it — AppKit paints them at logical y 9..22.5
+   * (centre 16) in a 52pt bar whose centre is 26. Ten points out is exactly
+   * the misalignment this token exists to remove. Where there are no lights,
+   * centring in the bar is right and this is half of what is left after a
+   * 32pt control. */
+  --chrome-pad: 6px;
+  /* WHAT THE NAV CARD PAINTS, and it is a different answer per theme because
+   * the two themes separate surfaces by different means.
+   *
+   * Measured, in the shipping build: the nav was `--bg-secondary` in both, so
+   * in dark it was #3f434b on a #22252a page — 1.53:1, a pale blue-grey slab
+   * bolted to the side of a near-black window. Worse, it took the selected
+   * destination with it: `.drawer-item.active` is `--bg-tertiary` (#474e57),
+   * which on that slab is 1.13:1, so the one pill whose whole job is to say
+   * where you are was the faintest thing in the column.
+   *
+   * Both numbers invert when the fill goes. Against the page instead, the
+   * active pill is 1.60:1 — and that is not a coincidence, it is the
+   * reference: sampled out of the goose desktop screenshots, its sidebar fill
+   * and its canvas fill are the SAME colour (#202125), the panel is separated
+   * by a 1px #383a41 border and nothing else, and its selected pill measures
+   * 1.58:1. In dark `--bg-primary` here is that same "no fill at all", said in
+   * a token so the hover mix below has something to mix against.
+   *
+   * Light keeps its fill, because light has the opposite problem: #f4f6f7 on
+   * #ffffff is 1.09:1 — a step you have to look for, not one that shouts —
+   * and taking it away would leave the card resting on nothing. Light
+   * separates with fills, dark separates with lines. */
+  --nav-fill: var(--bg-secondary);
+  /* Every structural line in the shell: the nav card's edge and the divider
+   * between the two content columns. One token, two theme values, chosen so
+   * the line lands at the SAME strength in both — light #cbd1d6 on white is
+   * 1.44:1 and dark #3f434b on #22252a is 1.42:1. Taking one value for both
+   * is what put a 1.9:1 divider next to a 1.4:1 card edge in dark, which reads
+   * as two different kinds of line for no reason. */
+  --shell-line: var(--border-secondary);
+  flex: 1;
+  min-height: 0;
+  /* A COLUMN: the window's own bar, then the columns of content. It was a row
+   * with the bar's contents absolutely positioned over it, and that could not
+   * be made to work — the traffic lights land at logical (9, 9) and the nav
+   * card is inset 8 with a 16px radius, so the two fought over one corner no
+   * matter how the paddings were arranged. A band that spans the window is
+   * what gives the lights somewhere of their own to be. */
+  display: flex;
+  flex-direction: column;
+}
+
+/* The bar. Height is a token because two other things read it, and it exists
+ * on every platform — `--traffic-w` is zero where the titlebar was not hidden,
+ * so the bar simply starts with the toggle instead of leaving room first. */
+.shell-chrome {
+  flex: 0 0 var(--chrome-h);
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding-left: 6px;
+}
+
+/* Where AppKit paints the traffic lights. Nothing renders them and nothing may
+ * cover them — this box is empty on purpose, and it is `flex: 0 0` so it holds
+ * its width rather than being squeezed by the drag region beside it. */
+.traffic-slot {
+  flex: 0 0 var(--traffic-w);
+  align-self: stretch;
+}
+
+.shell-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .app > .shell {
+    --nav-fill: var(--bg-primary);
+    --shell-line: var(--border-primary);
+  }
+}
+
+:root[data-theme="dark"] .app > .shell {
+  --nav-fill: var(--bg-primary);
+  --shell-line: var(--border-primary);
+}
+
+/* The nav is a COLUMN and a CARD, and they are two elements because they have
+ * two jobs.
+ *
+ * This is the column. It owns the width, it owns the collapse, and it clips —
+ * so when it animates to nothing the card inside slides out of view at the
+ * width it has always had. The alternative, one element that shrinks, reflows
+ * its own contents the whole way: "Session History" rewraps to four lines and
+ * back again over 200ms, which is a lot of motion to say "gone". */
+.navpane {
+  flex: 0 0 var(--nav-w);
+  width: var(--nav-w);
+  display: flex;
+  min-height: 0;
+  padding: var(--shell-gap);
+  overflow: hidden;
+  /* The phone's own drawer curve (`.drawer`, assets/main.css), so the two
+   * shells open the same panel at the same speed. */
+  transition:
+    flex-basis 200ms cubic-bezier(0.32, 0.72, 0, 1),
+    width 200ms cubic-bezier(0.32, 0.72, 0, 1),
+    padding 200ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* And this is the card: a rounded, outlined panel floating on the page with
+ * room around it, which is the phone's grammar ("chrome floats, content
+ * scrolls under it") arriving on the desktop, and the reference's own
+ * description of the same panel — "the sidebar is a rounded outlined card
+ * floating on it with breathing room" (AppLayout.tsx).
+ *
+ * --radius-xl, because docs/design.md's tier for "containers that hold other
+ * things" is 16px and this holds every destination in the app.
+ *
+ * A FIXED width, not `100%`: the column's width is what animates, and a
+ * percentage of an animating box is a box that reflows for 200ms. */
+.navcard {
+  flex: 0 0 auto;
+  width: calc(var(--nav-w) - 2 * var(--shell-gap));
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Plain padding again. The card used to hold the traffic lights clear of its
+   * own wordmark; the bar above it does that now, so this is just a card. */
+  padding: 12px 8px;
+  background: var(--nav-fill);
+  border: 1px solid var(--shell-line);
+  border-radius: var(--radius-xl);
+  /* Instant on the way in, deferred on the way out: the card has to be gone
+   * from the tab order once it is off screen, but taking it out at the START
+   * of the slide would make the panel disappear rather than leave. */
+  visibility: visible;
+  transition: visibility 0s;
+}
+
+.shell[data-nav="closed"] .navpane {
+  flex-basis: 0;
+  width: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.shell[data-nav="closed"] .navcard {
+  visibility: hidden;
+  transition: visibility 0s 200ms;
+}
+
+/* The collapse control. In flow in the bar, immediately after the room the
+ * traffic lights need — so it is in the same place on every platform and at
+ * every width, which is the property that matters most about the one control
+ * that brings the navigation back.
+ *
+ * It used to be absolutely positioned against `.shell` and slid between the
+ * nav card's corner and the window's. Both of those positions turned out to be
+ * the window's own once the titlebar was hidden, and a control that animates
+ * into the close button is a control that gets misclicked. goose's own app
+ * parks the identical button in the identical spot
+ * (`ui/desktop/src/components/Layout/AppLayout.tsx:112`).
+ *
+ * A pill, per docs/design.md's tier: an icon button's shape is its identity. */
+.nav-toggle {
+  flex: 0 0 auto;
+  margin-top: var(--chrome-pad);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--icon-md);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.nav-toggle:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-color: var(--border-secondary);
+}
+
+/* The rest of the bar drags the window.
+ *
+ * A sibling of the toggle rather than the bar itself, so pressing the toggle
+ * cannot also start a drag — the reference needs a `no-drag` class for exactly
+ * this and the box tree gives it to us instead. It stretches, so the whole top
+ * edge is grabbable rather than a 212px patch of it. */
+.window-drag {
+  flex: 1;
+  align-self: stretch;
+  min-width: 0;
+}
+
+/* `position: relative` is load-bearing and is not about the pane's own
+ * painting. `.fab` and anything else a view positions absolutely measure
+ * against the nearest positioned ancestor, which without this is `.app` — so
+ * the list's "New chat" pill would float in the bottom-right corner of the
+ * WINDOW, over the detail column, rather than over the list it belongs to.
+ * Modals are unaffected: `.modal-backdrop` and `.toast` are `position: fixed`
+ * already, and nothing here introduces a transform for them to be trapped by
+ * (the same property `.app` deliberately preserves for backdrop-filter). */
+.pane {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+/* The list takes a SHARE of the surplus, it is not pinned to its floor.
+ *
+ * At a flat 330 the widest window was the worst one to read a list in. Measured
+ * at 1500: the card is 296pt, the timestamp and the two 32pt action icons take
+ * the right-hand 80 of the title line, and what is left for the title is about
+ * 119pt — so "Nightly dependency…", "Weekly changelog…", "Quarterly
+ * dependency…" and "Staging smoke tests during…" were all cut, and the first
+ * and third differ only after the cut. The same four rows render whole at 900,
+ * where the list has the pane to itself. Making the window bigger was making
+ * the list show less, and the 958pt it was handed to instead was 55–90% empty.
+ *
+ * clamp() rather than a percentage, because both ends are real. 330 is the
+ * floor the breakpoint arithmetic in src/shell/desktop.rs is built on and the
+ * width the mockups drew; 460 is where a list of titles stops earning more —
+ * past it the column is a page, not an index. 30% is what walks between them:
+ * 330 until about 1100, 450 at 1500, and the detail never drops below the
+ * measure it reads at (see section 6). */
+.pane-list {
+  flex: 0 0 clamp(330px, 30%, 460px);
+  width: clamp(330px, 30%, 460px);
+  border-right: 1px solid var(--shell-line);
+}
+
+/* Two columns. Below the three-column sum the list and the detail share one,
+ * and `data-detail` — set in src/shell/desktop.rs from the same `at_root` the
+ * nav highlights with — says which of them has something in it. This is the
+ * layout goose's own desktop app is in at EVERY width: SchedulesView returns
+ * the detail INSTEAD of the list. It is the reference arrangement, not a
+ * degraded one. */
+@media (max-width: 901px) {
+  .pane-list {
+    flex: 1 1 auto;
+    width: auto;
+    border-right: 0;
+  }
+
+  .shell[data-detail="open"] .pane-list {
+    display: none;
+  }
+
+  .shell[data-detail="empty"] .pane-detail {
+    display: none;
+  }
+}
+
+/* One column. The nav keeps every destination and loses its words.
+ *
+ * It does not become an overlay and it does not gain a hamburger: that is the
+ * phone's answer, and a narrow desktop window is not a phone. A rail is the
+ * desktop answer — the destinations stay on screen, reachable in one click,
+ * and `title` (src/shell/mod.rs, nav_tooltip) gives the pointer their names
+ * back. */
+@media (max-width: 571px) {
+  /* The VARIABLE, not the column, so the card inside it follows: 72 - 8 - 8 is
+   * the 56px rail the icons sit in, and the collapse rules above keep working
+   * unchanged because they never mention a number. */
+  .app > .shell {
+    --nav-w: 72px;
+  }
+
+  /* Room at the top for the toggle, which at this width has no wordmark to sit
+   * beside — the rail drops both the brand and the group headers. Without it
+   * the button lands on the first destination's icon, and 54 rather than the
+   * 46 that would merely clear it because at the rail every label is gone and
+   * the toggle is one more 32px glyph in a column of them: the gap is the only
+   * thing left saying it is not a destination.
+   *
+   * `max()` against the chrome strip, because on macOS the traffic lights are
+   * in that same corner and are taller than the toggle alone needs. */
+  .navcard {
+    padding: 12px 4px;
+  }
+
+
+  /* A destination's label is a bare text node — `render_group` emits it with
+   * no element around it, because that is the phone's markup and the phone's
+   * markup does not change on this branch. So it is COLLAPSED rather than
+   * hidden: an anonymous inline box at zero font-size has no metrics, and the
+   * icon takes its own size back below. The text stays in the accessibility
+   * tree, which is what keeps each button's name. */
+  .navpane .drawer-item {
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .navpane .drawer-item .icon {
+    font-size: var(--icon-md);
+  }
+
+  /* A wordmark and two section headers do not fit in 56px, and neither is a
+   * control: nothing is lost but the labelling of a list that is now four
+   * icons long. */
+  .navpane .drawer-brand,
+  .navpane .drawer-group {
+    display: none;
+  }
+}
+
+/* ── 2. chrome that no longer floats ────────────────────────────────────
+ *
+ * On the phone the top of the screen is a row of detached glass controls over
+ * the page (docs/design.md: "Each carries its own glass. Nothing spans the
+ * width"). Three columns cannot have that. `.topbar` is `position: absolute`
+ * against `.app`, so three of them would stack in the same corner; and a
+ * floating pill per column, three abreast, is three pills where the eye
+ * expects one. A pane header is the title sitting on the page, which is what
+ * the agreed mockups show. This deviation is written up in docs/design.md. */
+
+/* One height for every pane header, and it is not a preference.
+ *
+ * The bars are siblings across a 1pt divider and their heights were 20pt
+ * apart: a list header holds a title and comes to about 48, a detail header
+ * holds a 44pt back chevron and often two lines of text and comes to about 64.
+ * Two headers at two heights across one divider is a seam that visibly
+ * stair-steps.
+ *
+ * 4rem is the taller of the two derived rather than measured: `.icon-btn` is
+ * min-height 44 and this bar's own padding is 10 top and bottom. In rem, so it
+ * follows the reader's font-size like everything else (design rule 14) — the
+ * chevron does not, but a bar that grows past its controls is the harmless
+ * direction.
+ *
+ * NO RULE UNDER IT, and that is a reversal.
+ *
+ * The first draft drew one, on the reasoning that a static bar is in normal
+ * flow and "borders separate, shadows float". True as far as it goes, and it
+ * missed what the line was actually separating: nothing. The bar is
+ * `--bg-primary` and so is the pane under it, the content does not scroll
+ * beneath it, and the header is already set apart by being a 4rem band of air
+ * with one heading in it. What the rule did do was meet the column divider at
+ * a right angle, once per pane, which is a corner — and a window whose
+ * structure is drawn in corners is the "boxy" this pass is about.
+ *
+ * The reference agrees and is explicit about it: goose's own desktop app
+ * headers (RecipesView, SkillsView, SchedulesView) are a title and a subtitle
+ * on the canvas with no divider anywhere, and its layout comment says the main
+ * content is "no border / no card; just flows on the canvas"
+ * (ui/desktop/src/components/Layout/AppLayout.tsx). The one line the shell
+ * still draws is the one between two columns, which does separate two things.
+ *
+ * `background` stays. It is the same colour as the pane, so it paints nothing
+ * — but `.topbar` inherits the phone's glass (`backdrop-filter` and a
+ * translucent tint), and an opaque fill is what overrides it. */
+.topbar {
+  position: static;
+  min-height: 4rem;
+  padding: 10px var(--edge);
+  border-bottom: 0;
+  background: var(--bg-primary);
+}
+
+/* Out of flow, centred and reserving room for controls at both ends — all
+ * three are answers to a floating bar. In a pane header the title starts at
+ * the leading edge and takes what is left. */
+.topbar > .title,
+.topbar > .titlegroup {
+  position: static;
+  transform: none;
+  max-width: none;
+  text-align: left;
+}
+
+/* The fourth property the reset above was missing, and the one that showed.
+ *
+ * `.titlegroup` is a flex column with `align-items: center` in assets/main.css,
+ * which is right for a title that is itself centred on the screen's centre
+ * line. Taking the centring off the GROUP and leaving it on its items left the
+ * subtitle centred under the title instead of sharing its left edge — "Review"
+ * floating over "3 files · +14 −9", "Pull requests" over
+ * "acme/widget-service · goose/retry-backoff" — so one header presented three
+ * different left edges. */
+.topbar > .titlegroup {
+  align-items: flex-start;
+}
+
+/* The glass belonged to the floating controls. On a bar that is itself a
+ * surface, a shadowed pill around each button is a second material for no
+ * reason. */
+.topbar > .icon-btn,
+.topbar-actions {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* The nav is already on screen, so a control that opens it does nothing —
+ * design rule 11. One rule rather than a branch in Rust, because there are two
+ * hamburgers: `views::chrome::TopBar` renders one for all twelve of its call
+ * sites, and `views/code.rs` hand-rolls a second. `display: none` takes it out
+ * of the tab order and the accessibility tree as well as off the screen. */
+.topbar > .icon-btn.menu {
+  display: none;
+}
+
+/* The band of material behind the status bar, and the padding that kept
+ * content out from under a bar that floated over it. Neither has anything to
+ * do here. */
+.app::before {
+  display: none;
+}
+
+.scroll,
+.compose {
+  padding-top: 12px;
+}
+
+/* ── 3. rows that do not swipe ──────────────────────────────────────────
+ *
+ * The row's markup does not change — this is the same `.session-item`,
+ * `.session-swipe` and `.session-actions` the phone renders, and that is why
+ * every `RowAction` call site in the app is untouched. What changes is one
+ * flex basis. `.session-swipe` is `flex: 0 0 100%` on the phone, which is what
+ * pushes the tray past the row's right edge and out of sight; letting it
+ * shrink brings the same element back inside the row.
+ *
+ * It also fixes a real bug rather than a wrong affordance. `.session-item` is
+ * `overflow-x: auto; scroll-snap-type: x mandatory` with the scrollbar hidden
+ * — on macOS a trackpad's two-finger swipe drives that natively, with no
+ * affordance to say so. Today the tray is reachable by accident and
+ * unreachable on purpose. */
+
+.session-item {
+  /* The positioning context for the actions below. Nothing else in a row is
+   * positioned, and `.pane` already carries `position: relative` for the FAB,
+   * so this changes what `.session-actions` measures against and nothing
+   * else. */
+  position: relative;
+  overflow-x: visible;
+  overflow-y: visible;
+  scroll-snap-type: none;
+}
+
+.session-swipe {
+  flex: 1 1 auto;
+}
+
+/* Top-right of the row, and OUT OF FLOW — which is the whole point.
+ *
+ * `.session-actions` is a flex sibling of `.session-swipe`, and `.session-swipe`
+ * holds the title, the meta line and the quote. Left in flow the two icons take
+ * 78px off all three: measured at the default 1180x820 window, a chat title's
+ * box was 111px against the 196px the same row gets with no actions on it, and
+ * the quote came out 141px wide with 220px of text clamped into 80px of box.
+ *
+ * The agreed mockups do not do that: they put the actions inside the row's TOP
+ * LINE, beside the title only, with the quote a sibling of that line spanning
+ * the whole card. Absolute is how the same arrangement is reached without
+ * touching the markup, which is what keeps every `RowAction` call site and the
+ * phone's DOM alike untouched — only the title line reserves the gutter, and
+ * the meta line and the quote get the row's full width. */
+/* 8px between the buttons, not the tray's 2.
+ *
+ * The pair this matters for is Chats': a pencil and a trash, 32pt each, with
+ * the IRREVERSIBLE one on the outside where an overshoot to the right lands.
+ * At 2pt apart the two targets were effectively one 66pt target with a delete
+ * at the end of it. 8 is the app's own smallest deliberate gap (`.btn-row`,
+ * `.modal-actions`) and it is what the gutter below is counted from. */
+.session-actions {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  gap: 8px;
+}
+
+/* The gutter the icons sit in, reserved on the title line and nowhere else.
+ *
+ * Counted rather than assumed: a row with one action reserves one 32px button,
+ * a row with two reserves two and the 8px between them, and a row with no
+ * actions at all — Skills, a scheduled run — renders no `.session-actions` and
+ * so matches neither rule and reserves nothing. `:has()` is what makes the
+ * count readable from the row; this sheet is in a macOS binary only, where the
+ * web view is WebKit 15.4 or newer. The 8px is the gap between the title and
+ * the first icon. */
+.session-item:has(> .session-actions) .session-head {
+  padding-right: 40px;
+}
+
+.session-item:has(> .session-actions > .row-action:nth-child(2)) .session-head {
+  padding-right: 80px;
+}
+
+/* Always visible, never revealed.
+ *
+ * goose's own desktop app hover-reveals the actions on a session CARD in a
+ * grid and shows them outright in a LIST row — ExtensionItem.tsx renders its
+ * gear unconditionally with `hover:text-text-primary`, and SchedulesView.tsx
+ * renders pause/resume/delete outright. A 330px column of rows is a list, so
+ * the icons are painted always and hover changes only their colour and their
+ * border. A delete you cannot see until you find it is not an affordance.
+ *
+ * 32px, not the mockups' 26. Two reasons that agree: docs/audit.js reports
+ * SMALL-TAP on any button under 32px in either axis, so 32 is this repo's own
+ * floor and desktop states will pass it when they are captured; and goose's
+ * own row buttons are `h-8`, which is 32. The 44px in docs/design.md is the
+ * HIG's TOUCH number and does not describe a pointer — the exception is
+ * written up there. */
+.row-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  /* A resting EDGE, not a transparent one waiting for a pointer.
+   *
+   * Scanning a list is the state these are read in, and at rest the pause bars
+   * in Scheduler and Extensions were 6.5 x 12.5pt of `--text-secondary` grey
+   * with no box round them, sitting beside a fully saturated red trash: one
+   * control shouting, two reading as typography. In light they barely
+   * registered at all. Hover already drew the border — this only moves it to
+   * where the reading happens, and the pointer keeps a step of its own below
+   * (`--border-secondary`, one value deeper, in both themes). */
+  border: 1px solid var(--border-primary);
+  /* A pill, and it is the design system's rule rather than a taste:
+   * docs/design.md tiers rounding, and the top tier is "anything whose shape
+   * is its identity — icon buttons, tabs, chips, send". Every icon button on
+   * the phone is `--radius-full`; these were `--radius-md`, so a list of
+   * 16px-rounded cards carried two 8px-rounded squares each and the squares
+   * were the only thing in the window at that radius. A control never sits at
+   * a tighter radius than the container around it — that rule, broken here, is
+   * the one docs/design.md names as what makes a UI read as boxy. */
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--icon-md);
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.row-action.danger {
+  color: var(--text-danger);
+}
+
+/* ── 4. the pointer tier ────────────────────────────────────────────────
+ *
+ * assets/main.css contains no `:hover` and no `:focus-visible` rule at all —
+ * the design system is `:active`-only, because it was written for a thumb.
+ * Every one of them is here, which is also what stops iOS inheriting sticky
+ * hover: the sheet is not in that binary.
+ *
+ * Colour and a border, never a reveal, and never a shape that moves: an icon
+ * that grows under the cursor is a target that moves while you are aiming. */
+
+/* The row deepens its buttons' edges when the pointer is over it — the
+ * mockups' `.card:hover .act{border-color}`, one token further now that the
+ * resting state owns `--border-primary`. */
+.session-item:hover .row-action {
+  border-color: var(--border-secondary);
+}
+
+.row-action:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-color: var(--border-secondary);
+}
+
+/* Destructive keeps its own colour under the cursor rather than resolving to
+ * the ordinary one — the reference's `text-red-500 hover:text-red-600`, in the
+ * token that already holds exactly that value (--text-danger is #c62828 light,
+ * #ff8080 dark). */
+.row-action.danger:hover {
+  color: var(--text-danger);
+  border-color: var(--border-danger);
+  background: color-mix(in srgb, var(--bg-danger) 10%, var(--bg-primary));
+}
+
+.session-item:hover {
+  border-color: var(--text-tertiary);
+}
+
+/* Hover gets a step of its own, and `--bg-tertiary` is not available for it.
+ *
+ * That token is what `.drawer-item.active` paints with in assets/main.css, and
+ * the comment above that rule is the reason it cannot be spent twice: "at
+ * 1.08:1 against the light page the selected destination was indistinguishable
+ * from the unselected ones". Tertiary was chosen BECAUSE it is the one value
+ * that reads as selected. Give it to hover as well and the pointer paints a
+ * second selected-looking pill, in a nav whose whole job is to say which
+ * destination you are on.
+ *
+ * A mix rather than a third token: the halfway point between what the card
+ * paints and what the selected pill paints is a step by construction, in light
+ * and in dark, because both ends are. `.row-action.danger:hover` above mixes
+ * for the same reason. `:not(.active)` so hovering where you already are does
+ * not dim the highlight.
+ *
+ * `--nav-fill` and not `--bg-secondary`, and that is the whole of what the
+ * theme split above costs. Mixing against the wrong end is not a subtle
+ * error: in dark the card now paints `--bg-primary`, so halfway to
+ * `--bg-secondary` was a #434952 pill on a #22252a card — 1.51:1, LOUDER than
+ * the 1.60:1 that means "you are here", and hover would have out-shouted
+ * selection. Against what the card actually paints it lands at 1.28:1, one
+ * clear step under. */
+.drawer-item:hover:not(.active) {
+  background: color-mix(in srgb, var(--bg-tertiary) 50%, var(--nav-fill));
+}
+
+/* An OUTLINE on the selected destination, not just a fill, and it is light
+ * mode this is for.
+ *
+ * `--bg-tertiary` on the dark card measures 1.60:1 and needs nothing; on the
+ * light card it is #e3e6ea on #f4f6f7, which is 1.13:1 — the same "you have to
+ * look for it" the fill split above was fixing in the other theme. A 3:1
+ * boundary is what a non-text indicator owes, and `--border-secondary` is
+ * 1.44:1 against the card's own fill on top of the pill's, which together read
+ * as a selected pill rather than a smudge.
+ *
+ * `box-shadow: inset` rather than `border`, because `.drawer-item` is
+ * `border: 0; padding: 0 12px` in assets/main.css: a real border would push
+ * every label and icon in the nav 1px inward on exactly the row that is
+ * highlighted, so the selected destination would visibly shift as you arrived
+ * at it. */
+.navpane .drawer-item.active {
+  box-shadow: inset 0 0 0 1px var(--border-secondary);
+}
+
+/* Which row the detail column is showing.
+ *
+ * The one state a three-column layout needs that one column never did: on the
+ * phone the list is not on screen beside what it opened, so there was nothing
+ * to mark. Here they are side by side, and an unmarked list is a list that does
+ * not say where the pane beside it came from. It is the mockups' `.card.on`.
+ *
+ * `--bg-tertiary` because that is the token main.css already proved reads as
+ * selected (see `.drawer-item.active`), and it is free here in a way it is not
+ * in the nav: rows sit on `--bg-primary`, and hover on a row is a border rather
+ * than a fill, so nothing else in a list is wearing it. */
+.session-item.on {
+  background: var(--bg-tertiary);
+  border-color: var(--text-tertiary);
+}
+
+/* The selected row is filled with `--bg-tertiary`, and in light that is
+ * #e3e6ea — the same value as `--border-primary`. The resting edge above would
+ * vanish on exactly the row the pointer is most likely to be aiming at, so the
+ * marked row takes the pointer's deeper token at rest too. */
+.session-item.on .row-action {
+  border-color: var(--border-secondary);
+}
+
+/* Keyboard focus, for every control in the app at once.
+ *
+ * `--text-primary` rather than a new accent token: it is defined in light and
+ * in dark, it is by construction the highest-contrast colour against every
+ * surface in the file, and inventing an accent is a design decision this
+ * branch has no mandate for. `:focus-visible` and not `:focus`, so a click
+ * does not leave a ring behind it.
+ *
+ * Outline and offset, and deliberately NOT `border-radius`. That is not an
+ * outline property — it changes the element's own corners, so a `radius-sm`
+ * here squared off every focused control in the app: measured, the FAB went
+ * from a 9999px pill to a 4px rectangle the moment it took focus, and
+ * `.session-item` from 16px to 4px. It also bought nothing, because WebKit and
+ * Chromium already draw an outline following the element's existing radius.
+ * The rule eight lines above — never a shape that moves — is the one this
+ * broke. */
+:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
+/* ── 5. the column with nothing in it ───────────────────────────────────
+ *
+ * The state a three-column app is in the moment it launches, and the one state
+ * with no precedent to copy: goose's own desktop app never has it, because
+ * there a detail replaces its list rather than sitting beside it. */
+
+.pane-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+/* Secondary, not tertiary. Measured against `--bg-primary` in a browser,
+ * `--text-tertiary` is 2.20:1 in light and 2.87:1 in dark — under the 3:1 that
+ * meaningful non-text has to meet, at both. docs/design.md's Deviations
+ * section already records that number and reserves tertiary for dots and
+ * rules; a 40px glyph that is the only thing in an empty column is not one of
+ * those. */
+.pane-empty > .icon {
+  font-size: 40px;
+  color: var(--text-secondary);
+}
+
+.pane-empty-line {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: var(--text-lg);
+  line-height: var(--lh-md);
+  color: var(--text-primary);
+}
+
+.pane-empty-hint {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+/* ── 6. the measure ─────────────────────────────────────────────────────
+ *
+ * A phone form is as wide as the phone, so nothing in assets/main.css caps a
+ * line: there was never any surplus to spend. A detail pane is 1288pt at a
+ * 1500pt window and every control was spending all of it — measured, a
+ * 21-character server URL in a 1213pt field, "Reconnect" in a 621pt button,
+ * agent prose at 121 characters a line, "Kind" and "Yours" 853pt apart with
+ * nothing between them, and one helper sentence as a single 944pt line. That
+ * is not a wide layout, it is an uncapped one, and 1500 was this machine's
+ * ceiling rather than the app's: on a 27" display the same field is 2000pt.
+ *
+ * So the detail column gets a MEASURE and centres its content in it. Every
+ * screen at once, in one rule, rather than a cap per view — the whole point of
+ * a shell is that a feature landing tomorrow gets this without knowing it.
+ *
+ * 40rem, and the counter-proof for the number is in the app itself: the same
+ * Settings form at a 390pt field (the 56pt-rail width) reads perfectly, and
+ * the phone's is 370. 640 is between that and the 121-character line, at the
+ * top of the band the reference lands in — goose's own desktop app puts this
+ * exact form in a dialog capped `sm:max-w-[600px]`
+ * (ui/desktop/src/components/settings/providers/modal/ProviderConfigurationModal.tsx:347),
+ * its settings controls at `max-w-[260px]` and its helper paragraphs at
+ * `max-w-md` (AppSettingsSection.tsx:486, :346), and its empty chat at
+ * `max-w-2xl` = 672 (Hub.tsx:128). In rem so it tracks the reader's font-size:
+ * a measure is a count of CHARACTERS, and characters get bigger.
+ *
+ * CENTRED, not left-aligned, and the header goes with it. A capped column
+ * pinned left leaves 600pt of nothing on one side, which reads as a layout
+ * that failed rather than one that chose; centring it splits the slack. That
+ * only works if the pane header is capped to the same column, or the title
+ * sits at the pane's edge while its content starts 300pt inboard — so the bar
+ * takes the same gutter and its rule still spans the pane, because the rule
+ * belongs to the pane and the title belongs to the content.
+ *
+ * `max()` is what makes this a cap and not a layout: below 40rem + two edges
+ * every one of these resolves to `--edge` and NOTHING moves, which is the
+ * whole of the two-column and one-column tiers. Nothing here is inside a
+ * breakpoint for exactly that reason. */
+
+.pane-detail {
+  --measure: 40rem;
+  /* Percentages in a custom property are substituted, not resolved, so this is
+   * one expression evaluated against each user's own containing block. Every
+   * user below is a child of `.pane-detail` (or absolutely positioned against
+   * it), so `100%` is the pane's content width in all of them. */
+  --gutter: max(var(--edge), (100% - var(--measure)) / 2);
+}
+
+.pane-detail .topbar,
+.pane-detail .scroll:not(.diff),
+.pane-detail .compose {
+  padding-left: var(--gutter);
+  padding-right: var(--gutter);
+}
+
+/* `.composer` is a bordered, shadowed card rather than a padded region, so it
+ * takes the gutter as margin — the card itself has to be the measure wide, or
+ * the send arrow stays 580pt from the chips it shares a bar with. */
+.pane-detail .composer {
+  margin-left: var(--gutter);
+  margin-right: var(--gutter);
+}
+
+/* The one screen that is not prose and is not a form.
+ *
+ * A diff line is as long as the author left it, and the width is the whole
+ * reason this screen is better on a desktop than on a phone — it is the one
+ * capture in the review that was right at every width. So the scroller keeps
+ * `.scroll.diff`'s own zero gutter from assets/main.css (the file cards
+ * inside it are full-bleed by design), and its header keeps the pane's edge
+ * rather than the measure's, so the two still start at the same place. */
+.pane-detail:has(.scroll.diff) .topbar {
+  padding-left: var(--edge);
+  padding-right: var(--edge);
+}
+
+/* The FAB lands on the measure's trailing edge instead of the pane's.
+ *
+ * It is still a floating pill in the corner — promoting it into the header is
+ * a change to what the views EMIT, and this branch's rule is that the shell
+ * decides layout and the views decide content. But "Run" 600pt to the right of
+ * the recipe it runs was the corner of a window; on the column's edge it is
+ * the corner of the thing. `.pane` is `position: relative`, so this measures
+ * against the pane exactly as `right: var(--edge)` did. */
+.pane-detail .fab {
+  right: var(--gutter);
+}
+
+/* A short transcript starts at the top of the pane, not at the bottom of it.
+ *
+ * `.chat::before { margin-top: auto }` is what grows a conversation upward
+ * from the composer, and on a phone it is right: the composer is under your
+ * thumb and the last turn should be next to it. On a 940pt pane it meant a
+ * two-message chat opened with 651 of 726pt — 90% — empty above it, which
+ * reads as a fetch that failed rather than as a conversation. Nothing else
+ * about the transcript changes: the anchor only ever did anything while the
+ * content was SHORTER than the box, so a full transcript is untouched and
+ * still scrolled to its end by src/viewport.rs. */
+.pane-detail .scroll.chat::before {
+  margin-top: 0;
+}
+
+/* One green dot per window.
+ *
+ * `TopBar { conn: true }` is a fact about a SCREEN, and at three columns two
+ * screens are up — so Scheduler and Recipes painted two identical unlabelled
+ * 8pt dots, 1200pt apart, with nothing on screen explaining either. The list's
+ * is the one that survives: it is beside the destination you are in, it does
+ * not move when you open and close things, and it is the one that is there on
+ * every list. Below the three-column breakpoint the detail is alone on screen
+ * and keeps its own. */
+@media (min-width: 902px) {
+  .pane-detail .topbar > .conn-badge {
+    display: none;
+  }
+}
+
+/* ── 7. the fourth line of a preview ────────────────────────────────────
+ *
+ * `.session-quote` clamps to three lines and pads by 10, and WebKit clips
+ * `overflow: hidden` at the PADDING box — so a preview needing four lines
+ * painted the fourth one into the bottom padding and had it sliced through the
+ * middle of its glyphs. It is in assets/main.css and it is not a desktop bug,
+ * but it fires whenever the text needs a fourth line, which a 330pt column
+ * makes routine and a 402pt phone does not.
+ *
+ * Fixed by moving the padding OUTSIDE the clip: a transparent bottom border is
+ * painted over by the element's own background (`background-clip` is
+ * `border-box` by default), so the box is the same height, the same colour and
+ * the same radius, and the clip edge is now exactly where the third line ends.
+ * No markup, no change to the three lines that are meant to be there.
+ *
+ * Desktop-only because the sheet is: the phone's copy of this rule is
+ * untouched, which is the promise this branch is under. */
+.session-quote {
+  padding-bottom: 0;
+  border-bottom: 10px solid transparent;
+}
+
+/* ── 8. dialogs that are not sheets ─────────────────────────────────────
+ *
+ * Every modal in this app is a phone action sheet: `align-items: flex-end` on
+ * the backdrop and two square corners where the card meets the bottom of the
+ * screen. On a phone that is the whole grammar — it arrives from the edge your
+ * thumb is at. In a 1500x940 window it is a card welded to the bottom of the
+ * frame with 766pt of dimmed, empty pane above it, and for the row overflow it
+ * is worse than misplaced: the "···" is in the TOP-RIGHT of the detail pane
+ * and the menu it opens appears at the bottom CENTRE of the window, 1224pt
+ * away, holding one item.
+ *
+ * Centred is what a desktop dialog is, and it is what goose's own desktop app
+ * does with the identical confirm — `fixed inset-0 flex items-center
+ * justify-center` on a `w-[500px] max-w-[90vw]` card
+ * (ui/desktop/src/components/sessions/SessionListView.tsx:242). The card keeps
+ * its 560 cap and everything inside it; only where it sits and which corners
+ * are round change here. Anchoring the overflow to its button is a popover,
+ * which is markup this shell does not own. */
+.modal-backdrop {
+  align-items: center;
+}
+
+.modal {
+  border-radius: var(--radius-xl);
+}
+
+/* A menu is not a dialog, and centred is where it says so.
+ *
+ * `.modal.sheet.menu` is the row overflow — on the phone it is a full-width
+ * strip of actions rising from the bottom edge, and 560 is the right width for
+ * that. Centred in a window it was a 560pt card holding one 100pt row, which
+ * reads as a dialog that forgot to say anything. The cap is the same idea as
+ * the measure: as wide as what is in it. `.menu` is already in the markup —
+ * `views::mod::OverflowSheet` carries it so `domdump.rs` can file the state
+ * under a key of its own — so this needs nothing new. */
+.modal.sheet.menu {
+  max-width: 22rem;
+}
+
+/* ── 9. two empty states are one too many ───────────────────────────────
+ *
+ * Search a list for something that is not in it and the window said two
+ * things at once: the list read `No chats match “zzzzqqq”.` and the column
+ * beside it read "Nothing open — Pick something from Chats to see it here."
+ * There is nothing to pick. A matched pair of shrugs, one of them giving an
+ * instruction the app has just finished making impossible.
+ *
+ * The list's sentence is the one that knows WHY, so it is the one that stays,
+ * and the detail keeps only its heading. `:has()` because the shell does not
+ * know what is in its list column and should not: `p.empty` is what every list
+ * in this app renders when it has nothing to show (`views/sessions.rs`,
+ * `views/skills.rs`, `views/recipes.rs`, `views/scheduler.rs`,
+ * `views/code.rs`), so the question is askable from the markup and needs no
+ * new signal, no prop and no plumbing through six views. */
+.shell:has(.pane-list .empty) .pane-detail .pane-empty-hint {
+  display: none;
+}
+
+/* And the sentence itself moves up under the control that caused it.
+ *
+ * `.empty` is `min-height: 100%` in assets/main.css so the message centres in
+ * the box, which is right on a 874pt phone screen and wrong in a 940pt column:
+ * "No chats match" was stranded about 500pt below the search field it was
+ * answering. Only in the LIST column — in the detail, "That recipe is no
+ * longer open." is the whole screen and centred is where it belongs. */
+.pane-list .empty {
+  min-height: 0;
+  padding-top: 48px;
+}

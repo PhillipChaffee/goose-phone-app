@@ -118,8 +118,13 @@ to enter in the app.
 
 ```bash
 curl -sSL https://dioxus.dev/install.sh | bash   # the dx CLI
-dx serve --desktop                               # try it on your computer first
+dx serve --desktop                               # the desktop app (its own shell)
 ```
+
+`--desktop` builds the **desktop shell** — a pinned nav, a list and a detail
+pane, with row actions on every row instead of a swipe tray. The phone shell is
+compiled only for iOS and Android, so it is the simulator or a device that
+shows it. See [the desktop section of `docs/design.md`](docs/design.md).
 
 **iOS** — see [`docs/iphone-setup.md`](docs/iphone-setup.md) for the full walkthrough
 (signing is the fiddly part):
@@ -202,12 +207,14 @@ scripts/shoot-simulator.sh chat  # regenerate a README image from the simulator
 node scripts/make-og-card.js     # regenerate the project page's social preview
 ```
 
-`docs/audit.js` rebuilds every captured state as a standalone 402×874 document
-and checks each for overflow, clipped text, square-cornered surfaces,
-undersized tap targets, radius-nesting mistakes and text below the WCAG AA
-contrast threshold. It exits non-zero on a finding. The states it reads are
-captured from the running app, so it cannot drift from what ships. The rules
-it enforces, and why they are the rules, are in
+`docs/audit.js` rebuilds every captured state as a standalone document, at six
+phone sizes from 320×568 to 440×956 — five iPhones and Android's modal 360×800
+— and at four text sizes, and checks each for overflow, clipped text, text
+spilling a box that never clips, square-cornered surfaces, undersized tap
+targets, radius-nesting mistakes and, at the reference size, text below the
+WCAG AA contrast threshold. It exits non-zero on a finding. The states it reads
+are captured from the running app, so it cannot drift from what ships. The
+rules it enforces, and why they are the rules, are in
 [`docs/design.md`](docs/design.md).
 
 ```

@@ -417,6 +417,22 @@ pre {
   user-select: text;
 }
 
+/* The mono token, on the elements the UA stylesheet has an opinion about.
+ * Without this line a <code> outside `.md` — the two in `.hint` on the
+ * settings screen, the one in `.recipe-prose` — computes to the bare generic
+ * `monospace`, which is not a face: it is a question put to whatever is
+ * installed. iOS answers Courier, a Linux CI runner answers WenQuanYi Zen Hei
+ * Mono, and this Mac answers Menlo, so the same paragraph is three different
+ * widths. `--font-mono` is what the design says code is set in and there is no
+ * reason for an element to opt out of it by being outside a wrapper class.
+ * `.md code` still adds the chip on top; this is only the face. */
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-mono);
+}
+
 #main {
   height: 100%;
 }
@@ -1012,6 +1028,35 @@ html:has(.titlegroup) {
    * charitable reading, since nothing here sets an overflow, so it was
    * painted straight through the pill onto the list behind it. */
   min-height: 48px;
+  /* IT IS PINNED ON ONE SIDE, SO WITHOUT THIS IT IS BOUNDED ON NEITHER.
+   *
+   * `right` is set and `left` is auto, which makes this shrink-to-fit:
+   * clamp(min-content, available, max-content), where available is the whole
+   * viewport less the one gutter. Nothing in that formula knows about the
+   * gutter on the other side, so as the label grows the pill simply walks out
+   * to x=0. Measured at AX5, before this line: left=0.00 at 320, 360, 375, 390
+   * AND 402 — a floating action button 110px tall, spanning the screen, with
+   * 16px of margin on one side and none on the other. --edge above calls
+   * itself "the gutter every floating thing shares"; this was the floating
+   * thing that did not.
+   *
+   * The audit never said so because a box can only report OVERFLOW-X once its
+   * MIN-content passes the viewport, and this one's cleared 320pt by 10px in
+   * San Francisco and missed by 3 in the wider face a Linux runner picked —
+   * which is how the same commit was green here and red in CI. GUTTER in
+   * docs/audit.js is the check that now states the rule instead of waiting for
+   * the arithmetic to break it.
+   *
+   * `overflow-wrap: anywhere` is what makes the bound safe rather than merely
+   * stated: on a 320pt screen the cap is 288px and the pill's min-content at
+   * AX5 — 16 padding, a 46px icon, an 8px gap, the word "extension" and 20
+   * padding — is 295, and a min-content floor that cannot be met is not a
+   * narrower pill, it is text painted outside one. Set on the button rather
+   * than on this one label, so it holds for whatever a future screen puts
+   * there: the five labels in the app today are all short, and that stops
+   * being true the first time one is not. */
+  max-width: calc(100% - 2 * var(--edge));
+  overflow-wrap: anywhere;
   padding: 0 20px 0 16px;
   border: 0;
   border-radius: var(--radius-full);
@@ -1028,12 +1073,22 @@ html:has(.titlegroup) {
   opacity: 0.9;
 }
 
-/* The list keeps clear of the floating action's landing zone — which is now a
- * box that grows, so the clearance has to. 24 + 36 is the 60 this was, and
- * --lh-md is what sets the pill's height once its label outgrows 48px. */
+/* The list keeps clear of the floating action's landing zone — which is a box
+ * that grows, so the clearance has to. 24 + 36 is the 60 this was.
+ *
+ * Three line boxes of the pill's own label, not `--lh-md + 36px`, since the
+ * pill got a `max-width` above: bounded to the gutters it is 288px wide on a
+ * 320pt screen, and at AX5 "Add extension" does not fit that on two lines, so
+ * the landing zone went from 110px to 165 and the old term cleared 115.
+ * Measured against every scale this walks, at 320pt where the pill is at its
+ * tallest: 48px tall against 60 of clearance at root 16 and 17, 48 against 72
+ * at 23, 165 against 167 at 53. The pill sets no line-height, so a line box is
+ * `normal` — 1.18 x the font size for San Francisco and for New York, which is
+ * what docs/audit.js now pins its stand-ins to; 1.2 is that rounded up so the
+ * clearance is a ceiling rather than a coin toss. */
 .scroll.has-fab {
   padding-bottom: calc(var(--safe-bottom) + var(--chrome-gap) + 24px
-    + max(60px, var(--lh-md) + 36px));
+    + max(60px, 3 * 1.2 * var(--text-sm)));
 }
 
 /* A lone refresh keeps its place in the bar rather than joining the fab. */
@@ -1236,6 +1291,14 @@ html:has(.titlegroup) {
   line-height: var(--lh-xs);
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  /* Nothing clips a card head, so a word too wide for it is painted outside
+   * rather than cut. The two declarations above are what make that reachable:
+   * uppercase and 0.06em of tracking put "Credentials" at 290px inside a 254px
+   * card at AX5 on a 320pt screen, whose ink then lands 3px past the right
+   * edge of the SCREEN and is saved only by `.app`'s own overflow. `anywhere`
+   * rather than `break-word`, here and in the three rules below: only
+   * `anywhere` also lowers the min-content size the box is being sized from. */
+  overflow-wrap: anywhere;
 }
 
 /* Groups run label → field → optional hint, repeated. Without a gap between
@@ -3205,6 +3268,19 @@ body.away-from-bottom .scroll-bottom {
   display: flex;
   align-items: center;
   gap: 14px;
+  /* A row of a scroller, not a spring. `.drawer-nav` (in the section at the
+   * foot of this file) scrolls when the destinations stop fitting — but every
+   * row is a flex item OF that scroller, and the `min-height` on the next line
+   * is an EXPLICIT minimum, so it replaces the automatic content-based one and
+   * licenses flexbox to squeeze the row below its own line box before the
+   * scroller ever engages. Measured at AX5 on a 375x667 phone: every row
+   * crushed to 48px, a two-line "Scheduler" label occupying 389..513 inside a
+   * 427..475 box and painting 28px of real glyph across the "Skills" row above
+   * it. Two destination names on top of each other.
+   *
+   * `.drawer-group` is safe without this only because it has no min-height of
+   * its own and so keeps `min-height: auto`. */
+  flex-shrink: 0;
   min-height: 48px;
   /* A destination's label is a bare text node, so it is an anonymous flex
    * item whose automatic minimum is its longest word — and at AX5 one word is
@@ -3497,6 +3573,12 @@ body.away-from-bottom .scroll-bottom {
   color: var(--text-secondary);
   font-size: var(--text-xs);
   line-height: var(--lh-sm);
+  /* Its parent `.choice-main` is `flex: 1 1 0`, so the flex minimum has
+   * already been lowered — but a lowered minimum only helps if the word can
+   * break. At AX5 on a 320pt screen "commands" is 189px in a 153px note, and
+   * the 36px that will not fit is painted 24px across the check that says
+   * which mode is in force. */
+  overflow-wrap: anywhere;
 }
 
 /* The leading mark says which mode this is; only the trailing check says
@@ -3589,6 +3671,11 @@ body.away-from-bottom .scroll-bottom {
   font-size: var(--text-xs);
   line-height: var(--lh-sm);
   text-align: center;
+  /* What a banner carries is a transport or an error the server named, and
+   * those are single tokens with nowhere to break: `streamable_http` is 277px
+   * in a 256px banner at AX5 on a 320pt screen, and the banner does not clip,
+   * so the rest is painted out through its own border. */
+  overflow-wrap: anywhere;
 }
 
 /* Rule 8's dot again, sized like `.dot`. Centred by the row, so unlike
@@ -3652,6 +3739,11 @@ body.away-from-bottom .scroll-bottom {
   color: var(--text-secondary);
   font-size: var(--text-xs);
   line-height: var(--lh-xs);
+  /* `min-width: 0` above lowered the flex minimum; this is the half that makes
+   * the word actually break. Without it, at AX5 on a 320pt screen "reviewed"
+   * is 152px in a 119px label, and the 34px that will not fit is painted 26px
+   * across the "Mark all" button beside it. */
+  overflow-wrap: anywhere;
 }
 
 /* Same gutter as the row above it: the bar must line up with its own label,
@@ -3937,6 +4029,16 @@ body.away-from-bottom .scroll-bottom {
   border: 0;
   background: transparent;
   color: var(--text-secondary);
+  /* Every other button in this file carries this line and this one did not,
+   * so "Viewed" was the one label in the app set in **Arial**: the UA
+   * stylesheet's `font` shorthand on a <button> names a family as well as a
+   * size, and overriding `font-size` below leaves the family behind. Found by
+   * docs/audit.js's font guard, which is the whole reason that guard walks
+   * computed families rather than trusting the token override. Arial is a
+   * different width from the sans on every platform this ships to — and on a
+   * Linux runner "Arial" is not even Arial, it is fontconfig answering with
+   * Liberation Sans. */
+  font-family: inherit;
   font-size: var(--text-xs);
   line-height: var(--lh-xs);
   white-space: nowrap;
@@ -4270,7 +4372,18 @@ body.away-from-bottom .scroll-bottom {
  * Secondary, not tertiary. This is normal-weight text, which the audit holds
  * to 4.5:1, and tertiary measures 2.20:1 in light (see the Deviations
  * section of docs/design.md). Tertiary stays for dots and rules, which are
- * non-text and only need 3:1. */
+ * non-text and only need 3:1.
+ *
+ * The only other rule in this file built from uppercase + 0.06em is
+ * `.settings h2`, and that pair is exactly what put "Credentials" 36px outside
+ * its card — so the absence of `overflow-wrap: anywhere` here is deliberate,
+ * not an oversight. This heading is the one place the idiom does not need it:
+ * `Group::header()` in src/nav.rs returns a `&'static str`, so the text is the
+ * app's own and not a server's. Measured at AX5 on a 320pt screen, the worst
+ * case this app can produce: "LIBRARY" is 177px in a 238px box, 62px of slack,
+ * which is about two more characters. A group named longer than that needs the
+ * declaration adding, and the audit does say so — SPILL fires on this box,
+ * because nothing clips it either. */
 .drawer-group {
   margin: 16px 12px 6px;
   color: var(--text-secondary);

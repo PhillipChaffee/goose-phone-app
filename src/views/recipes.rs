@@ -101,6 +101,14 @@ fn row(
     entry: &RecipeListEntry,
     mut confirm_delete: Signal<Option<RecipeListEntry>>,
 ) -> Element {
+    // Which row the desktop's detail column came from. Ignored on the phone,
+    // where the list is not on screen beside it (`views::chrome::row_is_marked`).
+    let selected = ctx
+        .recipes
+        .open
+        .read()
+        .as_ref()
+        .is_some_and(|open| open.id == entry.id);
     let ctx = *ctx;
     let meta = row_meta(entry);
     let age = rfc3339_to_epoch(&entry.last_modified).map(relative_time);
@@ -112,6 +120,7 @@ fn row(
             icon: "book",
             title: "{entry.recipe.title}",
             trailing: age,
+            selected,
             actions: vec![RowAction::delete(EventHandler::new(move |()| {
                 confirm_delete.set(Some(delete_entry.clone()));
             }))],

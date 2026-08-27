@@ -20,6 +20,18 @@ pub fn SessionsView() -> Element {
     let mut confirm_delete = use_signal(|| None::<String>);
     let mut rename = use_signal(|| None::<(String, String)>);
 
+    // Which row the desktop's detail column is showing. Ignored on the phone,
+    // where the list is not on screen beside it
+    // (`views::chrome::row_is_marked`).
+    //
+    // A memo and not a plain read, and that is the whole reason this line is
+    // three: `ctx.chat` is one signal holding the entire transcript, so reading
+    // any part of it here would re-render every row of this list on every
+    // streamed delta — and on the desktop the chat is streaming in the column
+    // next door. The memo re-runs on each of those and wakes this screen only
+    // when the id it returns actually changes, which is once per open.
+    let open_chat = use_memo(move || ctx.chat.read().session_id.clone());
+
     // A search box on a list with nothing in it and nothing searched is a
     // control offering to filter zero rows. It stays once a search is running,
     // though — otherwise the field that emptied the list disappears with it,
@@ -30,8 +42,10 @@ pub fn SessionsView() -> Element {
         TopBar { title: "Chats", conn: true }
         main {
             class: "scroll has-fab",
-            // Named, so the pull-to-refresh listener knows this list has
-            // something to fetch and which fetch it is.
+            // Named, so the three things that refresh a list know this one
+            // has something to fetch and which fetch it is: the phone's pull
+            // gesture, and on the desktop ⌘R and arriving here. They meet in
+            // `viewport::refresh_named`.
             "data-refresh": "chats",
             "data-refreshing": "{loading}",
             if searchable {
@@ -68,6 +82,7 @@ pub fn SessionsView() -> Element {
                         trailing: info.updated_at.as_deref()
                             .and_then(rfc3339_to_epoch)
                             .map(relative_time),
+                        selected: open_chat.read().as_deref() == Some(info.session_id.as_str()),
                         // Rename before Delete because the tray is a
                         // scroller: a short drag reveals the first button and
                         // a full one reaches the last, so the destructive

@@ -1,8 +1,8 @@
 use dioxus::prelude::*;
 
-use crate::icons::Icon;
-use crate::nav::{self, Destination, Group, DESTINATIONS};
-use crate::state::{use_app_ctx_provider, AppCtx};
+use crate::nav;
+use crate::shell::AppShell;
+use crate::state::use_app_ctx_provider;
 use crate::views;
 
 #[component]
@@ -12,12 +12,15 @@ pub fn App() -> Element {
     // Which destination is on screen, what it renders and what its dump is
     // called are three questions with one answer, and that answer is a row of
     // `nav::DESTINATIONS` rather than three `match`es that have to agree.
+    // What is rendered from it is the shell's business now, because the two
+    // shells arrange the same destination differently; the dump key is not,
+    // because it is the same key either way.
     let dest = nav::current(&ctx);
-    let body = (dest.view)(&ctx);
 
+    // The three hooks that are true of both shells. The two gesture ones —
+    // tap-to-close a swiped row, and pull-to-refresh — moved into
+    // `shell::mobile`, so a desktop binary does not contain them at all.
     crate::viewport::use_visual_viewport();
-    crate::viewport::use_close_open_row();
-    crate::viewport::use_pull_to_refresh();
     crate::viewport::use_transcript_bottom();
     crate::viewport::use_file_picker();
     #[cfg(debug_assertions)]
@@ -37,10 +40,21 @@ pub fn App() -> Element {
 
     rsx! {
         document::Style { {crate::css::STYLES} }
-        // After the design system, not before it: the Dynamic Type opt-in is
-        // a rule on `html` and main.css has one of its own, so cascade order
-        // is what decides. Empty on every platform but iOS, where it is the
-        // one declaration that makes `rem` mean the reader's chosen text size.
+        // After the design system: the shell is the pinned nav, the panes and
+        // the width breakpoints that reflow them. Empty on iOS and Android.
+        // See `crate::css::SHELL`.
+        document::Style { {crate::css::SHELL} }
+        // LAST, so the platform genuinely has the last word.
+        //
+        // It used to sit between the two, and that was wrong in a way only the
+        // second platform sheet could expose. iOS did not care — `SHELL` is
+        // empty in a phone binary, so there was nothing after it to lose to.
+        // macOS did: `assets/desktop.css` defaults `--chrome-h`/`--traffic-w`
+        // to zero on `.app > .shell` and `assets/platform/macos.css` raises
+        // them on the same selector, so at equal specificity the later sheet
+        // won and the reservation was always zero — measured, the nav toggle
+        // was painted on top of the close button at the rail width. A platform
+        // rule that a shared sheet can silently outrank is not a platform rule.
         document::Style { {crate::css::PLATFORM} }
         document::Meta {
             name: "viewport",
@@ -52,8 +66,7 @@ pub fn App() -> Element {
                       viewport-fit=cover, interactive-widget=resizes-content",
         }
         div { class: "app",
-            {body}
-            Drawer {}
+            AppShell {}
             if goose_permission_open {
                 views::chat::PermissionModal {}
             } else if code_permission_open {
@@ -61,69 +74,6 @@ pub fn App() -> Element {
             }
             if let Some(message) = toast {
                 div { class: "toast", "{message}" }
-            }
-        }
-    }
-}
-
-/// The navigation drawer.
-///
-/// It replaced a bottom tab bar, which spent 100px of every screen on two
-/// destinations and left no room for a third. The destinations themselves
-/// live in `nav::DESTINATIONS`; this walks them in group order, so a feature
-/// appears in the drawer by adding a row to that table and touching nothing
-/// here.
-#[component]
-fn Drawer() -> Element {
-    let ctx = crate::state::use_app_ctx();
-    let mut open = ctx.drawer_open;
-
-    rsx! {
-        div {
-            class: if open() { "drawer-scrim open" } else { "drawer-scrim" },
-            onclick: move |_| open.set(false),
-        }
-        aside { class: if open() { "drawer open" } else { "drawer" },
-            h2 { class: "drawer-brand", "goose" }
-            nav { class: "drawer-nav",
-                for group in Group::ALL {
-                    {render_group(&ctx, group)}
-                }
-            }
-        }
-    }
-}
-
-/// One labelled band of the drawer.
-///
-/// An empty group renders nothing at all, header included: until the features
-/// land there is no Library to head, and a heading over a gap is the app
-/// promising something it does not have.
-fn render_group(ctx: &AppCtx, group: Group) -> Element {
-    let items: Vec<&'static Destination> = DESTINATIONS
-        .iter()
-        .filter(|dest| dest.group == group)
-        .collect();
-    if items.is_empty() {
-        return rsx! {};
-    }
-    let ctx = *ctx;
-
-    rsx! {
-        if let Some(header) = group.header() {
-            div { class: "drawer-group", "{header}" }
-        }
-        for dest in items {
-            button {
-                key: "{dest.id}",
-                class: if (dest.at_root)(&ctx) { "drawer-item active" } else { "drawer-item" },
-                onclick: move |_| {
-                    (dest.go)(&ctx);
-                    let mut open = ctx.drawer_open;
-                    open.set(false);
-                },
-                Icon { name: dest.icon }
-                "{dest.label}"
             }
         }
     }

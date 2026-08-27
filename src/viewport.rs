@@ -52,6 +52,72 @@ pub(crate) fn use_visual_viewport() {
     });
 }
 
+/// Say whether the window is fullscreen, in an attribute the stylesheet reads.
+///
+/// `src/main.rs` hides the macOS titlebar, so `assets/platform/macos.css`
+/// reserves a 52pt strip for the traffic lights. Fullscreen takes those lights
+/// away — `AppKit` hides them and re-draws them in an overlay on hover near the
+/// top edge — so the reservation becomes 52pt of nothing at the top of a window
+/// someone has just asked to be as large as possible.
+///
+/// NOTHING CROSSES INTO RUST. That is what makes this compatible with the rule
+/// above `CLOSE_OPEN_ROW` rather than an exception to it: the cost that rule is
+/// about is the synchronous XHR per listened-to event, and a resize STREAM is
+/// exactly the shape that must not be listened to from Rust. This listener
+/// never calls `dioxus.send` at all — it sets an attribute, and CSS does the
+/// rest. There is no signal, no re-render, and no message.
+///
+/// INFERRED, not reported, because tao surfaces no fullscreen event and wry
+/// gives the web view no `:fullscreen` to match (that pseudo-class is the
+/// Fullscreen API's, which is about an ELEMENT and is not what a green-button
+/// fullscreen does). The reference has it easy — Electron broadcasts
+/// `fullscreen-change` over IPC (`ui/desktop/src/main.ts:1555`). The test is
+/// the one thing that is reliably different: in fullscreen the menu bar
+/// auto-hides and the window covers the display exactly, so the inner height
+/// reaches the screen height. A merely maximised window is short by the menu
+/// bar. The 2px slack absorbs fractional scaling.
+///
+/// Guarded on `screen.height` being sane, so a headless or embedded context
+/// that reports 0 does not latch fullscreen on forever.
+///
+/// `cfg`-gated to match its only caller below, and that is not tidiness: CI
+/// runs the iOS check with `RUSTFLAGS: -D warnings` (`.github/workflows/ci.yml`),
+/// so an ungated const whose user is desktop-only is `dead_code` on a phone
+/// target and therefore a BUILD FAILURE there while passing locally, where
+/// `cargo check --target aarch64-apple-ios` carries no such flag. That gap is
+/// exactly how this shipped: the local gate and the CI gate are not the same
+/// command.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+const FULLSCREEN_CLASS: &str = r"
+(() => {
+  if (window.__fsWired) return;
+  window.__fsWired = true;
+  const app = () => document.querySelector('.app');
+  const sync = () => {
+    const el = app();
+    if (!el) return;
+    const h = window.screen && window.screen.height;
+    const full = !!h && h > 200 && window.innerHeight >= h - 2;
+    el.setAttribute('data-fullscreen', full ? 'true' : 'false');
+  };
+  window.addEventListener('resize', sync);
+  sync();
+  // `.app` is re-rendered by Dioxus, which drops the attribute with it, so the
+  // observer is what keeps it set across a render rather than only across a
+  // resize. Attributes only, and on the body's children, so a transcript
+  // streaming text does not wake it.
+  new MutationObserver(sync).observe(document.body, { childList: true });
+})();
+";
+
+/// Wire the fullscreen attribute. Desktop only — a phone has no window.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+pub(crate) fn use_fullscreen_class() {
+    use_effect(move || {
+        document::eval(FULLSCREEN_CLASS);
+    });
+}
+
 /// A tap on an open row closes its tray instead of opening the session.
 ///
 /// That is what Mail and Messages do, and the alternative is worse than it
@@ -71,6 +137,15 @@ pub(crate) fn use_visual_viewport() {
 /// costs nothing per frame: the native renderer sends every listened-to event
 /// through a synchronous XHR, so an `onscroll` handler would put a blocking
 /// round-trip on each frame of a drag.
+///
+/// Phone only, and the `cfg` is the point rather than a tidy-up. This and
+/// `PULL_TO_REFRESH` below are the two gestures, and "the desktop shell has no
+/// swipe tray and no pull-to-refresh" is a claim worth making structural: a
+/// desktop binary does not contain the script, so it cannot install four touch
+/// listeners and append a spinner to `document.body` by accident. The only
+/// caller of either is `src/shell/mobile.rs`, which is itself compiled for
+/// exactly these targets.
+#[cfg(any(target_os = "ios", target_os = "android"))]
 const CLOSE_OPEN_ROW: &str = r"
 document.addEventListener('click', (e) => {
   const row = e.target.closest && e.target.closest('.session-item');
@@ -85,6 +160,7 @@ document.addEventListener('click', (e) => {
 ";
 
 /// Install the tap-to-close behaviour for swiped-open rows.
+#[cfg(any(target_os = "ios", target_os = "android"))]
 pub(crate) fn use_close_open_row() {
     use_effect(move || {
         document::eval(CLOSE_OPEN_ROW);
@@ -260,6 +336,7 @@ fn jump_script(id: &str) -> String {
 /// the swipe handler does not expect them; instead the indicator animates down
 /// from behind the chrome on its own, which also works for a list too short to
 /// rubber-band at all.
+#[cfg(any(target_os = "ios", target_os = "android"))]
 const PULL_TO_REFRESH: &str = r#"
 (() => {
   if (window.__ptrWired) return;
@@ -368,58 +445,73 @@ pub(crate) fn use_file_picker() {
 ///
 /// The scroller names its own refresh in `data-refresh`, so a list that has
 /// nothing to fetch simply does not set it and the gesture never starts.
+#[cfg(any(target_os = "ios", target_os = "android"))]
 pub(crate) fn use_pull_to_refresh() {
     let ctx = crate::state::use_app_ctx();
     use_effect(move || {
         let mut eval = document::eval(PULL_TO_REFRESH);
         spawn(async move {
             while let Ok(which) = eval.recv::<String>().await {
-                match which.as_str() {
-                    "chats" => {
-                        spawn_forever(
-                            async move { crate::state::refresh_sessions(&ctx, false).await },
-                        );
-                    }
-                    "code" => {
-                        spawn_forever(async move {
-                            crate::code::refresh_code_chats(&ctx).await;
-                            // The asks are part of what this list says, so a
-                            // pull refreshes them too rather than leaving the
-                            // cards up to ten seconds behind the rows.
-                            crate::code::refresh_code_permissions(&ctx).await;
-                        });
-                    }
-                    "diff" => crate::code::load_code_diff(&ctx),
-                    "pulls" => crate::code::refresh_pulls(&ctx),
-                    // The extensions list has no refresh button on purpose
-                    // (`views/extensions.rs` says why), so this arm is the
-                    // only way back to the server that a reader has.
-                    // `refresh` drives both the list and the warnings through
-                    // `load_remote`, so `loading` toggles and the spinner
-                    // clears itself.
-                    "extensions" => {
-                        spawn_forever(async move { crate::extensions::refresh(&ctx).await });
-                    }
-                    "skills" => crate::skills::refresh(&ctx),
-                    // ---- one arm per feature that owns a list ----
-                    //
-                    // A feature's scroller sets `data-refresh` to its own
-                    // name and claims that name here. The gesture and the
-                    // lists it serves were written on different branches:
-                    // the name is the whole contract between them, and an
-                    // unclaimed one is a pull that spins and fetches
-                    // nothing.
-                    "recipes" => crate::recipes::refresh(&ctx),
-                    // The Scheduler has two scrollers and one name: pulling on
-                    // a job's detail refreshes that job's runs *and* the list
-                    // behind it, because the dot on the row it came from is the
-                    // same fact as the buttons on the screen it is on.
-                    "scheduler" => crate::scheduler::pull_refresh(&ctx),
-                    _ => {}
-                }
+                refresh_named(&ctx, &which);
             }
         });
     });
+}
+
+/// Re-fetch the list a scroller's `data-refresh` names.
+///
+/// Three routes arrive here and there is one `match` for exactly that reason:
+/// the phone's pull gesture above, and on the desktop ⌘R and arriving at a
+/// destination (`src/shell/desktop.rs`). A list that could be refreshed by one
+/// route and not the others is a list that is stale depending on how you
+/// asked.
+///
+/// An unrecognised name is deliberately not an error: `.scroll` elements that
+/// set no `data-refresh` at all are the majority, and a destination with
+/// nothing to fetch — Settings — reaches this by id and should do nothing.
+/// What catches a name with no arm is the test at the bottom of this file,
+/// which reads the views for the names they emit and this file for the arms
+/// that answer them.
+pub(crate) fn refresh_named(ctx: &crate::state::AppCtx, which: &str) {
+    let ctx = *ctx;
+    match which {
+        "chats" => {
+            spawn_forever(async move { crate::state::refresh_sessions(&ctx, false).await });
+        }
+        "code" => {
+            spawn_forever(async move {
+                crate::code::refresh_code_chats(&ctx).await;
+                // The asks are part of what this list says, so a pull
+                // refreshes them too rather than leaving the cards up to ten
+                // seconds behind the rows.
+                crate::code::refresh_code_permissions(&ctx).await;
+            });
+        }
+        "diff" => crate::code::load_code_diff(&ctx),
+        "pulls" => crate::code::refresh_pulls(&ctx),
+        // The extensions list has no refresh button on purpose
+        // (`views/extensions.rs` says why), so this arm is the only way back
+        // to the server that a reader has. `refresh` drives both the list and
+        // the warnings through `load_remote`, so `loading` toggles and the
+        // spinner clears itself.
+        "extensions" => {
+            spawn_forever(async move { crate::extensions::refresh(&ctx).await });
+        }
+        "skills" => crate::skills::refresh(&ctx),
+        // ---- one arm per feature that owns a list ----
+        //
+        // A feature's scroller sets `data-refresh` to its own name and claims
+        // that name here. The gesture and the lists it serves were written on
+        // different branches: the name is the whole contract between them, and
+        // an unclaimed one is a pull that spins and fetches nothing.
+        "recipes" => crate::recipes::refresh(&ctx),
+        // The Scheduler has two scrollers and one name: pulling on a job's
+        // detail refreshes that job's runs *and* the list behind it, because
+        // the dot on the row it came from is the same fact as the buttons on
+        // the screen it is on.
+        "scheduler" => crate::scheduler::pull_refresh(&ctx),
+        _ => {}
+    }
 }
 
 #[cfg(test)]

@@ -43,6 +43,11 @@ The split is the point. When the reply is set in a different voice from the
 controls around it, the reply stops competing with them, and it does so
 without drawing a box.
 
+The app ships no font file and never will. `docs/audit.js` does ship three, for
+the length of a run and for one reason — a browser that has never heard of
+San Francisco cannot be asked whether a box fits. See *The audit brings its own
+fonts*, at the end of this file.
+
 ### 2. There is no top bar, and no bottom bar
 
 The top of a screen is three detached things: a circular control at the
@@ -811,10 +816,121 @@ That is the right simulation rather than a shortcut: Chromium cannot parse
 of the opt-in is that the root's px *is* the body size, so stating it as a
 number is the same claim in the only form this browser can hear. It needs no
 re-capture, which is what makes it compatible with never hand-editing the
-gallery. Contrast runs at the smallest size alone, because the 18.66px
-large-text threshold makes every larger one strictly more permissive.
+gallery.
 
-Three of its checks only mean something on that axis. **`CLIPPED-Y`** is the
+It walks a second axis too — **six phone sizes**, width *and* height:
+320×568, 360×800, 375×667, 390×844, 402×874 and 440×956. Height travels with
+width because a phone is not a column, and that is not a detail. Both failures
+this axis found are "content taller than the space it was given", so holding
+the height at the reference 874 while narrowing invents a tall thin phone
+nobody owns and understates every one of them: at 375×874 the drawer reported
+24 findings, and at 375×667 — the size an SE 3rd gen actually is — it reported
+116. 402×874 stays as the **reference size**, because it is what the gallery is
+captured at and what every measurement in this document was made against;
+contrast runs there and at the smallest text size alone, since the 18.66px
+large-text threshold makes every larger one strictly more permissive and a
+wider phone moves boxes rather than colours. 320×568 is in the list because
+`docs/measure-composer.js` already gates 320 as a defensive floor, and an audit
+that gave up at 375 would gate a narrower band than the composer script does.
+360×800 is in it because this app ships to Android as well, WebView's CSS px is
+a dp, and 360dp is the width most Android phones report — a list of iPhones
+alone would gate half the codebase. It is the only entry here that is not an
+iPhone, and root 16px is the text size that goes with it, since the Dynamic
+Type opt-in is iOS-only.
+
+The rest of the Android band is absent because it was measured rather than
+assumed: 393×852, 412×915 and 360×640 added to that list all report clean, and
+all three together would cost half again the runtime to restate what the six
+already say. 393×852 has a second reason — three points from 390 is a question
+about how many columns one elastic chip has, which is `measure-composer.js`'s
+subject, and that script does sweep 393. The two width lists are not the same
+list and are not meant to be: they share the 320 floor and the 360/375/390/402
+middle, and each holds one width the other does not (393 there, 440 here) for a
+reason stated where it is declared.
+
+Adding that axis turned the gate red with **308 findings**, every one of them
+at AX5 and none of them at 390, 402 or 440 — 148 at 320×568, 116 at 375×667 and
+24 at 360×800. They were six causes: five in the stylesheet, accounting for 288
+of them, and one in the check itself. Both of the real ones had been on screen
+the whole time the audit reported clean at one size.
+
+The first was the drawer, and it is the more instructive. `.drawer-nav` was
+given `flex: 1; min-height: 0; overflow-y: auto` precisely so the destinations
+would scroll at accessibility sizes — but a scroller only helps if its content
+keeps its size, and the rows are flex items of that column with the default
+`flex-shrink: 1`. Worse, `min-height: 48px` on `.drawer-item` is an *explicit*
+minimum, so it replaces the automatic content-based one and licenses flexbox to
+crush the row below its own line box before the scroller ever engages. The fix
+had been half-done and looked finished. Measured at 375×667 and AX5: every row
+squeezed to 48px, a two-line "Scheduler" label occupying 389..513 inside a
+427..475 box, painting 28px of real glyph across the "Skills" row above it —
+two destination names on top of each other. `flex-shrink: 0` is the whole fix,
+and it cannot regress the reference size because there is no crush there to
+undo: at 402×874 the rows already measure their natural 62px and the nav's
+scrollHeight equals its clientHeight. With it, the nav finally scrolls the way
+its own comment says it should — 724px of content in a 497px port.
+
+The second was four boxes where one word is wider than the column it was given,
+at 320×568: `streamable_http` 277px in a 256px `.banner`, `reviewed` 152px in a
+119px `.diff-progress-label`, `commands` 189px in a 153px `.choice-note`, and
+`Credentials` — uppercase with 0.06em of tracking, which is what makes it the
+worst of the four — 290px in a 254px card head, whose ink lands 3px past the
+right edge of the *screen* and is saved only by `.app`'s own overflow. All four
+are the second half of an idiom this stylesheet already states nine times (ten
+counting the feature sheets; the tenth line a grep for it finds in `main.css`
+is a comment), and two of them already carried the first half (`min-width: 0`):
+the flex minimum had been lowered without the `overflow-wrap: anywhere` that
+lets the word actually break. `anywhere` rather than `break-word`, because only
+`anywhere` also lowers the min-content size the box is being sized from.
+
+The remaining 20 were the check being wrong, and are the one place this axis
+argued for *narrowing* a walk. All 20 were the same `<path>`, inside an
+`svg.icon`, inside an `.action-chip` scrolled off the end of `.action-row` —
+which is a deliberate sideways scroller. The chip and the svg root are both
+exempted correctly; the path was not, because `inHorizontalScroller` stops at
+the first ancestor that clips and from inside an icon that is always the icon's
+own root (`svg:root { overflow: hidden }` is a UA rule), so the walk could
+never reach the scroller. A path's bbox is not a box on screen. The exemption
+is conditioned on the root actually clipping rather than on being inside an
+`<svg>` at all, so an svg that states `overflow: visible` still reports its
+children; and the root is never exempted by it, so it goes on answering for
+itself. Verified both ways: with the CSS fixed but the tightening absent the
+residual is exactly those 20 findings and nothing else, and with `.action-row`
+forced to `overflow: visible` the svg root, both chips and the stat count all
+still fire.
+
+One implementation note worth keeping, because it looks like a no-op. The size
+loop resizes a live page rather than opening one per size — 196 navigations
+stay constant and only reflows multiply — and it follows every resize by
+touching every element's rect once. A closed `<details>` is a
+`content-visibility`-locked subtree, and Chromium does not re-lay it out when
+the viewport *narrows*: the first walk afterwards reads the previous size's
+numbers. Reading `document.body.offsetHeight` does not clear it, because a
+page-level reflow is precisely what a locked subtree skips. It does not bite in
+the order the list is actually in, since that list only ever widens — but
+against the stylesheet in the tree, which the audit reports clean, reverse the
+list with that line deleted and the run reports **16 findings against a true
+zero**: the code card's `<pre>` at 423 in a 402 viewport, stale from 440, and
+at 343 in a 320, stale from 360. Put the line back and the reversed list is
+clean again. It costs nothing measurable, because the walk was going to force
+that layout a moment later anyway.
+
+Two coverage claims are asserted rather than assumed, because both had already
+been demonstrated to fail quietly. The contrast walk runs at one cell of the
+grid — the reference size, the smallest text size — so the entry carrying that
+flag *is* the scope of one of the two walks: delete the flag and, against a
+deliberately broken stylesheet, 158 real contrast failures are reported as
+`Clean`. It is now a startup error to have anything but exactly one, and the
+summary line names the cell rather than folding contrast into the whole
+product. Separately, every stylesheet is checked non-empty at startup, because
+a zero-byte `<link>` fires the load event and `document.styleSheets` counts a
+link that 404s — so nothing inside the page can tell a styled document from an
+unstyled one. Emptying `assets/features/skills.css` and running the gate
+reports **Clean**; emptying `assets/main.css` reports 73664 findings about
+`<textarea>`'s default 182×21 box and buttons at radius 0, which reads as a
+design regression rather than as a missing file.
+
+Three of its checks only mean something on the text-size axis. **`CLIPPED-Y`** is the
 vertical half of the clipped-text walk, with anything carrying a
 `-webkit-line-clamp` exempted, because four `.session-*` elements clip
 vertically on purpose. **`SPILL`** is ink outside a box that never clips —
@@ -826,10 +942,25 @@ leaving the bar, which the `SCRIM` check could not see while `.topbar` had a
 pinned height: its bottom edge never moved, so the comparison could not go
 wrong and reported clean with the title painted outside the glass.
 
-Against the stylesheet as it stood before rule 14 landed, that pass reports
-**844 findings** — 36 at 16px, 36 at 17, 84 at 23 and 688 at 53 — and it is
-clean against the one in the tree. A check you cannot make fail is worth
-nothing.
+`SCRIM` and `COLLAPSED` are counted with the geometry rather than the contrast
+walk, which is where they started. Both measure edges, not colours — `SCRIM`
+compares the solid band against the bar's *measured* bottom, and `COLLAPSED` is
+a height — so both belong on the phone-size axis, and `SCRIM` in particular is
+width-sensitive in a way nothing else covers: a title that wraps at a narrow
+width makes the bar taller and the scrim stops reaching it, which
+`TITLE-TALLER` cannot see because the heading is still inside the now-taller
+bar. Moving them is also what makes it honest to run the contrast walk at the
+reference size alone; what is left in that function is provably colour-only.
+
+Against the stylesheet as it stood before rule 14 landed (`22a91ca^`), that
+pass reports **6424 findings** — 240 at 16px, 240 at 17, 600 at 23 and 5344 at
+53 — and it is clean against the one in the tree. A check you cannot make fail
+is worth nothing. Those are the numbers the whole grid gives, and the grid is
+what has to be restated whenever it grows: this figure read 844 (36/36/84/688)
+when it was written, measured at 402×874 alone and over the 43 states captured
+then. Pinning today's pass back to 402×874 gives 980 (40/40/96/804) — the same
+walk, six more captured screens. Re-measure it when either axis changes; a
+calibration number is only worth its date.
 
 It also repeats every state with the server-supplied strings swapped for the
 longest plausible value, because a captured state only shows the one string the
@@ -960,12 +1091,123 @@ and it names every key it carries over. Do not hand-edit the gallery;
 re-capture it.
 
 What the gallery still cannot tell you: safe-area insets are zero in a
-browser, so the floating chrome sits higher than it does on a device, and the
-font stack resolves to whatever is installed locally rather than to iOS's, so
-every text measurement is approximate. Positions and material are what the
-simulator is for. (Headless Chromium *does* composite `backdrop-filter` — a
-controlled test measured a stdev of 7.03 with the blur against 47.11 without,
-so a tint tuned as if the blur were absent comes out flat on a device.)
+browser, so the floating chrome sits higher than it does on a device.
+Positions and material are what the simulator is for. Two more, both of them
+heights: the **keyboard-up viewport**
+is a real height this app renders at and no headless browser reports it, and
+every state is captured and measured **at rest** — `scripts/capture-gallery.py`
+records markup at the top of its scroller and no offset, so a screen scrolled
+under the chrome is a state that would have to be captured as one. (Headless
+Chromium *does* composite `backdrop-filter` — a controlled test measured a
+stdev of 7.03 with the blur against 47.11 without, so a tint tuned as if the
+blur were absent comes out flat on a device.)
+
+### The audit brings its own fonts
+
+**A gate that asks the host what a font is has no verdict.** For a while this
+list said the font stack "resolves to whatever is installed locally rather
+than to iOS's, so every text measurement is approximate" — and that was fine
+while the audit walked 402pt alone and nothing turned on a few pixels. Adding
+the 320pt column and the AX5 scale turned the caveat into a verdict: the same
+commit came out **Clean** on a Mac and **24 findings** on `ubuntu-latest`, all
+of them at 320x568 at root 53px.
+
+Nobody was rendering the design's fonts. `-apple-system` / `ui-serif` /
+`ui-monospace` are San Francisco, New York and SF Mono on iOS — rule 1 above —
+but Chromium on macOS matches none of those first entries and lands on
+`.SF NS`, **Charter** and **Menlo**, and a Linux runner lands on Liberation
+Sans, Serif and Mono (Playwright's `--with-deps` installs `fonts-liberation`,
+and fontconfig answers `Arial` with it). Liberation Sans is ~5% wider than San
+Francisco and Liberation Serif ~8% narrower than New York, which is more than
+enough to decide a 3px question.
+
+So `docs/audit.js` ships three faces in `docs/fonts/` and repoints the three
+tokens at them for the duration of the run: **Inter** for the sans,
+**Literata** for the serif, **JetBrains Mono** for the mono, all OFL 1.1, plus
+796 bytes of Noto Sans Math for the one character (`⋯`) that none of them has.
+The header of that file is the full argument; the four things worth knowing
+here:
+
+- **They are stand-ins, chosen by measurement.** `node docs/audit.js fonts`
+  compares them against the real `/System/Library/Fonts` files over every
+  string this app puts on screen, at all four roots, and fails if a median
+  leaves ±5%. It is macOS-only, because only macOS has the files — Apple's
+  faces are not redistributable, which is the whole reason stand-ins exist.
+- **Vertical metrics are not the stand-in's.** `ascent-override` and
+  `descent-override` state San Francisco's and New York's own numbers, so
+  every line box is exactly as tall as iOS's and the only thing being
+  approximated is how wide a glyph is.
+- **Optical sizing is why the files are the big ones.** San Francisco tightens
+  as it grows; a wght-only Inter does not, and ran 1.15x SF at 53px against
+  1.01x at 16px — reporting spills at AX5 that no iPhone has.
+- **Pinning the file is only half of it.** Chromium on Linux hints through
+  FreeType and quantises advances; macOS does not. With every face pinned and
+  a bound taken off `.fab` on purpose, the two machines still disagreed — 176
+  findings against 152, `left=15` against `left=16`. `--font-render-hinting=none`
+  is what makes them print the same bytes, and it costs nothing here because
+  nothing in this walk reads a pixel.
+
+What is still unmeasured: size-specific tracking, Core Text's shaping, and the
+last few pixels of any text box — a single word can be 12% out either way. So
+a box that fits **by a few pixels** here is not proven to fit on a phone. That
+is a fact about the design rather than about the runner, and the answer to it
+is to stop having boxes that fit by a few pixels: see `.fab` below.
+
+Two guards keep the pinning honest, and both fail the run rather than adding a
+finding. One asks every element that lays out text what family it computed —
+which is how `.diff-seen` was found rendering "Viewed" in **Arial** (the UA
+stylesheet's `font` shorthand names a family, and overriding `font-size` left
+it behind) and a bare `<code>` outside `.md` rendering in the generic
+`monospace` (Courier on iOS, WenQuanYi Zen Hei Mono on a Linux runner, Menlo
+here). Both are fixed in `assets/main.css`. The other renders the whole corpus
+and asks the browser which platform faces it reached for, so a character
+outside the shipped subsets cannot quietly bring a host font with it.
+
+### A pinned box needs two bounds, not one
+
+`.fab` is `position: absolute; right: var(--edge)` with `left: auto`, so its
+width is `clamp(min-content, viewport − gutter, max-content)` — an expression
+with no term for the gutter on the other side. Measured at AX5 before this was
+fixed: `left = 0.00` at 320, 360, 375, 390 **and 402** — the reference width —
+a "floating" action button 110px tall spanning the screen with a 16px margin
+on one side and none on the other. `--edge` calls itself "the gutter every
+floating thing shares"; this was the floating thing that did not.
+
+The audit could not say so, because a shrink-to-fit box only reports
+`OVERFLOW-X` once its *min-content* passes the viewport, and that cleared 320pt
+by 10px in San Francisco and missed by 3 in Liberation Sans. **That** is what
+CI's `button.fab left=-3` was: a real defect, reported by the machine whose
+font happened to be wide enough to tip it.
+
+The fix is two lines and a consequence. `max-width: calc(100% - 2 *
+var(--edge))` gives the pill its second bound; `overflow-wrap: anywhere` makes
+that bound safe, since at 320pt the cap is 7px narrower than the word
+"extension" is at AX5 and a min-content floor that cannot be met is text
+painted outside the pill. The consequence is that the label takes three lines
+at 320pt/AX5 instead of two, so `.scroll.has-fab` clears three: measured, the
+list now clears the pill at every size and scale this gates on, by 14px at the
+tightest.
+
+And the rule is now stated rather than waited for — `GUTTER` in
+`docs/audit.js` reports an out-of-flow box, positioned against a screen-wide
+containing block, with one inset at `--edge` and the other side nearer the
+screen edge than that. On the tree before the fix it reports 88 findings per
+theme, at scales and widths where `OVERFLOW-X` was silent.
+
+### The other eight findings were the font, and the thing behind them is not
+
+CI's other complaint was `CLIPPED-X div.session-title scroll=80 client=76` on
+the recipe list. Measured under the pinned faces, and under the real New York:
+`scrollWidth == clientWidth` on every row. It was Liberation Serif — or rather
+Liberation *Sans*, one element over, since `.session-age` shares the row and
+"Aug 18" is 6.7px wider in it — and there is no clip to fix.
+
+What is left when the font is taken out of it is worth writing down anyway.
+`.session-age` is `flex-shrink: 0` inside a 210px `.session-head`, so at AX5 an
+absolute date takes 118 of those 210 points and the title gets 84 — two lines
+of about three characters. That is a real legibility problem at 320pt and a
+smaller one at 402, no check reports it, and no font choice will: it is a
+question about how much of a row a timestamp deserves, and it is open.
 
 If you want numbers out of the real DOM rather than pixels, `document::eval`
 reaches into the live WKWebView and can send `getBoundingClientRect` and
@@ -973,3 +1215,180 @@ computed styles back to Rust — that is how the spacing in this design was
 measured, and how the keyboard bug was finally diagnosed after two wrong
 guesses. Give it ~1500ms: WebKit applies `env(safe-area-inset-*)` after first
 paint, and an earlier read reports every bar 62px too high.
+
+---
+
+## The desktop shell
+
+The same design system, worn a second way. `assets/main.css` is untouched by
+it: everything below lives in `assets/desktop.css`, which `src/css.rs` embeds
+only in a desktop binary.
+
+**Platform and width are different axes.** The platform decides the
+*affordances* and it decides them at compile time — the desktop shell has
+always-visible row actions, no swipe tray and no pull-to-refresh; the phone
+shell has all three, unchanged. Width decides one thing and one thing only:
+how many columns are drawn. **A desktop window dragged narrow is a narrow
+desktop app, not the phone.** Nothing about how a control behaves changes with
+width. goose's own desktop app takes the same position — its single width
+threshold collapses the sidebar and changes nothing else.
+
+**The columns, and where the numbers come from.** Nav 212, list 330, and a
+content column no narrower than 360, which is this file's own floor (rule 14's
+note: 320 is a defensive width rather than a device) and the width
+`docs/measure-composer.js` is gated at. The breakpoints are their sums rather
+than round numbers:
+
+| width      | columns                                              |
+|------------|------------------------------------------------------|
+| ≥ 902      | nav 212 · list 330 · detail                          |
+| 572 – 901  | nav 212 · list **or** detail                         |
+| < 572      | nav narrows to a 72px icon rail · list or detail     |
+
+Below 902 the list and the detail share a column and whichever has something
+in it wins — which is the arrangement goose's desktop app is in at every
+width. The rail keeps every destination on screen and one click away; the
+labels stay in the DOM at zero size, so each button keeps its name, and
+`title` gives the pointer a copy of it. The nav *column* is 212 and 72; the
+card inside it is that minus 8 points of breathing room on each side, so the
+panel itself is 196 and the rail's icons sit in 56.
+
+**The nav is a floating card, and it collapses.** It is inset from the window
+by 8 points on three sides, rounded at `--radius-xl` and outlined — the phone's
+"chrome floats" grammar, and the same treatment goose's own desktop app gives
+the same panel ("a rounded outlined card floating on it with breathing room",
+`AppLayout.tsx`). The content beside it is the plain canvas: no card, no
+border.
+
+It starts **open on every launch** and nothing persists the choice. The toggle
+is `⌘/` — goose's own chord for this (`toggleNavigation`) — or the button, which
+is a sibling of the columns rather than a child of the nav, because a control
+that vanishes with the panel it reopens is a one-way door. It slides between
+the card's top corner and the window's. State lives in a `use_signal` local to
+`AppShell` and reaches the sheet as `data-nav`; it is deliberately *not*
+`ctx.drawer_open`, which on a phone means "a panel is covering the screen" and
+carries two behaviours that are wrong for a pinned column — `render_group`
+closes it on every navigation, and `views/scheduler.rs` stops polling while it
+is open.
+
+**The window's floor is 480 × 560 points**, set with
+`WindowBuilder::with_min_inner_size`. 480 is the rail plus 424 of content —
+wider than the 402 frame every gallery state is audited in — and it is also
+exactly what goose's own desktop app ships as its minimum. 560 is the nav's
+intrinsic height (seven destinations at 48px, plus the wordmark and the
+padding) with slack. A test in `src/shell/desktop.rs` checks the floor against
+the breakpoints, because only one of the two is compiled.
+
+**Nothing observes a resize.** The breakpoints are `@media` rules in a
+stylesheet a phone binary does not contain, so pane count needs no Rust at
+all. That is not tidiness — it is the synchronous-XHR rule above: a Rust
+resize handler would be a blocking round trip per frame of a drag. The one
+thing CSS cannot work out for itself is whether a detail is open, and that is
+a fact about the app rather than the window, so the shell states it in a
+`data-detail` attribute.
+
+**Refresh is arrival, plus a chord.** There is no refresh control, which is
+also goose's own desktop app's answer — `SessionListView.tsx` has none and does
+not poll. Arriving at a destination re-fetches its list, and ⌘R (Ctrl+R
+elsewhere) re-fetches whatever is mounted. Both go through the same
+`viewport::refresh_named` the phone's pull gesture uses, so a list cannot be
+refreshable one way and not another. The arrival half is the one a user meets;
+⌘R is deliberately undocumented in the UI, and registering it as a real menu
+item is the obvious next step for discoverability — it is not taken here
+because a menu accelerator *consumes* the key on macOS, so it would have to
+replace the JS listener rather than sit beside it, and that swap cannot be
+verified without a desktop run.
+
+**The row is the list's, the detail is beside it, and the row says so.** In
+three columns the list and what it opened are on screen together, which is the
+one arrangement where an unmarked list is confusing — the phone never had it.
+The open row takes `--bg-tertiary`, which is the token `assets/main.css` already
+proved reads as *selected* (see the note over `.drawer-item.active`), and
+`ListRow` refuses to paint it at all on the phone.
+
+### Deviations, desktop only
+
+**The pane header does not float, and it draws no line.** Rule 3 — "each
+carries its own glass, nothing spans the width" — is the phone's identity and
+cannot survive three columns: `.topbar` is positioned against `.app`, so three
+of them would stack in one corner, and three glass pills abreast is three where
+the eye expects one. On the desktop the bar is static: the title sits on the
+canvas in a 4rem band of air, and the controls keep their shapes and lose their
+shadows.
+
+The first draft put a rule under it, on rule 6's reasoning that anything in
+normal flow separates with a hairline. That was a misreading of what the line
+had to separate: the bar and the pane under it are the same colour and nothing
+scrolls beneath it, so the rule separated nothing — while meeting the column
+divider at a right angle once per pane. A window whose structure is drawn in
+corners is exactly the "boxy" this system exists to avoid. goose's own desktop
+app draws no such divider either. The one line the shell still draws is
+between the two content columns, which are two different things.
+
+**Nav colour is split by theme, and it is measured.** The nav card paints
+`--bg-secondary` in light and `--bg-primary` in dark — i.e. in dark it paints
+nothing at all and the outline does the separating. Both directions come from
+the same measurement. One fill for both put a #3f434b panel on a #22252a page
+(1.53:1, a pale slab bolted to a dark window) and dragged the selected
+destination down with it: `--bg-tertiary` on that slab is 1.13:1, so the one
+pill whose job is to say where you are was the faintest thing in the column.
+Against the page it is 1.60:1 — which is where goose's own sidebar lands
+(sampled: identical sidebar and canvas fills, a 1px border, a 1.58:1 selected
+pill). Light has the opposite problem — #f4f6f7 on white is 1.09:1, a step you
+have to look for — so it keeps its fill and the selected pill gains an inset
+1px ring on top of it. **Light separates with fills, dark separates with
+lines.** `--shell-line` follows the same split so the card's edge and the
+column divider land at the same strength in both themes (1.44:1 and 1.42:1).
+
+**Row action buttons are 32px, not rule 9's 44.** 44 is the HIG's *touch*
+number and a pointer is not a thumb. 32 is not a taste either: it is the floor
+`docs/audit.js` enforces (SMALL-TAP fires under 32px in either axis), and it
+is the size goose's own desktop rows use. The mockups' 26 would fail our own
+gate. The nav's rows keep 48px — nothing is gained by shrinking them.
+
+**Row actions are out of flow.** The icons are absolutely positioned in the
+row's top-right, and only the *title line* reserves a gutter for them
+(`:has()` counts the buttons, so a one-action row reserves one and a row with
+none reserves nothing). Left in the row's flex flow they take their width off
+the meta line and the quote as well: measured at a 1180-wide window, the quote
+came out 141px with 220px of text clamped into it. The agreed mockup puts the
+actions beside the title only and lets the quote span the card; this is that
+arrangement reached without changing the markup, which is what keeps the
+phone's DOM identical.
+
+**The app's first `:hover` and `:focus-visible` rules live here.**
+`assets/main.css` has none at all; it was written for a thumb. Hover changes
+colour and shows a button's border — it never *reveals* a control and never
+moves one. Two corollaries that are easy to get wrong and were:
+
+- **Hover may not borrow the selected colour.** `--bg-tertiary` is what
+  `.drawer-item.active` paints with, and main.css's own note says why ("at
+  1.08:1 against the light page the selected destination was indistinguishable
+  from the unselected ones"). Spending it on hover made two destinations look
+  selected at once. Hover gets its own step, halfway between the pane and the
+  selected fill.
+- **The focus ring is an outline and nothing else.** `border-radius` is not an
+  outline property: setting one in the `:focus-visible` rule squared off every
+  control the moment it took focus — the FAB went from a 9999px pill to a 4px
+  rectangle. WebKit and Chromium already draw the outline following the
+  element's own radius, so there is nothing to add.
+
+The ring itself is `--text-primary`, which is by construction the
+highest-contrast colour against every surface in the file; inventing an accent
+token is a decision this work had no mandate for.
+
+### What is not covered yet
+
+`docs/style-gallery.html` and `docs/audit.js` cover the **phone shell only**.
+The gallery holds no desktop state, so nothing in `assets/desktop.css` is
+audited — which is why `assets/desktop.css` is deliberately *not* in
+`assets/features/`, since the audit links that whole directory into 402×874
+phone frames and would measure every phone state against a layout no phone can
+produce. Capturing desktop states works and is easy — the desktop build is the
+default feature set, so `cargo run > /tmp/desktop.log` against
+`cargo run -p mock-goose-server` prints the same `@@DOM@@` dumps a device does
+— but `scripts/capture-gallery.py` writes the store wholesale from one log and
+`window.__dumpKey` is the bare screen name, so a desktop `chats` would
+overwrite the phone's. Two prerequisites before a desktop axis exists: the
+script has to take several logs in one invocation, and the dump key has to
+carry the shell.
