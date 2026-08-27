@@ -79,6 +79,15 @@ pub(crate) fn use_visual_viewport() {
 ///
 /// Guarded on `screen.height` being sane, so a headless or embedded context
 /// that reports 0 does not latch fullscreen on forever.
+///
+/// `cfg`-gated to match its only caller below, and that is not tidiness: CI
+/// runs the iOS check with `RUSTFLAGS: -D warnings` (`.github/workflows/ci.yml`),
+/// so an ungated const whose user is desktop-only is `dead_code` on a phone
+/// target and therefore a BUILD FAILURE there while passing locally, where
+/// `cargo check --target aarch64-apple-ios` carries no such flag. That gap is
+/// exactly how this shipped: the local gate and the CI gate are not the same
+/// command.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 const FULLSCREEN_CLASS: &str = r"
 (() => {
   if (window.__fsWired) return;
