@@ -551,7 +551,8 @@ const DESKTOP_SIZES = [
 // text size, this list grows and that sentence stops being true.
 const DESKTOP_SCALES = [16];
 
-// The nav's collapse, walked rather than captured.
+// The shell's own state, walked rather than captured: the nav's collapse, and
+// whether the window is fullscreen.
 //
 // `data-nav` is a plain attribute on `.shell` that only assets/desktop.css
 // reads (src/shell/desktop.rs sets it; a test there checks the sheet acts on
@@ -563,7 +564,30 @@ const DESKTOP_SCALES = [16];
 // the nav card are all in the same corner, and the one regression this shell
 // has already shipped — a toggle painted on top of the macOS close button —
 // lived in exactly that cell.
-const DESKTOP_NAV = ['open', 'closed'];
+//
+// AND THE WINDOW'S OWN TWO STATES, in the same list rather than as a second
+// product.
+//
+// `data-fullscreen` is the other attribute `src/shell/desktop.rs` writes onto
+// `.shell`, and until this list existed nothing rendered a frame with it set:
+// `assets/platform/macos.css`'s `[data-fullscreen="true"]` block — which takes
+// the whole 76pt traffic-light indent and the 52pt band's padding back — was
+// checked by nothing at all. It was also, for the whole life of the feature,
+// REACHED by nothing: the flag came from a JS guess at `innerHeight` that never
+// once matched a real fullscreen window. A rule no frame ever renders and no
+// window ever triggers is indistinguishable from a rule that works.
+//
+// Three cells and not four, chosen rather than multiplied. Fullscreen changes
+// exactly one thing — the band, which loses its indent and gains its padding —
+// and the band is the same band whether the nav is open or shut, so
+// closed x fullscreen measures the collapsed cell a second time and nothing
+// else. Stated as a product this would be a 100% cost on the desktop half for
+// one new arrangement; stated as a list it is 50%.
+const DESKTOP_SHELL = [
+  { nav: 'open', fullscreen: 'false' },
+  { nav: 'closed', fullscreen: 'false' },
+  { nav: 'open', fullscreen: 'true' },
+];
 
 // Flipping `data-nav` starts a 200ms transition on `.navpane`'s flex-basis,
 // width and padding, so a walk that read geometry straight afterwards would be
@@ -1027,6 +1051,58 @@ const GEOMETRY = () => {
           out.push(`TITLE-COLLIDE ${name(heading)} overlaps ${name(group)} by ${over.toFixed(0)}px`);
         }
       }
+    }
+  }
+
+  // THE DETAIL'S HEADING BELONGS TO THE WINDOW, AND SO DOES THE CONNECTION.
+  //
+  // This is the whole claim the window bar exists to make, and until now it
+  // was made by nothing but three `display: none` rules in
+  // `assets/desktop.css`. Delete any of them and the app paints the open
+  // thing's name in the band AND again in the pane a few pixels below it,
+  // while every other check in this file stays green: nothing clips, nothing
+  // overflows, nothing collides, because two headings in two different bars
+  // are each placed perfectly inside their own.
+  //
+  // NOT "one title per window", which is the tempting reading and is wrong.
+  // The LIST column keeps its own heading on purpose — "Skills" over the list
+  // of skills — so that the list never moves at any width or in any state
+  // (`src/shell/desktop.rs`). Stated that way the rule fires 144 times on a
+  // correct build, once per size where both columns are up. What must not
+  // double is the DETAIL's heading, because that is the one the band took.
+  //
+  // COUNTED AS RENDERED, which is the only reading that means anything here.
+  // The pane still emits its heading — `nav::Detail` is the pane's own data
+  // and Dioxus has no portal, so the markup cannot be moved, only hidden — so
+  // "present in the DOM" counts two on a correct build and checks nothing.
+  // `getClientRects()` for that, the same test the bar loop above uses.
+  //
+  // DESKTOP ONLY, decided by the DOM rather than by the state's key: the band
+  // is the discriminator and it is also the thing under test. A phone has one
+  // `.topbar` by construction and no second column to disagree with it.
+  if (document.querySelector('.shell-chrome')) {
+    const shown = (sel) => [...document.querySelectorAll(sel)]
+      .filter((el) => el.getClientRects().length);
+    const band = shown('.shell-chrome > .chrome-title');
+    const pane = shown('.pane-detail .topbar > .title, .pane-detail .topbar > .titlegroup');
+    // Guarded on the band actually carrying one. With nothing open the band
+    // paints no title at all — `src/shell/desktop.rs` renders it only for a
+    // `Some(crumb)`, so an empty flex item never takes its gap — and then the
+    // detail pane keeping its own heading is not a duplicate, it is the only
+    // one there is.
+    if (band.length && pane.length) {
+      out.push(`TITLE-DOUBLED the band carries ${name(band[0])}`
+        + ` "${(band[0].textContent || '').trim().slice(0, 32)}" and the detail pane still paints`
+        + ` ${pane.map((el) => `${name(el)} "${(el.textContent || '').trim().slice(0, 32)}"`).join(' + ')}`);
+    }
+    // The connection is the window's, full stop — there is one socket, so a
+    // second badge is a second answer to a question with one answer. No guard
+    // needed: `assets/desktop.css` hides every pane's copy unconditionally,
+    // so more than one rendered is always wrong.
+    const badges = shown('.conn-badge');
+    if (badges.length > 1) {
+      out.push(`CONN-DOUBLED ${badges.length} connection badges rendered at once:`
+        + ` ${badges.map((el) => name(el)).join(' + ')}`);
     }
   }
 
@@ -1537,7 +1613,7 @@ const compareFonts = async (states) => {
       // separately for that reason.
       const sizes = state.desktop ? DESKTOP_SIZES : SIZES;
       const scales = state.desktop ? DESKTOP_SCALES : SCALES;
-      const navs = state.desktop ? DESKTOP_NAV : [null];
+      const navs = state.desktop ? DESKTOP_SHELL : [null];
       for (const size of sizes) {
         await page.setViewportSize({ width: size.width, height: size.height });
         // A resize is a reflow like the font-size below, with one exception
@@ -1584,9 +1660,14 @@ const compareFonts = async (states) => {
             // Nothing to restore between states, since every page here is
             // navigated fresh from the captured markup.
             if (nav) {
-              await page.evaluate((value) => {
+              await page.evaluate((cell) => {
                 const shell = document.querySelector('.shell');
-                if (shell) shell.setAttribute('data-nav', value);
+                if (!shell) return;
+                shell.setAttribute('data-nav', cell.nav);
+                // Set here for the same reason `data-nav` is: the captured
+                // markup can only ever say "false", because a window being
+                // driven for a capture is not a window in fullscreen.
+                shell.setAttribute('data-fullscreen', cell.fullscreen);
               }, nav);
             }
             const issues = [...new Set([
@@ -1641,7 +1722,10 @@ const compareFonts = async (states) => {
     return `${count(desktop)} ${desktop ? 'desktop' : 'phone'} states x ${themeCount}`
       + ` x ${sizes.length} ${desktop ? 'window' : 'phone'} sizes (${sizes.map((z) => `${z.width}x${z.height}`).join('/')})`
       + ` x ${scales.length} text size${scales.length > 1 ? 's' : ''} (${scales.join('/')}px)`
-      + (desktop ? ` x ${DESKTOP_NAV.length} nav states (${DESKTOP_NAV.join('/')})` : '');
+      + (desktop
+        ? ` x ${DESKTOP_SHELL.length} shell states (`
+          + `${DESKTOP_SHELL.map((c) => `nav ${c.nav}${c.fullscreen === 'true' ? ' fullscreen' : ''}`).join('/')})`
+        : '');
   };
   const shells = [false, ...(count(true) ? [true] : [])];
   const scope = shells.map(grid).join(', and ');
