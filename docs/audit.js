@@ -81,12 +81,42 @@ const STYLESHEETS = [
 // `<textarea>`'s default 182x21 box and buttons at radius 0, which read as a
 // design regression rather than as a missing file. One stat each, at startup,
 // so neither outcome has to be diagnosed from the findings.
-for (const sheet of STYLESHEETS) {
+// The two sheets a DESKTOP state is measured against, on top of the list
+// above, in the order src/app.rs emits them: STYLES, then SHELL, then
+// PLATFORM.
+//
+// ORDER IS THE WHOLE CARE HERE. Both files set `--chrome-h` and `--traffic-w`
+// on the same `.app > .shell` selector — desktop.css defaults them and
+// macos.css raises them — so at equal specificity the later sheet wins.
+// src/app.rs carries the write-up of getting it the other way round: the
+// reservation was always zero and the nav toggle painted on top of the macOS
+// close button at the rail width. Linked in the wrong order this would audit a
+// window nobody ships and report it clean.
+//
+// And they are linked PER STATE rather than from a directory, which is what
+// makes it structurally impossible for them to reach a phone frame. That is
+// exactly the property `assets/features/` cannot give — src/css.rs keeps both
+// of these out of it for that reason — and the cost of getting it wrong is
+// measured rather than feared: copy the two into assets/features/, so every
+// phone frame gets them too, and `node docs/audit.js light` against a Clean
+// tree reports 716 findings — 438 OVERFLOW-X, 266 SPILL, 12 CLIPPED-X. A
+// phone state laid out as three columns is not a phone state.
+const DESKTOP_SHEETS = [
+  path.join(ASSETS, 'desktop.css'),
+  path.join(ASSETS, 'platform', 'macos.css'),
+];
+for (const sheet of [...STYLESHEETS, ...DESKTOP_SHEETS]) {
   if (!fs.existsSync(sheet) || fs.statSync(sheet).size === 0) {
     console.error(`${sheet} is missing or empty — every screen it styles would be measured against the UA defaults`);
     process.exit(1);
   }
 }
+
+// The prefix src/shell/mod.rs puts on a desktop dump's key, and therefore the
+// only thing in docs/gallery-states.json that says which shell drew a state.
+// It is a fact about the capture rather than a convention this file invents —
+// see scripts/capture-gallery.py, which partitions on the same string.
+const DESKTOP_PREFIX = 'desktop-';
 
 // ── the faces this measures with, and why they are not the app's ────────
 // THE GATE SHIPS ITS OWN FONTS. Every check below is a measurement of text,
@@ -467,6 +497,87 @@ const SIZES = [
   { width: 440, height: 956 },
 ];
 
+// ── window size ─────────────────────────────────────────────────────────
+// A window is not a phone, and this list is a weaker claim than the one above
+// — deliberately, and it should be read as the weaker one. SIZES is a COVERAGE
+// claim about devices: those are the phones this app is gated on and there are
+// no others. A window can be any size at all, so there is no equivalent claim
+// available. What this list is instead: EVERY BREAKPOINT STRADDLED ON BOTH
+// SIDES, plus the floor, plus the size the app actually opens at, plus the one
+// width where the list column stops growing.
+//
+//   480x560   MIN_INNER (src/shell/desktop.rs) — the floor
+//             `with_min_inner_size` refuses to let the window past. 560 is the
+//             nav's own intrinsic height, which is the first thing to give.
+//   571x700   the last pixel of the icon rail — `@media (max-width: 571px)`
+//   572x700   the first pixel of the 212pt nav. The PAIR is what makes this a
+//             straddle rather than a sample: a breakpoint is exactly the place
+//             where one number renders one layout and the next renders
+//             another, and only both sides can say the two agree.
+//   901x760   the last pixel of two columns — `@media (max-width: 901px)`
+//   902x760   the first pixel of three, and also where
+//             `@media (min-width: 902px)` starts hiding the detail pane's
+//             `.conn-badge`, so two rules turn here.
+//   1180x820  `with_inner_size` in src/main.rs — the window everyone opens.
+//             THE REFERENCE: where CONTRAST runs. Measured on the running app
+//             rather than read off the source (see DESKTOP_SCALES).
+//   1600x1000 past 1533, where `.pane-list`'s `flex: 0 0 clamp(330px, 30%,
+//             460px)` saturates at 460. A third regime neither breakpoint
+//             names, and the one docs/design.md's 1500pt measurements came
+//             out of.
+//
+// Height travels with width for SIZES' reason. It is not a device height here
+// — there is no such thing — so each is chosen to be plausible and to leave
+// the nav its 560.
+const DESKTOP_SIZES = [
+  { width: 480, height: 560 },
+  { width: 571, height: 700 },
+  { width: 572, height: 700 },
+  { width: 901, height: 760 },
+  { width: 902, height: 760 },
+  { width: 1180, height: 820, reference: true },
+  { width: 1600, height: 1000 },
+];
+
+// ONE text size on the desktop, and it is measured rather than derived.
+//
+// The four-scale walk above is the Dynamic Type opt-in, and that opt-in is
+// `font: -apple-system-body` in assets/platform/ios.css — a line no other
+// build has. src/css.rs gives a macOS binary assets/platform/macos.css
+// instead, which sets no font at all, so nothing moves the root off the web
+// view's own default. Read off the running window with one `document::eval`
+// during the capture that produced these states: `16px root; viewport
+// 1180x820; devicePixelRatio 2`. If a desktop build ever opts into a system
+// text size, this list grows and that sentence stops being true.
+const DESKTOP_SCALES = [16];
+
+// The nav's collapse, walked rather than captured.
+//
+// `data-nav` is a plain attribute on `.shell` that only assets/desktop.css
+// reads (src/shell/desktop.rs sets it; a test there checks the sheet acts on
+// it), so flipping it here is a real reflow of a real rule and not a fiction —
+// which is what separates it from `data-detail`, a fact about what the app has
+// open that has to be captured and must never be flipped. It is worth the
+// second pass because the rail tier and the collapsed tier are where the
+// window chrome gets crowded: the toggle, the traffic-light reservation and
+// the nav card are all in the same corner, and the one regression this shell
+// has already shipped — a toggle painted on top of the macOS close button —
+// lived in exactly that cell.
+const DESKTOP_NAV = ['open', 'closed'];
+
+// Flipping `data-nav` starts a 200ms transition on `.navpane`'s flex-basis,
+// width and padding, so a walk that read geometry straight afterwards would be
+// measuring a column mid-slide. Everything this script measures is measured AT
+// REST — that is already true of the capture, which records markup with no
+// scroll offset — so the axis states it rather than waiting a quarter of a
+// second per cell for the same answer. `!important` because a transition is
+// declared on the element itself, and `all` because the card's deferred
+// `visibility` is part of the same slide: at rest a closed nav is hidden, not
+// hidden-in-200ms. Desktop states only, since nothing flips an attribute on a
+// phone frame and a transition that never starts needs no turning off.
+const AT_REST_CSS = '*, *::before, *::after { transition: none !important;'
+  + ' animation: none !important; }';
+
 // CONTRAST runs at the reference size alone, so that flag is not a label: it
 // is the entire scope of one of this script's two walks. Drop the key while
 // rewriting the list and the colour walk stops running while the summary goes
@@ -474,10 +585,19 @@ const SIZES = [
 // .banner { color: #bbbbbb }` appended to main.css: 158 real contrast failures
 // reported as Clean. Asserted rather than defaulted, because "whichever one
 // happens to be first" is not a reference size.
-const REFERENCE = SIZES.filter((size) => size.reference);
-if (REFERENCE.length !== 1) {
-  console.error(`exactly one SIZES entry must carry \`reference\` — it is where CONTRAST runs; found ${REFERENCE.length}`);
-  process.exit(1);
+//
+// ONE PER SHELL, and the desktop's is not optional either: assets/desktop.css
+// splits `--nav-fill` and `--shell-line` by theme on purpose, and
+// docs/design.md records that the split came out of a measured 1.53:1 slab and
+// a 1.13:1 selected pill. A colour walk that does not run at 1180x820 in both
+// themes would not have caught the thing the split exists to fix.
+const REFERENCE = { false: SIZES.filter((z) => z.reference), true: DESKTOP_SIZES.filter((z) => z.reference) };
+for (const [desktop, found] of Object.entries(REFERENCE)) {
+  if (found.length !== 1) {
+    const which = desktop === 'true' ? 'DESKTOP_SIZES' : 'SIZES';
+    console.error(`exactly one ${which} entry must carry \`reference\` — it is where CONTRAST runs; found ${found.length}`);
+    process.exit(1);
+  }
 }
 
 // ── stress ──────────────────────────────────────────────────────────────
@@ -517,6 +637,17 @@ const LONGEST = {
   // name, a skill's name, a recipe's title. Stressing only `.topbar > .title`
   // left the shape that actually carries the long strings unchecked.
   '.titlegroup > .title': 'Refactor the transcript folding so streamed parts land in order',
+  // The DESKTOP's window bar, and it is the one title in the app that shares
+  // its line with something load-bearing. `.window-drag` is the only way a
+  // window whose titlebar src/main.rs has hidden can be moved, so the promise
+  // `.chrome-title` makes is that it shrinks and ellipsises rather than eating
+  // the drag strip — at 480pt, the window's own floor, with the whole of the
+  // traffic-light reservation and the connection badge already spent. Nothing
+  // else on this list appears in a desktop state's chrome, so without these
+  // two the band would only ever be measured holding whatever short string the
+  // capture happened to catch.
+  '.chrome-heading': 'Refactor the transcript folding so streamed parts land in order',
+  '.chrome-sub': 'PhillipChaffee/goose-phone-app · goose/desktop-unified-top-bar',
   // Every settings-shaped row on every screen puts server text here — a model
   // name, an MCP command line, a cron sentence read back as English — and
   // none of it was being stressed.
@@ -538,6 +669,11 @@ const stressed = (states) => states.flatMap((state) => {
   return [{
     label: `${state.label} (long text)`,
     body: state.body,
+    // Carried, not re-derived. This builds a fresh object, so a flag left out
+    // here would quietly send every stressed desktop state through the phone's
+    // sheets and the phone's sizes — half the desktop grid, silently, with the
+    // summary still counting it.
+    desktop: state.desktop,
     swap: Object.fromEntries(hits),
   }];
 });
@@ -576,6 +712,38 @@ const GEOMETRY = () => {
   // alone cannot tell the two apart, and taking it at face value would
   // silence this check everywhere. A region that states overflow-y: hidden
   // has said which axis it means.
+  // Does this box span the REGION that lays it out, edge to edge, in either
+  // axis — where a region is the viewport, or a box that is itself one by the
+  // same test?
+  //
+  // The SQUARE check below has always exempted "a page or a panel", and while
+  // the page WAS the viewport, `r.width >= vw` was the whole of that idea. A
+  // shell of columns is the first thing here that has regions inside regions:
+  // `.pane-detail` reaches from under the window's chrome band to the bottom
+  // of the window and from the divider to the window's right edge, which is a
+  // panel by any reading — docs/design.md says so outright, "the content
+  // beside it is the plain canvas: no card, no border" — and it spans neither
+  // axis of the viewport, because the nav is beside it and the chrome band is
+  // above it. Measured on the first desktop run: 1552 SQUARE findings, every
+  // one of them `.pane-list`, `.pane-detail` or `.topbar`, in a stylesheet
+  // whose square corners are stated design.
+  //
+  // EDGE TO EDGE AND NOT PAST IT, which is what keeps this from being a
+  // general softening. A `<ul>` of session cards is 816px tall inside a 704px
+  // scrollport: it has OVERFLOWED its region rather than spanned it, so the
+  // walk stops there and every card inside it goes on answering for its own
+  // corners. And the chain is unbroken or it is nothing — one padded ancestor
+  // anywhere between a box and the window and the box is not a panel.
+  const spansRegion = (el) => {
+    let r = el.getBoundingClientRect();
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      if (Math.abs(r.width - p.clientWidth) > 0.5 && Math.abs(r.height - p.clientHeight) > 0.5) {
+        return false;
+      }
+      r = p.getBoundingClientRect();
+    }
+    return true;
+  };
   const inHorizontalScroller = (el) => {
     for (let p = el.parentElement; p; p = p.parentElement) {
       const ps = getComputedStyle(p);
@@ -771,6 +939,14 @@ const GEOMETRY = () => {
     // code gets the width, and a curve at a corner the screen edge already
     // cuts is a notch rather than a card. The width half of this sentence
     // used to be `&&`-ed with the height and so decided nothing.
+    //
+    // `spansRegion` below is the same sentence for a window with columns in
+    // it, and it is asked LAST, once everything cheap has already said this
+    // box might be a finding — it is a walk to the root and this loop visits
+    // every element on the page. Kept as a separate disjunct rather than
+    // folded into this line so that nothing a phone frame exempts today can
+    // stop being exempt: this test is unchanged, and the other one only ever
+    // adds.
     const fullScreen = r.width >= vw - 0.5 || r.height >= vh - 0.5;
     // Nor is a row a surface. Something that fills its clipping parent from
     // edge to edge already has that parent's corners — rounding it as well
@@ -780,7 +956,8 @@ const GEOMETRY = () => {
     const flush = clip && Math.max(...rad(getComputedStyle(clip))) > 0
       && r.width + 0.5 >= clip.clientWidth;
     if ((filled || boxed) && !fullScreen && !flush && Math.max(...rad(cs)) === 0
-        && r.width > 24 && r.height > 12 && tag !== 'html' && tag !== 'body') {
+        && r.width > 24 && r.height > 12 && tag !== 'html' && tag !== 'body'
+        && !spansRegion(el)) {
       out.push(`SQUARE       ${name(el)} ${r.width.toFixed(0)}x${r.height.toFixed(0)}`);
     }
     if (tag === 'button' && (r.height < 32 || r.width < 32)) {
@@ -793,10 +970,38 @@ const GEOMETRY = () => {
   // clips, nothing overflows the viewport and nothing reports an error — the
   // title simply runs underneath a button. Caught here because it is the sort
   // of thing that only appears when a control group changes width.
-  const bar = document.querySelector('.topbar');
-  if (bar) {
-    const heading = bar.querySelector(':scope > .title, :scope > .titlegroup');
-    if (heading) {
+  //
+  // EVERY bar, not the first one. A phone screen has exactly one `.topbar`, so
+  // `querySelector` said everything there was to say and these numbers cannot
+  // move on that shell. The desktop shell has a header per PANE — measured over
+  // the captured states, seven of the fourteen have two — and the singular
+  // query would have measured the list column's and never looked at the
+  // detail's, which is the one holding a back chevron, an overflow control and
+  // often a two-line title. A check that silently examines one of two is worse
+  // than one that examines neither, because the summary line counts it as
+  // covered.
+  //
+  // AND THE WINDOW'S OWN BAR IS ONE OF THEM. `.shell-chrome` holds the name of
+  // whatever the desktop's detail column has open, and it is the one bar in
+  // this app whose height is not the app's to choose: `--chrome-h` is 52px
+  // measured off a real macOS window, because the traffic lights are painted
+  // into it. So "the title is taller than the bar" is a sharper question there
+  // than anywhere else — a heading that outgrows this one is painted over the
+  // window's own controls — and it is the one bar the phone does not have, so
+  // adding it costs the phone grid nothing.
+  const bars = [...document.querySelectorAll('.topbar, .shell-chrome')];
+  for (const bar of bars) {
+    const heading = bar.querySelector(':scope > .title, :scope > .titlegroup, :scope > .chrome-title');
+    // RENDERED, not merely present. `assets/desktop.css` takes the detail
+    // pane's own heading out with `display: none` once the window's bar is
+    // carrying it, and a `display: none` box reports 0x0 at the origin — which
+    // is "outside the bar" by arithmetic and inside it by every meaning the
+    // check has. Measured: without this the desktop grid reports 392
+    // TITLE-TALLER, every one of them `div.titlegroup 0..0`, and the phone
+    // grid is untouched because nothing on the phone hides a heading.
+    // `getClientRects()` and not the bounding box, because a box of zero
+    // height is a real finding and an element with no boxes at all is not.
+    if (heading && heading.getClientRects().length) {
       const h = heading.getBoundingClientRect();
       // The other axis, and the one the SCRIM check below is blind to. The
       // scrim is `--topbar-h` tall and the scroll padding is derived from the
@@ -811,13 +1016,41 @@ const GEOMETRY = () => {
         out.push(`TITLE-TALLER ${name(heading)} ${h.top.toFixed(0)}..${h.bottom.toFixed(0)}`
           + ` outside the bar's ${b.top.toFixed(0)}..${b.bottom.toFixed(0)}`);
       }
-      for (const group of bar.querySelectorAll(':scope > .icon-btn, :scope > .topbar-actions')) {
+      // `.nav-toggle` and `.conn-badge` are the window bar's two controls, the
+      // same way `.icon-btn` and `.topbar-actions` are a pane header's.
+      for (const group of bar.querySelectorAll(
+        ':scope > .icon-btn, :scope > .topbar-actions, :scope > .nav-toggle, :scope > .conn-badge',
+      )) {
         const g = group.getBoundingClientRect();
         const over = Math.min(h.right, g.right) - Math.max(h.left, g.left);
         if (over > 0.5) {
           out.push(`TITLE-COLLIDE ${name(heading)} overlaps ${name(group)} by ${over.toFixed(0)}px`);
         }
       }
+    }
+  }
+
+  // THE WINDOW HAS TO STAY DRAGGABLE.
+  //
+  // `src/main.rs` hides the macOS titlebar, which takes AppKit's own drag
+  // region with it, so `.window-drag` is the ONLY thing left that can move the
+  // window. It is a flex sibling of everything else in the band — the traffic
+  // lights' reservation, the nav toggle, the title of whatever is open, the
+  // connection badge — and every one of those is free to grow: a long enough
+  // session name, a long enough agent version, a wider `--traffic-w`. Squeeze
+  // this to nothing and the window is stuck where it is, with no error, no
+  // clipping and nothing else on screen out of place. `assets/desktop.css`
+  // answers that with `flex: 1 0 96px`; this is what notices when something
+  // takes that back.
+  //
+  // 44px rather than the sheet's own 96, deliberately: this is a floor on the
+  // AFFORDANCE, not a restatement of the declaration. 44 is design rule 9's
+  // number for a target a person has to hit.
+  const drag = document.querySelector('.window-drag');
+  if (drag) {
+    const d = drag.getBoundingClientRect();
+    if (d.width < 44) {
+      out.push(`DRAG-GONE    .window-drag is ${d.width.toFixed(0)}px wide — the window cannot be moved`);
     }
   }
 
@@ -835,6 +1068,64 @@ const GEOMETRY = () => {
     }
   }
 
+  // The room the WINDOW's own controls are painted in, and the one thing this
+  // walk can say about them.
+  //
+  // On macOS `src/main.rs` hides the titlebar, so AppKit paints the traffic
+  // lights straight onto the app's surface — at logical (9, 9), measured off a
+  // real window, because tao's `with_traffic_light_inset` is a no-op under
+  // wry. Nothing in the DOM draws them. `.traffic-slot` is an empty box the
+  // shell renders to hold that room, sized by `--traffic-w` in
+  // `assets/platform/macos.css`, and the rule is simply that nothing else may
+  // be in it.
+  //
+  // THIS IS THE REGRESSION THAT SHIPPED. The nav toggle used to be absolutely
+  // positioned against `.shell` and slid between the nav card's corner and the
+  // window's; at the rail width both of those are the window's own corner, so
+  // the button was painted on top of the close button — a control you cannot
+  // press sitting exactly where you press to close the window. It was found by
+  // eye on a device, because nothing rendered a desktop state and no check
+  // asked this question.
+  //
+  // What it can and cannot say, stated rather than implied: a browser draws an
+  // empty box where the lights are, so this can prove nothing overlaps the
+  // RESERVATION and can prove nothing about whether the reservation is where
+  // the lights actually land. The second half is a device check and stays one.
+  //
+  // Controls and fills only. An ancestor of the slot contains it by
+  // construction, and a box with nothing in it that happens to overlap is not
+  // something anyone can see; what makes this a failure is ink or a target.
+  const slot = document.querySelector('.traffic-slot');
+  if (slot) {
+    const s = slot.getBoundingClientRect();
+    if (s.width > 0.5 && s.height > 0.5) {
+      for (const el of document.querySelectorAll('*')) {
+        if (el === slot || el.contains(slot) || slot.contains(el)) continue;
+        const cs = getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+        const paints = cs.backgroundColor !== 'rgba(0, 0, 0, 0)'
+          || el.tagName.toLowerCase() === 'button'
+          || [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+        if (!paints) continue;
+        const r = el.getBoundingClientRect();
+        // A sheet that covers the whole window is not a thing in the corner.
+        // `.modal-backdrop` is `position: fixed` over everything by design and
+        // reported 56 times on the first run; AppKit paints the lights over
+        // the web view, so a dim behind them is not a control in their way.
+        // The failure this is about is a box that lands IN that corner.
+        if (r.width >= vw - 0.5 && r.height >= vh - 0.5) continue;
+        const over = Math.min(
+          Math.min(r.right, s.right) - Math.max(r.left, s.left),
+          Math.min(r.bottom, s.bottom) - Math.max(r.top, s.top),
+        );
+        if (over > 0.5) {
+          out.push(`CHROME-SLOT  ${name(el)} is inside the ${s.width.toFixed(0)}x${s.height.toFixed(0)}px`
+            + ` the window's own controls are painted in, by ${over.toFixed(0)}px`);
+        }
+      }
+    }
+  }
+
   // The floating chrome is legible because an opaque scrim covers the band it
   // sits in, and the scroller's top padding keeps content out of that band. If
   // the two ever disagree, the title lands on whatever scrolled underneath it
@@ -846,9 +1137,23 @@ const GEOMETRY = () => {
   // a narrow width makes the bar taller and the scrim stops covering it — a
   // failure the whole phone-size axis exists to reach, and one TITLE-TALLER
   // cannot see, because the heading is still inside the now-taller bar.
+  //
+  // AND IT IS ASKED ONLY WHERE THERE IS A SCRIM. `assets/desktop.css` sets
+  // `.app::before { display: none }`: on that shell the bar is `position:
+  // static`, nothing scrolls under it, and there is no band of material to
+  // check. Chromium still reports the SPECIFIED height for a `display: none`
+  // pseudo-element, so both branches below go on computing against 84px of
+  // something that paints nothing — measured on the captured `desktop-chats`
+  // at 1180x820, the pseudo flips `block` to `none` while
+  // `getComputedStyle(...).height` stays `84px`, and the first branch then
+  // compares 84-24=60 solid against a bar ending at 116. Every desktop state
+  // would report it, in both themes, at every size. `display` is the question
+  // the check was always asking and it is `block` on the phone, so this cannot
+  // move a phone number.
   const app = document.querySelector('.app');
   const scroller = document.querySelector('.scroll');
-  if (app && bar) {
+  const [bar] = bars;
+  if (app && bar && getComputedStyle(app, '::before').display !== 'none') {
     const scrim = parseFloat(getComputedStyle(app, '::before').height) || 0;
     const fade = parseFloat(getComputedStyle(app).getPropertyValue('--scrim-fade')) || 0;
     const barBottom = bar.getBoundingClientRect().bottom;
@@ -873,9 +1178,22 @@ const GEOMETRY = () => {
   // disappears. That is how every blank line in a diff silently vanished,
   // closing up the gaps the author put there. A height, so it belongs on the
   // size axis with the rest of the geometry.
+  //
+  // `checkVisibility`, not a `display` test, and it is the same trap the SPILL
+  // walk above already carries a note about. `display` is not inherited, so
+  // `getComputedStyle(el).display` inside a `display: none` SUBTREE returns
+  // the element's own specified value — `flex`, `list-item` — and nothing
+  // about the ancestor that is hiding it. Below the three-column breakpoint
+  // `assets/desktop.css` hides whichever of the list and the detail is not
+  // the one you are looking at, and every row inside the hidden column then
+  // measured zero and reported as an empty row. Measured: 384 findings on the
+  // first desktop run, all `.session-item`, all of them a list the window is
+  // too narrow to show. The message this check prints — "empty content
+  // generates no line box" — was false for every one of them.
   for (const el of document.querySelectorAll('.diff-line, .setting-row, .drawer-item, .session-item')) {
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+    if (!el.checkVisibility()) continue;
     if (el.getBoundingClientRect().height < 1) {
       const cls = typeof el.className === 'string' ? el.className.trim() : '';
       out.push(`COLLAPSED    .${cls.split(/\s+/).join('.')} has no height — empty content generates no line box`);
@@ -1103,8 +1421,12 @@ const compareFonts = async (states) => {
   // the machinery for replaying an offset here was carrying a comment about
   // behaviour no run could produce. What that leaves uncovered is named in
   // docs/design.md with the rest of this script's blind spots.
+  // Which shell drew a state is in its key and nowhere else — see
+  // DESKTOP_PREFIX. It decides three things at once: which stylesheets the
+  // rebuilt page links, which viewport sizes it is walked at, and whether the
+  // nav's collapse is walked as a second axis.
   const states = Object.entries(JSON.parse(fs.readFileSync(STATES, 'utf8')))
-    .map(([label, body]) => ({ label, body }));
+    .map(([label, body]) => ({ label, body, desktop: label.startsWith(DESKTOP_PREFIX) }));
   if (states.length === 0) {
     console.error(`${STATES} is empty`);
     process.exit(1);
@@ -1122,7 +1444,15 @@ const compareFonts = async (states) => {
   // for a string that never changes.
   const fontSheet = path.join(tmp, 'audit-fonts.css');
   fs.writeFileSync(fontSheet, FONT_CSS);
-  const sheets = [...STYLESHEETS, fontSheet];
+  const atRestSheet = path.join(tmp, 'audit-at-rest.css');
+  fs.writeFileSync(atRestSheet, AT_REST_CSS);
+  // Per state, not hoisted: the desktop sheets are linked from what the STATE
+  // is, so there is no arrangement of this script in which they reach a phone
+  // frame. Font sheet last, because it only repoints `:root`'s three font
+  // tokens and has to beat every sheet that names them.
+  const sheetsFor = (state) => (state.desktop
+    ? [...STYLESHEETS, ...DESKTOP_SHEETS, atRestSheet, fontSheet]
+    : [...STYLESHEETS, fontSheet]);
   const browser = await chromium.launch(LAUNCH);
 
   // Every character this run will lay out, taken from the markup itself
@@ -1162,7 +1492,7 @@ const compareFonts = async (states) => {
       const file = path.join(tmp, `state-${i}.html`);
       fs.writeFileSync(file,
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-        + sheets.map((href) => `<link rel="stylesheet" href="${href}">`).join('')
+        + sheetsFor(state).map((href) => `<link rel="stylesheet" href="${href}">`).join('')
         + `</head><body>${state.body}</body></html>`);
       await page.goto(`file://${file}`, { waitUntil: 'load' });
       // `load` fires when the stylesheets have arrived, not when the faces
@@ -1199,7 +1529,16 @@ const compareFonts = async (states) => {
       //
       // Size outside scale rather than inside, so the flush below runs once
       // per size instead of once per size and scale.
-      for (const size of SIZES) {
+      //
+      // WHICH grid, from the state. A phone state walks phone sizes at four
+      // text sizes; a desktop state walks window sizes at the one root a
+      // desktop build has, and walks the nav's collapse instead of a text
+      // scale. Two products, not one — the summary line below states them
+      // separately for that reason.
+      const sizes = state.desktop ? DESKTOP_SIZES : SIZES;
+      const scales = state.desktop ? DESKTOP_SCALES : SCALES;
+      const navs = state.desktop ? DESKTOP_NAV : [null];
+      for (const size of sizes) {
         await page.setViewportSize({ width: size.width, height: size.height });
         // A resize is a reflow like the font-size below, with one exception
         // that costs phantom findings. A closed <details> is a
@@ -1236,26 +1575,43 @@ const compareFonts = async (states) => {
         // An inline style on <html> beats every stylesheet rule, which is what
         // makes it a simulation of the Dynamic Type opt-in rather than a rule
         // competing with one.
-        for (const [s, scale] of SCALES.entries()) {
+        for (const [s, scale] of scales.entries()) {
           await page.evaluate((px) => {
             document.documentElement.style.fontSize = `${px}px`;
           }, scale);
-          const issues = [...new Set([
-            ...await page.evaluate(GEOMETRY),
-            // Contrast at the smallest scale and the reference size only. It
-            // is a walk over computed colours: the 18.66px large-text
-            // threshold makes every larger scale strictly more permissive,
-            // and a wider phone moves boxes rather than colours. Honest to
-            // gate on the size only because the two checks that were in this
-            // function and were NOT about colour — the scrim covering the bar,
-            // and a row that measures nothing — have moved into GEOMETRY,
-            // where they are walked at every size like the geometry they are.
-            ...(s === 0 && size.reference ? await page.evaluate(CONTRAST) : []),
-          ])];
-          if (issues.length) {
-            findings += issues.length;
-            console.log(`\n${state.label}  [${theme}, ${size.width}x${size.height}, root ${scale}px]`);
-            issues.forEach((str) => console.log(`  ${str}`));
+          for (const [n, nav] of navs.entries()) {
+            // An attribute the sheet reads, set the way the shell sets it.
+            // Nothing to restore between states, since every page here is
+            // navigated fresh from the captured markup.
+            if (nav) {
+              await page.evaluate((value) => {
+                const shell = document.querySelector('.shell');
+                if (shell) shell.setAttribute('data-nav', value);
+              }, nav);
+            }
+            const issues = [...new Set([
+              ...await page.evaluate(GEOMETRY),
+              // Contrast at the smallest scale and the reference size only. It
+              // is a walk over computed colours: the 18.66px large-text
+              // threshold makes every larger scale strictly more permissive,
+              // and a wider phone moves boxes rather than colours. Honest to
+              // gate on the size only because the two checks that were in this
+              // function and were NOT about colour — the scrim covering the bar,
+              // and a row that measures nothing — have moved into GEOMETRY,
+              // where they are walked at every size like the geometry they are.
+              //
+              // And at the FIRST nav state, which is the captured one: a
+              // closed nav is `visibility: hidden`, which the colour walk
+              // skips element by element, so the shut column can only ever
+              // report a subset of what the open one does.
+              ...(s === 0 && n === 0 && size.reference ? await page.evaluate(CONTRAST) : []),
+            ])];
+            if (issues.length) {
+              findings += issues.length;
+              console.log(`\n${state.label}  [${theme}, ${size.width}x${size.height}, root ${scale}px`
+                + `${nav ? `, nav ${nav}` : ''}]`);
+              issues.forEach((str) => console.log(`  ${str}`));
+            }
           }
         }
       }
@@ -1271,11 +1627,31 @@ const compareFonts = async (states) => {
   // reason — GEOMETRY runs the whole product below, CONTRAST runs one cell of
   // it, and one sentence over both would claim 24x the colour coverage this
   // script has.
-  const scope = `${states.length} states x ${themes.length} theme${themes.length > 1 ? 's' : ''}`
-    + ` x ${SIZES.length} phone sizes (${SIZES.map((z) => `${z.width}x${z.height}`).join('/')})`
-    + ` x ${SCALES.length} text sizes (${SCALES.join('/')}px)`;
-  const [ref] = REFERENCE;
-  const contrastScope = `${ref.width}x${ref.height} at root ${SCALES[0]}px`;
+  //
+  // AND THE TWO SHELLS ARE STATED SEPARATELY, for exactly that reason one
+  // level up. They are different grids — six phone sizes at four text sizes
+  // against seven window sizes at one, with the nav's collapse in place of the
+  // text axis — so a single sentence over both would claim four times the
+  // scale coverage the desktop half has.
+  const themeCount = `${themes.length} theme${themes.length > 1 ? 's' : ''}`;
+  const count = (desktop) => states.filter((z) => !!z.desktop === desktop).length;
+  const grid = (desktop) => {
+    const sizes = desktop ? DESKTOP_SIZES : SIZES;
+    const scales = desktop ? DESKTOP_SCALES : SCALES;
+    return `${count(desktop)} ${desktop ? 'desktop' : 'phone'} states x ${themeCount}`
+      + ` x ${sizes.length} ${desktop ? 'window' : 'phone'} sizes (${sizes.map((z) => `${z.width}x${z.height}`).join('/')})`
+      + ` x ${scales.length} text size${scales.length > 1 ? 's' : ''} (${scales.join('/')}px)`
+      + (desktop ? ` x ${DESKTOP_NAV.length} nav states (${DESKTOP_NAV.join('/')})` : '');
+  };
+  const shells = [false, ...(count(true) ? [true] : [])];
+  const scope = shells.map(grid).join(', and ');
+  const contrastScope = shells
+    .map((desktop) => {
+      const [ref] = REFERENCE[desktop];
+      const scales = desktop ? DESKTOP_SCALES : SCALES;
+      return `${ref.width}x${ref.height} at root ${scales[0]}px`;
+    })
+    .join(' and ');
   if (findings) {
     console.log(`\n${findings} finding${findings > 1 ? 's' : ''} across ${scope}`
       + ` (contrast at ${contrastScope} only).`);

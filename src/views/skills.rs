@@ -13,6 +13,7 @@ use goose_acp_client::SourceEntry;
 
 use crate::icons::Icon;
 use crate::markdown;
+use crate::nav::Crumb;
 use crate::skills;
 use crate::state::{use_app_ctx, AppCtx};
 use crate::views::chrome::{ListRow, TopBar};
@@ -150,15 +151,35 @@ fn file_count(files: usize) -> String {
     }
 }
 
+/// What the open skill is called, once.
+///
+/// Read by two things that are never on screen together: the header below,
+/// and — on the desktop — the window's own bar, which takes the heading out of
+/// the pane and paints it in `.shell-chrome` instead
+/// (`src/shell/desktop.rs`, `assets/desktop.css`). The `None` arm is the
+/// view's own dead-end fallback, for the reason stated there.
+pub(crate) fn crumb(ctx: &AppCtx) -> Crumb {
+    (ctx.skills.open)().map_or_else(
+        || Crumb::plain("Skill"),
+        |entry| Crumb::detailed(entry.name.clone(), Some(entry.scope_label().to_owned())),
+    )
+}
+
 #[component]
 pub fn SkillDetailView() -> Element {
     let ctx = use_app_ctx();
+    // The one expression the window's bar also reads, so a skill cannot be
+    // called one thing in the pane and another in the chrome. Both arms
+    // hand `TopBar` a `String` equal to the one the expression they replace
+    // produced, into the same prop of the same component — so the phone's
+    // captured markup does not move.
+    let bar = crumb(&ctx);
     let Some(entry) = (ctx.skills.open)() else {
         // Only reachable if the open skill were cleared while its screen was
         // up. It is not, but a screen with no way back is the one failure
         // this app has already shipped once.
         return rsx! {
-            TopBar { title: "Skill", on_back: move |()| skills::close(&ctx) }
+            TopBar { title: bar.title, on_back: move |()| skills::close(&ctx) }
             main { class: "scroll", p { class: "empty", "This skill is no longer open." } }
         };
     };
@@ -171,8 +192,8 @@ pub fn SkillDetailView() -> Element {
 
     rsx! {
         TopBar {
-            title: "{entry.name}",
-            subtitle: entry.scope_label().to_owned(),
+            title: bar.title,
+            subtitle: bar.subtitle,
             on_back: move |()| skills::close(&ctx),
         }
         main { class: if connected { "scroll has-fab" } else { "scroll" },

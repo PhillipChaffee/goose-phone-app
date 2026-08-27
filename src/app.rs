@@ -13,8 +13,9 @@ pub fn App() -> Element {
     // called are three questions with one answer, and that answer is a row of
     // `nav::DESTINATIONS` rather than three `match`es that have to agree.
     // What is rendered from it is the shell's business now, because the two
-    // shells arrange the same destination differently; the dump key is not,
-    // because it is the same key either way.
+    // shells arrange the same destination differently; the NAME of the dump
+    // still is not — it is the same destination on both — but which shell drew
+    // it is, and that is what `shell::DUMP_PREFIX` adds below.
     let dest = nav::current(&ctx);
 
     // The three hooks that are true of both shells. The two gesture ones —
@@ -23,8 +24,16 @@ pub fn App() -> Element {
     crate::viewport::use_visual_viewport();
     crate::viewport::use_transcript_bottom();
     crate::viewport::use_file_picker();
+    // One store, two shells. The prefix is `""` in a phone binary, so every
+    // key already in `docs/gallery-states.json` is byte-identical to what it
+    // was; it is `"desktop-"` here, so a desktop `chats` no longer overwrites
+    // the phone's. See `shell::DUMP_PREFIX`.
     #[cfg(debug_assertions)]
-    crate::domdump::use_dom_dump((dest.key)(&ctx).unwrap_or(dest.id).to_owned());
+    crate::domdump::use_dom_dump(format!(
+        "{}{}",
+        crate::shell::DUMP_PREFIX,
+        (dest.key)(&ctx).unwrap_or(dest.id)
+    ));
 
     let toast = (ctx.toast)();
     // Two independent, backend-tagged queues; the goose modal wins ties.

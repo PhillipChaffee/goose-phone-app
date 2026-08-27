@@ -44,11 +44,21 @@ is the whole story. The audit walks a second axis as well — six phone sizes,
 were content taller than the space it was given. Five are iPhones and 360x800
 is Android's modal size, since this app ships to both.
 
-`docs/style-gallery.html` renders every state in a 402x874 frame against that
-stylesheet — the capture size, which the audit keeps as its reference size but
-no longer measures at alone: open it in a browser after a CSS change and all of
-them are visible at once, with no build and no device. It is **generated** from the
-running app by `scripts/capture-gallery.py` — never hand-edited — and
+The audit walks a **second grid** for the desktop shell: seven window sizes at
+the one root a macOS build has, with the nav's collapse in place of the text
+axis. A state says which grid it is on through its own key — a desktop dump
+carries a `desktop-` prefix from `src/shell::DUMP_PREFIX` — and that is also
+what decides whether `assets/desktop.css` and `assets/platform/macos.css` are
+linked, so a desktop rule cannot reach a phone frame. Both shells write into
+one `docs/gallery-states.json`, so a capture takes **both logs in one
+invocation**: `scripts/capture-gallery.py /tmp/applog.txt /tmp/desktop.log`.
+
+`docs/style-gallery.html` renders every phone state in a 402x874 frame and
+every desktop state in the 1180x820 window `src/main.rs` opens, each against
+the sheets that shell actually ships: open it in a browser after a CSS change
+and all of them are visible at once, with no build and no device. It is
+**generated** from the running app by `scripts/capture-gallery.py` — never
+hand-edited — and
 `node docs/audit.js both` plus `node docs/measure-composer.js` (no argument:
 that sweeps its whole default list of six widths in ~2min, and naming one
 narrows the run to that width) are the checks that read it. See the end of
@@ -59,7 +69,13 @@ phone (swipe trays, pull-to-refresh, drawer over the page), `desktop.rs` is a
 pinned nav plus a list and a detail pane with row actions always on the row.
 Platform decides affordances; width decides only how many columns, entirely
 inside `assets/desktop.css` — so nothing in Rust listens to a resize. The
-desktop section at the end of `docs/design.md` is the whole story.
+desktop's window chrome is inside the app: one band across the top holding the
+traffic lights' reservation, the nav toggle, the name of whatever the detail
+column has open, and the connection — and `assets/desktop.css` takes that same
+heading back out of the pane, so there is one title per window rather than one
+per column. The name travels as data on `nav::Destination` (`Detail`'s
+`Crumb`), because Dioxus has no portal. The desktop section at the end of
+`docs/design.md` is the whole story.
 
 The toolchain is pinned in `rust-toolchain.toml` and rustup honours it
 automatically, so a local `cargo clippy` sees exactly the lints CI sees.

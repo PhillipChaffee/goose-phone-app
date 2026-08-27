@@ -1111,18 +1111,46 @@ subtree to the console whenever the UI settles in a new state
 (`src/domdump.rs`, debug builds only) and the script writes both the JSON and
 `docs/style-gallery.html` from it.
 
+**One store, two shells, and therefore one invocation.** The desktop build
+prints the same dumps a device does — `cargo run > /tmp/desktop.log` against
+`cargo run -p mock-goose-server` — and both shells write into the same JSON, so
+a phone capture followed by a desktop capture would each delete the other's
+states. Pass both logs at once instead:
+
+```bash
+scripts/capture-gallery.py /tmp/applog.txt /tmp/desktop.log
+```
+
+Which shell drew a state is in its **key**: `src/shell::DUMP_PREFIX` is
+`"desktop-"` in a desktop binary and the empty string in a phone one, prefixed
+onto the destination key in `src/app.rs`. It has to be a value handed to the
+JS rather than something the JS works out, because `src/domdump.rs` is
+installed by a hook that runs *above* the shell split and a browser cannot ask
+which binary it is in. The phone's empty prefix is load-bearing rather than a
+default — the 49 phone keys already in the store, `LABELS` in
+`scripts/capture-gallery.py` and every phone finding the audit has ever
+reported are all keyed on the bare name — so `src/shell/mod.rs` asserts it at
+compile time on the targets it is about. That one string then does every job
+that has to be done downstream: it keeps the two sets from colliding in the
+store, it picks the frame and the stylesheets `docs/style-gallery.html` renders
+a state in, and it is what `docs/audit.js` partitions on.
+
 The state is not just the screen. A drawer, a settings sheet, a choice list, a
 swiped-open row and a confirm dialog each get their own key, so they each get
 audited — keying on the mounted view alone filed them all under the screen
 behind them, the last dump won, and three branches' worth of new UI sat
 outside everything the audit checked while it reported clean.
 
-A capture **replaces** the gallery. Keeping states you did not visit is how
-the old hand-written gallery went stale: a screen captured on another branch
-survives every later run and nothing ever says the markup no longer exists.
-`--merge` is there if you really want to build the set up over several runs,
-and it names every key it carries over. Do not hand-edit the gallery;
-re-capture it.
+A capture **replaces** the gallery, and a capture may be **several logs**.
+Keeping states you did not visit is how the old hand-written gallery went
+stale: a screen captured on another branch survives every later run and nothing
+ever says the markup no longer exists. That guarantee is the reason the two
+shells go in one invocation rather than two runs — `--merge` is not the
+workaround, because it exists precisely to *shout* that a carried-over key may
+be stale, and using it routinely would turn the freshness guarantee into noise
+nobody reads. It is there if you really do want to build the set up over
+several runs, and it names every key it carries over. Do not hand-edit the
+gallery; re-capture it.
 
 What the gallery still cannot tell you: safe-area insets are zero in a
 browser, so the floating chrome sits higher than it does on a device.
@@ -1321,6 +1349,51 @@ thing CSS cannot work out for itself is whether a detail is open, and that is
 a fact about the app rather than the window, so the shell states it in a
 `data-detail` attribute.
 
+**The window's own bar says what the window has open.** `.shell-chrome` is
+the band the traffic lights are painted in, and it carries three things: the
+nav toggle, the name of whatever the detail column is showing, and the
+connection. `assets/desktop.css` then takes that same heading back out of the
+pane below it (`[data-detail="open"] .pane-detail .topbar > .title`), so there
+is **one title per window** where there used to be one per column.
+
+Only the detail's, and only when there is one. A LIST keeps its heading on the
+canvas at every width, in every state, so the list column never moves — which
+is also the reference's arrangement: its band is an empty drag strip and
+`SessionActionsHeader.tsx` returns `null` when no session is open, while
+`SettingsView`, `SessionListView` and the rest each keep a big `<h1>` inside
+their own content column.
+
+**Leading-aligned, and that is measured rather than preferred.** The reference
+centres its band title on the window, and it can: it has no list column, so its
+window centre *is* its content centre. Ours is not. At a 902pt window the
+detail column's 40rem measure centres **271px** from the window's centre, and
+with the nav shut at 1400 it is **210px** out — a centred title would name the
+pane it is not over. Anchored to the toggle it starts at x=122 at every width,
+in every theme, with the nav open or shut (measured on all seven window sizes).
+That also removes a real motion: the detail title used to be padded by
+`--gutter`, which is computed from the pane's own width, so collapsing the nav
+at 1400 slid the heading 486 → 380, 106px sideways over 200ms.
+
+Recorded and not built: giving `.shell-chrome` the same flex template as
+`.shell-body` — a `var(--nav-w)` spacer, then a `clamp(330px, 30%, 460px)` one
+— would put the title over the pane it names at every tier, in CSS, with no
+Rust observing anything. It costs back the slide above. Reconsider it if
+leading alignment reads wrong once somebody has lived with it.
+
+**The title travels as data, because Dioxus has no portal.** Nothing rendered
+inside a pane can be *moved* into the band, so `nav::Destination::detail`
+returns a `Detail { crumb, view }` instead of a bare `Element`: one function
+answers "what is open" and "what is it called" at once, and a screen therefore
+cannot have a detail without a name. Each screen's derivation is a
+`pub(crate) fn` beside its view that the view itself reads, so the pane and the
+window cannot end up calling the same thing two different things. Five headers
+in `views/code.rs` and `views/chat.rs` are hand-rolled rather than
+`views::chrome::TopBar`, and that is exactly why the pane's copy is removed in
+**CSS** and not with a Rust conditional: `.topbar > .title` reaches all
+fourteen `TopBar` call sites and all six hand-rolled headers alike, where a
+branch inside the component would have left five of the nine detail screens
+painting a second title.
+
 **Refresh is arrival, plus a chord.** There is no refresh control, which is
 also goose's own desktop app's answer — `SessionListView.tsx` has none and does
 not poll. Arriving at a destination re-fetches its list, and ⌘R (Ctrl+R
@@ -1358,6 +1431,40 @@ divider at a right angle once per pane. A window whose structure is drawn in
 corners is exactly the "boxy" this system exists to avoid. goose's own desktop
 app draws no such divider either. The one line the shell still draws is
 between the two content columns, which are two different things.
+
+**The connection keeps its words here, and only here.** Rule 8 says "in a bar,
+the dot is *all* you get", and `assets/main.css` enforces it with
+`.topbar .conn-label { display: none }`. The reason that rule gives is
+specific — "the agent name and version are ~107px of text that a **centred**
+title cannot clear" — and it does not survive the move: nothing in
+`.shell-chrome` is centred, and at a 1400pt window the strip this sits in was
+1278px of nothing. So the window's bar shows `● goose-mock 1.47.0`, which is
+what the reference paints in the same place (`EnvironmentBadge`,
+`BaseChat.tsx`), and both panes give theirs up at every width.
+
+That last part replaced a `@media (min-width: 902px)` that hid only the
+*detail's* copy. The media query was correct about the count and wrong about
+the consequence: dragging the window across 902 made the badge jump between
+columns, so the state of the connection appeared to move because the layout
+reflowed. One per window is now structural.
+
+Which of the two shrinks first at the 480pt floor is `assets/main.css`'s
+decision, not a new one. `.conn-label`'s own note says the badge holds its
+name and "the title beside it shrinks first — it has min-width 0 and its own
+ellipsis, and a truncated title is normal", so the badge is `flex: 0 0 auto`.
+Measured at 480×560 with the longest string in the audit's stress table: the
+title stops at 119px and ellipsises, the badge is whole, and the drag strip is
+exactly its 96px floor.
+
+**The pane header keeps its controls and loses its title.** With the window's
+bar naming the detail, the detail's own `.topbar` is a back chevron and
+whatever the screen puts in `.topbar-actions`. Both stay in the pane on
+purpose: at three columns the chevron closes the DETAIL while the list stays on
+screen, and in a window-level bar that would read as a window-level Back —
+and `.topbar-actions` is an `Element`, which is the one thing that cannot
+travel. The bar keeps its 4rem, because that height exists so the two panes'
+headers do not stair-step across the divider between them, and that is still
+true of a header holding only a chevron.
 
 **Nav colour is split by theme, and it is measured.** The nav card paints
 `--bg-secondary` in light and `--bg-primary` in dark — i.e. in dark it paints
@@ -1411,18 +1518,142 @@ The ring itself is `--text-primary`, which is by construction the
 highest-contrast colour against every surface in the file; inventing an accent
 token is a decision this work had no mandate for.
 
-### What is not covered yet
+### What the desktop axis covers
 
-`docs/style-gallery.html` and `docs/audit.js` cover the **phone shell only**.
-The gallery holds no desktop state, so nothing in `assets/desktop.css` is
-audited — which is why `assets/desktop.css` is deliberately *not* in
-`assets/features/`, since the audit links that whole directory into 402×874
-phone frames and would measure every phone state against a layout no phone can
-produce. Capturing desktop states works and is easy — the desktop build is the
-default feature set, so `cargo run > /tmp/desktop.log` against
-`cargo run -p mock-goose-server` prints the same `@@DOM@@` dumps a device does
-— but `scripts/capture-gallery.py` writes the store wholesale from one log and
-`window.__dumpKey` is the bare screen name, so a desktop `chats` would
-overwrite the phone's. Two prerequisites before a desktop axis exists: the
-script has to take several logs in one invocation, and the dump key has to
-carry the shell.
+`docs/audit.js` walks **two grids**, and they are stated separately in its own
+verdict line for the reason it states everything separately: an unnamed count
+is exactly how a coverage claim rots. The phone's is 98 states × 2 themes × 6
+phone sizes × 4 text sizes. The desktop's is **28 states × 2 themes × 7 window
+sizes × 1 text size × 2 nav states**, and every one of those numbers is a
+different claim from the phone's.
+
+**Seven window sizes, and the claim is deliberately weaker.** `SIZES` is a
+coverage claim about *devices*: those are the phones this app is gated on and
+there are no others. A window can be any size at all, so no equivalent claim is
+available. What `DESKTOP_SIZES` is instead: **every breakpoint straddled on
+both sides, plus the floor, plus the size the app opens at, plus the width
+where the list column stops growing** — 480×560 (`MIN_INNER`), 571 and 572
+(the icon rail's edge), 901 and 902 (the two/three-column edge, which is also
+where the detail pane's `.conn-badge` goes), 1180×820 (`with_inner_size` in
+`src/main.rs`, and the reference size), and 1600×1000 (past 1533, where
+`clamp(330px, 30%, 460px)` saturates). Straddling is the point: a breakpoint is
+precisely the number where one width renders one layout and the next renders
+another, and only both sides can say the two agree.
+
+**One text size, and it was read off a window rather than derived.** The
+four-scale walk is the Dynamic Type opt-in, and that opt-in is
+`font: -apple-system-body` in `assets/platform/ios.css` — a line no other build
+has. A macOS binary gets `assets/platform/macos.css`, which sets no font, so
+nothing moves the root off the web view's default. Measured during the capture
+with one `document::eval`: **16px root, viewport 1180×820, devicePixelRatio 2**.
+
+**The nav's collapse walks in place of the text axis.** `data-nav` is a plain
+attribute on `.shell` that only `assets/desktop.css` reads, so flipping it is a
+real reflow of a real rule rather than a fiction — which is exactly what
+separates it from `data-detail`, a fact about what the app has open that has to
+be *captured* and must never be flipped. It earns the second pass because the
+rail and collapsed tiers are where the window chrome gets crowded, and that is
+where this shell's one shipped regression lived.
+
+**The desktop sheets are linked per state, never from a directory.** This is
+why `assets/desktop.css` and `assets/platform/macos.css` are deliberately *not*
+in `assets/features/`: the audit links that whole directory into every 402×874
+phone frame. Building the `<link>` list from the state instead makes it
+structurally impossible for a desktop rule to reach a phone frame. The cost of
+getting it wrong is measured rather than feared — copy the two into
+`assets/features/` and `node docs/audit.js light` against a clean tree reports
+**716 findings** (438 OVERFLOW-X, 266 SPILL, 12 CLIPPED-X). A phone state laid
+out as three columns is not a phone state. Their **order** is the other half of
+that care: both files set `--chrome-h` and `--traffic-w` on the same
+`.app > .shell` selector, so at equal specificity the later sheet wins, and the
+wrong order is the one that made the reservation always zero. An audit linking
+them that way would measure a window nobody ships and report it clean.
+
+#### The calibration, measured
+
+A check you cannot make fail is worth nothing, so each of these was made to
+fail on purpose and the number written down. All against a tree the axis calls
+clean.
+
+| put back | reported | where |
+|---|---|---|
+| the toggle absolutely positioned against `.shell` and centred in the nav column — **the regression that shipped** | 112 CHROME-SLOT | 480×560 and 571×700 **only**, never 572 and up |
+| the same collision behind `[data-nav="closed"]` | 392 CHROME-SLOT | nav **closed** only, all seven widths |
+| `--text-secondary: #bbbbbb` on `.app > .shell` | 352 CONTRAST | 1180×820, nav open — the reference cell |
+| `border-radius: 0` on `.session-item` | 1164 SQUARE | every width |
+| `min-height: 0; height: 0` on `.setting-row` | 196 COLLAPSED | every width, both nav states |
+| `margin-top: -20px` on `.chrome-title` | 196 TITLE-TALLER | every width, both nav states |
+| `margin-left: -40px` on `.chrome-title` | 196 TITLE-COLLIDE, all `overlaps button.nav-toggle by 32px` | every width, both nav states |
+| `flex: 1 1 0` on `.window-drag` (i.e. letting it shrink) | 70 DRAG-GONE, `26px wide` | 480×560 and 571×700 **only** |
+
+The last three arrived with the window's own bar and each covers a way it can
+go wrong. `TITLE-TALLER` and `TITLE-COLLIDE` are the existing pane-header
+checks pointed at `.shell-chrome` as well, which costs the phone grid nothing
+because the phone has no such bar; `DRAG-GONE` is new, and it is the one that
+guards a control you cannot see. `src/main.rs` hides the macOS titlebar, which
+takes AppKit's own drag region with it, so `.window-drag` is the only thing
+left that can move the window — and it is a flex sibling of a title, a badge
+and a reservation that are all free to grow. Squeezed to nothing the window is
+simply stuck, with no clipping, no overflow and nothing else out of place. The
+demo fires at 480 and 571 and falls silent at 572, which is the same straddle
+earning its place as the first row, and it fires on the ordinarily-captured
+title rather than only the stressed one — so `flex: 1 0 96px` is doing work
+today rather than insuring against a hypothetical.
+
+**One check had to be taught what "not rendered" means.** `TITLE-TALLER`
+compared a heading's box against its bar's, and `assets/desktop.css` now takes
+the detail pane's heading out with `display: none` — which reports 0×0 at the
+origin, "outside the bar" by arithmetic and inside it by every meaning the
+check has. Measured: 392 findings, every one of them `div.titlegroup 0..0` or
+`h1.title.ellipsis 0..0`, all on desktop states and none on a phone one. The
+guard is `getClientRects().length` rather than a zero-size test, because a box
+of zero *height* is a real finding and an element with no boxes at all is not.
+
+The first row is the one that matters most, because it is not hypothetical: the
+nav toggle used to be absolutely positioned against `.shell` and slid between
+the nav card's corner and the window's. At the rail width both of those are the
+window's own corner, so the button painted **on top of the macOS close
+button** — a control you cannot press sitting exactly where you press to close
+the window. It was found by eye on a device, because nothing rendered a desktop
+state and no check asked the question. `CHROME-SLOT` asks it now, and the fact
+that it fires at 480 and 571 and falls silent at 572 is the straddle earning
+its place rather than sampling.
+
+None of those five runs put a single finding on a phone state.
+
+#### The blind spots, named
+
+- **The traffic lights themselves.** AppKit paints them, not the app;
+  `.traffic-slot` is an empty reservation and the numbers in
+  `assets/platform/macos.css` are measured off a real window. A browser draws
+  an empty box where the lights are, so `CHROME-SLOT` can prove **nothing
+  overlaps the reservation** and can prove **nothing about whether the
+  reservation is where the lights land**. The second half stays a device check,
+  beside the safe-area caveat above.
+- **`:hover` and `:focus-visible`.** The app's first ones live in this sheet
+  and a captured static DOM has neither. Forcing them (`page.hover()`, or CDP
+  `CSS.forcePseudoState`) is a real next axis and not this one.
+- **Fullscreen.** `.app[data-fullscreen="true"]` drops the whole reservation
+  (`assets/platform/macos.css`), and no captured state carries the attribute.
+  It needs its own capture, not a flipped attribute: unlike `data-nav`, whether
+  the window is fullscreen is a fact about the window.
+- **Motion.** Flipping `data-nav` starts a 200ms transition on `.navpane`, and
+  desktop frames link a generated sheet that turns transitions off. Everything
+  here is measured **at rest**, which is already true of the capture; the slide
+  itself is unmeasured.
+- **Four of the nine detail screens are not on this grid at all.** `Code` needs
+  an opencode server, and there is none on the capture machine, so
+  `code-new`, `code-chat`, `code-diff` and `code-pulls` cannot be reached in a
+  desktop run: the Code list renders "Set the code server URL and password in
+  Settings, then come back" and has no way in. Their band titles
+  (`views::code::{new_crumb, chat_crumb, diff_crumb, pulls_crumb}`) are
+  therefore held by unit tests and the compiler and by nothing that renders
+  them. The phone's four `code-*` states in the gallery are unaffected —
+  they were captured on a device against a real one.
+- **`GUTTER` is phone-only.** It needs an out-of-flow box whose containing
+  block spans the viewport, and `.pane` is `position: relative` on purpose so
+  a FAB floats over its own column rather than the window. No desktop FAB's
+  containing block is ever the viewport, and `.pane-detail .fab` uses
+  `--gutter` rather than `--edge` anyway. It reports nothing on this grid, and
+  a check that reports nothing reads like a pass — so it is written down here
+  as a gap instead.

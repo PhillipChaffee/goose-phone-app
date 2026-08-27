@@ -25,6 +25,7 @@ use crate::code::{
 use crate::diff::Block;
 use crate::external::open_external;
 use crate::icons::Icon;
+use crate::nav::Crumb;
 use crate::state::{relative_time_secs, use_app_ctx, AppCtx, ConnState};
 use crate::views::attach::{AttachButton, AttachTray};
 use crate::views::chat::{format_tokens, render_transcript};
@@ -826,6 +827,20 @@ fn choose_repo(
 /// and `set_code_model` clears it on every switch, so picking one before the
 /// model is settled is picking a value the next tap throws away. The chat's own
 /// settings chip takes it from the first turn on.
+/// What the window's own bar calls the draft screen.
+///
+/// The pane's own header has no title at all — it carries a dismiss control
+/// and nothing else, because on a phone "New code session" said less than the
+/// field's placeholder does and said it twice (see [`compose_placeholder`]).
+/// The window's bar is a different surface: it is the only thing on the
+/// desktop that says which of the seven destinations the window is in and what
+/// it has open, and leaving it blank while a draft is up says neither. The
+/// string is the one the screen already gives its own scroller as an
+/// `aria-label`, so this is the name it already had rather than a new one.
+pub(crate) fn new_crumb() -> Crumb {
+    Crumb::plain("New code session")
+}
+
 #[component]
 pub fn CodeNewView() -> Element {
     let ctx = use_app_ctx();
@@ -1212,6 +1227,33 @@ fn new_mode_sheet(ctx: &AppCtx, mut s: NewSheet, agents: &[Agent], loading: bool
 /// button address the same element.
 const SCROLL_ID: &str = "code-chat-scroll";
 
+/// Where a code chat is: the repo, and the branch when there is one.
+///
+/// The same sentence the header below builds out of three rsx nodes, written
+/// a second time rather than shared — and that is deliberate. Collapsing those
+/// three into one interpolation would put a `<!--placeholder-->` where a
+/// branchless repo renders nothing today, which is a change to the phone's DOM
+/// for a screen this work is not about. `the_window_bar_says_what_the_pane_
+/// says` below is what holds the two in step instead.
+fn chat_where(repo: &str, branch: &str) -> Option<String> {
+    match (repo, branch) {
+        ("", _) => None,
+        (repo, "") => Some(repo.to_owned()),
+        (repo, branch) => Some(format!("{repo} · {branch}")),
+    }
+}
+
+/// What the open code chat is called, once.
+///
+/// Read by two things that are never on screen together: the header below,
+/// and — on the desktop — the window's own bar, which takes the heading out of
+/// the pane and paints it in `.shell-chrome` instead
+/// (`src/shell/desktop.rs`, `assets/desktop.css`).
+pub(crate) fn chat_crumb(ctx: &AppCtx) -> Crumb {
+    let chat = ctx.code_chat.read();
+    Crumb::detailed(chat.title.clone(), chat_where(&chat.repo, &chat.branch))
+}
+
 #[component]
 pub fn CodeChatView() -> Element {
     let ctx = use_app_ctx();
@@ -1281,6 +1323,8 @@ pub fn CodeChatView() -> Element {
         }
     };
 
+    let heading = chat_crumb(&ctx).title;
+
     rsx! {
         header { class: "topbar",
             button {
@@ -1300,7 +1344,10 @@ pub fn CodeChatView() -> Element {
                 Icon { name: "chevron-left" }
             }
             div { class: "titlegroup",
-                h1 { class: "title ellipsis", "{chat.title}" }
+                // The same expression the window's bar reads. The substituted
+                // value is byte-identical to the `{chat.title}` it replaces,
+                // so the phone's captured markup is unchanged.
+                h1 { class: "title ellipsis", "{heading}" }
                 if !chat.repo.is_empty() {
                     span { class: "subtitle ellipsis",
                         "{chat.repo}"
@@ -1540,6 +1587,33 @@ pub fn CodeChatView() -> Element {
 /// gutter, because the head is chrome and the code is content. The soft-wrap
 /// toggle is unaffected: a no-wrap body is still its own horizontal
 /// scrollport, now one that starts at the screen's edge.
+/// What the review screen counts under its own name.
+///
+/// One expression for the header's subtitle line and the window bar's.
+fn diff_subtitle(ctx: &AppCtx) -> String {
+    let diff = ctx.code_diff.read();
+    let total = diff.files.len();
+    let (added, removed) = diff.totals();
+    if total == 0 {
+        ctx.code_chat.read().title.clone()
+    } else if total == 1 {
+        format!("1 file · +{added} −{removed}")
+    } else {
+        format!("{total} files · +{added} −{removed}")
+    }
+}
+
+/// What the window's own bar calls the review screen.
+///
+/// The title is a literal in both places rather than a shared constant,
+/// because promoting the header's static text node to an interpolated one
+/// would change the phone's captured markup for a screen whose rendering is
+/// not what this is about. `the_window_bar_names_a_screen_the_way_the_pane_
+/// does` below is what holds the two in step instead.
+pub(crate) fn diff_crumb(ctx: &AppCtx) -> Crumb {
+    Crumb::detailed("Review", Some(diff_subtitle(ctx)))
+}
+
 #[component]
 pub fn CodeDiffView() -> Element {
     let ctx = use_app_ctx();
@@ -1548,14 +1622,7 @@ pub fn CodeDiffView() -> Element {
 
     let total = diff.files.len();
     let reviewed = diff.reviewed();
-    let (added, removed) = diff.totals();
-    let subtitle = if total == 0 {
-        ctx.code_chat.read().title.clone()
-    } else if total == 1 {
-        format!("1 file · +{added} −{removed}")
-    } else {
-        format!("{total} files · +{added} −{removed}")
-    };
+    let subtitle = diff_subtitle(&ctx);
     let percent = (reviewed * 100).checked_div(total).unwrap_or(0);
     let show_empty = !diff.loading && diff.files.is_empty() && diff.error.is_none();
     let cards = diff
@@ -1859,21 +1926,32 @@ fn diff_rows(ctx: &AppCtx, state: &DiffState, file: &DiffFile) -> Vec<Element> {
 /// Nothing here goes near the chat's container: the manager answers both
 /// routes from GitHub with its own credential, so this screen works on a chat
 /// that is fast asleep and does not wake it by being looked at.
+/// Which branch's pull requests these are.
+///
+/// One expression for the header's subtitle line and the window bar's.
+fn pulls_subtitle(ctx: &AppCtx) -> String {
+    let chat = ctx.code_chat.read();
+    match (chat.repo.as_str(), chat.branch.as_str()) {
+        ("", "") => chat.title.clone(),
+        (repo, "") => repo.to_owned(),
+        ("", branch) => branch.to_owned(),
+        (repo, branch) => format!("{repo} · {branch}"),
+    }
+}
+
+/// What the window's own bar calls the pull-request screen. See
+/// [`diff_crumb`] for why the title is a literal in both places.
+pub(crate) fn pulls_crumb(ctx: &AppCtx) -> Crumb {
+    Crumb::detailed("Pull requests", Some(pulls_subtitle(ctx)))
+}
+
 #[component]
 pub fn CodePullsView() -> Element {
     let ctx = use_app_ctx();
     let state = (ctx.code_pulls)();
     let mut confirm = use_signal(|| None::<u64>);
 
-    let subtitle = {
-        let chat = ctx.code_chat.read();
-        match (chat.repo.as_str(), chat.branch.as_str()) {
-            ("", "") => chat.title.clone(),
-            (repo, "") => repo.to_owned(),
-            ("", branch) => branch.to_owned(),
-            (repo, branch) => format!("{repo} · {branch}"),
-        }
-    };
+    let subtitle = pulls_subtitle(&ctx);
     let show_empty = !state.loading && state.pulls.is_empty() && state.error.is_none();
     let confirming = confirm().and_then(|number| {
         state
@@ -2050,12 +2128,64 @@ fn merge_confirm_body(pull: &PullRequest) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_choices, branch_chip_label, branch_choices, can_start, chat_ask, code_chip_label,
-        code_mode_label, compose_placeholder, mode_icon, model_choices, model_sheet_choices,
-        new_model_label, repo_chip_label, repo_choices, resolve_agent, Agent, BranchList,
-        CodePermission, ModelInfo, RepoEntry, DEFAULT_AGENT,
+        agent_choices, branch_chip_label, branch_choices, can_start, chat_ask, chat_where,
+        code_chip_label, code_mode_label, compose_placeholder, mode_icon, model_choices,
+        model_sheet_choices, new_crumb, new_model_label, repo_chip_label, repo_choices,
+        resolve_agent, Agent, BranchList, CodePermission, ModelInfo, RepoEntry, DEFAULT_AGENT,
     };
     use opencode_client::AgentMode;
+
+    /// The window's bar and the pane below it must call a screen the same
+    /// thing, and for three of this file's screens nothing in the compiler
+    /// makes them.
+    ///
+    /// The code chat is safe by construction — its heading reads `chat_crumb`
+    /// directly. These three are literals written twice on purpose: promoting
+    /// the headers' static text nodes to interpolated ones would change the
+    /// phone's captured markup for screens this work is not about (see
+    /// `diff_crumb`), and the New screen's name lives on an `aria-label`
+    /// rather than in a heading at all.
+    ///
+    /// What this proves, exactly: each string the window's bar paints is still
+    /// findable, quoted, somewhere else in this file. It cannot prove the
+    /// second occurrence is the header — a `contains` never can — so it is a
+    /// tripwire on a rename rather than a proof of identity. Two occurrences
+    /// and not one, because the crumb's own literal is the first.
+    #[test]
+    fn the_window_bar_names_a_screen_the_way_the_pane_does() {
+        let source = include_str!("code.rs");
+        for title in [
+            new_crumb().title,
+            "Review".to_owned(),
+            "Pull requests".to_owned(),
+        ] {
+            let quoted = format!("{title:?}");
+            let seen = source.matches(&quoted).count();
+            assert!(
+                seen >= 2,
+                "{quoted} appears {seen} time(s) in views/code.rs — the \
+                 window's bar calls a screen something the screen no longer \
+                 calls itself"
+            );
+        }
+    }
+
+    /// The sentence the window's bar puts beside a code chat's title, which
+    /// the header below it builds out of three rsx nodes instead. Written
+    /// twice because collapsing those three into one interpolation would
+    /// change the phone's DOM (see [`super::chat_where`]), so the shape of the
+    /// two is all a test can hold — and the empty cases are where they would
+    /// drift.
+    #[test]
+    fn a_code_chat_says_where_it_is_the_way_its_header_does() {
+        assert_eq!(chat_where("", ""), None);
+        assert_eq!(chat_where("", "goose/x"), None, "no repo, no sentence");
+        assert_eq!(chat_where("acme/w", ""), Some("acme/w".to_owned()));
+        assert_eq!(
+            chat_where("acme/w", "goose/x"),
+            Some("acme/w \u{b7} goose/x".to_owned()),
+        );
+    }
 
     fn agent(name: &str, mode: AgentMode, description: Option<&str>) -> Agent {
         Agent {

@@ -340,8 +340,15 @@ pub(crate) fn AppShell() -> Element {
     // with no list of its own (Settings) is one screen, so its detail is
     // unconditional: it takes the content area whole and the shell draws two
     // columns rather than three.
+    //
+    // It arrives with its own name (`nav::Detail`), which is the whole of what
+    // the window's bar needs: Dioxus has no portal, so no header rendered
+    // inside a pane can be MOVED into `.shell-chrome` — but a `String` travels
+    // anywhere. So the title is carried as data and painted in the bar below,
+    // and `assets/desktop.css` takes the pane's own copy of it back out.
     let detail = (dest.detail)(&ctx);
     let detail_open = detail.is_some();
+    let crumb = detail.as_ref().map(|detail| detail.crumb.clone());
 
     rsx! {
         // `data-detail` is the one thing the CSS cannot work out for itself,
@@ -399,6 +406,40 @@ pub(crate) fn AppShell() -> Element {
                     Icon { name: "sidebar" }
                 }
 
+                // WHAT THE WINDOW HAS OPEN, in the window's own bar.
+                //
+                // The reference does exactly this and nothing more: its band
+                // is an empty drag strip, and the one thing painted into the
+                // middle of it is the open session's name, contributed by
+                // whatever is mounted (`SessionActionsHeader.tsx` returns
+                // `null` when there is no session). A LIST keeps its heading
+                // on the canvas there, and it keeps it here — so the list
+                // column never moves, at any width, in any state, and the one
+                // thing that travels is the name of the thing you opened.
+                //
+                // Leading-aligned rather than centred on the window, and that
+                // is measured rather than preferred. The reference's window
+                // centre IS its content centre because it has no list column;
+                // ours is not. At a 902pt window the detail column's own
+                // measure centres 271pt from the window's centre, and with the
+                // nav shut at 1400 it is 210pt out — so a centred title names
+                // the pane it is not over. Anchored to the toggle it is in one
+                // place at every width, which is the same property the toggle
+                // itself is placed for.
+                //
+                // `if let` and not a `title` prop with an empty string: an
+                // empty flex item still takes its gap, and the bar with
+                // nothing open should be exactly what it was before this —
+                // the lights, the toggle, and a drag strip.
+                if let Some(crumb) = crumb {
+                    div { class: "chrome-title",
+                        h1 { class: "chrome-heading", "{crumb.title}" }
+                        if let Some(subtitle) = crumb.subtitle {
+                            span { class: "chrome-sub", "{subtitle}" }
+                        }
+                    }
+                }
+
                 // Everything to the right of the toggle drags the window.
                 //
                 // `src/main.rs` takes the titlebar away, and that takes
@@ -430,6 +471,24 @@ pub(crate) fn AppShell() -> Element {
                         let _ = dioxus::desktop::window().drag_window();
                     },
                 }
+
+                // ONE GREEN DOT PER WINDOW, and now structurally rather than
+                // by a media query.
+                //
+                // `TopBar { conn: true }` is a fact about a SCREEN, so at
+                // three columns two screens each painted one and
+                // `assets/desktop.css` hid the detail's above 902px. The
+                // consequence was a badge that jumped columns when the window
+                // was dragged across that width — the state of the connection
+                // moving because the layout reflowed. In the bar it belongs to
+                // the window, there is exactly one of it, and it never moves.
+                // The reference puts its `EnvironmentBadge` in the same place
+                // for the same reason (`BaseChat.tsx`).
+                //
+                // Rendered directly rather than passed through a prop:
+                // `ConnBadge` reads `ctx.conn` and nothing else, so the shell
+                // can ask for it as it stands.
+                crate::views::ConnBadge {}
             }
 
             div { class: "shell-body",
@@ -470,7 +529,7 @@ pub(crate) fn AppShell() -> Element {
 
             section { class: "pane pane-detail",
                 if let Some(detail) = detail {
-                    {detail}
+                    {detail.view}
                 } else {
                     {empty_detail(dest)}
                 }
@@ -635,6 +694,9 @@ mod tests {
             "traffic-slot",
             "window-drag",
             "nav-toggle",
+            "chrome-title",
+            "chrome-heading",
+            "chrome-sub",
             "navcard",
             "navpane",
         ] {
@@ -647,6 +709,50 @@ mod tests {
                 "nothing styles .{class}, which the shell still renders"
             );
         }
+    }
+
+    /// The window's bar takes the detail's title and its connection badge, and
+    /// `assets/desktop.css` is what stops the pane below painting either of
+    /// them again. That half is invisible to the compiler in BOTH directions:
+    /// the sheet names classes Rust never writes (`.conn-badge` comes from
+    /// `views::ConnBadge`, `.title` and `.titlegroup` from six hand-rolled
+    /// headers and from `views::chrome::TopBar`), and the shell names an
+    /// attribute the sheet has to agree about. Lose either and the window
+    /// shows a chat's name twice, 500pt apart and at two different sizes, with
+    /// nothing failing anywhere.
+    ///
+    /// A rule this cannot check and a reader should not assume: that the rule
+    /// MATCHES. `.pane .topbar > .conn-badge` is a child combinator, so a
+    /// header that wrapped its badge one element deeper would keep painting
+    /// it and this would still pass. `docs/audit.js` on a captured desktop
+    /// state is what sees that, and its `.shell-chrome` arm is what sees the
+    /// band.
+    #[test]
+    fn the_pane_gives_up_what_the_window_bar_took() {
+        let shell = include_str!("desktop.rs");
+        let sheet = include_str!("../../assets/desktop.css");
+
+        assert!(
+            shell.contains("crate::views::ConnBadge {}"),
+            "the window's bar no longer renders the connection badge, so \
+             `.pane .topbar > .conn-badge` below now hides the only one there is"
+        );
+        for rule in [
+            r#"[data-detail="open"] .pane-detail .topbar > .title"#,
+            r#"[data-detail="open"] .pane-detail .topbar > .titlegroup"#,
+            ".pane .topbar > .conn-badge",
+        ] {
+            assert!(
+                sheet.contains(rule),
+                "assets/desktop.css never mentions `{rule}`, so the pane paints \
+                 a second copy of what `.shell-chrome` is already showing"
+            );
+        }
+        assert!(
+            shell.contains(r#""data-detail": if detail_open"#),
+            "the sheet keys the rules above on [data-detail], which this file \
+             is the only thing that sets"
+        );
     }
 
     /// The chrome reservation is macOS's alone, because `src/main.rs` hides

@@ -504,11 +504,20 @@ mod tests {
         );
     }
 
-    /// The 49 states the phone was captured in, unescaped.
+    /// The 49 states the PHONE was captured in, unescaped.
     ///
     /// Read from disk rather than `include_str!`ed, following
     /// `src/viewport.rs`'s own fixture test: it is 352K, and a test does not
     /// need it in the binary.
+    ///
+    /// The phone's half of the store, and the filter is the point rather than
+    /// housekeeping. `docs/gallery-states.json` holds both shells now — a
+    /// desktop dump's key carries `shell::DUMP_PREFIX` — and every assertion
+    /// below is of the form "no captured state contains this desktop class",
+    /// which the desktop's own states would answer for the phone and fail.
+    /// Keyed rather than pattern-matched on the markup for the reason the
+    /// prefix exists at all: which shell drew a state is a fact about the
+    /// capture, not something to infer from what is in it.
     fn shipped_markup() -> String {
         let path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/gallery-states.json");
@@ -516,8 +525,21 @@ mod tests {
         assert!(!raw.is_empty(), "cannot read {}", path.display());
         let states: std::collections::BTreeMap<String, String> =
             serde_json::from_str(&raw).unwrap_or_default();
-        assert!(!states.is_empty(), "{} parsed to nothing", path.display());
-        states.into_values().collect::<Vec<_>>().join("\n")
+        let phone: Vec<String> = states
+            .into_iter()
+            .filter(|(key, _)| !key.starts_with(crate::shell::DUMP_PREFIX_DESKTOP))
+            .map(|(_, markup)| markup)
+            .collect();
+        // Not `!raw.is_empty()` twice. A store that had lost its phone half
+        // entirely would leave every `contains` assertion below trivially
+        // satisfied and every `!contains` one vacuously true, which is a test
+        // that has stopped testing rather than one that fails.
+        assert!(
+            !phone.is_empty(),
+            "{} holds no phone state — every claim below would pass vacuously",
+            path.display()
+        );
+        phone.join("\n")
     }
 
     /// The phone has no selected row, whatever a list passes.

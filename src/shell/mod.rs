@@ -82,6 +82,83 @@ const _: () = assert!(matches!(Shell::CURRENT, Shell::Mobile));
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 const _: () = assert!(matches!(Shell::CURRENT, Shell::Desktop));
 
+/// What this shell's DOM dumps are keyed under, prefixed onto the destination
+/// key in `src/app.rs`.
+///
+/// `docs/gallery-states.json` is ONE store and both shells write into it. The
+/// key `src/domdump.rs` emits is `Destination::key`, which is a fact about the
+/// destination and identical on both — so a desktop `chats` and a phone
+/// `chats` are the same string, and whichever log was read last would win.
+/// Nothing would say so: the store would still hold 49 plausible states and
+/// `docs/audit.js` would go on reporting them clean while auditing one shell's
+/// markup against the other's list of screens.
+///
+/// It cannot be done in `DUMP_JS`. That string is installed by a hook `app.rs`
+/// calls ABOVE the shell split — deliberately, because which markup a
+/// destination produces is the shell's business and what the dump is called is
+/// not — and the browser has no way to ask which binary it is running in. So
+/// the one thing the JS cannot know is handed to it as a value, from the one
+/// module that is `cfg`'d on exactly that question.
+///
+/// The phone's prefix is the empty string and that is load-bearing, not a
+/// default: the 49 keys already in the store, the `LABELS` table in
+/// `scripts/capture-gallery.py` and every phone finding `docs/audit.js` has
+/// ever reported are all keyed on the bare name. A prefix on that side would
+/// silently retire all of them.
+///
+/// `debug_assertions` only, following `src/domdump.rs` — a release build
+/// contains no dump machinery and would carry this as dead code.
+#[cfg(debug_assertions)]
+#[cfg(any(target_os = "ios", target_os = "android"))]
+pub(crate) const DUMP_PREFIX: &str = "";
+
+#[cfg(debug_assertions)]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+pub(crate) const DUMP_PREFIX: &str = DUMP_PREFIX_DESKTOP;
+
+/// What a DESKTOP state's key starts with, whatever this binary is.
+///
+/// [`DUMP_PREFIX`] answers "what do MY dumps get called", which is a different
+/// question from "which of these captured states is the desktop's" — and the
+/// tests that read `docs/gallery-states.json` ask the second one. They run on
+/// this host, which is a desktop target, so asking them through `DUMP_PREFIX`
+/// would work today and mean the wrong thing: it would resolve to `""` in a
+/// build for a phone and filter the whole store away.
+///
+/// `scripts/capture-gallery.py` and `docs/audit.js` both partition on this
+/// same string, and neither can be reached from here — so it is a literal in
+/// three places, and the two of them that are checkable by a compiler are the
+/// two in this file.
+///
+/// Dead on a phone, and it has to stay compiled there anyway. `DUMP_PREFIX` is
+/// the only non-test reader and on iOS it resolves to `""` from the arm above,
+/// so the constant is reachable from nothing but `#[cfg(test)]` code — which
+/// `cargo check --package goose-mobile --target aarch64-apple-ios` does not
+/// build. CI runs that command with `RUSTFLAGS: -D warnings`, so `dead_code`
+/// there is a red build. Deleting it is not the fix: the tests that read
+/// `docs/gallery-states.json` have to ask "which of these is the desktop's"
+/// on every target, and the answer must not depend on which one they are
+/// compiled for.
+#[cfg(debug_assertions)]
+#[cfg_attr(
+    any(target_os = "ios", target_os = "android"),
+    expect(
+        dead_code,
+        reason = "read only by tests and by the desktop arm of DUMP_PREFIX; \
+                  the iOS check builds neither"
+    )
+)]
+pub(crate) const DUMP_PREFIX_DESKTOP: &str = "desktop-";
+
+// The phone's half of that claim, checked at COMPILE time on the targets it is
+// about, in the shape `src/css.rs` already uses for the same kind of promise.
+// A phone binary that started prefixing would rename all 49 captured states at
+// once, and the only symptom would be an audit that has quietly stopped
+// covering the screens it says it covers.
+#[cfg(debug_assertions)]
+#[cfg(any(target_os = "ios", target_os = "android"))]
+const _: () = assert!(DUMP_PREFIX.is_empty());
+
 /// The tooltip on a destination button.
 ///
 /// `None` on the phone, where nothing hovers and the label is right there.
@@ -188,7 +265,7 @@ pub(crate) fn render_group(ctx: &AppCtx, group: Group) -> Element {
 
 #[cfg(test)]
 mod tests {
-    use super::{nav_is_active, nav_tooltip, Shell};
+    use super::{nav_is_active, nav_tooltip, Shell, DUMP_PREFIX_DESKTOP};
 
     /// The phone's rule is `at_root` and only `at_root` — a destination one
     /// push deep is somewhere to go back to, not where you are — and the
@@ -215,11 +292,16 @@ mod tests {
     /// omitted entirely, so the phone's destination buttons gain nothing.
     ///
     /// Checked against the SHIPPED markup and not only against this file.
-    /// `docs/gallery-states.json` is 49 states dumped out of the app on a
-    /// device and never hand-edited; every destination button in it opens
+    /// `docs/gallery-states.json` is 49 phone states dumped out of the app on
+    /// a device and never hand-edited; every destination button in it opens
     /// `class="drawer-item…" data-dioxus-id=` with nothing between, so an
     /// added attribute — which is precisely what the desktop arm adds — has
     /// nowhere to hide.
+    ///
+    /// The PHONE's half of the store, since it now holds both shells. The
+    /// desktop's own states are full of exactly the attribute this forbids,
+    /// which is the whole reason the desktop arm returns `Some`: reading them
+    /// here would fail the test by finding the feature working.
     #[test]
     fn the_phone_drawer_gains_no_attribute() {
         assert_eq!(nav_tooltip(Shell::Mobile, "Chats"), None);
@@ -233,7 +315,10 @@ mod tests {
         assert!(!states.is_empty(), "cannot read {}", path.display());
 
         let mut seen = 0_usize;
-        for markup in states.values() {
+        for (_, markup) in states
+            .iter()
+            .filter(|(key, _)| !key.starts_with(DUMP_PREFIX_DESKTOP))
+        {
             for tail in markup.split("<button class=\"drawer-item").skip(1) {
                 seen += 1;
                 let head: String = tail.chars().take_while(|c| *c != '>').collect();
