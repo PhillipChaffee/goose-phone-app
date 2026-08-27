@@ -467,7 +467,60 @@ measured instead of the transport-error story it used to tell.
 Nothing here makes the ask survive. Everything here is narration and damage
 limitation, and the section says so twice on purpose.
 
-### 4.1 Record the loss at both drain sites, with a discriminator
+### 4.1 Record the loss — BUILT, and not the way this section said
+
+> **This section's plan was wrong in one load-bearing way, and the correction
+> is worth more than the plan.** It said "record the loss at both drain
+> sites". Both drain sites require the client process to still be alive, and
+> the case section 0 measured is the app being **killed** — `kill -9`, or iOS
+> jetsam after a suspension. No Rust in this process runs at that moment. A
+> snapshot taken at drain time records nothing in exactly the scenario this
+> document exists for.
+>
+> So the requirement "it must survive the app being killed" forces the write
+> **earlier than the loss**: at the moment the ask ARRIVES, which is the last
+> moment we are guaranteed to be running. An entry still `Open` at the next
+> startup is reconciled into a loss there. That startup pass has no equivalent
+> anywhere in the plan below, and it is the only thing that covers the
+> measured case.
+>
+> Two more corrections the build turned up:
+>
+> - **`use_persistent` does not persist** on any target this app builds for.
+>   It resolves to `SessionStorage`, an in-memory `HashMap`
+>   (dioxus-sdk-storage `persistence.rs:34`, `client_storage/mod.rs:32-41`,
+>   `memory.rs:13-28`). Confirmed by running the app: before this change
+>   `~/Library/Application Support/goose-mobile` did not exist on a machine
+>   the app had run on many times, and `fs::set` does `create_dir_all` on its
+>   first write. The journal uses `use_synced_storage::<LocalStorage, _>`
+>   under its own key, and a test gates the choice. **`settings` and
+>   `code_cache` therefore do not survive a restart either** — a separate bug,
+>   deliberately not fixed, because fixing it starts writing a saved secret to
+>   disk.
+> - **`want_connected` cannot be the discriminator.** `establish()` closes the
+>   live client while that flag is still true, so Settings → Connect on a live
+>   connection is indistinguishable from a dropped tailnet, and a report keyed
+>   on it fires a phantom loss every time somebody presses Connect. The cause
+>   is carried on the transport's own event instead
+>   (`AcpEvent::Disconnected { cause: DisconnectCause }`), because the
+>   transport is the only layer that knows.
+>
+> And one simplification. The plan has both drain sites converging on a shared
+> record. In the build only ONE of them decides: the pump's `Disconnected`
+> arm, because it is the one that is told the cause. `abandon_pending_permissions`
+> drops the queue entries and touches the journal not at all. The pump marks
+> every `Open` entry rather than reading the queue, which is also what makes
+> it correct — by the time it runs the queue is usually already empty, for the
+> reason section 2.5 gives.
+>
+> What shipped: `src/ask_journal.rs`, wired at four write sites in
+> `src/state.rs` (ask arrives, answered, withdrawn, app starts) plus the two
+> loss sites. Every citation into `src/state.rs` below is from before that
+> change and is stale by ~200 lines; they are left as they were rather than
+> renumbered, because what they point at has moved for a reason the paragraph
+> above explains.
+
+The original plan follows.
 
 `src/state.rs`. Add to `AppCtx` (near `permission`, `:321-324`):
 
@@ -540,7 +593,15 @@ rule 13 is about reporting an ask that is still live and answerable, and there
 is no such thing on the goose plane. This reports an ask that is **already
 lost**, which is a different claim and a different register.
 
-### 4.3 Stop destroying live turns on a deliberate reconnect
+> **BUILT**, in the two registers rule 8 and rule 7 give it and no others:
+> a card at the tail of the open chat's transcript, derived from the journal
+> rather than pushed into `chat.items` (`reload_chat` clears `items`, so a
+> stored item would be wiped by the very reconnect that reveals the loss), and
+> on the Chats list a dot on the tile plus one past-tense sentence with no
+> buttons — there is nothing to press. Rule 13 is amended in the same commit
+> rather than left to be cited against the marker later.
+
+### 4.3 Stop destroying live turns on a deliberate reconnect — BUILT
 
 `src/state.rs:597-600` and `src/views/settings.rs:45`. Under section 2.3 the
 Close frame that `establish()` sends is an abort request for whatever turn is
@@ -597,6 +658,18 @@ it is wanted as a regression guard for the stdio transport, where the `Err` arm
 genuinely does run (2.3), and label it as such — not as "the other possible
 world".
 
+> **BUILT**, `abort` only. `crates/mock-goose-server/src/state.rs`'s
+> `DieOnClose`, and `discard_rounds` on socket close in `main.rs`: abort each
+> turn task, join it so the drain cannot race a clean finish, then write down
+> the prompt records and the generated title and nothing else.
+> `tests/permission_loss.rs` is the gate and is written to the replay in
+> section 0 rather than to the code. Against the mock as it stood it failed
+> with `left: ""`, `right: "Run uname and report back"` — the mock persisted
+> nothing at all for an abandoned round, not even the prompt, which is a third
+> behaviour and is neither what goose does nor what the mock used to claim.
+> The second test in that file states that contrast on purpose, so nobody
+> re-derives why a green `cargo test` had said nothing about this failure.
+
 The client fix must render the `abort` case correctly, and it can, because it
 reports from its own snapshot rather than from anything the server says
 afterwards. That property is worth more now than it was: section 0 proves the
@@ -636,6 +709,20 @@ Two more things explicitly not worth building, with the reasons:
   `beginBackgroundTaskWithExpirationHandler`, `endBackgroundTask`,
   `backgroundTimeRemaining` and `sharedApplication` are all safe `pub fn` in
   objc2-ui-kit 0.3.2. The window is reachable.)
+
+  > **NOT BUILT**, and the reason is that it cannot be gated by anything this
+  > repository can run. Its whole value depends on a signal that fires when
+  > the reader has really left, and the only signals available — tao's
+  > `Suspended`, or a `visibilitychange` bridge — are ones whose iOS semantics
+  > cannot be settled without a device: both plausibly fire for a Control
+  > Center pull. Get that wrong and the feature silently destroys turns
+  > nobody left, which is worse than the failure it mitigates. It also
+  > depends on a frame reaching the socket inside the window between the
+  > signal and the freeze, which is several hops (JS event → eval channel →
+  > Rust → tokio → write) and is not measurable from here. Defaulting it off,
+  > as the plan does, means shipping something that looks like a safety net
+  > and has never been shown to be one. It wants a device run of its own
+  > before any of it is written.
 - **A second always-connected "notifier" process.** Every connection gets its own
   `GooseAcpAgent` with its own `sessions` map and its own `ToolConfirmationRouter`
   (`crates/goose/src/acp/transport/mod.rs:188-190`,
@@ -763,17 +850,17 @@ server build. Result: the round is discarded, and the two accounts that had been
 written down as fact are both wrong. What is left open is in 7.1 (the mechanism)
 and 7.6 (the side effects), and neither blocks a stage below.
 
-**Stage 1 — the mock learns to fail (4.5).** The `abort` mode, matched to
+**Stage 1 — the mock learns to fail (4.5). DONE.** The `abort` mode, matched to
 section 0's replay: user message and title kept, everything else from the round
 dropped. Nothing can be tested before this and the CLAUDE.md lockstep rule
 requires it anyway.
 
-**Stage 2 — record and report (4.1, 4.2, 4.4).** One commit or two: the signal
-and the two drain sites, then the surface. No new dependency, no protocol change,
-no upstream anything. This is the whole of what ships this week, and it converts
-a silent wrong decision into a stated one.
+**Stage 2 — record and report (4.1, 4.2, 4.4). DONE**, with the correction at
+the head of 4.1: the note is written when the ask arrives, not at either drain
+site, because neither drain site runs when the app is killed — and being killed
+is the case section 0 measured.
 
-**Stage 3 — stop making it worse (4.3).** Small, localised, independent of
+**Stage 3 — stop making it worse (4.3). DONE.** Small, localised, independent of
 everything else.
 
 **Stage 4 — upstream PR 5.1.** Contained, mechanical, and it improves matters for
@@ -784,9 +871,15 @@ vanished-peer case.
 
 **Stage 5 — upstream PR 5.2, in two parts.** The discriminator and the
 persistence first (small, and safe once 5.1 landed). The resumable re-ask second
-(large; see must-not-break 2). Only after that does dropping the `Screen::Chat`
-guard at `src/state.rs:708` buy anything — today it is a real gap with nothing
-on the other side of it.
+(large; see must-not-break 2).
+
+> The `Screen::Chat` guard in `reconnect_loop` is **already gone**, ahead of
+> this stage rather than after it. The reasoning here was that dropping it
+> buys nothing until 5.2 lands, which is true — and it also costs one request
+> on a reconnect, which is less than the cost of a one-line gap nobody
+> remembers to close on the day the upstream fix arrives. A phone coming back
+> is usually locked on the Chats list, which is precisely where the guard
+> stopped `session/load` from running at all.
 
 ## 7. What is still open, and how to check
 
