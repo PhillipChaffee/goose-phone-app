@@ -43,6 +43,11 @@ The split is the point. When the reply is set in a different voice from the
 controls around it, the reply stops competing with them, and it does so
 without drawing a box.
 
+The app ships no font file and never will. `docs/audit.js` does ship three, for
+the length of a run and for one reason — a browser that has never heard of
+San Francisco cannot be asked whether a box fits. See *The audit brings its own
+fonts*, at the end of this file.
+
 ### 2. There is no top bar, and no bottom bar
 
 The top of a screen is three detached things: a circular control at the
@@ -1086,10 +1091,9 @@ and it names every key it carries over. Do not hand-edit the gallery;
 re-capture it.
 
 What the gallery still cannot tell you: safe-area insets are zero in a
-browser, so the floating chrome sits higher than it does on a device, and the
-font stack resolves to whatever is installed locally rather than to iOS's, so
-every text measurement is approximate. Positions and material are what the
-simulator is for. Two more, both of them heights: the **keyboard-up viewport**
+browser, so the floating chrome sits higher than it does on a device.
+Positions and material are what the simulator is for. Two more, both of them
+heights: the **keyboard-up viewport**
 is a real height this app renders at and no headless browser reports it, and
 every state is captured and measured **at rest** — `scripts/capture-gallery.py`
 records markup at the top of its scroller and no offset, so a screen scrolled
@@ -1097,6 +1101,113 @@ under the chrome is a state that would have to be captured as one. (Headless
 Chromium *does* composite `backdrop-filter` — a controlled test measured a
 stdev of 7.03 with the blur against 47.11 without, so a tint tuned as if the
 blur were absent comes out flat on a device.)
+
+### The audit brings its own fonts
+
+**A gate that asks the host what a font is has no verdict.** For a while this
+list said the font stack "resolves to whatever is installed locally rather
+than to iOS's, so every text measurement is approximate" — and that was fine
+while the audit walked 402pt alone and nothing turned on a few pixels. Adding
+the 320pt column and the AX5 scale turned the caveat into a verdict: the same
+commit came out **Clean** on a Mac and **24 findings** on `ubuntu-latest`, all
+of them at 320x568 at root 53px.
+
+Nobody was rendering the design's fonts. `-apple-system` / `ui-serif` /
+`ui-monospace` are San Francisco, New York and SF Mono on iOS — rule 1 above —
+but Chromium on macOS matches none of those first entries and lands on
+`.SF NS`, **Charter** and **Menlo**, and a Linux runner lands on Liberation
+Sans, Serif and Mono (Playwright's `--with-deps` installs `fonts-liberation`,
+and fontconfig answers `Arial` with it). Liberation Sans is ~5% wider than San
+Francisco and Liberation Serif ~8% narrower than New York, which is more than
+enough to decide a 3px question.
+
+So `docs/audit.js` ships three faces in `docs/fonts/` and repoints the three
+tokens at them for the duration of the run: **Inter** for the sans,
+**Literata** for the serif, **JetBrains Mono** for the mono, all OFL 1.1, plus
+796 bytes of Noto Sans Math for the one character (`⋯`) that none of them has.
+The header of that file is the full argument; the four things worth knowing
+here:
+
+- **They are stand-ins, chosen by measurement.** `node docs/audit.js fonts`
+  compares them against the real `/System/Library/Fonts` files over every
+  string this app puts on screen, at all four roots, and fails if a median
+  leaves ±5%. It is macOS-only, because only macOS has the files — Apple's
+  faces are not redistributable, which is the whole reason stand-ins exist.
+- **Vertical metrics are not the stand-in's.** `ascent-override` and
+  `descent-override` state San Francisco's and New York's own numbers, so
+  every line box is exactly as tall as iOS's and the only thing being
+  approximated is how wide a glyph is.
+- **Optical sizing is why the files are the big ones.** San Francisco tightens
+  as it grows; a wght-only Inter does not, and ran 1.15x SF at 53px against
+  1.01x at 16px — reporting spills at AX5 that no iPhone has.
+- **Pinning the file is only half of it.** Chromium on Linux hints through
+  FreeType and quantises advances; macOS does not. With every face pinned and
+  a bound taken off `.fab` on purpose, the two machines still disagreed — 176
+  findings against 152, `left=15` against `left=16`. `--font-render-hinting=none`
+  is what makes them print the same bytes, and it costs nothing here because
+  nothing in this walk reads a pixel.
+
+What is still unmeasured: size-specific tracking, Core Text's shaping, and the
+last few pixels of any text box — a single word can be 12% out either way. So
+a box that fits **by a few pixels** here is not proven to fit on a phone. That
+is a fact about the design rather than about the runner, and the answer to it
+is to stop having boxes that fit by a few pixels: see `.fab` below.
+
+Two guards keep the pinning honest, and both fail the run rather than adding a
+finding. One asks every element that lays out text what family it computed —
+which is how `.diff-seen` was found rendering "Viewed" in **Arial** (the UA
+stylesheet's `font` shorthand names a family, and overriding `font-size` left
+it behind) and a bare `<code>` outside `.md` rendering in the generic
+`monospace` (Courier on iOS, WenQuanYi Zen Hei Mono on a Linux runner, Menlo
+here). Both are fixed in `assets/main.css`. The other renders the whole corpus
+and asks the browser which platform faces it reached for, so a character
+outside the shipped subsets cannot quietly bring a host font with it.
+
+### A pinned box needs two bounds, not one
+
+`.fab` is `position: absolute; right: var(--edge)` with `left: auto`, so its
+width is `clamp(min-content, viewport − gutter, max-content)` — an expression
+with no term for the gutter on the other side. Measured at AX5 before this was
+fixed: `left = 0.00` at 320, 360, 375, 390 **and 402** — the reference width —
+a "floating" action button 110px tall spanning the screen with a 16px margin
+on one side and none on the other. `--edge` calls itself "the gutter every
+floating thing shares"; this was the floating thing that did not.
+
+The audit could not say so, because a shrink-to-fit box only reports
+`OVERFLOW-X` once its *min-content* passes the viewport, and that cleared 320pt
+by 10px in San Francisco and missed by 3 in Liberation Sans. **That** is what
+CI's `button.fab left=-3` was: a real defect, reported by the machine whose
+font happened to be wide enough to tip it.
+
+The fix is two lines and a consequence. `max-width: calc(100% - 2 *
+var(--edge))` gives the pill its second bound; `overflow-wrap: anywhere` makes
+that bound safe, since at 320pt the cap is 7px narrower than the word
+"extension" is at AX5 and a min-content floor that cannot be met is text
+painted outside the pill. The consequence is that the label takes three lines
+at 320pt/AX5 instead of two, so `.scroll.has-fab` clears three: measured, the
+list now clears the pill at every size and scale this gates on, by 14px at the
+tightest.
+
+And the rule is now stated rather than waited for — `GUTTER` in
+`docs/audit.js` reports an out-of-flow box, positioned against a screen-wide
+containing block, with one inset at `--edge` and the other side nearer the
+screen edge than that. On the tree before the fix it reports 88 findings per
+theme, at scales and widths where `OVERFLOW-X` was silent.
+
+### The other eight findings were the font, and the thing behind them is not
+
+CI's other complaint was `CLIPPED-X div.session-title scroll=80 client=76` on
+the recipe list. Measured under the pinned faces, and under the real New York:
+`scrollWidth == clientWidth` on every row. It was Liberation Serif — or rather
+Liberation *Sans*, one element over, since `.session-age` shares the row and
+"Aug 18" is 6.7px wider in it — and there is no clip to fix.
+
+What is left when the font is taken out of it is worth writing down anyway.
+`.session-age` is `flex-shrink: 0` inside a 210px `.session-head`, so at AX5 an
+absolute date takes 118 of those 210 points and the title gets 84 — two lines
+of about three characters. That is a real legibility problem at 320pt and a
+smaller one at 402, no check reports it, and no font choice will: it is a
+question about how much of a row a timestamp deserves, and it is open.
 
 If you want numbers out of the real DOM rather than pixels, `document::eval`
 reaches into the live WKWebView and can send `getBoundingClientRect` and

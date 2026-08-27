@@ -2,6 +2,7 @@
 //
 //   npm i -D playwright        (Chromium only; see PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD)
 //   node docs/audit.js         [light|dark|both]
+//   node docs/audit.js fonts   (macOS only — see the font block below)
 //
 // Every screen state in docs/gallery-states.json is rebuilt as a standalone
 // document at every phone size below — the gallery's <iframe> gives clean
@@ -12,7 +13,8 @@
 //             spilling a box that does not clip at all, filled or
 //             fully-bordered boxes left at radius 0, buttons under 32px, any
 //             child rounded more than the parent clipping it, a bar title
-//             taller than the bar, the chrome band still opaque where that
+//             taller than the bar, floating chrome that has outgrown the
+//             gutter it floats on, the chrome band still opaque where that
 //             title sits with the scroller's padding still clearing it, and
 //             rows that render nothing and therefore measure nothing.
 //   contrast  every element carrying its own text, composited against the
@@ -30,9 +32,13 @@
 //
 // What it cannot check: anything that needs a real device. Safe-area insets
 // are zero in a browser, so the floating chrome sits higher here than it does
-// on a phone, and the font stack resolves to whatever is installed locally
-// rather than to iOS's. Positions and text metrics are what the simulator is
-// for.
+// on a phone. Positions are what the simulator is for.
+//
+// Text metrics used to be on that list, and being on it was what let the same
+// commit come out Clean here and 24 findings on ubuntu-latest: an
+// approximation nobody gates on is a caveat, and this gates on it. The faces
+// are pinned now, close to iOS's by a measurement that is itself runnable —
+// the block below is the whole argument, including what it still cannot see.
 //
 // What it is structurally blind to, and what covers it instead: this walks
 // whole screens at whole phone sizes, and the composer's chip row is decided
@@ -81,6 +87,293 @@ for (const sheet of STYLESHEETS) {
     process.exit(1);
   }
 }
+
+// ── the faces this measures with, and why they are not the app's ────────
+// THE GATE SHIPS ITS OWN FONTS. Every check below is a measurement of text,
+// and until this block existed the text was laid out in whatever face the
+// host machine happened to have — so the same commit was Clean here and 24
+// findings on ubuntu-latest. Not a flake and not a difference of opinion
+// about geometry: a difference of advance widths.
+//
+// What each environment actually resolved, measured with CDP's
+// CSS.getPlatformFontsForNode against assets/main.css's three stacks:
+//
+//   iOS            San Francisco / New York / SF Mono — the first entry of
+//                  each stack, which is the whole design intent.
+//   macOS Chromium `.SF NS` (matched at BlinkMacSystemFont, not at
+//                  -apple-system) / **Charter** / **Menlo**. `ui-serif` is
+//                  unmapped and the installed family is the hidden
+//                  `.New York`, so the serif stack falls through two entries.
+//   ubuntu-latest  Liberation Sans / Serif / Mono. `npx playwright install
+//                  --with-deps` always installs its `tools` dependency group,
+//                  and for ubuntu24.04 that group is where `fonts-liberation`
+//                  comes from; fontconfig's metric aliases then answer `Arial`
+//                  with Liberation Sans, and the serif and mono stacks reach
+//                  their bare generic.
+//
+// Liberation Sans is ~5% wider than San Francisco for the strings on these
+// screens and Liberation Serif ~8% narrower than New York, which is enough to
+// decide a pass at 320x568 at root 53px. So the three tokens are repointed at
+// three files in docs/fonts/ and every run everywhere lays out the same
+// glyphs. The verdict is now a property of the commit.
+//
+// WHAT THIS COSTS, said plainly, because it is not free:
+//
+//   * These are not the faces anybody sees. No open licence ships San
+//     Francisco or New York, and vendoring Apple's own files is not
+//     redistributable — so the audit measures stand-ins and no run here,
+//     on any machine, is a measurement of an iPhone's text.
+//   * They are stand-ins CHOSEN by measurement, not by taste, and the
+//     measurement is `node docs/audit.js fonts` — every string and every word
+//     in gallery-states.json and in LONGEST, at all four roots, against the
+//     real /System/Library/Fonts files. It runs on a Mac only, since only a
+//     Mac has those files, and it fails if a median leaves ±5%. Today the
+//     widest median is 4.3%: Inter runs 0.98-1.04 of San Francisco, Literata
+//     0.97-1.04 of New York, and JetBrains Mono is 1.000 of SF Mono at every
+//     size and every string, both being fixed-pitch and `size-adjust` closing
+//     the one ratio between them. Liberation, which is what a Linux runner
+//     was answering with, sits at 0.94 sans and 0.86 serif.
+//   * A stand-in is close in the median and not in every word: the same run
+//     reports single tokens 12% out either way, so this walk cannot
+//     adjudicate the last few pixels of a text box. A design that FITS here
+//     by a few pixels is not thereby proven to fit on a phone — which is a
+//     claim about the design and not about the runner. `.fab` in
+//     assets/main.css grew a `max-width` for exactly that reason, and the
+//     GUTTER check below states the rule it was relying on arithmetic for.
+//   * Size-specific tracking and Core Text's shaping are unmeasured, here and
+//     before. Optical sizing is NOT on that list any more, and it is why both
+//     stand-ins are the `-standard-` builds rather than the `-wght-` ones
+//     that are half the size: San Francisco tightens as it grows, and against
+//     the wght-only Inter — no `opsz` axis, so no tightening — the same word
+//     was 1.01x San Francisco at 16px and 1.15x at 53px. That 15% was
+//     reporting spills at AX5 that no iPhone has. With the axis in, 1.00 and
+//     1.04.
+//   * Positions on a device are still what the simulator is for.
+//
+// And the pinning is CHECKED rather than assumed: the two guards below ask
+// the browser which families it really used, and fail the run — not the
+// check, the run — if a glyph reached a host font. A pin nobody verifies is
+// how this problem comes back.
+//
+// THE VERTICAL METRICS ARE NOT THE STAND-IN'S. A face brings two things to a
+// layout: how wide each glyph is, and how tall a line of it stands. The first
+// is what a stand-in can only approximate. The second is a pair of numbers in
+// the font's header, and `ascent-override` / `descent-override` /
+// `line-gap-override` let this run state them — so every line box here is
+// exactly as tall as the iOS face's, and the whole class of finding that is
+// only about a taller stand-in never happens.
+//
+// Not a nicety: Literata is a 149% line box at `line-height: normal` against
+// New York's 119%, and without these three lines the pinned run reported 96
+// findings that were all one thing — `CLIPPED-Y h1.title.ellipsis scroll=83
+// client=80` and `SPILL div.bubble-text content leaves the box by 2px`, at
+// root 53px, in every state that has a bar title. Overridden, they are gone,
+// and the SPILL and CLIPPED-Y checks go back to being about the design.
+//
+// Measured on this Mac with canvas TextMetrics against the real files, at
+// 100px: SFNS.ttf (which `BlinkMacSystemFont` resolves to, byte-identical
+// numbers) 97 up / 21 down / 118 normal; NewYork.ttf 95 / 24 / 119;
+// SFNSMono.ttf 97 / 21 / 118. Ascent plus descent is the whole normal line
+// box in all three, so the line gap is zero and is stated as zero rather than
+// left to the stand-in.
+const FONT_DIR = path.join(__dirname, 'fonts');
+const FONTS = [
+  {
+    token: '--font-sans',
+    family: 'Audit Sans',
+    file: 'inter-latin-standard-normal.woff2',
+    // Inter, OFL 1.1, from @fontsource-variable/inter 5.3.0. Drawn as a UI
+    // face on the same brief San Francisco was, and the closer of the two
+    // measured against it — the other being Liberation Sans, which is what
+    // the runner had been answering with, at 0.94.
+    // The face it stands for, and where a Mac keeps it: `node docs/audit.js
+    // fonts` measures one against the other. Named here rather than in that
+    // function so the claim sits beside the choice it justifies.
+    standsFor: 'San Francisco',
+    applePath: '/System/Library/Fonts/SFNS.ttf',
+    metrics: { ascent: 97, descent: 21, lineGap: 0 },
+  },
+  {
+    token: '--font-serif',
+    family: 'Audit Serif',
+    file: 'literata-latin-standard-normal.woff2',
+    // Literata, OFL 1.1, from @fontsource-variable/literata 5.3.0. A screen
+    // reading serif, which is what --font-serif is for; the tightest spread
+    // against New York of the five tried (Literata, Source Serif 4, Noto
+    // Serif, Charis SIL, Liberation Serif).
+    standsFor: 'New York',
+    applePath: '/System/Library/Fonts/NewYork.ttf',
+    metrics: { ascent: 95, descent: 24, lineGap: 0 },
+    // Literata runs wide against New York, and by more as it grows: medians
+    // of 0.99 at a 16px root and 1.06 at 53. One scalar cannot fix a
+    // distribution, but it can centre it — 0.977 is the geometric middle of
+    // that range, and it takes the widest median deviation from 5.9% to 4.3%,
+    // inside the +-5% the comparison asserts. It buys nothing about the
+    // SPREAD, which stays what it is; see the cost list above.
+    sizeAdjust: 0.977,
+  },
+  {
+    token: '--font-mono',
+    family: 'Audit Mono',
+    file: 'jetbrains-mono-latin-wght-normal.woff2',
+    // JetBrains Mono, OFL 1.1, from @fontsource-variable/jetbrains-mono
+    // 5.3.0. Fixed-pitch against fixed-pitch, so this is the one of the three
+    // where the horizontal match can be made EXACT rather than close: SF
+    // Mono's advance is 0.61816em and JetBrains Mono's is 0.6em, one ratio
+    // for every glyph at every size, so `size-adjust` closes it and the mono
+    // slabs are measured at iOS's own column width. Nothing like it is
+    // available for a proportional face, where the ratio is a distribution
+    // and not a number — see the cost list above.
+    standsFor: 'SF Mono',
+    applePath: '/System/Library/Fonts/SFNSMono.ttf',
+    metrics: { ascent: 97, descent: 21, lineGap: 0 },
+    sizeAdjust: 61.8163 / 60,
+  },
+];
+// The fourth face, which is not a design choice but an arithmetic one. The
+// three above are LATIN subsets — 72, 110 and 40KB against the ~350KB of a
+// full build — and this app puts one character outside that subset on screen:
+// `⋯` (U+22EF), the "N unchanged lines" marker in the review screen
+// (src/views/code.rs). Measured: not one of Inter, Literata, JetBrains Mono,
+// Source Serif, Noto Serif, Charis SIL or Liberation has it even in its
+// FULL build, so this is not a subsetting mistake to fix by shipping bigger
+// files. Left alone it is one glyph resolved by the host — PingFang SC here,
+// something else on a runner — which is the whole failure in miniature.
+//
+// So it is named as the next family after each of the three, and the run
+// fails if any character reaches past it. 796 bytes: Google Fonts' css2 API
+// will cut a face down to a given string, and this is Noto Sans Math holding
+// that one glyph. Regenerate the same way if this list ever grows —
+//   curl -H 'User-Agent: <a Chrome UA>' \
+//     'https://fonts.googleapis.com/css2?family=Noto+Sans+Math&text=%E2%8B%AF'
+// — and follow the src: url() it answers with.
+const LEFTOVERS = {
+  family: 'Audit Leftovers',
+  file: 'noto-sans-math-U22EF.woff2',
+  standsFor: 'whatever the host would have chosen',
+  // A glyph borrowed from a fourth face brings that face's ascent and descent
+  // into the line box it lands in, so this one is overridden like the others.
+  // San Francisco's numbers, which are also SF Mono's; the serif is 95/24 and
+  // the two points of difference reach exactly one character on one screen.
+  metrics: { ascent: 97, descent: 21, lineGap: 0 },
+};
+for (const font of [...FONTS, LEFTOVERS]) {
+  const file = path.join(FONT_DIR, font.file);
+  if (!fs.existsSync(file) || fs.statSync(file).size === 0) {
+    console.error(`${file} is missing or empty — without it this would measure the host's fonts and disagree with CI`);
+    process.exit(1);
+  }
+  font.path = file;
+}
+// A data: URL rather than a relative one. The pages are built in a temp
+// directory and a file:// document is an opaque origin, so a font fetched
+// across to docs/fonts/ is a cross-origin font request and Chromium declines
+// it — silently, which is the worst of the three outcomes. Inlined, there is
+// nothing to decline.
+//
+// `font-weight: 100 900` because all three are variable fonts and the design
+// uses four weights; declaring one weight would leave Chromium synthesising
+// bold, which is a different advance width again.
+// `size-adjust` scales the OVERRIDES too — measured: `size-adjust: 103.03%`
+// with `ascent-override: 97%` reports a 100% ascent, not 97 — so the ratio is
+// divided back out here. Stated once, in the one place that knows about both,
+// rather than as three pre-divided numbers in the table above that would stop
+// meaning "what SF Mono measures" the moment the ratio changed.
+const face = (font) => {
+  const adjust = font.sizeAdjust || 1;
+  const pct = (v) => `${(v / adjust).toFixed(4)}%`;
+  return `@font-face{font-family:"${font.family}";`
+    + `src:url(data:font/woff2;base64,${fs.readFileSync(font.path).toString('base64')}) format("woff2");`
+    + 'font-weight:100 900;font-style:normal;font-display:block;'
+    + `ascent-override:${pct(font.metrics.ascent)};`
+    + `descent-override:${pct(font.metrics.descent)};`
+    + `line-gap-override:${pct(font.metrics.lineGap)};`
+    + (font.sizeAdjust ? `size-adjust:${(font.sizeAdjust * 100).toFixed(4)}%;` : '')
+    + '}';
+};
+// The stack each token is repointed at: the face, then the leftovers face, and
+// nothing else. No generic at the end on purpose — `sans-serif` there would be
+// the host quietly answering again, and the guards below would have nothing to
+// catch because the browser would report a legitimate match.
+// Single-quoted so the same string is legal both in a stylesheet and in a
+// double-quoted style="" attribute, which is where the glyph guard puts it.
+const STACK = (font) => `'${font.family}', '${LEFTOVERS.family}'`;
+const FONT_CSS = [...FONTS, LEFTOVERS].map(face).join('\n')
+  // Last sheet in the document, so this beats assets/main.css's :root on
+  // order at equal specificity — the same way the app's own later sheets do.
+  + `\n:root{${FONTS.map((font) => `${font.token}:${STACK(font)};`).join('')}}`;
+
+// A pin that is not checked is a pin that comes back. Two ways a host face can
+// still get in, and one guard each:
+//
+//   the family  a rule that names a stack instead of a token — the tokens are
+//               overridden, a literal `-apple-system` in a stylesheet is not.
+//               familyLeaks() asks every element that lays out text of its own
+//               what it computed, once per state, and anything outside the
+//               four families above stops the run.
+//   the glyph   a character none of the four covers falls through in the
+//               ordinary way and takes its width with it. The corpus — every
+//               character in gallery-states.json and in LONGEST — is rendered
+//               once at startup in each stack and the BROWSER is asked which
+//               platform faces it reached for; a non-custom face in that
+//               answer is a host font, whatever its name.
+//
+// Both fail the run rather than adding a finding: a face that leaked makes
+// every number in the run untrustworthy, so it is not one more thing to weigh
+// against the others.
+// PINNING THE FILE IS ONLY HALF OF IT: THE RASTERISER ROUNDS.
+//
+// The same woff2 does not produce the same advance widths on both machines.
+// Chromium draws text through Skia, and on Linux Skia goes through FreeType
+// with hinting on by default, which quantises a glyph's advance to fit the
+// grid it hinted to; macOS has no equivalent step. Measured, with all four
+// faces already pinned and the `.fab` bound deliberately taken back off:
+// macOS reported 176 findings and `left=3`, `left=8`, `left=15`, and the same
+// tree in mcr.microsoft.com/playwright:v1.62.1-noble reported 152 and
+// `left=5`, `left=9`, `left=16` — the 15-versus-16 being a finding on one
+// machine and silence on the other, which is precisely the failure this file
+// set out to end, one layer further down than the font.
+//
+// `--font-render-hinting=none` turns that step off, and with it the two
+// environments print the same bytes. It costs nothing this script measures:
+// hinting is about where the ink lands on a pixel grid, and nothing here
+// reads a pixel — the contrast walk reads computed colours, not a raster.
+const LAUNCH = { args: ['--font-render-hinting=none'] };
+
+const PINNED = [...FONTS, LEFTOVERS].map((font) => font.family);
+const familyLeaks = (pinned) => [...new Set([...document.querySelectorAll('*')]
+  .filter((el) => {
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+    // Only elements that lay out text of their own: an <svg> inherits a
+    // font-family it never uses, and reporting it would be noise.
+    return [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+  })
+  .filter((el) => {
+    const fam = getComputedStyle(el).fontFamily;
+    return !pinned.some((p) => fam.includes(p));
+  })
+  .map((el) => {
+    const cls = typeof el.className === 'string' ? el.className.trim() : '';
+    return `${el.tagName.toLowerCase()}${cls ? `.${cls.split(/\s+/).join('.')}` : ''}`
+      + ` computes font-family: ${getComputedStyle(el).fontFamily}`;
+  }))];
+
+// Which platform faces the browser really reached for, asked of the browser
+// rather than inferred from widths. CDP only reports the text nodes directly
+// under the node it is given — a nested <span> is invisible to it, measured —
+// so this is used on a scratch page whose text is a direct child, never on a
+// captured state.
+const platformFonts = async (page, selector) => {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('DOM.enable');
+  await cdp.send('CSS.enable');
+  const { root } = await cdp.send('DOM.getDocument', { depth: 1 });
+  const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector });
+  const { fonts } = await cdp.send('CSS.getPlatformFontsForNode', { nodeId });
+  await cdp.detach();
+  return fonts;
+};
 
 // ── text scale ──────────────────────────────────────────────────────────
 // The root font-size, in px, at each text size the app really runs at. Every
@@ -255,6 +548,9 @@ const GEOMETRY = () => {
   const px = (v) => parseFloat(v) || 0;
   const vw = document.documentElement.clientWidth;
   const vh = document.documentElement.clientHeight;
+  // The gutter every floating thing shares, read from the stylesheet rather
+  // than written here twice — see GUTTER below.
+  const edge = px(getComputedStyle(document.documentElement).getPropertyValue('--edge'));
   const corners = ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft'];
   const rad = (cs) => corners.map((c) => px(cs[`border${c}Radius`]));
   const name = (el) => {
@@ -322,6 +618,42 @@ const GEOMETRY = () => {
         && (r.right > vw + 0.5 || r.left < -0.5) && !inHorizontalScroller(el)) {
       out.push(`OVERFLOW-X   ${name(el)} left=${r.left.toFixed(0)} right=${r.right.toFixed(0)} vw=${vw}`);
     }
+
+    // Floating chrome that has outgrown the gutter it floats on.
+    //
+    // OVERFLOW-X above is the LAST thing that goes wrong to a box pinned to
+    // one side of the screen, not the first. `.fab` is `position: absolute;
+    // right: var(--edge)` with `left: auto`, so its width is
+    // clamp(min-content, viewport - gutter, max-content) — an expression with
+    // no term for the gutter on the other side. It reaches x=0 long before it
+    // reaches x=-1, and only the second of those was reportable: measured at
+    // AX5 before the `max-width` this check argued for, the button sat at
+    // left=0.00 on 320, 360, 375, 390 AND 402 — at 402x874, the reference
+    // size, which this script had already called Clean. Whether it tipped
+    // past zero was then decided by the advance width of one word, which is
+    // how the same commit was green on a Mac and red on a Linux runner.
+    //
+    // So the rule is stated instead of being waited for. assets/main.css:
+    // "--edge is the gutter every floating thing shares". An out-of-flow box
+    // whose containing block is the screen and whose inset on one side IS that
+    // gutter has declared itself one of those things; if its other side is
+    // nearer the screen edge than the gutter, it has stopped floating.
+    //
+    // Narrow on purpose, and each condition earns its place. The containing
+    // block must span the viewport, or every badge absolutely positioned in
+    // the corner of a card answers a question about the screen it was never
+    // asked. One inset must equal --edge exactly, which is what separates
+    // floating chrome from a drawer or a sheet — those are anchored flush to
+    // an edge and mean it, and neither of their insets is 16.
+    const cb = el.offsetParent;
+    const cbWidth = cb ? cb.getBoundingClientRect().width : vw;
+    if (!parked && /absolute|fixed/.test(cs.position) && cbWidth >= vw - 0.5) {
+      const gaps = [r.left, vw - r.right];
+      if (gaps.some((g) => Math.abs(g - edge) < 0.5) && Math.min(...gaps) < edge - 0.5) {
+        out.push(`GUTTER       ${name(el)} left=${r.left.toFixed(0)} right=${(vw - r.right).toFixed(0)} from the edges, gutter=${edge}`);
+      }
+    }
+
     if (parked) continue;
     // A flex or grid container that overflows is overflowing BOXES, not text,
     // and every one of those boxes is visited by this same walk — so it is
@@ -640,6 +972,119 @@ const CONTRAST = () => {
   return out;
 };
 
+// ── `node docs/audit.js fonts` ──────────────────────────────────────────
+// How far the stand-ins are from the faces an iPhone renders, measured rather
+// than asserted, over the text this app actually puts on screen.
+//
+// Only a Mac can run it, because only a Mac has the files: San Francisco, New
+// York and SF Mono are Apple's, they ship with the OS and they may not be
+// vendored into a repository. That is the whole reason the three faces in
+// docs/fonts/ exist. So this is not part of the gate — CI could not run it —
+// it is the evidence for the choice the gate depends on, kept runnable so the
+// numbers in the comment at the top of this file cannot quietly stop being
+// true.
+//
+// It fails if a median leaves ±5%. That bound is not a taste: at 320pt and AX5
+// the tightest boxes in this design have single-digit percentages of slack, so
+// a stand-in that is 8% out — which is exactly where Liberation Sans and
+// Liberation Serif sit, and exactly why CI disagreed with this laptop — is a
+// stand-in that decides findings by itself.
+const MEDIAN_BOUND = 0.05;
+
+const compareFonts = async (states) => {
+  const missing = FONTS.filter((font) => !fs.existsSync(font.applePath));
+  if (missing.length) {
+    console.error(`this comparison needs the real faces, which only macOS has: ${missing.map((font) => `${font.standsFor} (${font.applePath})`).join(', ')} not found`);
+    process.exit(1);
+  }
+  // Every run of text the app puts on screen, and every word in it — the word
+  // is the unit that decides a min-content width, and a min-content width is
+  // what decided the argument this whole block came out of.
+  const strings = new Set(Object.values(LONGEST));
+  for (const state of states) {
+    for (const [, text] of state.body.matchAll(/>([^<>]+)</g)) {
+      const t = text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+      if (t) strings.add(t);
+    }
+  }
+  const words = new Set();
+  for (const text of strings) for (const word of text.split(/\s+/)) if (word) words.add(word);
+
+  const real = FONTS.map((font) => `@font-face{font-family:"${font.standsFor}";`
+    + `src:url(data:font/ttf;base64,${fs.readFileSync(font.applePath).toString('base64')});`
+    + 'font-weight:100 900;font-display:block;}').join('\n');
+  const browser = await chromium.launch(LAUNCH);
+  const page = await browser.newPage();
+  await page.setContent(`<!doctype html><html><head><style>${FONT_CSS}\n${real}</style></head><body></body></html>`);
+
+  const runs = await page.evaluate(async ({ pairs, strings, words, scales }) => {
+    // A face nothing uses is a face the browser has not fetched, and canvas
+    // would then measure the fallback and report a flat 1.000 — which reads
+    // as a perfect match. Load each one by name first.
+    for (const [stand, real] of pairs) {
+      for (const family of [stand, real]) {
+        try { await document.fonts.load(`100px "${family}"`, 'Hxg'); } catch { /* reported below */ }
+      }
+    }
+    await document.fonts.ready;
+    const span = document.createElement('span');
+    span.style.cssText = 'position:absolute;white-space:pre;';
+    document.body.appendChild(span);
+    const width = (text, family, size, weight) => {
+      span.style.font = `${weight} ${size}px "${family}"`;
+      span.textContent = text;
+      return span.getBoundingClientRect().width;
+    };
+    const out = [];
+    for (const [stand, real] of pairs) {
+      for (const [what, list] of [['strings', strings], ['words', words]]) {
+        for (const { root, size, weight } of scales) {
+          const ratios = list.map((text) => {
+            const base = width(text, real, size, weight);
+            return { text, r: base > 0 ? width(text, stand, size, weight) / base : 1 };
+          }).filter((x) => Number.isFinite(x.r)).sort((a, b) => a.r - b.r);
+          out.push({
+            stand,
+            real,
+            what,
+            root,
+            size,
+            weight,
+            min: ratios[0],
+            median: ratios[Math.floor(ratios.length / 2)],
+            max: ratios[ratios.length - 1],
+            n: ratios.length,
+          });
+        }
+      }
+    }
+    return out;
+  }, {
+    pairs: FONTS.map((font) => [font.family, font.standsFor]),
+    strings: [...strings],
+    words: [...words],
+    // The body size and the label size at each of the four roots this walks,
+    // which is the range every measurement in the run happens inside.
+    scales: SCALES.flatMap((root) => [
+      { root, size: root, weight: 400 },
+      { root, size: root * 0.875, weight: 600 },
+    ]),
+  });
+  await browser.close();
+
+  let worst = 0;
+  for (const run of runs) {
+    worst = Math.max(worst, Math.abs(run.median.r - 1));
+    console.log(`${run.stand} vs ${run.real.padEnd(14)} ${run.what.padEnd(7)} root ${String(run.root).padStart(2)}px @${run.size.toFixed(2)}px/${run.weight}  `
+      + `median ${run.median.r.toFixed(3)}  min ${run.min.r.toFixed(3)} ("${run.min.text.slice(0, 24)}")  max ${run.max.r.toFixed(3)} ("${run.max.text.slice(0, 24)}")  n=${run.n}`);
+  }
+  console.log(`\nWidest median deviation: ${(worst * 100).toFixed(1)}% (bound ${(MEDIAN_BOUND * 100).toFixed(0)}%).`);
+  if (worst > MEDIAN_BOUND) {
+    console.error('a stand-in has drifted past the bound this gate rests on — pick a closer face or move the bound and say why');
+    process.exit(1);
+  }
+};
+
 (async () => {
   const arg = process.argv[2] || 'both';
   const themes = arg === 'both' ? ['light', 'dark'] : [arg];
@@ -666,8 +1111,45 @@ const CONTRAST = () => {
   }
   states.push(...stressed(states));
 
+  if (arg === 'fonts') {
+    await compareFonts(states);
+    return;
+  }
+
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-audit-'));
-  const browser = await chromium.launch();
+  // One file, linked last by every page: the faces are ~140KB of base64 and
+  // writing them into each of the 250 documents would be 35MB of temp churn
+  // for a string that never changes.
+  const fontSheet = path.join(tmp, 'audit-fonts.css');
+  fs.writeFileSync(fontSheet, FONT_CSS);
+  const sheets = [...STYLESHEETS, fontSheet];
+  const browser = await chromium.launch(LAUNCH);
+
+  // Every character this run will lay out, taken from the markup itself
+  // rather than from a guess about which ones matter — plus the ellipsis,
+  // which no state contains and every line clamp draws.
+  const corpus = [...new Set(['…', ...states.map((s) => s.body).join(''),
+    ...Object.values(LONGEST).join('')])].join('');
+  {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><html><head><style>${FONT_CSS}</style></head><body>`
+      + FONTS.map((font, i) => `<div id="f${i}" style="font-family:${STACK(font)}">`
+        + corpus.replace(/[&<>]/g, (c) => `&#${c.charCodeAt(0)};`) + '</div>').join('')
+      + '</body></html>');
+    await page.evaluate(() => document.fonts.ready);
+    const leaked = [];
+    for (const [i, font] of FONTS.entries()) {
+      for (const used of await platformFonts(page, `#f${i}`)) {
+        if (!used.isCustomFont) leaked.push(`${font.token} (${font.file} then ${LEFTOVERS.file}) fell through to the host's ${used.familyName} for ${used.glyphCount} glyph${used.glyphCount > 1 ? 's' : ''}`);
+      }
+    }
+    await page.close();
+    if (leaked.length) {
+      console.error(`the measurement faces do not cover this app's text, so this run would measure the host's fonts and disagree with CI:\n  ${leaked.join('\n  ')}`);
+      process.exit(1);
+    }
+  }
+
   let findings = 0;
 
   for (const theme of themes) {
@@ -680,9 +1162,20 @@ const CONTRAST = () => {
       const file = path.join(tmp, `state-${i}.html`);
       fs.writeFileSync(file,
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-        + STYLESHEETS.map((href) => `<link rel="stylesheet" href="${href}">`).join('')
+        + sheets.map((href) => `<link rel="stylesheet" href="${href}">`).join('')
         + `</head><body>${state.body}</body></html>`);
       await page.goto(`file://${file}`, { waitUntil: 'load' });
+      // `load` fires when the stylesheets have arrived, not when the faces
+      // they name have been decoded — and the first walk after a navigation
+      // is close enough to it to catch the fallback metrics. Measured before
+      // this line went in: intermittent findings that moved between runs of
+      // the same commit, which is the failure this whole block exists to end.
+      await page.evaluate(() => document.fonts.ready);
+      const leaks = await page.evaluate(familyLeaks, PINNED);
+      if (leaks.length) {
+        console.error(`${state.label} [${theme}] lays out text in a family this run did not pin, so its numbers are the host's:\n  ${leaks.join('\n  ')}`);
+        process.exit(1);
+      }
       if (state.swap) {
         await page.evaluate((swap) => {
           for (const [sel, text] of Object.entries(swap)) {
