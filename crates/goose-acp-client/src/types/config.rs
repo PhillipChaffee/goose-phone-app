@@ -9,9 +9,22 @@ use serde_json::Value;
 /// an optional `description`, and a flattened kind payload tagged by `type`.
 /// For `type: "select"` the payload is `currentValue` plus `options`, each of
 /// which keys on `value` (not `id`).
+///
+/// EXCEPT that goose renamed it. Measured against a real `goose serve` 1.46.0:
+/// every entry arrives keyed `id`, not `configId`, and because this field is
+/// the one non-`default` member of the struct, the whole of `session/new`
+/// failed to deserialize, reporting a missing `configId` field. Not a
+/// degraded session: no session at all, so the app could not open a chat
+/// against that server. The rest of the shape is unchanged, including
+/// `ConfigChoice` keying on `value`, which was checked at the same time.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigOption {
+    /// `alias`, not `rename`, so BOTH spellings parse. Which server a user
+    /// points at is not ours to choose — the phone reaches whatever is on
+    /// their tailnet — so a client that understands only the newer name would
+    /// simply break in the other direction on the next person's older server.
+    #[serde(alias = "id")]
     pub config_id: String,
     #[serde(default)]
     pub name: String,
@@ -129,6 +142,42 @@ mod tests {
 
     /// `configOptions` is absent whenever the session has no provider/model
     /// yet, so the sheet has to survive an empty set rather than assume one.
+    /// goose 1.46.0 keys these on `id`, not `configId`. Measured against a
+    /// real `goose serve`, not imagined: the payload below is the shape that
+    /// server actually answered `session/new` with, trimmed to one entry.
+    ///
+    /// Before the alias this did not degrade — `config_id` is the struct's
+    /// only required field, so the whole response failed to deserialize and
+    /// the app could not open a session at all.
+    #[test]
+    fn a_newer_goose_keys_config_options_on_id() {
+        let raw = json!({"configOptions": [
+            {"id": "mode", "name": "Mode", "category": "mode", "type": "select",
+             "currentValue": "auto",
+             "options": [{"value": "auto", "name": "auto",
+                          "description": "Automatically approve tool calls"},
+                         {"value": "approve", "name": "approve",
+                          "description": "Ask before every tool call"}]}
+        ]});
+        let opts = config_options_from(&raw);
+        assert_eq!(opts.len(), 1, "the `id` spelling must parse");
+        assert_eq!(opts[0].config_id, "mode");
+        assert_eq!(opts[0].current_value.as_deref(), Some("auto"));
+        assert_eq!(opts[0].options.len(), 2);
+    }
+
+    /// And the older spelling has to keep working, because which server a
+    /// phone reaches is not this crate's choice.
+    #[test]
+    fn the_older_config_id_spelling_still_parses() {
+        let raw = json!({"configOptions": [
+            {"configId": "mode", "name": "Mode", "type": "select", "currentValue": "auto"}
+        ]});
+        let opts = config_options_from(&raw);
+        assert_eq!(opts.len(), 1);
+        assert_eq!(opts[0].config_id, "mode");
+    }
+
     #[test]
     fn missing_config_options_is_an_empty_set() {
         assert!(config_options_from(&json!({"sessionId": "x"})).is_empty());
