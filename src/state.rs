@@ -522,7 +522,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
     // secret would start being written to disk), so it is deliberately NOT
     // fixed in this change.
     let lost_asks = dioxus_sdk_storage::use_synced_storage::<
-        dioxus_sdk_storage::LocalStorage,
+        crate::ask_journal::Backing,
         Vec<crate::ask_journal::AskRecord>,
     >("lost_asks".to_owned(), Vec::new);
     // An entry still `Open` here was written by a process that never got to

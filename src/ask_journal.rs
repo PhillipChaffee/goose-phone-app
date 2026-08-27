@@ -30,6 +30,18 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Where the journal is kept, named here rather than written at the one call
+/// site in `crate::state` so that a test in this file can hold it to account.
+///
+/// It has to be `LocalStorage`. `use_persistent`, which `settings` and
+/// `code_cache` use, resolves to `SessionStorage` — an in-memory `HashMap`
+/// hung off the root context on every non-wasm target (dioxus-sdk-storage
+/// `persistence.rs:34`, `client_storage/mod.rs:32-41`, `memory.rs:13-28`) —
+/// and a journal kept there would evaporate on exactly the event it exists to
+/// survive. `the_journals_storage_backing_really_reaches_the_disk` is the
+/// gate: swap this alias and that test fails.
+pub(crate) type Backing = dioxus_sdk_storage::LocalStorage;
+
 /// How many entries are kept. The storage backing rewrites a key's whole file
 /// on every change, and that write is on the path of every permission ask, so
 /// the journal's size is a cost paid per ask rather than per loss.
@@ -448,5 +460,47 @@ mod tests {
         lose_open(&mut journal, LostCause::Connection, NOW);
         prune(&mut journal, NOW + 8 * 86_400);
         assert!(journal.is_empty());
+    }
+
+    /// The claim the whole design rests on, run rather than read: [`Backing`]
+    /// actually writes a file, and a value put through it comes back after
+    /// the process that wrote it is gone.
+    ///
+    /// This is a gate and not a demonstration. The obvious backing —
+    /// `use_persistent`, which `settings` and `code_cache` use — resolves to
+    /// an in-memory `HashMap` on every target this app builds for. Everything
+    /// else in this file would still typecheck and still pass with it, and
+    /// the journal would evaporate on exactly the event it exists to survive.
+    /// So the alias is what `crate::state` is required to name, and this is
+    /// what the alias is required to be.
+    ///
+    /// `set_directory` writes a process-wide `OnceLock`, so this test owns it
+    /// for the whole binary; `main` is not run in a test binary, so nothing
+    /// else has claimed it. Pointed at a temp path rather than the real app
+    /// directory, so `cargo test` writes nothing anyone would keep.
+    #[test]
+    fn the_journals_storage_backing_really_reaches_the_disk() {
+        use super::Backing;
+        use dioxus_sdk_storage::StorageBacking;
+
+        let dir = std::env::temp_dir().join(format!("goose-mobile-journal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // What `set_dir!()` expands to on a non-wasm target, minus the macro,
+        // which only takes a literal.
+        dioxus_sdk_storage::set_directory(dir.clone());
+
+        let mut journal = Vec::new();
+        note(&mut journal, ask("call_01a0"), NOW);
+        Backing::set("lost_asks_test".to_owned(), &journal);
+
+        assert!(
+            dir.join("lost_asks_test").is_file(),
+            "the journal's backing wrote no file, so nothing here survives a \
+             restart — which is the one thing it is for"
+        );
+        let read: Option<Vec<AskRecord>> = Backing::get(&"lost_asks_test".to_owned());
+        assert_eq!(read.as_ref(), Some(&journal));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
