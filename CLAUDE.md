@@ -45,8 +45,8 @@ were content taller than the space it was given. Five are iPhones and 360x800
 is Android's modal size, since this app ships to both.
 
 The audit walks a **second grid** for the desktop shell: seven window sizes at
-the one root a macOS build has, with the nav's collapse in place of the text
-axis. A state says which grid it is on through its own key — a desktop dump
+the one root a macOS build has, with three shell states — nav open, nav closed
+and fullscreen — in place of the text axis. A state says which grid it is on through its own key — a desktop dump
 carries a `desktop-` prefix from `src/shell::DUMP_PREFIX` — and that is also
 what decides whether `assets/desktop.css` and `assets/platform/macos.css` are
 linked, so a desktop rule cannot reach a phone frame. Both shells write into

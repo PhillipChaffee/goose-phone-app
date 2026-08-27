@@ -52,71 +52,19 @@ pub(crate) fn use_visual_viewport() {
     });
 }
 
-/// Say whether the window is fullscreen, in an attribute the stylesheet reads.
-///
-/// `src/main.rs` hides the macOS titlebar, so `assets/platform/macos.css`
-/// reserves a 52pt strip for the traffic lights. Fullscreen takes those lights
-/// away — `AppKit` hides them and re-draws them in an overlay on hover near the
-/// top edge — so the reservation becomes 52pt of nothing at the top of a window
-/// someone has just asked to be as large as possible.
-///
-/// NOTHING CROSSES INTO RUST. That is what makes this compatible with the rule
-/// above `CLOSE_OPEN_ROW` rather than an exception to it: the cost that rule is
-/// about is the synchronous XHR per listened-to event, and a resize STREAM is
-/// exactly the shape that must not be listened to from Rust. This listener
-/// never calls `dioxus.send` at all — it sets an attribute, and CSS does the
-/// rest. There is no signal, no re-render, and no message.
-///
-/// INFERRED, not reported, because tao surfaces no fullscreen event and wry
-/// gives the web view no `:fullscreen` to match (that pseudo-class is the
-/// Fullscreen API's, which is about an ELEMENT and is not what a green-button
-/// fullscreen does). The reference has it easy — Electron broadcasts
-/// `fullscreen-change` over IPC (`ui/desktop/src/main.ts:1555`). The test is
-/// the one thing that is reliably different: in fullscreen the menu bar
-/// auto-hides and the window covers the display exactly, so the inner height
-/// reaches the screen height. A merely maximised window is short by the menu
-/// bar. The 2px slack absorbs fractional scaling.
-///
-/// Guarded on `screen.height` being sane, so a headless or embedded context
-/// that reports 0 does not latch fullscreen on forever.
-///
-/// `cfg`-gated to match its only caller below, and that is not tidiness: CI
-/// runs the iOS check with `RUSTFLAGS: -D warnings` (`.github/workflows/ci.yml`),
-/// so an ungated const whose user is desktop-only is `dead_code` on a phone
-/// target and therefore a BUILD FAILURE there while passing locally, where
-/// `cargo check --target aarch64-apple-ios` carries no such flag. That gap is
-/// exactly how this shipped: the local gate and the CI gate are not the same
-/// command.
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
-const FULLSCREEN_CLASS: &str = r"
-(() => {
-  if (window.__fsWired) return;
-  window.__fsWired = true;
-  const app = () => document.querySelector('.app');
-  const sync = () => {
-    const el = app();
-    if (!el) return;
-    const h = window.screen && window.screen.height;
-    const full = !!h && h > 200 && window.innerHeight >= h - 2;
-    el.setAttribute('data-fullscreen', full ? 'true' : 'false');
-  };
-  window.addEventListener('resize', sync);
-  sync();
-  // `.app` is re-rendered by Dioxus, which drops the attribute with it, so the
-  // observer is what keeps it set across a render rather than only across a
-  // resize. Attributes only, and on the body's children, so a transcript
-  // streaming text does not wake it.
-  new MutationObserver(sync).observe(document.body, { childList: true });
-})();
-";
-
-/// Wire the fullscreen attribute. Desktop only — a phone has no window.
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
-pub(crate) fn use_fullscreen_class() {
-    use_effect(move || {
-        document::eval(FULLSCREEN_CLASS);
-    });
-}
+// The fullscreen attribute used to live here, inferred in JS from
+// `innerHeight >= screen.height - 2`, on the reasoning that a fullscreen
+// window covers the display exactly while a merely maximised one is short by
+// the menu bar. IT NEVER ONCE FIRED. Driven into real fullscreen through
+// AXFullScreen, the comparison does not hold — so the reservation the
+// inference exists to drop stayed on, and `assets/platform/macos.css`'s
+// `[data-fullscreen="true"]` block was dead in every window that ever ran.
+//
+// It is now read off the window instead, in `src/shell/desktop.rs`, where the
+// answer is a fact rather than a guess. Kept as a note because the shape of
+// the mistake is worth more than the code was: a heuristic with no test can
+// be wrong for the whole life of a feature and look exactly like one that
+// works, since both spend all their time saying "not fullscreen".
 
 /// A tap on an open row closes its tray instead of opening the session.
 ///

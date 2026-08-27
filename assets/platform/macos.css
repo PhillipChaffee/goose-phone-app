@@ -48,15 +48,17 @@
  * points of nothing at the top of a window someone just asked to be as large
  * as possible.
  *
- * Detected in JS and applied in CSS, with NOTHING crossing into Rust —
- * `src/viewport.rs` `use_fullscreen_class` sets the attribute directly. That
- * is the rule working as intended rather than an exception to it: a resize
- * STREAM must be JS-owned because each listened-to event costs a synchronous
- * XHR, and here the listener never sends a message at all. The reference does
- * the same thing over IPC (`fullscreen-change`, main.ts:1555) because Electron
- * gives it a real event; we infer it, which is why the JS compares against the
- * screen height rather than trusting a flag. */
-.app[data-fullscreen="true"] > .shell {
+ * Read off the window, not inferred from it. `src/shell/desktop.rs`
+ * `use_fullscreen` asks tao on a `Resized` and writes the attribute in the
+ * render, beside `data-detail` and `data-nav`. It replaced a JS test of
+ * `innerHeight >= screen.height - 2` that NEVER FIRED in a real fullscreen
+ * window, which made this whole block dead for the life of the feature.
+ *
+ * A tao event is not a DOM event, so no synchronous XHR is paid and the rule
+ * in `src/viewport.rs` is untouched. The reference gets a real event over IPC
+ * (`fullscreen-change`, main.ts:1555); this is the same fact by a shorter
+ * route. */
+.app > .shell[data-fullscreen="true"] {
   /* The bar stays — it holds the toggle on every platform — but the room the
    * lights needed goes back to the layout, and with the lights gone the
    * toggle centres in the bar like it does everywhere else. */

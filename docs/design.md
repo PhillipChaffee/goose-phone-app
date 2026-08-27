@@ -1547,13 +1547,29 @@ has. A macOS binary gets `assets/platform/macos.css`, which sets no font, so
 nothing moves the root off the web view's default. Measured during the capture
 with one `document::eval`: **16px root, viewport 1180×820, devicePixelRatio 2**.
 
-**The nav's collapse walks in place of the text axis.** `data-nav` is a plain
-attribute on `.shell` that only `assets/desktop.css` reads, so flipping it is a
-real reflow of a real rule rather than a fiction — which is exactly what
-separates it from `data-detail`, a fact about what the app has open that has to
-be *captured* and must never be flipped. It earns the second pass because the
-rail and collapsed tiers are where the window chrome gets crowded, and that is
-where this shell's one shipped regression lived.
+**The shell's own state walks in place of the text axis.** `data-nav` and
+`data-fullscreen` are plain attributes on `.shell` that only
+`assets/desktop.css` and `assets/platform/macos.css` read, so flipping them is
+a real reflow of a real rule rather than a fiction — which is exactly what
+separates them from `data-detail`, a fact about what the app has open that has
+to be *captured* and must never be flipped. Three cells, chosen rather than
+multiplied: **nav open**, **nav closed**, and **fullscreen**. The collapse
+earns its pass because the rail and collapsed tiers are where the window chrome
+gets crowded, and that is where this shell's one shipped regression lived.
+Fullscreen earns its own because the band is the whole of what it changes — it
+gives back the 76pt traffic-light indent and takes 10pt of padding — so
+`closed x fullscreen` would measure the collapsed cell twice and nothing else.
+
+That both attributes are *written by the render* is what makes this legitimate,
+and it was not always true. `data-fullscreen` used to be set from JS, inferred
+from `innerHeight >= screen.height - 2`, and that comparison never once matched
+a real fullscreen window: the rule below was dead in every window that ever
+ran, and no frame here rendered it either. Two independent gaps, each of which
+made the other invisible. It is now read off `tao` on a `Resized` and written
+onto `.shell` beside the other two — verified by driving a real window in and
+out of fullscreen and watching the attribute follow — and the sabotage test
+that keeps this honest is deleting the rule's `--traffic-w: 0px`, which turns
+the grid from Clean to 672 findings.
 
 **The desktop sheets are linked per state, never from a directory.** This is
 why `assets/desktop.css` and `assets/platform/macos.css` are deliberately *not*
@@ -1633,10 +1649,6 @@ None of those five runs put a single finding on a phone state.
 - **`:hover` and `:focus-visible`.** The app's first ones live in this sheet
   and a captured static DOM has neither. Forcing them (`page.hover()`, or CDP
   `CSS.forcePseudoState`) is a real next axis and not this one.
-- **Fullscreen.** `.app[data-fullscreen="true"]` drops the whole reservation
-  (`assets/platform/macos.css`), and no captured state carries the attribute.
-  It needs its own capture, not a flipped attribute: unlike `data-nav`, whether
-  the window is fullscreen is a fact about the window.
 - **Motion.** Flipping `data-nav` starts a 200ms transition on `.navpane`, and
   desktop frames link a generated sheet that turns transitions off. Everything
   here is measured **at rest**, which is already true of the capture; the slide

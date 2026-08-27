@@ -197,6 +197,56 @@ fn use_nav_key(mut nav_open: Signal<bool>) {
     });
 }
 
+/// Whether the window is fullscreen, as the window itself reports it.
+///
+/// `src/main.rs` hides the macOS titlebar, so `assets/platform/macos.css`
+/// reserves a 52pt band with a 76pt indent for the traffic lights. Fullscreen
+/// takes those lights away — `AppKit` hides them and re-draws them in an overlay
+/// on hover near the top edge — so the reservation becomes 122pt of nothing at
+/// the top of a window someone has just asked to be as large as possible.
+///
+/// REPORTED, not inferred, and that is the whole change. This was a JS test of
+/// `innerHeight >= screen.height - 2`, on the reasoning that a fullscreen
+/// window covers the display exactly while a maximised one is short by the
+/// menu bar. Driven into real fullscreen it never once fired, so the block it
+/// exists to switch on was dead for the life of the feature — and a heuristic
+/// that is always wrong looks exactly like one that works, because both spend
+/// all their time saying "not fullscreen". `tao` knows the answer; asking it
+/// cannot be wrong.
+///
+/// A `Resized` and not a fullscreen event, because tao publishes no such
+/// event: the transition arrives as a resize and the flag is read back off the
+/// window. So this is a trigger, not a measurement — the 2px slack that made
+/// the old inference a guess has nothing to be slack about here.
+///
+/// NOT A BREACH OF THE RULE IN `src/viewport.rs`. That rule is about DOM
+/// events, each of which costs a synchronous XHR to reach Rust, which is why a
+/// resize stream must be JS-owned. A `tao` event is not a DOM event: it is
+/// already in the event loop, in this process, and reaches this closure by a
+/// function call. The stream is free; only the writes are not, and `peek`
+/// means the signal is written on the transition rather than on the frame.
+fn use_fullscreen() -> Signal<bool> {
+    use dioxus::desktop::tao::event::{Event, WindowEvent};
+    use dioxus::desktop::use_wry_event_handler;
+
+    let mut full = use_signal(|| dioxus::desktop::window().fullscreen().is_some());
+    use_wry_event_handler(move |event, _| {
+        if matches!(
+            event,
+            Event::WindowEvent {
+                event: WindowEvent::Resized(_),
+                ..
+            }
+        ) {
+            let now = dioxus::desktop::window().fullscreen().is_some();
+            if *full.peek() != now {
+                full.set(now);
+            }
+        }
+    });
+    full
+}
+
 /// What the collapse control says it will do, which is never what it is.
 ///
 /// A toggle's name is its ACTION, not its state — "Hide sidebar" while the
@@ -331,9 +381,9 @@ pub(crate) fn AppShell() -> Element {
     use_nav_key(nav_open);
     use_dismiss_key();
     // The chrome strip is only real while the traffic lights are on screen;
-    // fullscreen takes them away. JS-owned and message-free — see the note on
-    // `use_fullscreen_class`.
-    crate::viewport::use_fullscreen_class();
+    // fullscreen takes them away. Read off the window rather than guessed at —
+    // see `use_fullscreen`.
+    let fullscreen = use_fullscreen();
 
     // The destination's own answer to "is anything open", which is the fact
     // the third column needs and needs no new state to hold. A destination
@@ -368,6 +418,12 @@ pub(crate) fn AppShell() -> Element {
             // only fact it cannot work out for itself is which way the toggle
             // was last pressed.
             "data-nav": if nav_open() { "open" } else { "closed" },
+            // ON `.shell`, beside the other two facts the sheet reads, and not
+            // on `.app` where the JS used to put it. `.app` is the phone's
+            // element too, and an attribute set from a desktop-only hook had
+            // no business there; here it sits with `data-detail` and
+            // `data-nav`, set the same way, by the same render.
+            "data-fullscreen": if fullscreen() { "true" } else { "false" },
 
             // THE WINDOW'S OWN BAR, full width, above the columns.
             //
@@ -774,8 +830,26 @@ mod tests {
             "assets/platform/macos.css is the only thing that may raise it"
         );
         assert!(
-            macos.contains(r#"[data-fullscreen="true"]"#),
-            "fullscreen hides the traffic lights, so it must drop the reservation"
+            macos.contains(r#".shell[data-fullscreen="true"]"#),
+            "fullscreen hides the traffic lights, so it must drop the reservation \
+             — and the attribute is on `.shell`, beside data-detail and data-nav"
+        );
+        // BOTH HALVES, because for the whole life of this feature only one of
+        // them existed. The sheet had its rule and the attribute was set by a
+        // JS heuristic that never once matched a real fullscreen window, so the
+        // block above was dead and every check in the repo was green. A test
+        // that asks only "does the sheet mention it" cannot tell that apart
+        // from a working feature; this is the other half of the question.
+        let shell = include_str!("desktop.rs");
+        assert!(
+            shell.contains(r#""data-fullscreen": if fullscreen()"#),
+            "the shell must SET the attribute the sheet reads, in the render — \
+             an attribute nothing writes is a stylesheet rule nothing reaches"
+        );
+        assert!(
+            shell.contains("fn use_fullscreen()") && shell.contains(".fullscreen().is_some()"),
+            "the flag must be read off the window; inferring it from geometry \
+             is what shipped a feature that never engaged"
         );
     }
 
