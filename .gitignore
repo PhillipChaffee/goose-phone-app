@@ -10,3 +10,7 @@ package-lock.json
 # Scratch space for design mockups and one-off probes: never a build input,
 # and `git add -A` would otherwise commit whatever was last explored there.
 .probe-tmp/
+
+# Scratch dir for one-off measurement probes (headless renders, geometry
+# dumps). Never part of a build; see docs/design.md's "How to check your work".
+.probe-tmp/
