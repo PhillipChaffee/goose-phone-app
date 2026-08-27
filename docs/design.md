@@ -782,8 +782,15 @@ GOOSE_DEV_SECRET_KEY=mock-secret \
 GOOSE_DEV_WORKING_DIR=/tmp/goose-work \
 GOOSE_DEV_CODE_URL=http://127.0.0.1:4399 \
 GOOSE_DEV_CODE_PASSWORD=... \
-  dx build --platform ios --no-default-features --features mobile
+  dx build --platform ios
 ```
+
+Nothing to pass: `Cargo.toml` picks the renderer from the target triple with
+two target-conditional `[dependencies]` tables, so `--platform ios` is the
+whole instruction. (`dx` does synthesise flags of its own underneath —
+`--verbose` shows `features: ["desktop", "dioxus/mobile"]` on iOS — but both
+are inert against this manifest: `desktop = []` enables nothing and
+`dioxus/mobile` is what the target table already selected.)
 
 `cargo run -p mock-goose-server 3285` gives you the goose plane. For the code
 plane, `scripts/verify/test-code-agent-manager.sh --serve` in the

@@ -72,7 +72,7 @@ pub(crate) struct Settings {
 /// GOOSE_DEV_SECRET_KEY=mock-secret \
 /// GOOSE_DEV_CODE_URL=http://127.0.0.1:4399 \
 /// GOOSE_DEV_CODE_PASSWORD=... \
-///   dx build --platform ios --no-default-features --features mobile
+///   dx build --platform ios
 /// ```
 ///
 /// A release build expands to an empty string no matter what was set, so a
