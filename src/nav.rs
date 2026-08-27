@@ -20,6 +20,80 @@ use crate::code::CodeScreen;
 use crate::state::{AppCtx, Screen, Tab};
 use crate::views;
 
+/// What to call the screen the detail column is showing.
+///
+/// A value rather than an `Element`, and that is the whole reason it exists.
+/// Dioxus has no portal, so nothing rendered inside a pane can be moved into
+/// the window's own bar — but a `String` travels anywhere. The desktop shell
+/// paints this in `.shell-chrome` (`src/shell/desktop.rs`) and
+/// `assets/desktop.css` takes the same heading back out of the pane below, so
+/// there is one title per window rather than one per column.
+///
+/// The subtitle sits BESIDE the title rather than under it, which is a
+/// constraint rather than a taste: `--chrome-h` is 52px measured off a real
+/// macOS window, the toggle beside it is a 32px control centred on the traffic
+/// lights at y 16, and a two-line group centred on that same 16 would start
+/// above the top of the window. One line clears both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Crumb {
+    pub title: String,
+    /// Where the thing lives, what it is part of — the same string the pane's
+    /// own `.subtitle` carries, from the same expression.
+    pub subtitle: Option<String>,
+}
+
+impl Crumb {
+    /// A name and nothing else.
+    pub(crate) fn plain(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            subtitle: None,
+        }
+    }
+
+    /// A name and where it lives. `None` is the same as [`Crumb::plain`] —
+    /// several screens compute a subtitle that is legitimately absent.
+    pub(crate) fn detailed(title: impl Into<String>, subtitle: Option<String>) -> Self {
+        Self {
+            title: title.into(),
+            subtitle,
+        }
+    }
+}
+
+/// Whatever a destination has pushed on top of its root: the screen itself,
+/// and what to call it.
+///
+/// ONE function returns both, deliberately. The pair could have been two
+/// fields on [`Destination`] — a `detail` and a `detail_title`, each matching
+/// the same screen enum — and then the only thing keeping them in step would
+/// be whoever edited the row last: the app would render a diff and the window
+/// bar would name the chat it came from, with nothing to say so. This is the
+/// same argument the `root`/`detail` pair is already built on, one level down.
+pub(crate) struct Detail {
+    /// Dead on a phone, deliberately. One screen is on a phone at a time and
+    /// it names itself in its own header; there is no window bar to hand a
+    /// name to, so [`Destination::screen`] drops this on the floor. The
+    /// `expect` is scoped to those two targets rather than blanket-allowed, so
+    /// the day the phone does read it the exception fails the build instead of
+    /// rotting.
+    #[cfg_attr(
+        any(target_os = "ios", target_os = "android"),
+        expect(
+            dead_code,
+            reason = "the window bar this names is the desktop shell's alone"
+        )
+    )]
+    pub crumb: Crumb,
+    pub view: Element,
+}
+
+impl Detail {
+    pub(crate) const fn new(crumb: Crumb, view: Element) -> Self {
+        Self { crumb, view }
+    }
+}
+
 /// Where a destination sits in the drawer.
 ///
 /// The groups are about *whose* thing it is: [`Group::Work`] is what you are
@@ -97,8 +171,9 @@ pub(crate) struct Destination {
     /// [`Destination::screen`] composes the two, so they cannot disagree.
     ///
     /// A phone reads it only through `screen`, which is a destination's whole
-    /// stack collapsed to the one screen a phone shows.
-    pub detail: fn(&AppCtx) -> Option<Element>,
+    /// stack collapsed to the one screen a phone shows — and drops the
+    /// [`Crumb`], which is the desktop's window bar's alone.
+    pub detail: fn(&AppCtx) -> Option<Detail>,
     /// The dump key for the mounted screen, or `None` when this destination's
     /// stack is not the one on screen.
     ///
@@ -128,6 +203,7 @@ impl Destination {
     #[cfg(any(target_os = "ios", target_os = "android"))]
     pub(crate) fn screen(&self, ctx: &AppCtx) -> Element {
         (self.detail)(ctx)
+            .map(|detail| detail.view)
             .or_else(|| self.root.map(|root| root(ctx)))
             .unwrap_or_else(|| rsx! {})
     }
@@ -151,7 +227,10 @@ const CHATS: Destination = Destination {
     at_root: |ctx| (ctx.tab)() == Tab::Home && (ctx.screen)() == Screen::Sessions,
     root: Some(|_| rsx! { views::sessions::SessionsView {} }),
     detail: |ctx| match (ctx.screen)() {
-        Screen::Chat => Some(rsx! { views::chat::ChatView {} }),
+        Screen::Chat => Some(Detail::new(
+            views::chat::crumb(ctx),
+            rsx! { views::chat::ChatView {} },
+        )),
         _ => None,
     },
     key: |ctx| {
@@ -189,10 +268,22 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         root: Some(|_| rsx! { views::code::CodeSessionsView {} }),
         detail: |ctx| match (ctx.code_screen)() {
             CodeScreen::List => None,
-            CodeScreen::New => Some(rsx! { views::code::CodeNewView {} }),
-            CodeScreen::Chat => Some(rsx! { views::code::CodeChatView {} }),
-            CodeScreen::Diff => Some(rsx! { views::code::CodeDiffView {} }),
-            CodeScreen::Pulls => Some(rsx! { views::code::CodePullsView {} }),
+            CodeScreen::New => Some(Detail::new(
+                views::code::new_crumb(),
+                rsx! { views::code::CodeNewView {} },
+            )),
+            CodeScreen::Chat => Some(Detail::new(
+                views::code::chat_crumb(ctx),
+                rsx! { views::code::CodeChatView {} },
+            )),
+            CodeScreen::Diff => Some(Detail::new(
+                views::code::diff_crumb(ctx),
+                rsx! { views::code::CodeDiffView {} },
+            )),
+            CodeScreen::Pulls => Some(Detail::new(
+                views::code::pulls_crumb(ctx),
+                rsx! { views::code::CodePullsView {} },
+            )),
         },
         key: |ctx| ((ctx.tab)() == Tab::Code).then(|| code_key((ctx.code_screen)())),
     },
@@ -213,7 +304,10 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         root: Some(|_| rsx! { views::recipes::RecipesView {} }),
         detail: |ctx| match (ctx.recipes.screen)() {
             crate::recipes::Screen::List => None,
-            crate::recipes::Screen::Detail => Some(rsx! { views::recipes::RecipeDetailView {} }),
+            crate::recipes::Screen::Detail => Some(Detail::new(
+                views::recipes::crumb(ctx),
+                rsx! { views::recipes::RecipeDetailView {} },
+            )),
         },
         // Spelled inline rather than as a `recipes_key` beside `code_key`:
         // one destination is one hunk, and five branches each adding a
@@ -242,7 +336,10 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         root: Some(|_| rsx! { views::skills::SkillsView {} }),
         detail: |ctx| match (ctx.skills.screen)() {
             crate::skills::Screen::List => None,
-            crate::skills::Screen::Detail => Some(rsx! { views::skills::SkillDetailView {} }),
+            crate::skills::Screen::Detail => Some(Detail::new(
+                views::skills::crumb(ctx),
+                rsx! { views::skills::SkillDetailView {} },
+            )),
         },
         // The key mapping lives in `crate::skills` rather than here, so that
         // adding this destination is one row in this table and not a row plus
@@ -272,9 +369,10 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         root: Some(|_| rsx! { views::scheduler::SchedulerView {} }),
         detail: |ctx| match (ctx.scheduler.screen)() {
             crate::scheduler::Screen::List => None,
-            crate::scheduler::Screen::Detail => {
-                Some(rsx! { views::scheduler::ScheduledJobView {} })
-            }
+            crate::scheduler::Screen::Detail => Some(Detail::new(
+                views::scheduler::crumb(ctx),
+                rsx! { views::scheduler::ScheduledJobView {} },
+            )),
         },
         // The key mapping is a free function in `crate::scheduler`, next to the
         // enum it reads, so it can be tested without a Dioxus runtime.
@@ -303,9 +401,10 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         root: Some(|_| rsx! { views::extensions::ExtensionsView {} }),
         detail: |ctx| match (ctx.extensions.screen)() {
             crate::extensions::Screen::List => None,
-            crate::extensions::Screen::Detail => {
-                Some(rsx! { views::extensions::ExtensionDetailView {} })
-            }
+            crate::extensions::Screen::Detail => Some(Detail::new(
+                views::extensions::crumb(ctx),
+                rsx! { views::extensions::ExtensionDetailView {} },
+            )),
         },
         // The key mapping is a free function in `crate::extensions`, next to
         // the enum it reads, so it can be tested without a Dioxus runtime.
@@ -330,7 +429,12 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         // The screen is the detail, then — the one row where the detail is
         // unconditional, which is the same fact said in the table's own terms.
         root: None,
-        detail: |_| Some(rsx! { views::settings::SettingsView {} }),
+        detail: |_| {
+            Some(Detail::new(
+                views::settings::crumb(),
+                rsx! { views::settings::SettingsView {} },
+            ))
+        },
         key: |ctx| {
             ((ctx.tab)() == Tab::Home && (ctx.screen)() == Screen::Settings).then_some("settings")
         },

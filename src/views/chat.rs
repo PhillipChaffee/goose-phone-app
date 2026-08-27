@@ -23,6 +23,16 @@ use crate::views::{
 /// button address the same element.
 const SCROLL_ID: &str = "chat-scroll";
 
+/// What this conversation is called, once.
+///
+/// Read by two things that are never on screen together: the header below,
+/// and — on the desktop — the window's own bar, which takes the heading out of
+/// the pane and paints it in `.shell-chrome` instead
+/// (`src/shell/desktop.rs`, `assets/desktop.css`).
+pub(crate) fn crumb(ctx: &crate::state::AppCtx) -> crate::nav::Crumb {
+    crate::nav::Crumb::plain(ctx.chat.read().title.clone())
+}
+
 #[component]
 pub fn ChatView() -> Element {
     let ctx = use_app_ctx();
@@ -104,6 +114,8 @@ pub fn ChatView() -> Element {
         }
     };
 
+    let heading = crumb(&ctx).title;
+
     rsx! {
         header { class: "topbar",
             button {
@@ -115,7 +127,11 @@ pub fn ChatView() -> Element {
                 },
                 Icon { name: "chevron-left" }
             }
-            h1 { class: "title ellipsis", "{chat.title}" }
+            // The same expression the window's bar reads, so the two names
+            // cannot drift; the substituted value is byte-identical to the
+            // `{chat.title}` it replaces, which is what keeps the phone's
+            // captured markup unchanged.
+            h1 { class: "title ellipsis", "{heading}" }
             div { class: "topbar-actions",
                 button {
                     class: "icon-btn",

@@ -10,6 +10,7 @@ use goose_acp_client::RecipeListEntry;
 
 use crate::cron::{self, Schedule};
 use crate::icons::Icon;
+use crate::nav::Crumb;
 use crate::recipes::{
     close, facts, list_state, open, refresh, row_meta, run, run_offer, schedule_rows, set_schedule,
     ListState, RunOffer, ScanState,
@@ -146,6 +147,28 @@ fn row(
     }
 }
 
+/// What the open recipe is called, once.
+///
+/// Read by two things that are never on screen together: the header below,
+/// and — on the desktop — the window's own bar, which takes the heading out of
+/// the pane and paints it in `.shell-chrome` instead
+/// (`src/shell/desktop.rs`, `assets/desktop.css`). The `None` arm is the same
+/// dead-end fallback the view renders, for the same reason: the open recipe
+/// and the Detail screen are set and cleared together, so it is unreachable —
+/// but a window bar naming nothing would be worse than one naming the kind of
+/// thing that was there.
+pub(crate) fn crumb(ctx: &AppCtx) -> Crumb {
+    (ctx.recipes.open)().map_or_else(
+        || Crumb::plain("Recipe"),
+        |entry| {
+            Crumb::detailed(
+                entry.recipe.title.clone(),
+                entry.slash_command.as_ref().map(|name| format!("/{name}")),
+            )
+        },
+    )
+}
+
 /// One recipe, in full: what it says, what it pins, when it runs, and the one
 /// button that starts it.
 #[component]
@@ -157,12 +180,19 @@ pub fn RecipeDetailView() -> Element {
     let mut sheet_open = use_signal(|| false);
     let mut confirm_run = use_signal(|| false);
 
+    // The one expression the window's bar also reads, so a recipe cannot be
+    // called one thing in the pane and another in the chrome. Both arms
+    // hand `TopBar` a `String` equal to the one the expression they replace
+    // produced, into the same prop of the same component — so the phone's
+    // captured markup does not move.
+    let bar = crumb(&ctx);
+
     let Some(entry) = (ctx.recipes.open)() else {
         // Unreachable: the open recipe and the Detail screen are set and
         // cleared together. A dead end would not be, so this keeps a way
         // back rather than rendering nothing.
         return rsx! {
-            TopBar { title: "Recipe", on_back: move |()| close(&ctx), conn: true }
+            TopBar { title: bar.title, on_back: move |()| close(&ctx), conn: true }
             main { class: "scroll", p { class: "empty", "That recipe is no longer open." } }
         };
     };
@@ -171,8 +201,8 @@ pub fn RecipeDetailView() -> Element {
 
     rsx! {
         TopBar {
-            title: "{entry.recipe.title}",
-            subtitle: entry.slash_command.as_ref().map(|name| format!("/{name}")),
+            title: bar.title,
+            subtitle: bar.subtitle,
             on_back: move |()| close(&ctx),
             conn: true,
         }

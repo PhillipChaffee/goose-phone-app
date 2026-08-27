@@ -2,11 +2,23 @@ use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 use goose_acp_client::{probe, ProbeOutcome};
 
+use crate::nav::Crumb;
 use crate::state::{
     disconnect, establish, refresh_sessions, show_toast, use_app_ctx, ConnState, Screen, Settings,
 };
 use crate::views::chrome::TopBar;
 use crate::views::Confirm;
+
+/// What this screen is called, once.
+///
+/// Read by two things that are never on screen together: this view's own
+/// header, and — on the desktop — the window's bar, which takes the heading
+/// out of the pane and paints it in `.shell-chrome` instead
+/// (`src/shell/desktop.rs`). One expression, so the window and the pane cannot
+/// end up calling the same screen two different things.
+pub(crate) fn crumb() -> Crumb {
+    Crumb::plain("Settings")
+}
 
 #[component]
 pub fn SettingsView() -> Element {
@@ -95,7 +107,7 @@ pub fn SettingsView() -> Element {
         // replaces rendered only when connected, which left a disconnected
         // user with no way off this screen once the tab bar went away — the
         // component is where that stops being a per-screen decision.
-        TopBar { title: "Settings" }
+        TopBar { title: crumb().title }
         main { class: "scroll settings",
             section { class: "card",
                 h2 { "Server" }

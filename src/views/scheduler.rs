@@ -18,6 +18,7 @@ use dioxus::prelude::*;
 use goose_acp_client::{ScheduleState, ScheduledJob, SessionInfo};
 
 use crate::icons::Icon;
+use crate::nav::Crumb;
 use crate::recipes::{list_state, ListState};
 use crate::scheduler::{
     self, cadence, close, detail_actions, facts, last_run_label, open, row_state, state_label,
@@ -264,6 +265,33 @@ fn row(ctx: &AppCtx, job: &ScheduledJob, started: &HashSet<String>, now: i64) ->
     }
 }
 
+/// What the open job is called, once.
+///
+/// Read by two things that are never on screen together: the header below,
+/// and — on the desktop — the window's own bar, which takes the heading out of
+/// the pane and paints it in `.shell-chrome` instead
+/// (`src/shell/desktop.rs`, `assets/desktop.css`).
+///
+/// The `None` arm is the view's own dead-end fallback and it is the one on
+/// this table that is genuinely reachable: the poll replaces the list under
+/// the screen, so a job deleted from another client disappears while its
+/// detail is up.
+pub(crate) fn crumb(ctx: &AppCtx) -> Crumb {
+    let list = (ctx.scheduler.list)();
+    let open_id = (ctx.scheduler.open)();
+    let Some(job) = open_id
+        .as_ref()
+        .and_then(|id| list.items.iter().find(|job| &job.id == id))
+    else {
+        return Crumb::plain("Scheduled job");
+    };
+    let state = row_state(job, &(ctx.scheduler.started_here)());
+    Crumb::detailed(
+        title_for(&job.id),
+        Some(state_label(job, state, now_secs())),
+    )
+}
+
 /// One job, in full: what it runs, when it last ran, what it is doing about it
 /// now, and every run it has ever produced.
 #[component]
@@ -297,13 +325,20 @@ pub fn ScheduledJobView() -> Element {
         .as_ref()
         .and_then(|id| list.items.iter().find(|job| &job.id == id).cloned());
 
+    // The one expression the window's bar also reads, so a job cannot be
+    // called one thing in the pane and another in the chrome. Both arms
+    // hand `TopBar` a `String` equal to the one the expression they replace
+    // produced, into the same prop of the same component — so the phone's
+    // captured markup does not move.
+    let bar = crumb(&ctx);
+
     let Some(job) = job else {
         // Reachable, unlike its siblings: the poll replaces the list under this
         // screen, so a job deleted from another client disappears while its
         // detail is up. A dead end would be the one failure this app has
         // already shipped once, so this keeps the way back.
         return rsx! {
-            TopBar { title: "Scheduled job", on_back: move |()| close(&ctx), conn: true }
+            TopBar { title: bar.title, on_back: move |()| close(&ctx), conn: true }
             main { class: "scroll",
                 p { class: "empty", "That schedule is no longer on the server." }
             }
@@ -319,8 +354,8 @@ pub fn ScheduledJobView() -> Element {
 
     rsx! {
         TopBar {
-            title: title_for(&job.id),
-            subtitle: state_label(&job, state, now),
+            title: bar.title,
+            subtitle: bar.subtitle,
             on_back: move |()| close(&ctx),
             conn: true,
         }

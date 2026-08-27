@@ -118,6 +118,11 @@
    * is what put a 1.9:1 divider next to a 1.4:1 card edge in dark, which reads
    * as two different kinds of line for no reason. */
   --shell-line: var(--border-secondary);
+  /* The page's own secondary grey, held under a second name so a rule further
+   * down can mix against it. `.session-item.on` raises `--text-secondary` for
+   * the marked row, and a custom property may not name itself — see the note
+   * there. Nothing else reads this. */
+  --row-quiet: var(--text-secondary);
   flex: 1;
   min-height: 0;
   /* A COLUMN: the window's own bar, then the columns of content. It was a row
@@ -275,16 +280,114 @@
   border-color: var(--border-secondary);
 }
 
+/* WHAT THE WINDOW HAS OPEN, said once, in the window's own bar.
+ *
+ * `src/shell/desktop.rs` renders this from `nav::Detail`'s crumb whenever the
+ * detail column has something in it, and the rule further down takes the pane's
+ * own copy of the same heading back out. So there is one title per WINDOW where
+ * there used to be one per COLUMN — at three columns that is 64px of pane
+ * header given back at the top of every window, and a heading that no longer
+ * slides sideways when the nav collapses (measured: the detail title's x was
+ * 486 with the nav open and 380 with it shut, because it is padded by a gutter
+ * computed from the pane's own width).
+ *
+ * ONE LINE, and that is a constraint rather than a taste. `--chrome-h` is 52px
+ * measured off a real macOS window and the toggle beside this is a 32px control
+ * centred on the traffic lights at y 16; a two-line group centred on that same
+ * 16 starts above the top of the window. So the subtitle sits BESIDE the title
+ * — the same string the pane's `.subtitle` carries, from the same expression —
+ * on a baseline with it.
+ *
+ * 32px tall, matching the toggle, so the two are centred on the same line
+ * rather than each on its own idea of the bar's middle. */
+.chrome-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-top: var(--chrome-pad);
+  height: 32px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  /* Baseline, then centre the baseline row. `align-items: baseline` is what
+   * lines a 14px title up with a 12px subtitle beside it — centring each of
+   * them separately leaves the smaller one floating 2px high — but it also
+   * parks the pair at the top of the box, so this puts the pair back on the
+   * toggle's centre line. Derived, not typed: the title's line box is
+   * `--lh-sm` and the box is the toggle's 32, so the slack above it is half
+   * the difference. `max()` because a negative padding is an invalid
+   * declaration rather than a small one, and a root font-size large enough to
+   * turn this negative should leave the title at the top of the band rather
+   * than losing the rule. Measured at the desktop's 16px root: the heading
+   * lands at y 6..26 in a 0..32 box, against a toggle at y 0..32. */
+  padding-top: max(0px, calc((32px - var(--lh-sm)) / 2));
+  overflow: hidden;
+}
+
+/* Not the phone's `.title`, and not `--text-lg`. This is a window bar, not a
+ * page heading: the reference sets its band title at `text-xs font-medium`,
+ * and a 20px heading in a 52px strip beside a 32px icon button reads as a
+ * screen that has lost its layout. `--text-sm` is the rung this app already
+ * spends on chrome (`.session-title`). */
+.chrome-heading {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chrome-sub {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* The rest of the bar drags the window.
  *
  * A sibling of the toggle rather than the bar itself, so pressing the toggle
  * cannot also start a drag — the reference needs a `no-drag` class for exactly
  * this and the box tree gives it to us instead. It stretches, so the whole top
- * edge is grabbable rather than a 212px patch of it. */
+ * edge is grabbable rather than a 212px patch of it.
+ *
+ * `flex-shrink: 0` on a 96px basis, and that is the one number in this bar that
+ * is load-bearing rather than cosmetic. `src/main.rs` hides the titlebar, so
+ * this strip is the ONLY way the window can be moved; let it shrink and a long
+ * enough title at the 480pt window floor takes the last of it and the window
+ * becomes undraggable. The title shrinks instead — it has `min-width: 0` and
+ * its own ellipsis, and a truncated title is normal. */
 .window-drag {
-  flex: 1;
+  flex: 1 0 96px;
   align-self: stretch;
   min-width: 0;
+}
+
+/* The connection, at the trailing end of the window's bar.
+ *
+ * WITH ITS WORDS, which is a deviation from `assets/main.css`'s
+ * `.topbar .conn-label { display: none }` and from design rule 8 as that rule
+ * is written. The reason the rule gives is specific and does not survive the
+ * move: "the agent name and version are ~107px of text that a CENTRED title
+ * cannot clear". Nothing here is centred, and the strip this sits in was 1278px
+ * of nothing at a 1400pt window. An unlabelled 8px dot in the corner of a
+ * window bar is a control nobody can identify; the same dot with `goose 1.12.0`
+ * beside it is what the reference paints in the same place
+ * (`EnvironmentBadge`, `BaseChat.tsx`). `.conn-label` brings its own 9.25rem
+ * cap and ellipsis from assets/main.css. */
+.shell-chrome > .conn-badge {
+  flex: 0 0 auto;
+  margin-top: var(--chrome-pad);
+  height: 32px;
+  padding-right: 12px;
 }
 
 /* `position: relative` is load-bearing and is not about the pane's own
@@ -740,6 +843,37 @@
 .session-item.on {
   background: var(--bg-tertiary);
   border-color: var(--text-tertiary);
+  /* AND THE ROW'S SECONDARY TEXT STEPS UP WITH IT, because the fill that says
+   * "this one" costs the text on it half a point of contrast.
+   *
+   * Found by the desktop axis on its first run and it is the only finding in
+   * that run that was the stylesheet's: `--text-secondary` measures 5.02:1 on
+   * the page in light and 4.01:1 on this fill, and 7.75:1 / 4.24:1 in dark —
+   * both under the 4.5 body text owes. It fires on the timestamp, the meta
+   * line and `.ext-tools`, which is every small string a row carries, and
+   * only ever on the ONE row the detail pane came from. Exactly the shape
+   * main.css's own note over `.session-age` reasons in ("secondary, not
+   * tertiary: tertiary measured 2.2:1 in light"); this is that argument
+   * arriving one surface later.
+   *
+   * The token rather than the three selectors, so a row that grows a fourth
+   * small string cannot miss it — and a mix rather than `--text-primary`,
+   * which is 7.93:1 and would paint the marked row's timestamp as loudly as
+   * its title. 30% lands at 4.88:1 light and 5.29:1 dark: over the bar with
+   * room, where 20% clears it by 0.09 in light and this file's own habit is
+   * not to pass by a rounding error. `.session-quote` reads it too and sits
+   * on `--bg-secondary`, where the same step takes it from 5.02 to 5.63.
+   *
+   * `--row-quiet` and not `--text-secondary` on the right-hand side, and that
+   * is a language rule rather than a preference: a custom property that names
+   * itself is a CYCLE, and the whole cycle then computes to the
+   * guaranteed-invalid value — so `--text-secondary: color-mix(…,
+   * var(--text-secondary))` would not be a darker grey, it would be every
+   * small string in the row falling back to whatever it inherits. The alias
+   * is declared on `.app > .shell` with the rest of this sheet's tokens,
+   * which is an ANCESTOR, so there is no cycle and it still carries whichever
+   * value the theme resolved. */
+  --text-secondary: color-mix(in srgb, var(--text-primary) 30%, var(--row-quiet));
 }
 
 /* The selected row is filled with `--bg-tertiary`, and in light that is
@@ -916,19 +1050,50 @@
   margin-top: 0;
 }
 
-/* One green dot per window.
+/* One green dot per window, and now it is one because of where it is rather
+ * than because of how wide the window happens to be.
  *
  * `TopBar { conn: true }` is a fact about a SCREEN, and at three columns two
  * screens are up — so Scheduler and Recipes painted two identical unlabelled
- * 8pt dots, 1200pt apart, with nothing on screen explaining either. The list's
- * is the one that survives: it is beside the destination you are in, it does
- * not move when you open and close things, and it is the one that is there on
- * every list. Below the three-column breakpoint the detail is alone on screen
- * and keeps its own. */
-@media (min-width: 902px) {
-  .pane-detail .topbar > .conn-badge {
-    display: none;
-  }
+ * 8pt dots, 1200pt apart, with nothing on screen explaining either. This used
+ * to be a `@media (min-width: 902px)` that hid the DETAIL's copy, which left
+ * the badge jumping between columns as the window was dragged across that
+ * width: the state of the connection appeared to move because the layout
+ * reflowed. `.shell-chrome` now carries it (`src/shell/desktop.rs`), so both
+ * panes give theirs up at every width and there is nothing left to reflow.
+ *
+ * `.pane .topbar >` and not `.pane-detail .topbar >`: `views/code.rs` hand-
+ * rolls a badge of its own in the Code LIST's header, so a rule naming only
+ * the component's call sites would leave that one painting a second dot. */
+.pane .topbar > .conn-badge {
+  display: none;
+}
+
+/* AND ONE TITLE PER WINDOW, for the same reason and by the same means.
+ *
+ * The window's bar names whatever the detail column has open, so the pane
+ * below it must not name it again — three columns would otherwise show the
+ * chat's title twice, 500pt apart and at two different sizes. What is left in
+ * the pane's header is the back chevron and the screen's own controls, which
+ * are pane-scoped and stay: at three columns the chevron closes the DETAIL
+ * while the list stays on screen, and in the window's bar that would read as a
+ * window-level Back.
+ *
+ * Keyed on `[data-detail="open"]` rather than on `.pane-detail` alone even
+ * though the empty column has no header to hide: the attribute is the same
+ * fact the shell decides the bar's title from, so the two halves of "the
+ * window names it, the pane does not" are visibly one condition.
+ *
+ * `.topbar >`, so this reaches the six headers `views/code.rs` and
+ * `views/chat.rs` hand-roll exactly as it reaches `views::chrome::TopBar`'s.
+ * A Rust-side conditional inside the component would have covered eight of the
+ * fourteen call sites and left five of the nine detail screens painting a
+ * second title. The bar's height does not change: it is 4rem so that the two
+ * panes' headers do not stair-step across the divider between them, and that
+ * is still true of a header holding only a chevron. */
+.shell[data-detail="open"] .pane-detail .topbar > .title,
+.shell[data-detail="open"] .pane-detail .topbar > .titlegroup {
+  display: none;
 }
 
 /* ── 7. the fourth line of a preview ────────────────────────────────────

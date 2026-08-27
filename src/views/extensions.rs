@@ -18,7 +18,8 @@ use crate::extensions::{
     CatalogEntry, RowState, Screen, Sheet, CATALOG,
 };
 use crate::icons::Icon;
-use crate::state::use_app_ctx;
+use crate::nav::Crumb;
+use crate::state::{use_app_ctx, AppCtx};
 use crate::views::chrome::{ListRow, RowAction, RowFace, TopBar};
 
 #[component]
@@ -185,6 +186,35 @@ fn ExtensionRow(entry: GooseExtensionEntry, toggle: Option<crate::extensions::To
     }
 }
 
+/// What the open extension is called, once.
+///
+/// Read by two things that are never on screen together: the header below,
+/// and — on the desktop — the window's own bar, which takes the heading out of
+/// the pane and paints it in `.shell-chrome` instead
+/// (`src/shell/desktop.rs`, `assets/desktop.css`). The `None` arm is the
+/// view's own fallback, and it is reachable: the list is refreshed under this
+/// screen, so an extension removed on the server disappears while its detail
+/// is up.
+pub(crate) fn crumb(ctx: &AppCtx) -> Crumb {
+    let Some(entry) = ctx
+        .extensions
+        .list
+        .read()
+        .items
+        .iter()
+        .find(|e| Some(e.extension.name()) == (ctx.extensions.open)().as_deref())
+        .cloned()
+    else {
+        return Crumb::plain("Extension");
+    };
+    let title = title_for(&entry.extension);
+    let name = entry.extension.name().to_owned();
+    // The config name, when it is not already the title: it is what you would
+    // grep the server's config.yaml for.
+    let subtitle = (name != title).then_some(name);
+    Crumb::detailed(title, subtitle)
+}
+
 /// One extension in full: what it is, what it runs, what it may call.
 ///
 /// Read-only. Enabling and disabling live behind the row's swipe on the list,
@@ -208,27 +238,30 @@ pub(crate) fn ExtensionDetailView() -> Element {
         screen.set(Screen::List);
     };
 
+    // The one expression the window's bar also reads, so an extension cannot
+    // be called one thing in the pane and another in the chrome. Both arms
+    // hand `TopBar` a `String` equal to the one the expression they replace
+    // produced, into the same prop of the same component — so the phone's
+    // captured markup does not move.
+    let bar = crumb(&ctx);
+
     let Some(entry) = entry else {
         // The list was refreshed and this one is gone — removed on the server,
         // or the config was reloaded. Say so rather than showing a blank page.
         return rsx! {
-            TopBar { title: "Extension", on_back: back, conn: true }
+            TopBar { title: bar.title, on_back: back, conn: true }
             main { class: "scroll",
                 p { class: "empty", "This extension is no longer configured." }
             }
         };
     };
 
-    let title = title_for(&entry.extension);
-    let name = entry.extension.name().to_string();
     let state = RowState::of(entry.enabled, false, false);
 
     rsx! {
         TopBar {
-            title: title.clone(),
-            // The config name, when it is not already the title: it is what
-            // you would grep the server's config.yaml for.
-            subtitle: (name != title).then(|| name.clone()),
+            title: bar.title,
+            subtitle: bar.subtitle,
             on_back: back,
             conn: true,
         }
