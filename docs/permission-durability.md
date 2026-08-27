@@ -4,49 +4,170 @@ What happens when the transport dies while goose is waiting on a permission,
 why the answer is not the one this repo has been writing down, and what can
 actually be built.
 
-Everything below is cited. Where a claim rests on reading rather than running,
-it says so — section 7 is the list of experiments that would settle each one,
-and two of them would change the fix.
+**This document has been wrong twice, and both times it was written down as
+fact.** Section 0 is the measurement that settled it; read that before
+anything else. Everything after it is cited, and where a claim still rests on
+reading rather than running it says so — section 7 is the list of what is still
+open.
+
+## 0. What was measured, on a real server
+
+Not a reading. A run. Where this section and any other document in the
+repository disagree, this section wins.
+
+**Setup.** goose 1.46.0 over a Tailscale tailnet. A fresh session with
+`mode = approve`, prompted: "Run the shell command `uname -a` using your
+developer tool." The harness is
+`crates/goose-acp-client/examples/perm_loss.rs`, driven by
+`scripts/verify/permission-loss-experiment.sh`. The client received the
+permission ask and then **never answered**. The process was then killed, two
+ways, 75 seconds after the ask. A fresh client reconnected and called
+`session/load`.
+
+**During the turn**, from the saved log:
+
+```
+update: SessionInfoUpdate(... meta: {"goose": {"activeRunId": "run_882cc68c-..."}})
+update: SessionInfoUpdate(title: Some("Run uname command"), updated_at: ..., meta: {"messageCount": ...})
+update: ToolCall(ToolCallUpdate { tool_call_id: "call_01a0422902557371bf35096b",
+                                  title: Some("shell · uname -a"), status: None, ... })
+ASK RECEIVED: Some("shell · uname -a")
+PARKED pid=9963 session=20260827_3
+```
+
+**After the reconnect**, `session/load` replayed exactly four things:
+
+```
+REPLAY UserMessageChunk(... "Run the shell command `uname -a` ...")
+REPLAY GooseUpdate usage_update
+REPLAY UsageUpdate
+REPLAY AvailableCommandsUpdate
+```
+
+No `ToolCall`. No assistant message. No "declined". No tool response of any
+kind.
+
+**Identical for both deaths.** `kill -STOP` — the process frozen with its
+socket still open, which is what iOS does to a backgrounded app — and `kill -9`
+— the fd closed and the peer sees a FIN. Two sessions, **`20260827_3`** and
+**`20260827_4`**, same result.
+
+### 0.1 The three accounts, and how each one fared
+
+Three competing accounts of this failure had been written into this repository,
+all of them from reading source. Two of them were stated as fact.
+
+1. **"goose answers with `Permission::Cancel`, the tool is DECLINED, and the
+   transcript says the user declined it."** — **FALSIFIED.** This was stated as
+   fact in two places: the `AcpEvent::Disconnected` arm of `pump` in
+   `src/state.rs` (now `:671-689`, corrected in place) and §2 of
+   `docs/push-notifications.md` (now `:90-113`, corrected in place). Both keep
+   the old wording quoted so the mistake stays legible. There is no declined
+   tool in the replay. No `Failed` status, no `DECLINED_RESPONSE` text, no tool
+   response at all. Nothing.
+2. **"The whole ROUND is discarded."** — **CONFIRMED.** This was section 2.3 of
+   this document, hedged as inference, and it is what happened.
+3. **"Nothing happens; the server never notices, so a quiet client looks like a
+   thinking one."** — **FALSIFIED.** Something happened. The round is gone
+   within 75 seconds, and the tool call is not sitting there pending.
+
+The second entry is the only one that survives, and it survived because it was
+the only one that was *not* asserted as fact.
+
+### 0.2 The cruel part
+
+What survives is the user's prompt **and the generated title**. The session is
+called **"Run uname command"** and contains only the request. A user coming
+back finds a session named after work that has no trace of having happened.
+
+### 0.3 What this run did NOT establish
+
+Read these as carefully as the result. Getting one thing right does not license
+the next confident source read.
+
+- **Which mechanism destroyed the round.** The outcome is measured; the cause
+  is not. Section 2.3's abort predicts exactly this replay — but so does "the
+  `Err` arm ran and answered `Permission::Cancel`, and the round was never
+  persisted anyway, so the answer left no trace." The two are indistinguishable
+  from the client. The discriminator is the server's own log line
+  `error!("permission request failed")` at
+  `/Users/phillipchaffee/git/goose/crates/goose/src/acp/server.rs:1313`, which
+  was not captured on this run. See 7.1.
+- **Whether the round dies while the socket is still open.** The `STOP` case
+  does not isolate this: `scripts/verify/permission-loss-experiment.sh:107`
+  sends `kill -CONT` and then `kill -9` after the 75-second wait and before the
+  inspect, so the fd is closed either way before `session/load` runs. What the
+  `STOP` case proves is that the *outcome* is identical whether or not the peer
+  ever saw a FIN — which is enough to falsify account 3, because under account 3
+  the tool call would still be in the replay, pending. It is not enough to date
+  the death. See 7.4.
+- **That side effects of already-run tools remain on disk with no transcript
+  record.** The tool never executed here; it was blocked on the permission. The
+  claim in section 3 that a round's already-dispatched tools leave their marks
+  behind with nothing in the session file to say so is **unverified**, and this
+  run does not support it. See 7.6 for the experiment that would.
 
 ## 1. What happens, from the user's side
 
 You send a prompt, the agent starts a turn, and one of its tool calls needs
 your approval. The modal comes up asking whether `developer__shell` may run
 `rm -rf build/`. Before you answer, the phone locks — or you take a call, or
-the tailnet roams, or you switch apps for long enough. The socket dies with the
-process. When you come back, the app reconnects on its own after a few seconds,
-the transcript reloads, and the modal is gone. Nothing says it was ever there.
-What you find in its place is either a tool card marked **Failed** whose
-collapsed output reads "The user has declined to run this tool", or — more
-likely, see section 3 — a transcript that simply stops one round early, with no
-assistant message, no tool call and no explanation, as though the agent never
-replied. Either way a decision you were being asked to make was made without
-you, and the app's only trace of it is a red dot on the connection badge
+the tailnet roams, or you switch apps for long enough. When you come back, the
+app reconnects on its own after a few seconds, the transcript reloads, and the
+modal is gone.
+
+What you find is measured, not guessed (section 0): a transcript that **stops
+one round early**. No assistant message, no tool card, no explanation, as though
+the agent never replied — and a session title describing the work anyway. Your
+prompt is there. The answer to it is not, and neither is any record that it was
+ever attempted.
+
+The app's only trace of it is a red dot on the connection badge
 (`src/views/mod.rs:37`) and a four-second toast reading `Prompt failed:
 connection closed` (`src/state.rs:1364`) that has almost certainly expired
 before you look at the screen.
 
+Note what you do *not* find, because this repository told you twice that you
+would: a tool card marked **Failed** whose collapsed output reads "The user has
+declined to run this tool." That card does not exist. See 0.1.
+
 ## 2. The mechanism, on both sides of the wire
 
-### 2.1 What this repo currently believes
+### 2.1 What this repo believed, and how it was wrong
 
-Two places in the tree state the model this document is replacing.
+Two places in the tree stated the model section 0 falsified, both as fact.
 
-`src/state.rs:671` says:
+The `AcpEvent::Disconnected` arm of `pump` in `src/state.rs` said:
 
 > Transport is gone; the server resolves its own pending permission requests
 > via the transport-error path.
 
-and `docs/design.md:658` says:
+and §2 of `docs/push-notifications.md` said it at length, with the source quoted
+and an arrow drawn at the line:
+
+> When the phone's transport dies, that request fails, and goose answers its
+> own question with `Permission::Cancel`. […] **It silently denies the tool and
+> kills the run.**
+
+Both are wrong, and both have been corrected in place, with a note saying so
+rather than a silent edit.
+
+Design rule 13 (`docs/design.md`, "A list only reports what its backend can be
+asked") said a third thing:
 
 > drop the connection and the server resolves it as a transport error and the
 > turn unwinds with it, which is why the app clears that queue on disconnect.
 
-The first is the belief this design refutes. The second happens to describe the
-likely outcome correctly while naming the wrong cause, which is worse than being
-wrong, because it reads as corroboration.
+That one reaches the right *conclusion* — a goose session cannot be found
+sitting blocked while the app is away, which section 0 confirms — by naming a
+cause that was never observed. That is worse than being wrong, because it reads
+as corroboration of the sentence above it.
 
-### 2.2 The code the belief points at is real
+The rest of section 2 is the source reading that *predicted* the measured
+result. It is kept because it is still the best account of the mechanism, and
+it is still marked as reading, because 0.3 says the mechanism was not measured.
+
+### 2.2 The code the falsified belief points at is real
 
 `/Users/phillipchaffee/git/goose/crates/goose/src/acp/server.rs:1299-1325`
 sends the ask and registers a callback whose `Err` arm answers on the client's
@@ -91,12 +212,18 @@ indistinguishable there — only `AlwaysDeny` differs, by additionally writing a
 (`crates/goose/src/acp/common.rs:42-60`), so the wire cannot tell "the user
 pressed cancel" from "the socket died" either.
 
-So *if* that arm runs, the ask is answered as a user denial, persisted, and the
-model is instructed not to retry.
+So *if* that arm runs, the ask is answered as a user denial — and the reading
+above concluded, wrongly, that the denial would therefore be **persisted** and
+visible. Section 0 measured the transcript and there is no denial in it. Either
+the arm did not run (2.3) or it ran and its answer went down with the
+un-persisted round (2.4). What the arm cannot do is put a declined tool in front
+of the user, because the run looked and there was none.
 
-### 2.3 On the WebSocket this app uses, that arm almost certainly never runs
+### 2.3 On the WebSocket this app uses, that arm probably never runs
 
-This is the part that changes the fix.
+This is the part that predicted the measured result. It is still a source
+reading — 0.3 is explicit that the mechanism was not measured — but it is the
+only one of the three accounts that came out of the run intact.
 
 The app connects over a WebSocket
 (`crates/goose-acp-client/src/client.rs:273`, tungstenite). goose serves `/acp`
@@ -150,13 +277,18 @@ Two consequences, and neither is a race:
   to outlive it. Drop the handler and the generator is dropped mid-`await`.
 
 So on this transport the bug is not "goose answers your ask". It is **"goose
-destroys the conversation that contained your ask"**. The `Err` arm at
+destroys the conversation that contained your ask"** — and *that* is what the
+run in section 0 saw: prompt in, title in, round gone. The `Err` arm at
 `server.rs:1313` is a real bug on the *stdio* transport, where EOF genuinely
 does fail pending replies; this app inherited the fear of it without inheriting
 the behaviour.
 
-I have not run this. It is inference from the pinned source, and section 7.1 is
-the experiment that settles it.
+The **outcome** described here is measured (section 0). The **mechanism** is
+still inference from the pinned source: the run cannot separate "aborted before
+the arm ran" from "the arm ran and the round was discarded anyway", because both
+produce a replay with no tool call in it. Section 7.1 is the one extra
+observation — the server's log — that separates them, and it is now a small
+follow-up rather than the load-bearing unknown it used to be.
 
 ### 2.4 What is lost when the generator is dropped
 
@@ -261,32 +393,47 @@ sleep.
 
 ## 3. How bad it really is
 
-**Worst realistic case.** You approve a plan; the model opens a round with
-several tool calls; the auto-approved ones start running and touch the disk; one
-hits an approval gate; you lock the phone. Under section 2.3 you lose the whole
-provider round — the assistant message, every tool request in it, and every tool
-response in it — because none of it is persisted until `agent.rs:3339`. Earlier
-rounds and your prompt survive. What does **not** get rolled back are the side
-effects the already-dispatched tools produced on the server's disk. So the
-session file ends at the previous round while the working tree has moved, and
-your next prompt is sent against a history that does not know those files were
-written. That is the real severity: not a lost message, a lost *record* of work
-that happened.
+**The measured case.** Section 0, minimally: one prompt, one tool call, one ask,
+no answer. The round is gone. The prompt and the title remain. That is the floor,
+and it is already bad — a session called "Run uname command" that contains only
+the request to run it.
 
-Under section 2.2's world instead — if the abort does not win — you lose the tool
-call to a decline you never made, attributed to you in the transcript, with the
-model instructed not to retry.
+**Worst case, and it is a projection, not a measurement.** You approve a plan;
+the model opens a round with several tool calls; the auto-approved ones start
+running and touch the disk; one hits an approval gate; you lock the phone. The
+round is lost the same way — the assistant message, every tool request in it,
+and every tool response in it — because none of it is persisted until
+`agent.rs:3339`. Earlier rounds and your prompt survive.
 
-There is a third case, and on a phone it may be the most common: the network
-simply vanishes with no FIN (tailnet roam, cell handoff). Then the server
-observes nothing. The ws loop is not reading anything, there is no server-side
-keepalive at all — `websocket_server.rs:131` answers inbound pings and never
-sends one, and goose adds none in `acp/transport/mod.rs` — and
-`confirmation_rx.await` has no timeout. The turn hangs indefinitely inside an
-unreachable connection, holding a live `Agent`, while the app reconnects onto a
-brand-new `GooseAgentConnection` with an agent of its own
-(`crates/goose/src/acp/server.rs:2332-2345`) writing to the same session file.
-One leaked agent and one leaked turn per lock-and-reconnect cycle.
+What is **not established** is the next sentence this document used to assert:
+that the side effects the already-dispatched tools produced on the server's disk
+survive with no transcript record of them. It follows from the persistence
+reading, and it is the reason to care, but the run in section 0 never executed a
+tool — it was blocked on the permission the whole time. Treat it as a
+well-supported prediction and nothing more until 7.6 is run. If it holds, the
+real severity is not a lost message but a lost *record* of work that happened.
+
+Two other cases this document used to weigh equally, now settled:
+
+- **"You lose the tool call to a decline you never made."** Section 2.2's world.
+  **Falsified** (0.1). There is no decline in the transcript to be attributed to
+  you, because there is no tool call in the transcript at all.
+- **"The network vanishes with no FIN, so the server observes nothing and the
+  turn hangs forever."** **Falsified as the user-visible outcome** (0.1,
+  account 3). The `STOP` run is exactly this shape — a frozen process holding an
+  open socket, which is what a suspended phone is — and 75 seconds later the
+  round was gone, not parked. Under this account the replay would have shown the
+  tool call still pending; it showed no tool call.
+
+  What survives of it is the *resource* concern, which the replay cannot speak
+  to. There is still no server-side keepalive — `websocket_server.rs:131`
+  answers inbound pings and never sends one, and goose adds none in
+  `acp/transport/mod.rs` — and `confirmation_rx.await` still has no timeout. So
+  a turn may still be holding a live `Agent` inside an unreachable connection
+  while the app reconnects onto a brand-new `GooseAgentConnection` with an agent
+  of its own (`crates/goose/src/acp/server.rs:2332-2345`) writing to the same
+  session file. Whether that leak is real is 7.4, and it is now a
+  count-the-agents question rather than a what-does-the-user-see one.
 
 **How often.** Every time the phone is locked or backgrounded for more than a
 few seconds while an ask is on screen — which is the situation the whole app is
@@ -297,8 +444,11 @@ platform.
 **What is not affected.** Nothing on the Code tab: OpenCode exposes a
 pending-permissions endpoint and the app polls it (`src/code.rs:389-413`), so an
 ask there genuinely does survive the app being away. That asymmetry is already
-written up as design rule 13, and the half of rule 13 that explains why the
-goose plane needs nothing is the half that is wrong.
+written up as design rule 13, whose *conclusion* — the Chats list gets nothing —
+survives section 0 intact, because a goose ask really cannot be found parked
+while the app is away. Its stated *reason* did not survive, and
+design rule 13 (`docs/design.md:661-678`) has been corrected to say what was
+measured instead of the transport-error story it used to tell.
 
 ## 4. What can be fixed client-side today
 
@@ -364,14 +514,19 @@ suspended.
 
 Shape, per the design guide: a tint and a hairline with a dot, not a slab (rule
 7), sitting above the composer on the chat screen and dismissible; the wording
-names the tool and the session and says what is not known — "`shell: rm -rf
-build/` was waiting on you when the connection dropped. goose may have cancelled
-it." Where an ask belonged to a session that is not on screen, the chat row in
-the Chats list is the place, in the register rule 8 gives it.
+names the tool and the session. **The wording changes now that section 0 is
+measured.** "goose may have cancelled it" was hedging against account 1, and
+account 1 is dead: nothing was cancelled, the round was thrown away. Say that —
+"`shell: rm -rf build/` was waiting on you when the connection dropped. goose
+discarded the reply it was working on; your prompt is still there." Where an ask
+belonged to a session that is not on screen, the chat row in the Chats list is
+the place, in the register rule 8 gives it.
 
-Note what this collides with: rule 13 currently says the Chats list must show
-nothing. That rule's justification is section 2.2's model, and it has to be
-rewritten in the same change.
+Note what this collides with: rule 13 says the Chats list must show nothing, and
+section 0 says its *conclusion* is right. This surface does not contradict it —
+rule 13 is about reporting an ask that is still live and answerable, and there
+is no such thing on the goose plane. This reports an ask that is **already
+lost**, which is a different claim and a different register.
 
 ### 4.3 Stop destroying live turns on a deliberate reconnect
 
@@ -385,13 +540,27 @@ down.
 was on the table and it does not survive contact. Suppressing the Close leaves
 the old socket open server-side until TCP notices, which puts two connections —
 and therefore two `Agent`s, per `server_factory.rs:63-108` — on the same session
-file. That is section 3's third case, deliberately induced.
+file. Section 0's `STOP` case is the closest thing to a measurement of that
+shape, and it lost the round anyway, so this buys nothing even before the
+double-writer problem.
 
-### 4.4 Correct the two places that record the wrong model
+### 4.4 Correct every place that records the wrong model — DONE
 
-`src/state.rs:671-672` and `docs/design.md:658`. Both currently assert the
-transport-error path as fact. A comment that encodes a false mechanism is how
-this understanding propagated in the first place.
+Four places asserted the transport-error path, two of them as fact, and all four
+have been corrected against section 0 rather than quietly edited: the
+`AcpEvent::Disconnected` arm in `src/state.rs:671-689` (**comment only — no
+behaviour changed in that commit**), design rule 13 in
+`docs/design.md:661-678`, §2 of `docs/push-notifications.md`, and this document.
+Each keeps the wrong sentence quoted next to the correction. Two more files
+posed the three accounts as an open question and now record the answer:
+`crates/goose-acp-client/examples/perm_loss.rs` and
+`scripts/verify/permission-loss-experiment.sh`. A fifth,
+`docs/desktop-roadmap.md`, did not state the mechanism but did rest on "the
+client can go away and the server carries on", and has been given the measured
+counter-example.
+
+A comment that encodes a false mechanism is how this understanding propagated in
+the first place, and it propagated to four files before anyone ran the thing.
 
 ### 4.5 Teach the mock the failure, before writing any test
 
@@ -403,20 +572,30 @@ waits. It behaves the way we wish goose behaved. A regression test written
 against it today passes on a server that never had the bug, which is worse than
 no test.
 
-It needs two opt-in modes, because we do not yet know which world we are in:
-`MOCK_DIE_ON_CLOSE=cancel` (self-answer `cancelled` when the socket dies with a
-server-initiated request outstanding — section 2.2's world) and
-`MOCK_DIE_ON_CLOSE=abort` (drop the turn task outright, emitting nothing —
-section 2.3's world). The client fix must render both correctly, and it can,
-because it reports from its own snapshot rather than from anything the server
-says afterwards.
+**Section 0 changes what to build here.** The plan used to be two opt-in modes,
+`MOCK_DIE_ON_CLOSE=cancel` and `MOCK_DIE_ON_CLOSE=abort`, because we did not
+know which world we were in. We know: the `abort` mode is the one that
+reproduces the measured server. Build that one, and make it faithful to the
+replay in section 0 rather than to the source reading — on client disconnect,
+drop the turn task, persist nothing from the round, **and keep the user message
+and the session title**, because those are what actually survived.
+
+`cancel` mode is no longer needed to hedge a live uncertainty. Keep it only if
+it is wanted as a regression guard for the stdio transport, where the `Err` arm
+genuinely does run (2.3), and label it as such — not as "the other possible
+world".
+
+The client fix must render the `abort` case correctly, and it can, because it
+reports from its own snapshot rather than from anything the server says
+afterwards. That property is worth more now than it was: section 0 proves the
+server says *nothing* afterwards.
 
 ### 4.6 What none of this fixes
 
-The ask is still decided or destroyed. The work in the aborted round is still
-lost, and its side effects still have no transcript record. The user still
-cannot answer a question they were asked. This is a change from a silent wrong
-outcome to a stated one — which is worth shipping, and is not a fix.
+The round is still destroyed. The user still cannot answer a question they were
+asked. Whether the destroyed round's side effects are left on disk unrecorded is
+still unverified (0.3, 7.6). This is a change from a silent wrong outcome to a
+stated one — which is worth shipping, and is not a fix.
 
 Two more things explicitly not worth building, with the reasons:
 
@@ -425,16 +604,26 @@ Two more things explicitly not worth building, with the reasons:
   (`tao-0.34.8/src/platform_impl/ios/view.rs:618-620`); `did_enter_background`
   is registered with a literally empty body (`:623`). So the signal also fires
   for a Control Center pull and a notification banner, and denying on it would
-  destroy turns the user never left. And the payoff at the end of that work is a
-  transcript byte-identical to today's, because `reject_once` and the synthesized
-  `Cancel` both write `DECLINED_RESPONSE`. Worse: an explicitly answered ask can
-  never benefit from the upstream fix in section 5, because
-  `resend_pending_tool_permissions` skips anything with a recorded response.
+  destroy turns the user never left. That objection stands and is on its own
+  sufficient.
+
+  **One of the old objections here is falsified and has to be withdrawn.** This
+  section used to argue that the payoff is "a transcript byte-identical to
+  today's, because `reject_once` and the synthesized `Cancel` both write
+  `DECLINED_RESPONSE`". Section 0 measured today's transcript and there is no
+  `DECLINED_RESPONSE` in it — there is no tool call in it. So a deliberate
+  answer sent before the socket dies would let the round *finish and persist*, a
+  strictly better outcome than the measured one, not an identical one. The
+  argument against it is now only the false-positive `Suspended` and the fact
+  that an explicitly answered ask can never benefit from the upstream fix in
+  section 5 (`resend_pending_tool_permissions` skips anything with a recorded
+  response). Weigh it on those, and note that the second reason is contingent on
+  an upstream change nobody has made.
+
   (For the record, `unsafe_code = "forbid"` is *not* what blocks this —
   `beginBackgroundTaskWithExpirationHandler`, `endBackgroundTask`,
   `backgroundTimeRemaining` and `sharedApplication` are all safe `pub fn` in
-  objc2-ui-kit 0.3.2. The window is reachable; there is nothing worth sending in
-  it.)
+  objc2-ui-kit 0.3.2. The window is reachable.)
 - **A second always-connected "notifier" process.** Every connection gets its own
   `GooseAcpAgent` with its own `sessions` map and its own `ToolConfirmationRouter`
   (`crates/goose/src/acp/transport/mod.rs:188-190`,
@@ -449,6 +638,13 @@ Two more things explicitly not worth building, with the reasons:
 There are two, in two repositories, and they are not interchangeable. Written as
 the pull requests would be.
 
+Both were sized when it was still unknown which world we were in. Section 0
+settles the ordering: 5.1 is the one that addresses the measured failure, and
+5.2 addresses a conflation that — on this transport — currently has no observable
+victim, because there is no persisted denial to be wrongly attributed. 5.2 stops
+being theoretical the moment 5.1 lands, which is the argument for landing them in
+that order and not the other.
+
 ### 5.1 `agent-client-protocol-http`: peer teardown must unwind, not abort
 
 **Problem.** When a WebSocket peer goes away, `run_ws` removes the connection and
@@ -461,12 +657,15 @@ un-persisted state with it. The comment at `connection.rs:191` says this is
 deliberate, and for a peer that has finished it is fine. For a peer that
 vanished mid-request it is data loss.
 
+**Evidence it is the right target.** Section 0: the round the peer's departure
+interrupted is not in the session file afterwards, on either kind of departure.
+Quote the replay list in the PR; it is four lines and it is the whole argument.
+
 **Minimal change.** On ws loop exit, close the agent's *inbound* path first —
 drop or close `inbound_tx` so the agent's incoming stream reaches EOF — and give
-the connection future a bounded grace period to unwind before aborting. That is
-what turns section 2.3's world into section 2.2's: pending replies fail with
-`incoming_transport_closed`, close callbacks run, and any state the handler was
-holding gets its chance to flush.
+the connection future a bounded grace period to unwind before aborting: pending
+replies fail with `incoming_transport_closed`, close callbacks run, and any state
+the handler was holding gets its chance to flush.
 
 **Must not break.** The grace must be bounded, or a wedged handler holds the
 task forever. `close_connection_task` (`connection.rs:574-585`) already has the
@@ -532,21 +731,30 @@ the next `session/load`, and it is already called on every load (`:302`).
 
 **Also worth doing in the same PR, and much cheaper:** a server-side keepalive on
 the ACP WebSocket. `websocket_server.rs:131` answers inbound pings and never
-sends one, and goose adds nothing in `acp/transport/mod.rs`, so a network that
-vanishes without a FIN leaks a turn and an agent indefinitely (section 3's third
-case). That leak exists independently of anything to do with permissions.
+sends one, and goose adds nothing in `acp/transport/mod.rs`. Whether that leaks a
+turn and an agent is now the only live part of section 3's third case, and it is
+7.4. Note that it does not leak *visibly*: section 0's `STOP` run had the socket
+open and unread for 75 seconds and the round was destroyed regardless, so any
+leak is a resource leak on the server, not a parked turn a user could return to.
+That leak, if it exists, exists independently of anything to do with permissions.
 
 ## 6. Staging
 
 The ordering is chosen so that nothing depends on a question that has not been
 answered yet.
 
-**Stage 0 — settle which world we are in.** Section 7.1. One afternoon against a
-real goose over ws. Everything after this is cheaper once it is known, and
-sections 4.5 and 5.1 are shaped differently depending on the answer.
+**Stage 0 — settle which world we are in. DONE.** Section 0. Run against goose
+1.46.0 over the tailnet, sessions `20260827_3` and `20260827_4`; harness kept at
+`crates/goose-acp-client/examples/perm_loss.rs` and
+`scripts/verify/permission-loss-experiment.sh` so it can be re-run against a new
+server build. Result: the round is discarded, and the two accounts that had been
+written down as fact are both wrong. What is left open is in 7.1 (the mechanism)
+and 7.6 (the side effects), and neither blocks a stage below.
 
-**Stage 1 — the mock learns to fail (4.5).** Both modes. Nothing can be tested
-before this and the CLAUDE.md lockstep rule requires it anyway.
+**Stage 1 — the mock learns to fail (4.5).** The `abort` mode, matched to
+section 0's replay: user message and title kept, everything else from the round
+dropped. Nothing can be tested before this and the CLAUDE.md lockstep rule
+requires it anyway.
 
 **Stage 2 — record and report (4.1, 4.2, 4.4).** One commit or two: the signal
 and the two drain sites, then the surface. No new dependency, no protocol change,
@@ -568,34 +776,42 @@ persistence first (small, and safe once 5.1 landed). The resumable re-ask second
 guard at `src/state.rs:708` buy anything — today it is a real gap with nothing
 on the other side of it.
 
-## 7. What would falsify this, and how to check
+## 7. What is still open, and how to check
 
-**7.1 — Does the abort win, or does the `Err` arm run?** This is the load-bearing
-uncertainty and it changes stages 1, 4 and 5.
+The headline question — which of the three accounts is true — is **closed**, by
+section 0, and closing it falsified two of them. What follows is what that run
+did not reach. Read 0.3 first; it says in one place what each of these is
+missing.
 
-Run a real goose over ws with the pinned SDK. Start a turn that hits an approval
-gate. From a scratch client, half-close the socket (or `SIGSTOP` the client, or
-send a Close frame) while the permission is outstanding. Then read the session
-file. Three possible outcomes, three different worlds:
+**7.1 — Does the abort win, or does the `Err` arm run and leave no trace?**
+*Narrowed, not answered.* The outcome is settled: the round is discarded either
+way. The mechanism is not, because the replay is identical under both. This no
+longer changes the fix — 5.1 is the right PR under either — but it changes what
+the PR says about cause, so capture it before writing one.
 
-- a `DECLINED_RESPONSE` tool response present → section 2.2's world; the original
-  report is right and 5.1 is unnecessary.
-- the round absent entirely — no assistant message, no tool request → section
-  2.3's world; this document is right.
-- a tool request present with no response → a fourth world, in which
-  `fix_conversation` will silently delete the orphan on the next prompt
-  ("Removed orphaned tool request",
-  `crates/goose-provider-types/src/conversation.rs:500-513`, applied at
-  `agent.rs:801`). Also bad, also different.
+One observation settles it, and the session ids and harness from section 0 make
+it cheap: run the same experiment with the server's log captured, and look for
+`error!("permission request failed")` at
+`/Users/phillipchaffee/git/goose/crates/goose/src/acp/server.rs:1313`. Present
+means the arm ran and its `Permission::Cancel` was simply thrown away with the
+round; absent means the task was aborted before it could. Nothing else in the
+transcript distinguishes them.
 
-Watching for the `error!("permission request failed")` line at
-`acp/server.rs:1313` in the server log settles it directly: present means the arm
-ran, absent means it was aborted.
+Still worth watching for while there: a tool request persisted with no response.
+That was listed as a possible fourth world and section 0 rules it out for the
+blocked-on-permission case, but it may still arise for a round where some tool
+calls completed (7.6). If it does, `fix_conversation` silently deletes the orphan
+on the next prompt ("Removed orphaned tool request",
+`crates/goose-provider-types/src/conversation.rs:500-513`, applied at
+`agent.rs:801`).
 
-**7.2 — Is the deployed goose the pinned rev?** All of section 2.3 assumes the
-server the phone talks to is built from `c97a5203` and serves ws. A binary
-predating it, or one reached over stdio behind a bridge, may be in section 2.2's
-world regardless. Check the deployed build before writing PR 5.1.
+**7.2 — Does this generalise off the measured build?** *Partly answered.*
+Section 0 measured goose **1.46.0** over ws on the tailnet, which is the
+deployment that matters. The source reading in 2.3 is against the pinned SDK rev
+`c97a5203`; whether 1.46.0 is built from exactly that rev was not checked, and a
+server reached over stdio behind a bridge is a different transport with a
+different EOF story (2.3). Re-run the harness after a server upgrade rather than
+assuming the result travels — that is what it is checked in for.
 
 **7.3 — Which client task wins the drain race?** Section 2.5 claims the
 `send_prompt` sweep usually empties the queue before the pump's `Disconnected`
@@ -605,10 +821,25 @@ real and both sites need treating regardless of which usually wins — which is
 what 4.1 already does, so this experiment can only strengthen the design, never
 change it.
 
-**7.4 — Does a no-FIN disappearance really leak an agent?** Section 3's third
-case. Block the tailnet route rather than closing the socket, wait, reconnect,
-and count `GooseAcpAgent` instances or watch for two writers on one session file.
-If it does not leak, the keepalive ask in 5.2 can be dropped.
+**7.4 — Does a no-FIN disappearance leak an agent, and when does the round
+actually die?** Two questions that share one experiment, and section 0 sharpened
+both.
+
+The user-visible half is answered: a frozen client with an open socket loses the
+round anyway. The `STOP` case does not date the death, because
+`scripts/verify/permission-loss-experiment.sh:107` closes the fd with `kill -9`
+after the 75-second wait and before the inspect (0.3). To date it, `session/load`
+from a *third* client while the frozen one is still frozen and its socket still
+open — the harness's `inspect` mode already does exactly this and takes a session
+id, so it is a second invocation, not new code. Round already gone at that point
+→ the server acts on something other than the FIN. Round still there → it dies at
+the close, and the STOP and KILL cases only looked identical because of the
+cleanup kill.
+
+The resource half is unchanged: block the tailnet route rather than closing the
+socket, wait, reconnect, and count `GooseAcpAgent` instances or watch for two
+writers on one session file. If it does not leak, the keepalive ask in 5.2 can be
+dropped.
 
 **7.5 — Does WKWebView under dioxus-mobile fire `visibilitychange` on
 backgrounding?** Unverified, and nothing in this design depends on it — it is
@@ -617,3 +848,41 @@ answer it first. The bridge pattern to test with is the one
 `use_pull_to_refresh` already uses (`src/viewport.rs:437-450`): a JS listener
 registered once, one message per transition, so it costs no per-frame
 synchronous XHR.
+
+**7.6 — Do the side effects of tools that already ran survive with no transcript
+record?** *Unverified, and it is the claim that sets the severity.* Section 0
+cannot speak to it: the tool never executed, because it was blocked on the
+permission for the whole run. Section 3 states it as a prediction and labels it
+as one. Nobody should build a mitigation whose justification is this sentence
+until this experiment has been run.
+
+The design, as a variant of the existing harness rather than a new one:
+
+1. Same setup as section 0 — fresh session, `mode = approve`, real goose over ws.
+2. Prompt for a round with **two** tool calls where the first is auto-approved
+   and lands a durable, checkable mark on the server's disk, and the second
+   needs approval. Something in the shape of "write the current date to
+   `/tmp/perm-loss-probe-<nonce>`, then run `uname -a`". The nonce matters: it
+   ties the file to this run and nothing else.
+3. `perm_loss ask` parks on the second ask exactly as it does today; the log
+   already prints the first tool call's `ToolCall` update, so it is visible that
+   the write was dispatched.
+4. Kill the client both ways, wait, reconnect, `perm_loss inspect`.
+5. **The two observations, and they must both be made or the result means
+   nothing.** Read the replayed transcript: is the *first* tool call and its
+   result in it? Then stat `/tmp/perm-loss-probe-<nonce>` on the server: does the
+   file exist, and does its content match what the model was told to write?
+
+The four outcomes are all informative. File present and transcript empty is the
+predicted one and confirms section 3's severity. File present and transcript
+complete means the round is flushed incrementally after all and only the
+in-flight part is lost, which would soften section 3 considerably. File absent
+means the first tool never really ran — check step 2's phrasing before concluding
+anything, because a model that batched both calls into one request and blocked
+before dispatching either is a setup failure, not a result. File absent with the
+transcript showing it as completed would be a fifth world and worth its own
+write-up.
+
+The obvious trap: the check in step 5 must read the file **on the server's
+filesystem**, not through the agent, because asking the agent to look means
+starting a new turn on a session whose history is the thing under test.

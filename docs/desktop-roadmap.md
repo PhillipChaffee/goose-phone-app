@@ -471,7 +471,7 @@ a standing chore.
 | Config store + prompt templates (8 methods) | reachable | `config/upsert` is already sent, so the write half exists; `config/read` is its inverse. **The prompt-template editor is the server-side answer to what the earlier survey filed as ".goosehints: Electron-only"** — four calls over a `{name, defaultContent, userContent, isCustomized}` record and a textarea | small + one screen |
 | Edit-and-resend (fork / truncate) | reachable | Three methods across two namespaces; `session/fork` is base-ACP, not goose-namespace, and the mock has no fork | medium |
 | Server-side dictation | reachable | Ship 2 of 10 (`transcribe`, `config`); the model-management 8 live on the server. Capture is JS-owned MediaRecorder. **The cost is not the methods** — it is `NSMicrophoneUsageDescription` in the plist and mic-permission behaviour under WKWebView on a physical iPhone | medium, device-gated |
-| Local inference management (11 methods) | reachable, declined on scope, **and gated at compile time on the server** | The download runs entirely inside goose (`custom_dispatch.rs:863-867`); the phone only starts a job and polls a snapshot, and `reconnect_loop` (`src/state.rs:666-681`) already absorbs the drop. So the earlier "the phone can't hold a multi-GB download" objection is a category error. New constraint, read from goose's source and not yet observed on a wire: `local-inference` is a **Cargo feature** of the `goose` crate — in `goose-cli`'s defaults, absent from the `portable-default` musl release build — and the not-enabled arm returns `-32602`, which `goose/mod.rs:142` does *not* convert to `AcpError::Unsupported`. This row would need its own capability probe rather than riding the soft-degrade. Declined because the control belongs where the disk is, not because it is hard | small effort |
+| Local inference management (11 methods) | reachable, declined on scope, **and gated at compile time on the server** | The download runs entirely inside goose (`custom_dispatch.rs:863-867`); the phone only starts a job and polls a snapshot, and `reconnect_loop` (`src/state.rs:666-681`) already absorbs the drop. So the earlier "the phone can't hold a multi-GB download" objection is a category error. **"Absorbs the drop" does not generalise, and it has now been measured not to**: a turn blocked on a permission ask does *not* survive the client going away — the whole round is discarded (`docs/permission-durability.md` §0). Whether a download job survives is a different code path and is itself unverified; if it turns out to live inside the connection future rather than on the runtime, it dies the same way and this row gets more expensive. New constraint, read from goose's source and not yet observed on a wire: `local-inference` is a **Cargo feature** of the `goose` crate — in `goose-cli`'s defaults, absent from the `portable-default` musl release build — and the not-enabled arm returns `-32602`, which `goose/mod.rs:142` does *not* convert to `AcpError::Unsupported`. This row would need its own capability probe rather than riding the soft-degrade. Declined because the control belongs where the disk is, not because it is hard | small effort |
 | Provider administration (19 methods) | declined on scope | Eighteen independent wrappers with no ordering constraint — the most parallelisable item in the whole set, and rating it "large" misfiles a product decision as a cost. The nineteenth is not a wrapper: on goose main, `providers/config/authenticate` runs an interactive OAuth device flow, pushes a notification `forward_notification` currently drops at its `_ => {}` (`client.rs:580`), outlives the 30s `MUTATE_TIMEOUT` (`goose/mod.rs:100,104`), and opens a browser and writes the clipboard **on the server host** — which for a Tailscale client is not the reader's machine. Price it separately. Declined because a remote client talks to a server that is already configured, and because `providers/config/save` means typing an API key into a phone. The read-only 3-method slice ("why is this model unavailable") is trivial and defensible alone | medium effort, declined |
 | Skills authoring (5 methods) | declined | Already a recorded decision (`crates/goose-acp-client/src/goose/skills.rs:1-20`), and the reason still holds: goose Desktop's own Add Skill button ships `hidden` with `title="Coming soon"` | — |
 | MCP-UI "apps" | declined on design | Declaring `mcpHostCapabilities` is a promise to render arbitrary server-supplied HTML. **The security half of the old reasoning does not survive**: the app already injects server-derived HTML via `dangerous_inner_html` at seven sites, so a separate-scheme opaque-origin iframe would be *more* isolated than what ships. The reason that survives is the design system — extension markup does not obey our tokens, our tiered rounding or Dynamic Type, and it cannot be gallery-captured | very large |
@@ -673,7 +673,7 @@ capabilities on this list are *better* on a phone than on a desktop:
 - **Slash-command and @-mention autocomplete** is a pure composer win on both,
   and the composer is the phone's whole surface.
 
-**Three things get worse on the phone and should be stated rather than
+**Four things get worse on the phone and should be stated rather than
 discovered.** Notifications: an "agent finished" event cannot fire while the app
 is backgrounded, for the reason in The impossible list, so any UI that implies
 it will is a lie. Long-running server jobs: the local-inference progress
@@ -681,6 +681,17 @@ endpoint is a poll, so a phone watching a download has to stay awake — the
 download itself is fine, the *watching* is not. And `rfd`: it must be
 target-gated out of the iOS build entirely or the iOS check stops compiling, so
 any iOS file affordance is a JS-owned Blob or a share sheet, not a picker.
+
+The fourth is new, and it is the worst of them because it is silent and it is
+**measured, not read**. Background the app while a permission ask is on screen
+and goose discards the entire provider round. On reconnect `session/load`
+replays the user's prompt and the generated session title and nothing else — no
+tool call, no assistant message, and specifically *no* record of a decline, which
+is what three documents in this repository used to claim you would find. goose
+1.46.0, sessions `20260827_3` and `20260827_4`; write-up and evidence in
+`docs/permission-durability.md` §0. On the desktop the same code path is reached
+by system sleep rather than by backgrounding, so this is a phone-first problem
+and not a phone-only one.
 
 **The compile-time rule protects the phone here, and Stage 0 strengthens it.**
 After the manifest change, `dioxus::desktop` is unnameable on iOS because the

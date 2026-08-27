@@ -25,6 +25,13 @@ Two events, and only two:
 | turn ended | ordinary | the work is done; nothing is waiting on you |
 | blocked on a permission ask | urgent | the agent has stopped, and it stays stopped |
 
+The second row is a claim about the **code plane only**, and that is not a
+scoping convenience — it is measured. On the goose plane a blocked agent does
+not stay stopped; the round it was building is destroyed and the ask stops
+existing (§2, and `docs/permission-durability.md` §0). This document used to
+assert something different and wrong about the goose plane, and §2 records the
+correction rather than hiding it.
+
 The notification carries **no session title, no repo name, no tool arguments,
 no model output**. It says a count and a kind, and the app fetches the truth
 over the tailnet once it is open. That is not timidity — §7 shows that every
@@ -73,23 +80,54 @@ cx.send_request(permission_request)
             Ok(response)  => agent.handle_confirmation(request_id, outcome_to_confirmation(&response.outcome)).await,
             Err(e)        => agent.handle_confirmation(request_id, PermissionConfirmation {
                                  principal_type: PrincipalType::Tool,
-                                 permission: Permission::Cancel,   // <-- here
+                                 permission: Permission::Cancel,
                              }).await,
         }
         Ok(())
     })?;
 ```
 
-When the phone's transport dies, that request fails, and goose answers its own
-question with `Permission::Cancel`. The app already mirrors this on its side and
-says so in a comment — `permission.write().clear()` on disconnect, "the server
-resolves its own pending permission requests via the transport-error path"
-(`src/state.rs:670-673`).
+> **CORRECTION — this section was wrong, and it was written down as fact.**
+>
+> It used to read, with an arrow drawn at the `Permission::Cancel` line: "When
+> the phone's transport dies, that request fails, and goose answers its own
+> question with `Permission::Cancel`. […] **It silently denies the tool and
+> kills the run.**" It cited `src/state.rs:670-673`'s comment as corroboration,
+> and that comment was wrong too — it has since been corrected.
+>
+> That account has been **falsified by measurement**. See
+> `docs/permission-durability.md` §0. goose 1.46.0 over the tailnet, a session
+> in `mode = approve`, a client that received the ask and never answered, killed
+> both by `kill -STOP` (frozen, socket still open — what iOS does to a
+> backgrounded app) and by `kill -9` (fd closed). Sessions `20260827_3` and
+> `20260827_4`. On reconnect, `session/load` replayed exactly four things:
+>
+> ```
+> REPLAY UserMessageChunk(... "Run the shell command `uname -a` ...")
+> REPLAY GooseUpdate usage_update
+> REPLAY UsageUpdate
+> REPLAY AvailableCommandsUpdate
+> ```
+>
+> No `ToolCall`. No assistant message. No "declined". No tool response of any
+> kind. There is no denied tool to notify anyone about, because there is no tool
+> call left at all.
+
+What actually happens is worse for this feature, not better: **the whole
+provider round is discarded.** The user's prompt survives, and so does the
+generated session title — the measured session is called "Run uname command" and
+contains only the request to run it. Everything the round produced is gone.
 
 So locking the phone mid-ask today does not merely lose the notification. **It
-silently denies the tool and kills the run.** A notification delivered twenty
-minutes later would be describing a decision that was made for you nineteen
+destroys the reply the agent was composing, and leaves a session named after
+work with no record that the work was ever attempted.** A notification delivered
+twenty minutes later would be describing a turn that stopped existing nineteen
 minutes ago. No transport — APNs, ntfy, Telegram, email — changes that.
+
+The conclusion this section was drawing is therefore unchanged and if anything
+firmer. Only its mechanism was wrong, and it is worth noticing *how* it was
+wrong: the source read was confident, quoted, line-cited and annotated with an
+arrow, and none of that made it true.
 
 The same is true of the ordinary event for a different reason: "turn ended" on
 the goose plane is the resolution of the client's own `session/prompt` call

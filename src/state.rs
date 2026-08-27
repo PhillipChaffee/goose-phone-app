@@ -668,8 +668,25 @@ async fn pump(ctx: &AppCtx, mut events: mpsc::Receiver<AcpEvent>) {
                 client_slot.set(None);
                 chat.write().running = false;
                 running_sessions.write().clear();
-                // Transport is gone; the server resolves its own pending
-                // permission requests via the transport-error path.
+                // Transport is gone, so these asks can never be answered.
+                //
+                // This comment used to assert that "the server resolves its own
+                // pending permission requests via the transport-error path".
+                // That was read from goose's source, written down as fact, and
+                // is FALSE. Measured against goose 1.46.0 (sessions
+                // `20260827_3`/`20260827_4`, `docs/permission-durability.md`
+                // §0): a client that receives an ask and never answers loses the
+                // whole provider round. On reconnect `session/load` replays the
+                // user's prompt and the generated title — no tool call, no
+                // assistant message, no decline. Nothing resolves; the round is
+                // discarded. Same outcome whether the process was frozen with
+                // its socket open (`kill -STOP`, what iOS does to a backgrounded
+                // app) or its fd closed (`kill -9`).
+                //
+                // Clearing is still right — a queue of unanswerable asks is
+                // worse than none — but it is a local cleanup, not a mirror of
+                // anything the server does. The user is told nothing, which is
+                // the bug `docs/permission-durability.md` §4.1 is about.
                 permission.write().clear();
                 if *ctx.want_connected.peek() {
                     conn.set(ConnState::Failed(format!("Connection lost: {reason}")));

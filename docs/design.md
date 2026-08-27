@@ -659,10 +659,24 @@ ask is therefore *always already on your screen*, and a dot in the list could
 only ever be drawn behind the modal covering it.
 
 The case the Code list exists for cannot arise there either. An ask lives only
-as an outstanding request on a live socket: drop the connection and the server
-resolves it as a transport error and the turn unwinds with it, which is why the
-app clears that queue on disconnect. A goose session cannot be sitting blocked
-while the app is away. Nothing to poll, and nothing to catch up on.
+as an outstanding request on a live socket, and when the socket goes away the
+ask does not become server state — it stops existing. **A goose session cannot
+be sitting blocked while the app is away.** Nothing to poll, and nothing to
+catch up on.
+
+That last claim is measured, and the reason this rule used to give for it was
+not. It used to read: "drop the connection and the server resolves it as a
+transport error and the turn unwinds with it, which is why the app clears that
+queue on disconnect." That mechanism was never observed and the account it came
+from has since been falsified. What a real goose 1.46.0 actually does, when a
+client receives a permission ask and never answers, is discard the entire
+provider round: on reconnect `session/load` replays the user's prompt and the
+generated title and nothing else — no tool call, no assistant message, no
+decline. Sessions `20260827_3` and `20260827_4`; the run is written up in
+`docs/permission-durability.md` §0.
+
+The conclusion survives; the reason it gave did not. Keep them separate, because
+a rule that is right for a wrong reason will be defended when the reason changes.
 
 So the Chats list gets nothing — not a placeholder, not a greyed dot. Anything
 there would be a lie or a duplicate.

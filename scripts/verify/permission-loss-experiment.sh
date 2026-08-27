@@ -2,16 +2,28 @@
 # permission-loss-experiment.sh — what happens to a pending permission ask when
 # the client stops answering?
 #
-# Three accounts of this failure have been written into this repository, all
-# from reading source, and they disagree:
+# ANSWERED. This has been run: account 2, below. Kept so the answer can be
+# re-checked against a new server build. Write-up: docs/permission-durability.md
+# section 0.
+#
+# Three accounts of this failure had been written into this repository, all from
+# reading source, TWO OF THEM AS FACT:
 #
 #   1. goose answers its own question with Permission::Cancel, so the tool is
 #      DECLINED and the transcript says the user declined it.
+#      -> FALSIFIED. Nothing declined; no tool response at all.
 #   2. That arm never runs on a WebSocket, because teardown is abortive and
-#      kills the actor that would poll it — so the whole ROUND is discarded,
-#      including tool calls that already ran and changed the disk.
+#      kills the actor that would poll it — so the whole ROUND is discarded.
+#      -> CONFIRMED as to outcome; mechanism still unmeasured.
 #   3. Nothing happens, because the server never notices: there is no
 #      server-side keepalive, so a quiet client looks like a thinking one.
+#      -> FALSIFIED. The round is gone within 75 seconds.
+#
+# MEASURED: goose 1.46.0 over the tailnet, mode=approve, sessions 20260827_3
+# (kill -STOP) and 20260827_4 (kill -9). Both replayed exactly four things on
+# reconnect — the user message, usage_update, UsageUpdate,
+# AvailableCommandsUpdate — and nothing else. The prompt and the generated title
+# survive; the round does not.
 #
 # Each leaves a different fingerprint in the transcript, so one run tells them
 # apart. It has to run against a REAL goose with a provider configured — the
@@ -86,6 +98,12 @@ run_case() {
   sleep 75
 
   # Let a STOPped process go, so it does not linger holding a socket.
+  #
+  # KNOWN CONFOUND: this closes the fd before the inspect below, so the STOP
+  # case cannot date the death — it shows the OUTCOME is the same whether or not
+  # the peer saw a FIN, not that the round died while the socket was open. To
+  # date it, run `perm_loss <url> <secret> inspect <sid>` from a third shell
+  # while this process is still frozen. See docs/permission-durability.md 7.4.
   if [ "$signal" = "STOP" ]; then kill -CONT "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null; fi
   kill -9 "$wrapper" 2>/dev/null
 
@@ -98,6 +116,9 @@ run_case() {
   echo "   'declined' / status Failed on the tool  -> account 1 (goose answered for you)"
   echo "   the tool call MISSING from the replay   -> account 2 (the round was discarded)"
   echo "   the tool call present and still pending -> account 3 (server never noticed)"
+  echo "   MEASURED on goose 1.46.0: account 2, both cases. Expect four REPLAY"
+  echo "   lines only (user message, usage_update, UsageUpdate,"
+  echo "   AvailableCommandsUpdate). Anything else means the server changed."
   echo "   session id for cleanup: $sid"
 }
 
