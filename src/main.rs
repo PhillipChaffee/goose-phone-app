@@ -12,6 +12,8 @@
 
 mod app;
 
+mod ask_journal;
+
 mod attach;
 
 mod code;

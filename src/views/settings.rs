@@ -6,6 +6,7 @@ use crate::state::{
     disconnect, establish, refresh_sessions, show_toast, use_app_ctx, ConnState, Screen, Settings,
 };
 use crate::views::chrome::TopBar;
+use crate::views::Confirm;
 
 #[component]
 pub fn SettingsView() -> Element {
@@ -37,7 +38,7 @@ pub fn SettingsView() -> Element {
         });
     };
 
-    let on_connect = move |_| {
+    let mut connect_now = move || {
         save();
         // Root-scope task: it navigates away from this screen and must
         // survive the unmount.
@@ -48,6 +49,22 @@ pub fn SettingsView() -> Element {
                 refresh_sessions(&ctx, false).await;
             }
         });
+    };
+
+    // Reconnecting closes the live client first (`state::establish`), which
+    // sends a real Close frame — and a Close frame under a running turn
+    // destroys that turn's round on the server, prompt and title surviving
+    // and nothing else (docs/permission-durability.md section 0). The app
+    // cannot undo that afterwards, so it asks first. Only when there is
+    // something to lose: with nothing running this button is unchanged.
+    let mut confirm_reconnect = use_signal(|| false);
+    let running = !ctx.running_sessions.read().is_empty();
+    let on_connect = move |_| {
+        if running {
+            confirm_reconnect.set(true);
+        } else {
+            connect_now();
+        }
     };
 
     let on_test = move |_| {
@@ -219,6 +236,22 @@ pub fn SettingsView() -> Element {
                 }
                 p { "Connects to a remote goose AI agent over its ACP WebSocket API." }
                 p { "Reach a private server from anywhere with the Tailscale app enabled on this phone." }
+            }
+        }
+
+        if confirm_reconnect() {
+            Confirm {
+                title: "A turn is still running",
+                body: "Reconnecting closes this connection, and goose throws away \
+                       whatever the agent was working on. Your message stays in the \
+                       chat; the reply does not.",
+                confirm_label: "Reconnect anyway",
+                danger: true,
+                on_cancel: move |()| confirm_reconnect.set(false),
+                on_confirm: move |()| {
+                    confirm_reconnect.set(false);
+                    connect_now();
+                },
             }
         }
     }

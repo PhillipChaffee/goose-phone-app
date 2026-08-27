@@ -45,12 +45,37 @@ pub(crate) struct Server {
     /// lifetime: a child that writes to a closed stdout dies of SIGPIPE, and
     /// this one may grow more startup output later.
     _stdout: BufReader<ChildStdout>,
+    /// How to reach this same process again. A test that needs to see what
+    /// the server kept after the client went away has to come *back*, and a
+    /// second connection to the same mock is the only way to ask.
+    ///
+    /// `allow` and not `expect`, against this repo's usual rule, and the
+    /// exception is structural rather than lazy: this module is compiled once
+    /// per test binary, `permission_loss` is the only one that reconnects, and
+    /// an `expect` would be unfulfilled — and so itself an error — in exactly
+    /// that binary. The same goes for [`Server::reconnect`] below.
+    #[allow(dead_code)]
+    cfg: ConnectConfig,
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+impl Server {
+    /// Open a second, independent connection to the same running mock.
+    ///
+    /// Its event stream is returned rather than folded into `self.events`:
+    /// the first connection's stream is a record of what that connection saw
+    /// before it died, and a test comparing "during" with "after" needs the
+    /// two kept apart.
+    #[allow(dead_code)]
+    pub(crate) async fn reconnect(&self) -> (AcpClient, Receiver<AcpEvent>) {
+        let (client, events, _info) = AcpClient::connect(&self.cfg).await.unwrap();
+        (client, events)
     }
 }
 
@@ -107,6 +132,7 @@ pub(crate) async fn spawn_mock_with(env: &[(&str, &str)]) -> (Server, AcpClient)
             child,
             events,
             _stdout: stdout,
+            cfg,
         },
         client,
     )

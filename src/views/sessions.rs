@@ -83,6 +83,10 @@ pub fn SessionsView() -> Element {
                             .and_then(rfc3339_to_epoch)
                             .map(relative_time),
                         selected: open_chat.read().as_deref() == Some(info.session_id.as_str()),
+                        attention: crate::ask_journal::loss_count(
+                            &ctx.lost_asks.read(),
+                            &info.session_id,
+                        ) > 0,
                         // Rename before Delete because the tray is a
                         // scroller: a short drag reveals the first button and
                         // a full one reaches the last, so the destructive
@@ -115,6 +119,26 @@ pub fn SessionsView() -> Element {
                         }
                         if let Some(snippet) = info.last_message_snippet() {
                             div { class: "session-quote", "{snippet}" }
+                        }
+                        // The same panel the Code list draws for a chat that
+                        // is blocked on an ask, minus the buttons — because
+                        // there is nothing to press. The ask is not waiting;
+                        // it is gone, along with the round it belonged to.
+                        //
+                        // This is the amendment to design rule 13, and the
+                        // rule text says so: the rule's subject was a LIVE
+                        // ask, which cannot sit unanswered while the app is
+                        // away, and "the Chats list gets nothing" was right
+                        // about that and silent about this.
+                        if let Some(phrase) = lost_ask_phrase(
+                            crate::ask_journal::loss_count(
+                                &ctx.lost_asks.read(),
+                                &info.session_id,
+                            ),
+                        ) {
+                            div { class: "session-ask",
+                                p { class: "session-ask-title", "{phrase}" }
+                            }
                         }
                     }
                 }
@@ -218,6 +242,23 @@ fn session_meta(info: &SessionInfo) -> Option<Vec<String>> {
     (!parts.is_empty()).then_some(parts)
 }
 
+/// What a row says about answers this app never got back to goose, or `None`
+/// when it has none to report.
+///
+/// Past tense throughout, because the measurement is past tense: the round is
+/// already discarded (`docs/permission-durability.md` section 0), so a phrase
+/// like "waiting on you" — which is what the Code list's equivalent row says
+/// — would be the one thing that is definitely not true.
+fn lost_ask_phrase(count: usize) -> Option<String> {
+    match count {
+        0 => None,
+        1 => Some("An answer never reached goose. That round was discarded.".to_owned()),
+        n => Some(format!(
+            "{n} answers never reached goose. Those rounds were discarded."
+        )),
+    }
+}
+
 /// What an empty list says, or `None` when it is not empty.
 ///
 /// Two different silences: a search with no hits is not an empty account, and
@@ -241,7 +282,7 @@ fn empty_state(sessions: &[SessionInfo], loading: bool, query: &str) -> Option<S
 
 #[cfg(test)]
 mod tests {
-    use super::{empty_state, session_icon, session_meta};
+    use super::{empty_state, lost_ask_phrase, session_icon, session_meta};
     use goose_acp_client::{SessionInfo, SessionKind};
     use serde_json::json;
 
@@ -310,6 +351,19 @@ mod tests {
         let mut bare = session(None, 0);
         bare.meta = None;
         assert_eq!(session_meta(&bare), None);
+    }
+
+    /// A row with nothing lost draws no panel at all, and one that has lost
+    /// something says so in the past tense — the round is already gone, so
+    /// the Code list's "waiting on you" would be exactly wrong here.
+    #[test]
+    fn a_lost_answer_is_reported_as_something_that_already_happened() {
+        assert_eq!(lost_ask_phrase(0), None);
+        let one = lost_ask_phrase(1).unwrap_or_default();
+        assert!(one.contains("discarded"), "{one}");
+        assert!(!one.contains("waiting"), "{one}");
+        let many = lost_ask_phrase(3).unwrap_or_default();
+        assert!(many.starts_with("3 answers"), "{many}");
     }
 
     #[test]

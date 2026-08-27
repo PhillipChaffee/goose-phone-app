@@ -28,7 +28,7 @@ use tokio_tungstenite::{connect_async_tls_with_config, MaybeTlsStream, WebSocket
 
 use crate::error::AcpError;
 use crate::tls;
-use crate::types::{AcpEvent, InitializeInfo, PermissionRequest, SessionUpdate};
+use crate::types::{AcpEvent, DisconnectCause, InitializeInfo, PermissionRequest, SessionUpdate};
 
 pub const CLIENT_NAME: &str = "goose-mobile";
 
@@ -282,7 +282,7 @@ const MAX_MISSED_PONGS: u32 = 2;
 /// Whether the actor keeps looping, or stops with the reason it ended.
 enum Step {
     Continue,
-    Stop(String),
+    Stop(DisconnectCause, String),
 }
 
 async fn actor(
@@ -300,7 +300,7 @@ async fn actor(
     // Pings we have sent with nothing heard back since.
     let mut unanswered_pings: u32 = 0;
 
-    let reason = loop {
+    let (cause, reason) = loop {
         let step = tokio::select! {
             cmd = cmd_rx.recv() => {
                 handle_command(cmd, &mut sink, &mut pending, &mut next_id).await
@@ -313,24 +313,29 @@ async fn actor(
             }
             _ = keepalive.tick() => {
                 if unanswered_pings >= MAX_MISSED_PONGS {
-                    Step::Stop("server stopped responding (no pong)".to_string())
+                    Step::Stop(
+                        DisconnectCause::Transport,
+                        "server stopped responding (no pong)".to_string(),
+                    )
                 } else if sink.send(Message::Ping(Vec::new().into())).await.is_err() {
-                    Step::Stop("keepalive failed".to_string())
+                    Step::Stop(DisconnectCause::Transport, "keepalive failed".to_string())
                 } else {
                     unanswered_pings += 1;
                     Step::Continue
                 }
             }
         };
-        if let Step::Stop(reason) = step {
-            break reason;
+        if let Step::Stop(cause, reason) = step {
+            break (cause, reason);
         }
     };
 
     for (_, reply) in pending.drain() {
         let _ = reply.send(Err(AcpError::Closed));
     }
-    let _ = event_tx.send(AcpEvent::Disconnected { reason }).await;
+    let _ = event_tx
+        .send(AcpEvent::Disconnected { reason, cause })
+        .await;
 }
 
 /// Write one JSON-RPC frame; a failed send means the socket is already gone.
@@ -343,7 +348,7 @@ where
         .await
         .is_err()
     {
-        Step::Stop("send failed".to_string())
+        Step::Stop(DisconnectCause::Transport, "send failed".to_string())
     } else {
         Step::Continue
     }
@@ -361,9 +366,13 @@ where
     S: futures_util::Sink<Message> + Unpin,
 {
     match cmd {
+        // The only local stop there is. `None` means the last [`AcpClient`]
+        // handle was dropped, which is app teardown and just as deliberate.
+        // Everything else that ends this loop is the transport, and telling
+        // the two apart is the whole reason [`DisconnectCause`] exists.
         None | Some(Cmd::Close) => {
             let _ = sink.send(Message::Close(None)).await;
-            Step::Stop("closed by client".to_string())
+            Step::Stop(DisconnectCause::Local, "closed by client".to_string())
         }
         Some(Cmd::Request {
             method,
@@ -383,7 +392,7 @@ where
                     pending.insert(id, reply);
                     Step::Continue
                 }
-                stop @ Step::Stop(_) => {
+                stop @ Step::Stop(..) => {
                     let _ = reply.send(Err(AcpError::Closed));
                     stop
                 }
@@ -422,8 +431,8 @@ where
     S: futures_util::Sink<Message> + Unpin,
 {
     match msg {
-        None => Step::Stop("connection closed".to_string()),
-        Some(Err(e)) => Step::Stop(e.to_string()),
+        None => Step::Stop(DisconnectCause::Transport, "connection closed".to_string()),
+        Some(Err(e)) => Step::Stop(DisconnectCause::Transport, e.to_string()),
         Some(Ok(Message::Text(text))) => {
             if let Ok(value) = serde_json::from_str::<Value>(text.as_str()) {
                 match value {
@@ -441,10 +450,15 @@ where
             let _ = sink.send(Message::Pong(payload)).await;
             Step::Continue
         }
-        Some(Ok(Message::Close(frame))) => Step::Stop(frame.map_or_else(
-            || "closed by server".to_string(),
-            |frame| format!("closed by server: {}", frame.reason),
-        )),
+        // A Close frame FROM the server is still the transport ending under
+        // us, however politely: nothing on this side asked for it.
+        Some(Ok(Message::Close(frame))) => Step::Stop(
+            DisconnectCause::Transport,
+            frame.map_or_else(
+                || "closed by server".to_string(),
+                |frame| format!("closed by server: {}", frame.reason),
+            ),
+        ),
         Some(Ok(_)) => Step::Continue,
     }
 }

@@ -11,6 +11,12 @@
 //!   `MOCK_NO_SCHEDULER`=1        (goose started without --enable-scheduler)
 //!   `MOCK_DROP_ALLOWLIST`=1     (a goose that drops `available_tools` too)
 //!   `MOCK_SILENT`=1                    (go dead after the handshake)
+//!   `MOCK_DIE_ON_CLOSE`=abort  (throw away a round whose client went away)
+//!
+//! That last one is the mock being able to be *wrong the way goose is wrong*.
+//! By default a turn parked on a permission ask waits forever, which is not
+//! what a real goose does: see `crate::state::DieOnClose` and
+//! `docs/permission-durability.md` section 0.
 //!
 //! Prompt keywords: "slow" = long stream (time to hit Stop);
 //! "notool" = skip the tool call / permission prompt.
@@ -51,8 +57,8 @@ use tokio::sync::{mpsc, Notify};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::rpc::response_frame;
-use crate::state::{seed, Shared, State};
-use crate::turn::{run_turn, Pending};
+use crate::state::{seed, DieOnClose, Shared, State};
+use crate::turn::{run_turn, InFlight, Pending};
 
 // ---------------------------------------------------------------------------
 // A TcpStream with already-read bytes stitched back on the front, so we can
@@ -116,16 +122,18 @@ async fn main() {
     // the next file over also picked. That only works if the port comes back
     // out, so this line is the harness's input, not decoration.
     let addr = listener.local_addr().expect("local_addr");
-    let (fixtures, scheduler) = {
+    let (fixtures, scheduler, die_on_close) = {
         let s = state.lock().unwrap();
         (
             s.fixtures.label(),
             if s.no_scheduler { "off" } else { "on" },
+            s.die_on_close.label(),
         )
     };
     println!(
         "mock goose serve listening on http://{addr} \
-         (secret: {secret}, fixtures: {fixtures}, scheduler: {scheduler})"
+         (secret: {secret}, fixtures: {fixtures}, scheduler: {scheduler}, \
+         die-on-close: {die_on_close})"
     );
 
     loop {
@@ -227,6 +235,12 @@ async fn serve_ws(ws: Ws, state: Shared) {
     // cancellation flags.
     let pending: Pending = Arc::default();
     let cancels: Arc<Mutex<HashMap<String, Arc<Notify>>>> = Arc::default();
+    // Rounds this connection started, and the tasks running them. Both are
+    // per-connection on purpose: the failure being modelled is a round dying
+    // with the socket it was started on, and another client's turns are none
+    // of this socket's business.
+    let in_flight: InFlight = Arc::default();
+    let mut turns: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     while let Some(Ok(msg)) = stream.next().await {
         let text = match msg {
@@ -279,10 +293,11 @@ async fn serve_ws(ws: Ws, state: Shared) {
                     .to_string();
                 cancels.lock().unwrap().insert(sid.clone(), cancel.clone());
                 let cancels = cancels.clone();
-                tokio::spawn(async move {
-                    run_turn(id, params, out, state, pending, cancel).await;
+                let rounds = in_flight.clone();
+                turns.push(tokio::spawn(async move {
+                    run_turn(id, params, out, state, pending, cancel, rounds).await;
                     cancels.lock().unwrap().remove(&sid);
-                });
+                }));
             }
             (Some(m), Some(id)) => {
                 let response = features::dispatch(m, &params, &state, &out_tx);
@@ -309,5 +324,37 @@ async fn serve_ws(ws: Ws, state: Shared) {
             _ => {}
         }
     }
+
+    // The socket is gone. What happens to a round that was still running is
+    // the whole question this mock had no answer to; `DieOnClose` is that
+    // answer, and `Park` — doing nothing here — is the old one.
+    let mode = state.lock().unwrap().die_on_close;
+    if mode == DieOnClose::Abort {
+        discard_rounds(turns, &in_flight, &state).await;
+    }
+
     writer.abort();
+}
+
+/// Kill every round this connection had running and keep what a real goose
+/// keeps: the prompt and the title, and nothing the round produced.
+///
+/// See `crate::state::DieOnClose` for why this is a switch rather than the
+/// only behaviour.
+async fn discard_rounds(
+    turns: Vec<tokio::task::JoinHandle<()>>,
+    in_flight: &InFlight,
+    state: &Shared,
+) {
+    for turn in turns {
+        turn.abort();
+        // Joined, not just aborted: an abort is a request, and draining
+        // `in_flight` before the task has reached its next await point would
+        // race the `remove` a turn does when it finishes cleanly.
+        let _ = turn.await;
+    }
+    let abandoned: Vec<_> = in_flight.lock().unwrap().drain().collect();
+    for (_, round) in abandoned {
+        turn::abandon(state, round);
+    }
 }
