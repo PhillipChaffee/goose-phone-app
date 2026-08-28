@@ -1,10 +1,13 @@
 # Goose Mobile — project guide
 
-A Rust mobile client (Dioxus 0.7) for a remote goose AI agent server, targeting
-iOS and Android from one codebase and reaching the server over Tailscale.
+A Rust client (Dioxus 0.7) for a remote goose AI agent server, targeting iOS,
+Android and a macOS desktop shell from one codebase and reaching the server
+over Tailscale. The phone is the product; the desktop shell is the same views
+worn a second way (see the two-shells paragraph at the end).
 
 - `src/` — the Dioxus app (`state.rs` holds connection lifecycle + transcript folding)
 - `crates/goose-acp-client/` — UI-independent ACP protocol library (tokio + tungstenite + rustls)
+- `crates/opencode-client/` — the other backend: the code-agent manager and the per-chat `OpenCode` servers behind it (reqwest + rustls)
 - `crates/mock-goose-server/` — protocol-faithful fake server for testing without an API key
 - `scripts/check-server.sh` — verifies a goose server is in the shape the app needs
 - `docs/iphone-setup.md` — end-to-end iPhone deployment walkthrough
@@ -35,9 +38,14 @@ preference.
 
 Every size in it is a `rem`, because the root font-size is the reader's — on
 iOS `assets/platform/ios.css` sets it to `-apple-system-body` and the whole
-scale follows Dynamic Type. That sheet is the one platform-conditional
-stylesheet (`#[cfg(target_os = "ios")]` in `src/css.rs`), because macOS is
-WKWebView too and resolves the same keyword to a flat 13px. `docs/audit.js`
+scale follows Dynamic Type. `assets/platform/` is the one directory `src/css.rs`
+picks from by target rather than concatenating whole: `PLATFORM` is
+`ios.css` under `#[cfg(target_os = "ios")]` and `macos.css` under
+`#[cfg(target_os = "macos")]`, at most one per binary and never both. The iOS
+arm is a `cfg` rather than an unconditional line because macOS is WKWebView too
+and resolves the same keyword to a flat 13px; the macOS arm exists because
+`src/main.rs` hides the titlebar there and nowhere else, so only that build may
+reserve room for the traffic lights. `docs/audit.js`
 and `docs/measure-composer.js` both walk four text sizes; design.md rule 14
 is the whole story. The audit walks a second axis as well — six phone sizes,
 320x568 to 440x956, width *and* height, because the failures it found there
@@ -68,7 +76,12 @@ Two shells, chosen by `target_os` in `src/shell/`: `mobile.rs` is today's
 phone (swipe trays, pull-to-refresh, drawer over the page), `desktop.rs` is a
 pinned nav plus a list and a detail pane with row actions always on the row.
 Platform decides affordances; width decides only how many columns, entirely
-inside `assets/desktop.css` — so nothing in Rust listens to a resize. The
+inside `assets/desktop.css` — so nothing in Rust listens to a **DOM** resize,
+which is the one that costs a synchronous XHR per frame. There is exactly one
+Rust resize listener in the tree and it is not that: `use_fullscreen` in
+`src/shell/desktop.rs` takes a `tao` `Resized` as a trigger and reads the
+window's own fullscreen flag back off it, because tao publishes no fullscreen
+event. It decides nothing about columns. The
 desktop's window chrome is inside the app: one band across the top holding the
 traffic lights' reservation, the nav toggle, the name of whatever the detail
 column has open, and the connection — and `assets/desktop.css` takes that same

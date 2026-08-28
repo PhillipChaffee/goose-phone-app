@@ -716,6 +716,92 @@ mod tests {
         }
     }
 
+    // ---- reading the shell's source, without reading these tests ---------
+    //
+    // Four of the assertions below are of the form "the shell still writes the
+    // thing the stylesheet reads", which is a question no compiler in this
+    // build can answer: Rust writes an attribute or a class, CSS is the only
+    // thing that reads it, and nothing connects them. They were written as
+    // `include_str!("desktop.rs")` and a `contains` — and the file that pulls
+    // in is THIS one, test module and all, so each needle was supplied by the
+    // assertion asking for it and the suite could not fail. Measured: with
+    // `use_fullscreen`, its call site and the `data-fullscreen` attribute all
+    // deleted, `cargo test --package goose-mobile` reported 231 passed, 0
+    // failed; with the band's `ConnBadge` and the `data-detail` attribute
+    // deleted, the ten tests in this module were ten passes.
+    //
+    // `crate::selfscan::code_of` is the repair and its module comment carries
+    // the whole argument, including the two stronger mechanisms that were
+    // tried and rejected. What is left here is the two slices, which ask a
+    // sharper question than the old scans did: not whether the file mentions
+    // the attribute but which ELEMENT carries it.
+    //
+    // That is not a hypothetical distinction. `data-fullscreen` has already
+    // moved element once in this feature's short life — it was on `.app`,
+    // written by JS, with `assets/platform/macos.css` selecting
+    // `.app[data-fullscreen="true"] > .shell` to match, and both halves came
+    // across to `.shell` together in ece4857. A move is exactly what a
+    // file-wide `contains` cannot see: it goes on finding the string wherever
+    // it lands, so a half-finished move — render across, sheet not, or the
+    // reverse — reads as a working feature. Nothing else in the repo asks
+    // either, `docs/audit.js` least of all: the audit sets `data-nav` and
+    // `data-fullscreen` on `.shell` itself before it measures, so it would
+    // report a clean grid against a shell that writes neither.
+
+    /// `src/shell/desktop.rs` with this test module, and every comment, taken
+    /// out of it.
+    fn shell_code() -> String {
+        crate::selfscan::code_of("src/shell/desktop.rs", include_str!("desktop.rs"))
+    }
+
+    /// The attributes on the `.shell` div — the element `assets/desktop.css`
+    /// and `assets/platform/macos.css` key every state rule they have off.
+    fn shell_attributes() -> String {
+        let code = shell_code();
+        block(&code, "class: \"shell\",", "header {").to_owned()
+    }
+
+    /// What the window's own bar renders. The other half of the same
+    /// question: `.shell-chrome` is where the connection badge has to be,
+    /// because `assets/desktop.css` hides every pane's copy of it
+    /// unconditionally.
+    fn chrome_band() -> String {
+        let code = shell_code();
+        block(
+            &code,
+            "header { class: \"shell-chrome\",",
+            "div { class: \"shell-body\",",
+        )
+        .to_owned()
+    }
+
+    /// One rsx block: what lies between the thing that opens it and the thing
+    /// that opens whatever comes next.
+    ///
+    /// Deliberately crude — it counts no braces, and does not need to. Both
+    /// call sites bound a run of attributes or of children by the element that
+    /// follows it, and rustfmt keeps each of those on a line of its own. The
+    /// failure modes of a crude slice are a slice that is empty and a slice
+    /// that runs to the end of the file, and both of them would make every
+    /// assertion below vacuous rather than wrong, so both ends assert.
+    fn block<'a>(code: &'a str, opens: &str, ends_before: &str) -> &'a str {
+        let after = code.split_once(opens).map(|(_, rest)| rest);
+        assert!(
+            after.is_some(),
+            "src/shell/desktop.rs no longer contains `{opens}`, so the block \
+             this test reads is not there to be read"
+        );
+        let after = after.unwrap_or_default();
+        let body = after.split_once(ends_before).map(|(body, _)| body);
+        assert!(
+            body.is_some(),
+            "`{opens}` is no longer followed by `{ends_before}`, so this slice \
+             would run to the end of the file and stop saying anything about \
+             where anything is"
+        );
+        body.unwrap_or_default()
+    }
+
     /// Every class name the shell renders that only a stylesheet gives
     /// meaning to. Rust writes them, CSS is the only thing that reads them,
     /// and nothing in the compiler connects the two — so a rename on either
@@ -723,9 +809,16 @@ mod tests {
     /// anywhere. `.window-drag` is the worst of them: rename it and the
     /// window silently stops being draggable, because `src/main.rs` has taken
     /// the titlebar away and that strip is the only replacement.
+    ///
+    /// The one scan in this module that could already fail, and it was
+    /// checked rather than assumed: `class: "traffic-slotz"` in the render
+    /// fails it with "src/shell/desktop.rs no longer renders .traffic-slot",
+    /// because the needle is `class: "…"` and the list below holds the bare
+    /// name. It reads `shell_code()` all the same, so that this stays true of
+    /// the next name somebody adds to that list.
     #[test]
     fn every_class_the_shell_renders_is_styled_somewhere() {
-        let shell = include_str!("desktop.rs");
+        let shell = shell_code();
         let sheets = concat!(
             include_str!("../../assets/desktop.css"),
             include_str!("../../assets/platform/macos.css"),
@@ -783,13 +876,22 @@ mod tests {
     /// it and this would still pass. `docs/audit.js` on a captured desktop
     /// state is what sees that, and its `.shell-chrome` arm is what sees the
     /// band.
+    ///
+    /// REPRODUCED, because as shipped it could not fail. Both shell-side
+    /// assertions read `include_str!("desktop.rs")`, which includes this
+    /// module, so the two needles below were supplied by the two lines
+    /// containing them: delete `crate::views::ConnBadge {}` from the band and
+    /// `"data-detail"` from the `.shell` div and all ten tests in this module
+    /// still passed. Against `chrome_band()` and `shell_attributes()` the same
+    /// two deletions fail here, one message each — "the window's bar no longer
+    /// renders the connection badge" and "the `.shell` div no longer sets
+    /// data-detail" — and putting them back is green again.
     #[test]
     fn the_pane_gives_up_what_the_window_bar_took() {
-        let shell = include_str!("desktop.rs");
         let sheet = include_str!("../../assets/desktop.css");
 
         assert!(
-            shell.contains("crate::views::ConnBadge {}"),
+            chrome_band().contains("crate::views::ConnBadge {}"),
             "the window's bar no longer renders the connection badge, so \
              `.pane .topbar > .conn-badge` below now hides the only one there is"
         );
@@ -805,9 +907,11 @@ mod tests {
             );
         }
         assert!(
-            shell.contains(r#""data-detail": if detail_open"#),
-            "the sheet keys the rules above on [data-detail], which this file \
-             is the only thing that sets"
+            shell_attributes().contains(r#""data-detail": if detail_open"#),
+            "the `.shell` div no longer sets data-detail, and the sheet keys \
+             every rule above on it — so the pane paints a second copy of the \
+             title, and below the three-column breakpoint the list and the \
+             detail are both in the one column at once"
         );
     }
 
@@ -816,6 +920,15 @@ mod tests {
     /// desktop sheet and raised only by the platform sheet — otherwise a
     /// native-frame build gets its own titlebar AND a 52pt strip held empty
     /// for traffic lights it does not have.
+    ///
+    /// REPRODUCED, and it is the reason `shell_code()` exists. Delete
+    /// `use_fullscreen`, its call site and the attribute — the whole feature,
+    /// leaving nothing but the doc comment — and the version of this test that
+    /// read `include_str!("desktop.rs")` passed, along with the other 230:
+    /// both of its needles were on the two assertion lines below. Reading the
+    /// `.shell` div's own attributes instead, that same deletion fails here
+    /// with "the `.shell` div must SET the attribute the sheet reads"
+    /// (measured: 234 passed, 1 failed); restoring the feature is green again.
     #[test]
     fn the_window_chrome_is_reserved_only_where_the_titlebar_is_hidden() {
         let desktop = include_str!("../../assets/desktop.css");
@@ -840,12 +953,22 @@ mod tests {
         // block above was dead and every check in the repo was green. A test
         // that asks only "does the sheet mention it" cannot tell that apart
         // from a working feature; this is the other half of the question.
-        let shell = include_str!("desktop.rs");
+        //
+        // ON THE `.shell` DIV, and not merely somewhere in the file, because
+        // the assertion above names an element too. This attribute was on
+        // `.app` until ece4857 and the sheet's selector was
+        // `.app[data-fullscreen="true"] > .shell` to match it; the two halves
+        // moved together, and the only thing that says they still agree is
+        // that both of these read the same element. Reproduced rather than
+        // reasoned: put the attribute back on `.shell-chrome`, leaving the
+        // string in the file and the sheet untouched, and this fails.
         assert!(
-            shell.contains(r#""data-fullscreen": if fullscreen()"#),
-            "the shell must SET the attribute the sheet reads, in the render — \
-             an attribute nothing writes is a stylesheet rule nothing reaches"
+            shell_attributes().contains(r#""data-fullscreen": if fullscreen()"#),
+            "the `.shell` div must SET the attribute the sheet reads, in the \
+             render — an attribute nothing writes is a stylesheet rule nothing \
+             reaches"
         );
+        let shell = shell_code();
         assert!(
             shell.contains("fn use_fullscreen()") && shell.contains(".fullscreen().is_some()"),
             "the flag must be read off the window; inferring it from geometry \
@@ -858,6 +981,18 @@ mod tests {
     /// the compiler connects them, so a rename on either side leaves a button
     /// that toggles an attribute nobody styles — a control that visibly does
     /// nothing, with no error anywhere.
+    ///
+    /// EITHER SIDE, which this test's name has always claimed and only half of
+    /// it did. It read the stylesheet and stopped there: delete
+    /// `"data-nav": if nav_open()` from the render — the toggle still on
+    /// screen, still flipping a signal, `[data-nav="closed"]` now matching
+    /// nothing ever — and `cargo test --package goose-mobile` reported 231
+    /// passed, 0 failed. Nothing else in the repo covered it either.
+    /// `docs/audit.js` walks a closed nav, but it sets `data-nav` on `.shell`
+    /// itself from `DESKTOP_SHELL`, so the audit measures a collapsed column
+    /// whether or not the app can ever produce one. With the Rust half below,
+    /// that deletion fails here with "the `.shell` div no longer sets
+    /// data-nav" (measured: 234 passed, 1 failed); restored, it is green.
     #[test]
     fn the_stylesheet_acts_on_the_attribute_the_shell_sets() {
         let sheet = include_str!("../../assets/desktop.css");
@@ -868,6 +1003,12 @@ mod tests {
                  collapse control changes an attribute nothing styles"
             );
         }
+        assert!(
+            shell_attributes().contains(r#""data-nav": if nav_open()"#),
+            "the `.shell` div no longer sets data-nav, so the rules above \
+             match nothing: the toggle flips a signal, the sheet is never \
+             reached, and the nav cannot be collapsed at all"
+        );
     }
 
     /// A toggle is named for what it will DO, not for what it is. Getting
