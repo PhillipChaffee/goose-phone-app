@@ -341,8 +341,33 @@
   white-space: nowrap;
 }
 
+/* THE QUALIFIER TAKES WHAT IS LEFT AFTER THE NAME, never the other way round.
+ *
+ * `flex: 1 1 0` and not the `0 1 auto` this shipped with, and it is a priority
+ * rather than a size. Both items had a shrink factor of 1 against an `auto`
+ * basis, which means a narrow band takes the deficit off them in proportion to
+ * how much each wanted — so the LONGER the subtitle, the more of the title it
+ * cost. Measured on the captured `desktop-scheduler-detail` at a 572pt window:
+ * the group had 211px, the subtitle spent 95 of it on "Runs every day at
+ * 2:30 AM" and the heading was cut to 108, narrower than the 135px the
+ * connection badge was spending on an agent version beside it. That is
+ * `docs/audit.js`'s TITLE-OUTBID, and it was invisible for as long as that
+ * check compared the badge against the whole group instead of the heading.
+ *
+ * A zero basis is what makes it exact. The subtitle no longer bids in the
+ * shrink phase at all — it asks for nothing and GROWS into whatever the
+ * heading did not want, so the heading keeps its intrinsic width until there
+ * is genuinely none left, and only then ellipsises. Same result at 572:
+ * heading 173px, uncut, subtitle 30px. Nothing changes where there is room —
+ * the group is `flex: 0 1 auto`, so at 1180pt it is still exactly heading plus
+ * gap plus the subtitle's own width (measured: 333px, unchanged).
+ *
+ * A large `flex-shrink` on the subtitle was tried first and rejected: it is
+ * asymptotic rather than exact. At a factor of 100 the heading still gives up
+ * 1.2px of a 65px deficit, which is a cut title by any measurement and a check
+ * that has to be given a tolerance to hide it. */
 .chrome-sub {
-  flex: 0 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   color: var(--text-secondary);
   font-size: var(--text-xs);

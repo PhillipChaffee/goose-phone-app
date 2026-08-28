@@ -118,6 +118,117 @@ for (const sheet of [...STYLESHEETS, ...DESKTOP_SHEETS]) {
 // see scripts/capture-gallery.py, which partitions on the same string.
 const DESKTOP_PREFIX = 'desktop-';
 
+// ── what this run is supposed to cover ──────────────────────────────────
+// THE DESKTOP HALF WAS OPT-IN, AND THAT IS THE LOUDEST FAILURE ON THIS LIST.
+//
+// Every desktop check in this file is reached by iterating states whose key
+// starts with DESKTOP_PREFIX, so with no such key nothing desktop-shaped runs
+// — no window sizes, no shell axis, no window bar, no `.traffic-slot`, none of
+// it. Proved rather than argued: delete all 14 `desktop-` states from
+// docs/gallery-states.json and `node docs/audit.js both` reports **Clean**,
+// with a summary line that simply stops mentioning the desktop and reads as
+// though there were nothing to mention. A capture run given only the phone's
+// log produces exactly that file, and a gate that passes because half its
+// input went missing is worse than no gate: it is a green tick over an
+// untested shell.
+//
+// So the run states what it is FOR and fails when the gallery is not it.
+//
+// ASKED OF THE DRAWER, NOT OF THE KEYS. The obvious shape is "every
+// `nav::DESTINATIONS` id has a `desktop-<id>` state", and it is the wrong one.
+// Dump keys are not destination ids and src/nav.rs says so where it defines
+// them: `Screen::Chat` dumps as `chat`, singular, because "the gallery and
+// docs/audit.js have been keyed on these names since before this table
+// existed". A prefix match happens to work today only because `desktop-chats`
+// also exists, and it would fail the moment somebody renamed a screen — which
+// is a check that fires for the wrong reason, the other half of the same
+// disease this file is being treated for.
+//
+// What the capture DOES record, in markup, is which destination the nav had
+// marked while the dump was taken: `src/shell/mod.rs` renders
+// `class="drawer-item active" title="<label>"` for it and nothing else. So the
+// question becomes "was this destination ever the one on screen when a desktop
+// state was captured", which is the coverage claim actually wanted, is
+// answered by the captured bytes, and survives any renaming of keys.
+//
+// BOTH SOURCES, because either alone has a hole. src/nav.rs is the truth about
+// what the app has — a destination added and never captured leaves the gallery
+// self-consistent and stale, and only the source says so. The states are the
+// truth about what was captured. Reading the labels out of the source and
+// looking for them in the markup is what makes a stale capture a failure
+// rather than a smaller grid.
+const NAV_RS = path.join(__dirname, '..', 'src', 'nav.rs');
+// `id` then `label`, adjacent and each on its own line, which is how every row
+// of the table is written. Matching on the pair rather than on `Destination {`
+// is deliberate: that string is also `impl Destination {`, the struct's own
+// definition and the return type of `nav::current`, so counting it says 9
+// where the table has 7.
+//
+// A REGEX OVER RUST IS A GUESS, and this one is checked rather than trusted.
+// Reordering the two fields is a free change in Rust and would leave this
+// matching nothing at all — a coverage claim over the empty set, which is the
+// exact disease being treated. So the fields are counted independently and the
+// two numbers have to agree: 7 pairs against 14 fields on the table as it
+// stands. `pub id:` and `pub label:` in the struct definition are not counted,
+// because the leading `pub ` is not whitespace and neither is followed by a
+// quote.
+const DESTINATION = /\n\s*id:\s*"([^"]+)",\n\s*label:\s*"([^"]+)",/g;
+const DESTINATION_FIELD = /\n\s*(?:id|label):\s*"/g;
+const coverage = (states) => {
+  const gaps = [];
+  const phone = states.filter((state) => !state.desktop);
+  const desktop = states.filter((state) => state.desktop);
+  if (!phone.length) {
+    gaps.push('not one state is keyed for the PHONE, so the six phone sizes and'
+      + ' the four text sizes walked no markup at all');
+  }
+  if (!desktop.length) {
+    gaps.push(`not one state is keyed \`${DESKTOP_PREFIX}…\`, so the whole desktop grid —`
+      + ' its window sizes, its shell axis and every check only a window bar can fail —'
+      + ' did not run; re-capture with both logs'
+      + ' (scripts/capture-gallery.py /tmp/applog.txt /tmp/desktop.log)');
+    return gaps;
+  }
+  const nav = fs.readFileSync(NAV_RS, 'utf8');
+  const dests = [...nav.matchAll(DESTINATION)];
+  const fields = (nav.match(DESTINATION_FIELD) || []).length;
+  if (dests.length * 2 !== fields) {
+    gaps.push(`${NAV_RS} holds ${fields} destination \`id\`/\`label\` fields but only`
+      + ` ${dests.length} that this file can read as a pair — the loop below would be`
+      + ' checking a coverage claim over the wrong set, or over none');
+  }
+  for (const [, id, label] of dests) {
+    // The exact bytes `src/shell/mod.rs` emits for the marked row. A substring
+    // and not a parse: this runs before a browser is launched, the markup is
+    // machine-written and never hand-edited, and `src/shell/mod.rs`'s own
+    // `the_phone_drawer_gains_no_attribute` test reads the same file the same
+    // way for the same reason.
+    if (!desktop.some((state) => state.body.includes(`class="drawer-item active" title="${label}"`))) {
+      gaps.push(`no desktop state was captured with ${id} open — the nav offers it and`
+        + ' this grid has never rendered it in a window');
+    }
+  }
+  // AND BOTH ANSWERS TO "IS ANYTHING OPEN", because the band is two different
+  // arrangements and each has checks that only see one of them. TITLE-DOUBLED
+  // and TITLE-OUTBID are both guarded on the band carrying a title, so a
+  // gallery in which nothing is ever open runs neither of them and says so
+  // nowhere; a gallery in which everything is open never renders the band as
+  // the lights, the toggle and a drag strip, which is what it is for most of
+  // the time somebody is looking at it. Measured on the shipping gallery: 7 of
+  // the 14 carry a `.chrome-title` and 7 do not.
+  const open = desktop.filter((state) => state.body.includes('chrome-title')).length;
+  if (!open) {
+    gaps.push('no desktop state has anything open in its detail column, so the window'
+      + " bar's title, the pane's suppressed copy of it and the squeeze between them"
+      + ' are all unmeasured');
+  }
+  if (open === desktop.length) {
+    gaps.push('every desktop state has something open, so the band with an empty detail'
+      + ' column — where the title is absent rather than short — is unmeasured');
+  }
+  return gaps;
+};
+
 // ── the faces this measures with, and why they are not the app's ────────
 // THE GATE SHIPS ITS OWN FONTS. Every check below is a measurement of text,
 // and until this block existed the text was laid out in whatever face the
@@ -1080,11 +1191,36 @@ const GEOMETRY = () => {
   // DESKTOP ONLY, decided by the DOM rather than by the state's key: the band
   // is the discriminator and it is also the thing under test. A phone has one
   // `.topbar` by construction and no second column to disagree with it.
-  if (document.querySelector('.shell-chrome')) {
+  const chrome = document.querySelector('.shell-chrome');
+  if (chrome) {
     const shown = (sel) => [...document.querySelectorAll(sel)]
       .filter((el) => el.getClientRects().length);
     const band = shown('.shell-chrome > .chrome-title');
-    const pane = shown('.pane-detail .topbar > .title, .pane-detail .topbar > .titlegroup');
+    // A DESCENDANT COMBINATOR, DELIBERATELY UNLIKE THE RULE IT GUARDS.
+    //
+    // `assets/desktop.css` hides the pane's copy with `.pane-detail .topbar >
+    // .title`, and this check used to be written with the same `>`. That is
+    // the one shape a guard must never take: a heading nested one element
+    // deeper is un-hidden by the sheet and unseen by the check in the same
+    // stroke, so the failure and the blindness arrive together. It is not a
+    // hypothetical shape either — `views::chrome::TopBar` growing a wrapper
+    // around its heading is an ordinary refactor, and `.titlegroup` is already
+    // one such wrapper that the sheet had to be taught by hand.
+    //
+    // Reproduced, on the tree this comment ships in: wrap each of the seven
+    // detail panes' headings in `<div class="titlewrap">`, broaden
+    // assets/main.css's `.topbar > .title` to `.topbar .title` and give the
+    // wrapper `display: contents` — which is a refactor that changes not one
+    // pixel of a correct build — and the app paints the open thing's name
+    // twice, in the band and again in the pane. With `>` here: **Clean**.
+    // With the descendant selector: **588 TITLE-DOUBLED** (7 states x 2 for
+    // the long-text pass x 2 themes x 7 window sizes x 3 shell states).
+    //
+    // The cost of the wider net is that a `.titlegroup` and the `.title`
+    // inside it are both matched, so a doubled two-line heading names two
+    // elements in one finding. That is the finding being more specific, not
+    // less: on a correct build both are hidden and neither has a box.
+    const pane = shown('.pane-detail .topbar .title, .pane-detail .topbar .titlegroup');
     // Guarded on the band actually carrying one. With nothing open the band
     // paints no title at all — `src/shell/desktop.rs` renders it only for a
     // `Some(crumb)`, so an empty flex item never takes its gap — and then the
@@ -1099,13 +1235,42 @@ const GEOMETRY = () => {
     // second badge is a second answer to a question with one answer. No guard
     // needed: `assets/desktop.css` hides every pane's copy unconditionally,
     // so more than one rendered is always wrong.
+    //
+    // Measured, on the shipping grid: neuter `.pane .topbar > .conn-badge`
+    // and the run reports **948 CONN-DOUBLED**. The number recorded when this
+    // check went in was 632, and it was honest at the time — it was taken on a
+    // two-cell shell axis that the same commit replaced with three, and
+    // 632 x 1.5 is 948. Recorded again here so the next person measures rather
+    // than trusts.
     const badges = shown('.conn-badge');
     if (badges.length > 1) {
       out.push(`CONN-DOUBLED ${badges.length} connection badges rendered at once:`
         + ` ${badges.map((el) => name(el)).join(' + ')}`);
     }
+    // AND THE OTHER SIDE OF EXACTLY ONE, WHICH IS THE SIDE NOTHING ASKED.
+    //
+    // `badges.length > 1` is half a claim. The window can lose its connection
+    // indicator ENTIRELY and every gate stays green: nothing overflows,
+    // nothing collides, nothing is doubled, and the contrast walk is a loop
+    // over elements that are there. Measured, on this tree: broaden
+    // `assets/desktop.css`'s `.pane .topbar > .conn-badge` to a bare
+    // `.conn-badge` — the ordinary way an over-eager selector is written, and
+    // it hides the shell's copy along with the panes' — and every desktop
+    // state loses its dot at every size in both themes while
+    // `node docs/audit.js both` reports **Clean**. With this arm:
+    // **1176 CONN-GONE** (14 states x 2 for the long-text pass x 2 themes x
+    // 7 window sizes x 3 shell states — every desktop cell there is).
+    //
+    // `src/shell/desktop.rs` renders `views::ConnBadge` unconditionally, so
+    // there is no state of the app in which none is correct. That is asserted
+    // on the Rust side too, but a source-shaped test can only say the call
+    // site is still written down; this says the dot is still painted.
+    if (badges.length === 0) {
+      out.push('CONN-GONE    the window bar paints no connection badge at all —'
+        + ' there is one socket and nothing on screen says what it is doing');
+    }
 
-    // A SQUEEZED TITLE MUST OUTRANK THE BADGE BESIDE IT.
+    // A SQUEEZED TITLE MUST OUTRANK EVERYTHING NEGOTIABLE BESIDE IT.
     //
     // Everything in this band is a flex item competing for one line, and the
     // competition only has a wrong answer at the narrow end. Measured at the
@@ -1124,14 +1289,135 @@ const GEOMETRY = () => {
     // whose crumb happens to be one word. `scrollWidth > clientWidth` is the
     // difference between "took what it needed" and "was given less than it
     // asked for", and only the second is a question of priority.
+    //
+    // THE HEADING, NOT THE GROUP, and that was the whole of what went wrong
+    // the first time. The check tested `.chrome-heading` for being cut and
+    // then compared the badge against `.chrome-title`, which is the heading
+    // AND the subtitle AND the gap between them — so the more of the line the
+    // subtitle took, the safer the title looked. It was not a theoretical
+    // hole: on the captured `desktop-scheduler-detail`, unstressed, at
+    // 572x700, the group measured 211px while the heading inside it was cut
+    // to 108 and `.conn-badge` held 135. Against the group: silent. Against
+    // the heading: **16 TITLE-OUTBID** on a tree that was reported Clean —
+    // 4 states (`desktop-scheduler-detail` and three long-text passes) x 2
+    // themes x the one 572x700 window x 2 of the 3 shell states, the
+    // fullscreen cell being wider by the 76px it hands back. The fix is in
+    // `assets/desktop.css`: `.chrome-sub` is `flex: 1 1 0` now, so the
+    // qualifier takes what is left after the name rather than bidding against
+    // it, and the run is Clean again.
+    //
+    // AND EVERY SIBLING, NOT THE BADGE. `assets/desktop.css` drops
+    // `.conn-label` at 571px and under, which takes the badge to an 18px dot —
+    // so at the two narrowest window sizes on this grid the badge cannot
+    // outbid anything and a badge-only check is dead exactly where the band is
+    // most crowded. Proved with a regression confined to that tier — add
+    // `.window-drag { flex: 1 0 300px }` INSIDE the `max-width: 571px` block,
+    // which crushes the title at 480 and 571 and touches nothing above them:
+    // badge-only, **Clean**; per sibling, **162 TITLE-OUTBID**, 138 of them
+    // naming the drag strip and 24 naming a title left narrower than the
+    // button beside it. So each item on the line answers for itself, against
+    // the FLOOR the sheet gives it:
+    //
+    //   .window-drag   96px, and that one is load-bearing rather than
+    //                  cosmetic — `flex: 1 0 96px` is the only thing keeping
+    //                  a window whose titlebar src/main.rs hid draggable, and
+    //                  DRAG-GONE below is what guards the floor itself. It is
+    //                  also the item that legitimately holds all the slack, so
+    //                  only its EXCESS is a bid.
+    //   .nav-toggle    zero. It is a 32px control, so this reads as "the name
+    //                  of the open thing is in less room than the button
+    //                  beside it" — an absolute floor on the title, taken off
+    //                  a real control rather than typed in as a number.
+    //   .chrome-sub    zero. The subtitle qualifies the name; a qualified name
+    //                  with no name left is worth nothing.
+    //   .conn-badge    zero. The dot carries the whole state in colour — the
+    //                  sheet says so where it hides the label at the rail.
+    //
+    // `.traffic-slot` is the one item deliberately NOT on that list. Its width
+    // is the room AppKit paints the window's own controls in; it is not the
+    // app's to spend and cannot be given back while the lights are there. The
+    // one case where it should be zero and might not be is fullscreen, and
+    // FULLSCREEN below owns that question rather than this one.
     const bandTitle = band[0] && band[0].querySelector('.chrome-heading');
-    if (bandTitle && badges.length === 1) {
-      const cut = bandTitle.scrollWidth > bandTitle.clientWidth + 0.5;
-      const t = band[0].getBoundingClientRect().width;
-      const c = badges[0].getBoundingClientRect().width;
-      if (cut && c > t + 0.5) {
-        out.push(`TITLE-OUTBID the band's title is cut to ${t.toFixed(0)}px while`
-          + ` ${name(badges[0])} holds ${c.toFixed(0)}px beside it`);
+    if (bandTitle && bandTitle.getClientRects().length
+      && bandTitle.scrollWidth > bandTitle.clientWidth + 0.5) {
+      const t = bandTitle.getBoundingClientRect().width;
+      for (const rival of chrome.querySelectorAll(
+        ':scope > *:not(.chrome-title):not(.traffic-slot),'
+        + ' :scope > .chrome-title > *:not(.chrome-heading)',
+      )) {
+        const floor = rival.classList.contains('window-drag') ? 96 : 0;
+        const held = rival.getBoundingClientRect().width - floor;
+        if (held > t + 0.5) {
+          out.push(`TITLE-OUTBID ${name(rival)} holds ${held.toFixed(0)}px it could give back`
+            + `${floor ? ` (${(held + floor).toFixed(0)}px, ${floor}px of it its own floor)` : ''}`
+            + ` while the band's title is cut to ${t.toFixed(0)}px`);
+        }
+      }
+    }
+  }
+
+  // FULLSCREEN GIVES THE ROOM BACK, OR THE THIRD SHELL CELL BOUGHT NOTHING.
+  //
+  // `DESKTOP_SHELL` grew a fullscreen cell so that
+  // `assets/platform/macos.css`'s `[data-fullscreen="true"]` block would be
+  // rendered by something — it never had been, and a rule no frame renders is
+  // indistinguishable from a rule that works. But RENDERING a block is not
+  // CHECKING it: measured on this tree, breaking the block's selector so that
+  // fullscreen keeps the 76pt traffic-light reservation and the 0pt band
+  // padding leaves `node docs/audit.js both` **Clean**. The cell was a 50%
+  // growth of the desktop grid that could not fail.
+  //
+  // The commit that added it recorded 672 findings for a sabotage of the same
+  // block — that number came from setting `--traffic-w: 900px`, which
+  // physically overflows the window and is caught by OVERFLOW-X like any other
+  // 900px box. It is not the regression this block has. The regression it has
+  // is the one it already shipped once: the block going DEAD, which looks like
+  // nothing at all.
+  //
+  // So the claim is stated in the two numbers the block actually sets, and
+  // both are read off the layout rather than off the custom properties —
+  // a `getPropertyValue('--traffic-w')` test would pass on a sheet that
+  // declared the token and never spent it.
+  //
+  //   the reservation  In fullscreen macOS takes the lights away entirely, so
+  //                    52 points of band with 76 points held empty at the
+  //                    start of it is 76 points of nothing at the top of a
+  //                    window someone just asked to be as large as possible.
+  //   the toggle       With the lights gone there is nothing left to line the
+  //                    toggle up with, so it centres in the band like it does
+  //                    on every platform that never had lights. That is the
+  //                    whole of `--chrome-pad: 10px`, and it is the half a
+  //                    reservation check alone would miss.
+  //
+  // Measured, with the block's selector broken so nothing matches it:
+  // **784 FULLSCREEN** — 392 of each (28 desktop states x 2 themes x 7 window
+  // sizes x the 1 fullscreen cell). Break only `--traffic-w` and it is 392.
+  //
+  // Keyed on the attribute rather than on the state's key, for the reason the
+  // band block above is: the attribute is what the sheet reads, and the walk
+  // sets it exactly as `src/shell/desktop.rs` does. A phone frame has no
+  // element carrying it, so this cannot reach one.
+  const fullscreen = document.querySelector('.shell[data-fullscreen="true"]');
+  if (fullscreen) {
+    const fsSlot = fullscreen.querySelector('.traffic-slot');
+    const reserved = fsSlot ? fsSlot.getBoundingClientRect().width : 0;
+    if (reserved > 0.5) {
+      out.push(`FULLSCREEN   ${reserved.toFixed(0)}px is still reserved for traffic lights`
+        + ' that a fullscreen window does not have on screen');
+    }
+    const fsBand = fullscreen.querySelector('.shell-chrome');
+    const fsToggle = fullscreen.querySelector('.shell-chrome > .nav-toggle');
+    if (fsBand && fsToggle && fsToggle.getClientRects().length) {
+      const b = fsBand.getBoundingClientRect();
+      const t = fsToggle.getBoundingClientRect();
+      // Half a pixel, the same tolerance every other edge comparison in this
+      // file uses: the band is 52 and the toggle 32, so a centred toggle has
+      // exactly 10 above and 10 below and there is no rounding to absorb.
+      if (Math.abs((t.top - b.top) - (b.bottom - t.bottom)) > 0.5) {
+        out.push(`FULLSCREEN   the nav toggle sits ${(t.top - b.top).toFixed(0)}px below the band's`
+          + ` top and ${(b.bottom - t.bottom).toFixed(0)}px above its bottom — it is still aligned`
+          + ' on traffic lights that are not there');
       }
     }
   }
@@ -1537,6 +1823,14 @@ const compareFonts = async (states) => {
     console.error(`${STATES} is empty`);
     process.exit(1);
   }
+  // Before a browser is launched, because this is a question about the input
+  // rather than about the pixels — and because the answer this used to give
+  // when the input was half missing was "Clean". See `coverage`.
+  const gaps = coverage(states);
+  if (gaps.length) {
+    console.error(`${STATES} does not cover what this run claims to check:\n  ${gaps.join('\n  ')}`);
+    process.exit(1);
+  }
   states.push(...stressed(states));
 
   if (arg === 'fonts') {
@@ -1690,15 +1984,33 @@ const compareFonts = async (states) => {
             // Nothing to restore between states, since every page here is
             // navigated fresh from the captured markup.
             if (nav) {
-              await page.evaluate((cell) => {
+              const applied = await page.evaluate((cell) => {
                 const shell = document.querySelector('.shell');
-                if (!shell) return;
+                if (!shell) return false;
                 shell.setAttribute('data-nav', cell.nav);
                 // Set here for the same reason `data-nav` is: the captured
                 // markup can only ever say "false", because a window being
                 // driven for a capture is not a window in fullscreen.
                 shell.setAttribute('data-fullscreen', cell.fullscreen);
+                return true;
               }, nav);
+              // AND IT SAYS SO WHEN IT COULD NOT, which `if (!shell) return;`
+              // did not. Everything the shell axis buys is bought by these two
+              // attributes: with no `.shell` to put them on, the three cells
+              // are three walks of one identical frame and the summary line
+              // goes on advertising "3 shell states". Measured: rename the
+              // class consistently — in `src/shell/desktop.rs`'s markup and in
+              // both desktop sheets, which is what an ordinary refactor does —
+              // and the layout is untouched, the axis quietly stops existing
+              // and `node docs/audit.js both` reports **Clean**. It is the
+              // exact failure DESKTOP_SHELL was added to end, one level down.
+              if (!applied) {
+                console.error(`${state.label} is keyed as a desktop state but has no \`.shell\` for`
+                  + ' `data-nav` and `data-fullscreen` to go on, so the nav and fullscreen axis'
+                  + ' would walk the same frame three times — has the class been renamed in'
+                  + ' src/shell/desktop.rs without being renamed here?');
+                process.exit(1);
+              }
             }
             const issues = [...new Set([
               ...await page.evaluate(GEOMETRY),
