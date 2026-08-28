@@ -1448,13 +1448,27 @@ the consequence: dragging the window across 902 made the badge jump between
 columns, so the state of the connection appeared to move because the layout
 reflowed. One per window is now structural.
 
-Which of the two shrinks first at the 480pt floor is `assets/main.css`'s
-decision, not a new one. `.conn-label`'s own note says the badge holds its
-name and "the title beside it shrinks first — it has min-width 0 and its own
-ellipsis, and a truncated title is normal", so the badge is `flex: 0 0 auto`.
-Measured at 480×560 with the longest string in the audit's stress table: the
-title stops at 119px and ellipsises, the badge is whole, and the drag strip is
-exactly its 96px floor.
+**But only while there is a strip to sit in.** The argument above is about
+width and it inverts at the narrow end: measured at 480×560, `.window-drag` is
+down to its 96px minimum and the badge holds 135px, which is more than the
+119px left for the name of the thing the window has open. Fifteen characters of
+a title beside a fully spelled-out agent version is the wrong way round, so at
+571 and under `.conn-label` goes and the badge is the dot again — the phone's
+argument reaching the phone's answer, taking the phone's rule rather than
+inventing a second one. The dot carried the whole state in colour all along;
+the label was the identification of a control, never the reading of one.
+
+**And inside the title group the qualifier yields to the name.** Both were
+`flex: 0 1 auto`, which takes a deficit off two items in proportion to what
+each asked for — so the longer the subtitle, the more of the title it cost.
+Measured on the captured `desktop-scheduler-detail` at 572: the group had
+211px, the subtitle spent 95 of it on *Runs every day at 2:30 AM*, and the
+heading was cut to 108 — narrower than the badge beside it, which is the one
+arrangement the band is not allowed to reach. `.chrome-sub` is `flex: 1 1 0`
+now: it bids for nothing and grows into whatever the heading did not want, so
+the heading keeps its intrinsic width until there is none left. Same window
+after: heading 173px, uncut, subtitle 30px, and at 1180 the group is still
+exactly heading plus gap plus the subtitle's own width.
 
 **The pane header keeps its controls and loses its title.** With the window's
 bar naming the detail, the detail's own `.topbar` is a back chevron and
@@ -1524,8 +1538,25 @@ token is a decision this work had no mandate for.
 verdict line for the reason it states everything separately: an unnamed count
 is exactly how a coverage claim rots. The phone's is 98 states × 2 themes × 6
 phone sizes × 4 text sizes. The desktop's is **28 states × 2 themes × 7 window
-sizes × 1 text size × 2 nav states**, and every one of those numbers is a
+sizes × 1 text size × 3 shell states**, and every one of those numbers is a
 different claim from the phone's.
+
+**And the desktop half is no longer optional.** Every desktop check is reached
+by iterating states whose key starts with `desktop-`, so a gallery with none
+runs none of them — measured, by deleting all 14 from
+`docs/gallery-states.json`: **Clean**, with a summary line that simply stops
+mentioning the desktop and reads as though there were nothing to mention. A
+capture given only the phone's log produces exactly that file. `docs/audit.js`
+now states what it is *for* and exits before launching a browser when the
+gallery is not it: at least one state per shell, both answers to "is anything
+open in the detail column", and every destination in `nav::DESTINATIONS`
+captured at least once with the desktop nav marking it. That last claim is
+asked of the **drawer** and not of the keys — `src/shell/mod.rs` writes
+`class="drawer-item active" title="<label>"` for the destination on screen, so
+the question is answered by the captured bytes rather than by a naming
+convention `src/nav.rs` explicitly does not promise (`Screen::Chat` dumps as
+`chat`, singular, and says why). Drop `desktop-code-list` and the run stops
+with *no desktop state was captured with code open*.
 
 **Seven window sizes, and the claim is deliberately weaker.** `SIZES` is a
 coverage claim about *devices*: those are the phones this app is gated on and
@@ -1567,9 +1598,22 @@ a real fullscreen window: the rule below was dead in every window that ever
 ran, and no frame here rendered it either. Two independent gaps, each of which
 made the other invisible. It is now read off `tao` on a `Resized` and written
 onto `.shell` beside the other two — verified by driving a real window in and
-out of fullscreen and watching the attribute follow — and the sabotage test
-that keeps this honest is deleting the rule's `--traffic-w: 0px`, which turns
-the grid from Clean to 672 findings.
+out of fullscreen and watching the attribute follow.
+
+**Rendering that block is not checking it, and for one release it was not.**
+The sabotage originally recorded here — 672 findings for the fullscreen rule —
+was measured by setting `--traffic-w: 900px`, which physically overflows the
+window and is caught by `OVERFLOW-X` like any other 900px box. It is not the
+regression this rule has. Re-measured on the shipping grid: set the rule's
+`--traffic-w` back to `0px` and the run is **Clean**; break its selector so the
+whole block goes dead — which is the regression it *already shipped once*, back
+when the flag came from a JS guess that never matched — and the run is
+**Clean** as well. The third cell was a 50% growth of the desktop grid that
+could not fail. `FULLSCREEN` is the check that closes it, and it states the
+block's two numbers as two questions: the reservation is gone (**392**, with
+`--traffic-w` held at 76), and with the lights gone the toggle centres in the
+band like it does on every platform that never had them (**392**, with
+`--chrome-pad` held at 0). Both, for the dead block: **784**.
 
 **The desktop sheets are linked per state, never from a directory.** This is
 why `assets/desktop.css` and `assets/platform/macos.css` are deliberately *not*
@@ -1591,16 +1635,25 @@ A check you cannot make fail is worth nothing, so each of these was made to
 fail on purpose and the number written down. All against a tree the axis calls
 clean.
 
+**And a number is only true of the grid it was taken on.** The rows marked *(2
+cells)* below were measured before the fullscreen cell existed and have not
+been re-run; every other row in both tables was re-measured on the shipping
+three-cell grid for this pass, because a calibration nobody re-derives is a
+calibration that quietly stops describing the gate. The rescaling is not a
+factor you can apply in your head: `TITLE-TALLER` went 196 → **588**, three
+times rather than one and a half, because the two extra cells reach frames the
+first one did not.
+
 | put back | reported | where |
 |---|---|---|
-| the toggle absolutely positioned against `.shell` and centred in the nav column — **the regression that shipped** | 112 CHROME-SLOT | 480×560 and 571×700 **only**, never 572 and up |
-| the same collision behind `[data-nav="closed"]` | 392 CHROME-SLOT | nav **closed** only, all seven widths |
-| `--text-secondary: #bbbbbb` on `.app > .shell` | 352 CONTRAST | 1180×820, nav open — the reference cell |
-| `border-radius: 0` on `.session-item` | 1164 SQUARE | every width |
-| `min-height: 0; height: 0` on `.setting-row` | 196 COLLAPSED | every width, both nav states |
-| `margin-top: -20px` on `.chrome-title` | 196 TITLE-TALLER | every width, both nav states |
-| `margin-left: -40px` on `.chrome-title` | 196 TITLE-COLLIDE, all `overlaps button.nav-toggle by 32px` | every width, both nav states |
-| `flex: 1 1 0` on `.window-drag` (i.e. letting it shrink) | 70 DRAG-GONE, `26px wide` | 480×560 and 571×700 **only** |
+| the toggle absolutely positioned against `.shell` and centred in the nav column — **the regression that shipped** | 112 CHROME-SLOT *(2 cells)* | 480×560 and 571×700 **only**, never 572 and up |
+| the same collision behind `[data-nav="closed"]` | 392 CHROME-SLOT *(2 cells)* | nav **closed** only, all seven widths |
+| `--text-secondary: #bbbbbb` on `.app > .shell` | 361 CONTRAST + 156 ICON-CONTRAST | 1180×820, nav open — the reference cell |
+| `border-radius: 0` on `.session-item` | 1804 SQUARE | every width |
+| `min-height: 0; height: 0` on `.setting-row` | 196 COLLAPSED *(2 cells)* | every width, both nav states |
+| `margin-top: -20px` on `.chrome-title` | 588 TITLE-TALLER (+ 588 SPILL) | every width, every shell state |
+| `margin-left: -40px` on `.chrome-title` | 588 TITLE-COLLIDE, all `overlaps button.nav-toggle by 32px` | every width, every shell state |
+| `flex: 1 1 0` on `.window-drag` (i.e. letting it shrink) | 180 DRAG-GONE, down to `0px wide` | 480 through 902, silent at 1180 and up |
 
 The last three arrived with the window's own bar and each covers a way it can
 go wrong. `TITLE-TALLER` and `TITLE-COLLIDE` are the existing pane-header
@@ -1610,11 +1663,12 @@ guards a control you cannot see. `src/main.rs` hides the macOS titlebar, which
 takes AppKit's own drag region with it, so `.window-drag` is the only thing
 left that can move the window — and it is a flex sibling of a title, a badge
 and a reservation that are all free to grow. Squeezed to nothing the window is
-simply stuck, with no clipping, no overflow and nothing else out of place. The
-demo fires at 480 and 571 and falls silent at 572, which is the same straddle
-earning its place as the first row, and it fires on the ordinarily-captured
-title rather than only the stressed one — so `flex: 1 0 96px` is doing work
-today rather than insuring against a hypothetical.
+simply stuck, with no clipping, no overflow and nothing else out of place. It
+fires on the ordinarily-captured title rather than only the stressed one, so
+`flex: 1 0 96px` is doing work today rather than insuring against a
+hypothetical — and re-measured on the three-cell grid it reaches further than
+it was first recorded as doing: 480 through 902, down to a strip **0px** wide,
+falling silent only at 1180 and above.
 
 **One check had to be taught what "not rendered" means.** `TITLE-TALLER`
 compared a heading's box against its bar's, and `assets/desktop.css` now takes
@@ -1636,6 +1690,44 @@ that it fires at 480 and 571 and falls silent at 572 is the straddle earning
 its place rather than sampling.
 
 None of those five runs put a single finding on a phone state.
+
+#### The four checks that were checking nothing
+
+The table above is the honest half. The window bar also arrived with four
+checks that could not be made to fail at all, and each was found by trying —
+which is the only way any of them are ever found. All four are repaired and
+re-calibrated below, on the shipping three-cell grid.
+
+| put back | before the repair | after |
+|---|---|---|
+| the fullscreen block's selector broken, so a fullscreen window keeps the 76pt reservation and the 0pt band padding | **Clean** | 784 FULLSCREEN (392 for either half alone) |
+| the detail pane's heading wrapped one element deeper, with `.topbar > .title` broadened to match and the wrapper given `display: contents` — a refactor that moves not one pixel | **Clean**, with the name painted twice | 588 TITLE-DOUBLED |
+| `.pane .topbar > .conn-badge` broadened to a bare `.conn-badge`, which takes the shell's copy with it | **Clean**, with no connection indicator anywhere | 1176 CONN-GONE |
+| `flex: 1 0 300px` on `.window-drag` inside the `max-width: 571px` block — a crush confined to the tier where the badge is only a dot | **Clean** | 162 TITLE-OUTBID (138 the drag strip, 24 the title narrower than the 32pt button beside it) |
+
+`TITLE-OUTBID` is the one that was blind to its own defect rather than merely
+to a neighbouring one. It tested `.chrome-heading` for being cut and then
+compared the badge against the whole `.chrome-title` **group**, so the more of
+the line the subtitle took, the safer the title looked — and the defect it was
+written for was still on screen: at 572×700 on the captured
+`desktop-scheduler-detail`, unstressed, the group held 211px while the heading
+inside it was cut to 108 and the badge spent 135 on an agent version. Pointed
+at the heading it reports **16** on a tree that had been Clean. The fix is
+`assets/desktop.css`: `.chrome-sub` is `flex: 1 1 0`, so the qualifier grows
+into what the name did not want instead of bidding against it — heading 173px
+and uncut at the same window, and nothing changed where there is room. A large
+`flex-shrink` was tried first and rejected as asymptotic: at a factor of 100
+the heading still gives up 1.2px of a 65px deficit, which is a cut title that
+only a tolerance can hide.
+
+It was also structurally dead at the two narrowest windows on the grid, which
+is where the band is most crowded: `.conn-label` is hidden at 571 and under, so
+the badge there is an 18px dot that cannot outbid anything, and a badge-only
+check has nothing to say. Every item on the band's line answers for itself now,
+each against the floor the sheet gives it — `.window-drag` its documented 96,
+`.nav-toggle`, `.chrome-sub` and `.conn-badge` zero — with `.traffic-slot`
+deliberately excluded, because that room is not the app's to spend and
+`FULLSCREEN` owns the one case where it should be given back.
 
 #### The blind spots, named
 
