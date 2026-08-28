@@ -1341,13 +1341,23 @@ intrinsic height (seven destinations at 48px, plus the wordmark and the
 padding) with slack. A test in `src/shell/desktop.rs` checks the floor against
 the breakpoints, because only one of the two is compiled.
 
-**Nothing observes a resize.** The breakpoints are `@media` rules in a
+**Nothing observes a DOM resize.** The breakpoints are `@media` rules in a
 stylesheet a phone binary does not contain, so pane count needs no Rust at
 all. That is not tidiness — it is the synchronous-XHR rule above: a Rust
-resize handler would be a blocking round trip per frame of a drag. The one
+`onresize` handler would be a blocking round trip per frame of a drag. The one
 thing CSS cannot work out for itself is whether a detail is open, and that is
 a fact about the app rather than the window, so the shell states it in a
 `data-detail` attribute.
+
+This paragraph read "**Nothing observes a resize**" until `use_fullscreen`
+landed, and the qualifier is the whole of the difference rather than a hedge.
+`src/shell/desktop.rs` does now take a `tao` `Resized` — as a *trigger*, to
+read `window().fullscreen()` back off the window, because tao publishes no
+fullscreen event of its own. A `tao` event is not a DOM event: it is already in
+this process's event loop and reaches the closure by a function call, so none
+of the per-frame cost the rule is about is paid, and a `peek` guard means the
+signal is written on the transition rather than on the frame. Nothing about the
+column count travels that way, and nothing may start to.
 
 **The window's own bar says what the window has open.** `.shell-chrome` is
 the band the traffic lights are painted in, and it carries three things: the
@@ -1432,11 +1442,11 @@ corners is exactly the "boxy" this system exists to avoid. goose's own desktop
 app draws no such divider either. The one line the shell still draws is
 between the two content columns, which are two different things.
 
-**The connection keeps its words here, and only here.** Rule 8 says "in a bar,
-the dot is *all* you get", and `assets/main.css` enforces it with
-`.topbar .conn-label { display: none }`. The reason that rule gives is
-specific — "the agent name and version are ~107px of text that a **centred**
-title cannot clear" — and it does not survive the move: nothing in
+**The connection keeps its words here — above the rail tier, and nowhere
+else.** Rule 8 says "in a bar, the dot is *all* you get", and `assets/main.css`
+enforces it with `.topbar .conn-label { display: none }`. The reason that rule
+gives is specific — "the agent name and version are ~107px of text that a
+**centred** title cannot clear" — and it does not survive the move: nothing in
 `.shell-chrome` is centred, and at a 1400pt window the strip this sits in was
 1278px of nothing. So the window's bar shows `● goose-mock 1.47.0`, which is
 what the reference paints in the same place (`EnvironmentBadge`,
@@ -1448,13 +1458,35 @@ the consequence: dragging the window across 902 made the badge jump between
 columns, so the state of the connection appeared to move because the layout
 reflowed. One per window is now structural.
 
-Which of the two shrinks first at the 480pt floor is `assets/main.css`'s
+**And the premise inverts at the narrow end, so the rule does too.** "1278px
+of nothing" is an argument about width, and at the 480pt floor the same strip
+is at its 96px minimum and the badge is the widest thing in the bar. So
+`@media (max-width: 571px)` — the rail tier, the same breakpoint the nav
+collapses at — takes `.conn-label` back out, and the band is a dot again.
+Nothing is lost by it: the dot carries the whole state in colour, and the label
+was only ever the identification of a control. This is the phone's argument
+arriving at the phone's answer, and it takes the phone's own rule rather than
+inventing a second one.
+
+Which of the two gives way when they cannot both fit is `assets/main.css`'s
 decision, not a new one. `.conn-label`'s own note says the badge holds its
 name and "the title beside it shrinks first — it has min-width 0 and its own
-ellipsis, and a truncated title is normal", so the badge is `flex: 0 0 auto`.
-Measured at 480×560 with the longest string in the audit's stress table: the
-title stops at 119px and ellipsises, the badge is whole, and the drag strip is
-exactly its 96px floor.
+ellipsis, and a truncated title is normal", so the badge is `flex: 0 0 auto` —
+and that is exactly why the label has to go at the floor rather than be allowed
+to shrink there. Measured at 480×560 with the longest string in the audit's
+stress table, on `desktop-chat (long text)`, both sides of the change:
+
+| | title group | `.conn-badge` | `.window-drag` |
+|---|---|---|---|
+| with the label (the shipped bug) | 119px, ellipsised out of 417 wanted | 135px | 96px |
+| without it (today) | 236px | 18px | 96px |
+
+The drag strip is at its 96px floor either way, so the window is no harder to
+move; the 117px comes entirely off the badge. Nothing at 572pt and above moves
+at all. Reproduce it by putting the rail rule back — append
+`@media (max-width: 571px) { .shell-chrome > .conn-badge .conn-label { display:
+inline } .shell-chrome > .conn-badge { padding-right: 12px } }` to
+`assets/desktop.css` and re-run the axis.
 
 **The pane header keeps its controls and loses its title.** With the window's
 bar naming the detail, the detail's own `.topbar` is a back chevron and
@@ -1524,8 +1556,13 @@ token is a decision this work had no mandate for.
 verdict line for the reason it states everything separately: an unnamed count
 is exactly how a coverage claim rots. The phone's is 98 states × 2 themes × 6
 phone sizes × 4 text sizes. The desktop's is **28 states × 2 themes × 7 window
-sizes × 1 text size × 2 nav states**, and every one of those numbers is a
-different claim from the phone's.
+sizes × 1 text size × 3 shell states**, and every one of those numbers is a
+different claim from the phone's. (It read "2 nav states" until this pass, and
+that was only ever true of the commit that landed the axis: `data-fullscreen`
+became a third cell in the very next one and the count here did not follow.
+`node docs/audit.js both` prints the live grid on its own verdict line — 2 × 7
+× 3 is 42 desktop cells today — so a number written here that disagrees with
+that line is this paragraph's error, not the script's.)
 
 **Seven window sizes, and the claim is deliberately weaker.** `SIZES` is a
 coverage claim about *devices*: those are the phones this app is gated on and
@@ -1533,12 +1570,22 @@ there are no others. A window can be any size at all, so no equivalent claim is
 available. What `DESKTOP_SIZES` is instead: **every breakpoint straddled on
 both sides, plus the floor, plus the size the app opens at, plus the width
 where the list column stops growing** — 480×560 (`MIN_INNER`), 571 and 572
-(the icon rail's edge), 901 and 902 (the two/three-column edge, which is also
-where the detail pane's `.conn-badge` goes), 1180×820 (`with_inner_size` in
+(the icon rail's edge, and also where `.conn-badge` gives up its label),
+901 and 902 (the two/three-column edge), 1180×820 (`with_inner_size` in
 `src/main.rs`, and the reference size), and 1600×1000 (past 1533, where
 `clamp(330px, 30%, 460px)` saturates). Straddling is the point: a breakpoint is
 precisely the number where one width renders one layout and the next renders
 another, and only both sides can say the two agree.
+
+The 901/902 pair used to be described here as the width "where the detail
+pane's `.conn-badge` goes", and that stopped being true in the commit that
+wrote it: `@media (min-width: 902px)` hiding only the detail's copy was
+replaced, in that same change, by an unconditional
+`.pane .topbar > .conn-badge { display: none }`. Nothing about the connection
+turns at 902 any more — the badge's one remaining breakpoint is 571 — so 902 is
+now a column-count straddle and nothing else. `docs/audit.js`'s own comment
+beside `DESKTOP_SIZES` still carries the old sentence and is wrong in the same
+way; that file is not this one's to edit.
 
 **One text size, and it was read off a window rather than derived.** The
 four-scale walk is the Dynamic Type opt-in, and that opt-in is
@@ -1567,9 +1614,31 @@ a real fullscreen window: the rule below was dead in every window that ever
 ran, and no frame here rendered it either. Two independent gaps, each of which
 made the other invisible. It is now read off `tao` on a `Resized` and written
 onto `.shell` beside the other two — verified by driving a real window in and
-out of fullscreen and watching the attribute follow — and the sabotage test
-that keeps this honest is deleting the rule's `--traffic-w: 0px`, which turns
-the grid from Clean to 672 findings.
+out of fullscreen and watching the attribute follow.
+
+**The sabotage that was supposed to keep that honest no longer fails, and that
+is worth more said than deleted.** This paragraph used to end "deleting the
+rule's `--traffic-w: 0px` turns the grid from Clean to 672 findings". Re-run
+against the tree today it turns the grid from Clean to **Clean** — both
+readings of the sabotage, whether the one declaration falls back to the base
+sheet's 76px or the whole `[data-fullscreen="true"]` block is made dead.
+Neither reaches a check, because a fullscreen frame that keeps its 76pt
+reservation is simply the ordinary frame, and the ordinary frame is what the
+other two cells already report clean. The number was measured one commit
+earlier, and nothing since has been shown to explain the difference, so it is
+recorded here as **not reproduced** rather than restated.
+
+What the cell can still be shown to catch, so that it is not filed as dead:
+give the same block a reservation the band cannot afford —
+`.app > .shell[data-fullscreen="true"] { --traffic-w: 300px }` — and the run
+reports **196 findings** (84 OVERFLOW-X, 56 TITLE-OUTBID, 56 SPILL), every one
+of them in `nav open, fullscreen` and none in the other two cells or on a phone
+state. So the cell is walked and its rule is read; what is unproven is that
+`--traffic-w: 0px` specifically is load-bearing to anything this script
+measures. Treat that as an open item on the check rather than on the sheet: the
+declaration is right on a device, where the lights genuinely are not painted,
+and a browser cannot see the thing it is right about (see the blind spots
+below).
 
 **The desktop sheets are linked per state, never from a directory.** This is
 why `assets/desktop.css` and `assets/platform/macos.css` are deliberately *not*
@@ -1591,39 +1660,79 @@ A check you cannot make fail is worth nothing, so each of these was made to
 fail on purpose and the number written down. All against a tree the axis calls
 clean.
 
-| put back | reported | where |
-|---|---|---|
-| the toggle absolutely positioned against `.shell` and centred in the nav column — **the regression that shipped** | 112 CHROME-SLOT | 480×560 and 571×700 **only**, never 572 and up |
-| the same collision behind `[data-nav="closed"]` | 392 CHROME-SLOT | nav **closed** only, all seven widths |
-| `--text-secondary: #bbbbbb` on `.app > .shell` | 352 CONTRAST | 1180×820, nav open — the reference cell |
-| `border-radius: 0` on `.session-item` | 1164 SQUARE | every width |
-| `min-height: 0; height: 0` on `.setting-row` | 196 COLLAPSED | every width, both nav states |
-| `margin-top: -20px` on `.chrome-title` | 196 TITLE-TALLER | every width, both nav states |
-| `margin-left: -40px` on `.chrome-title` | 196 TITLE-COLLIDE, all `overlaps button.nav-toggle by 32px` | every width, both nav states |
-| `flex: 1 1 0` on `.window-drag` (i.e. letting it shrink) | 70 DRAG-GONE, `26px wide` | 480×560 and 571×700 **only** |
+**Every number in this table was re-derived at `d716047`**, by performing the
+sabotage, running `node docs/audit.js both` and counting, because the table as
+first written no longer reproduced: the grid grew a third shell state one
+commit after the table landed, `.conn-badge` lost its label at the rail tier
+one commit after that, and one of the eight rows had stopped reaching its own
+check entirely. **Not one of the eight numbers was still right**, three rows
+said "both nav states" of a grid that has three, and the `DRAG-GONE` row named
+two widths where it fires at five. A calibration number is only worth its date and
+its commit, exactly as the phone grid's 6424 already says of itself. **Re-derive
+this table whenever either axis changes**; do not scale it.
 
-The last three arrived with the window's own bar and each covers a way it can
-go wrong. `TITLE-TALLER` and `TITLE-COLLIDE` are the existing pane-header
+How each row is reproduced: **append** the declarations to the sheet named and
+re-run. Appending is what makes them faithful without a rewrite — every one of
+these is at the same specificity as the rule it is fighting, so the later copy
+wins, and a `git checkout` of the one file puts the tree back.
+
+| put back, appended to `assets/desktop.css` | reported | where |
+|---|---|---|
+| `.nav-toggle { position: absolute; z-index: calc(var(--z-chrome) + 1); top: 20px; left: calc(var(--nav-w) - var(--shell-gap) - 44px); margin-top: 0 }` — **the regression that shipped** | **224 CHROME-SLOT** and 426 TITLE-COLLIDE (650) | the slot findings at 480×560 and 571×700 **only**, never 572 and up — but in **nav open and nav closed alike**, 28 states × 2 themes × 2 widths × 2 cells |
+| the same collision behind `[data-nav="closed"]` — `.shell[data-nav="closed"] .nav-toggle { position: absolute; z-index: calc(var(--z-chrome) + 1); top: 14px; left: var(--shell-gap); margin-top: 0 }` | **392 CHROME-SLOT** | nav **closed** only, all seven widths |
+| `--text-secondary: #bbbbbb` on `.app > .shell` | **361 CONTRAST** and 156 ICON-CONTRAST (517) | 1180×820, nav open, **light only** — the reference cell, and a value that is only wrong against a white page |
+| `border-radius: 0` on `.session-item` | **1804 SQUARE** | all 42 desktop cells; 24 states |
+| `min-height: 0; height: 0; padding: 0` on `.setting-row` | **588 COLLAPSED** | all 42 cells, 14 per cell, 10 states |
+| `margin-top: -20px` on `.chrome-title` | **588 TITLE-TALLER** and 588 SPILL (1176) | all 42 cells, 14 per cell — the 14 states whose band carries a title |
+| `margin-left: -40px` on `.chrome-title` | **588 TITLE-COLLIDE**, every one of them `div.chrome-title overlaps button.nav-toggle by 32px` | all 42 cells |
+| `flex: 1 1 0` on `.window-drag` (i.e. letting it shrink) | **180 DRAG-GONE** — 164 reading `0px wide` and 16 reading `6px wide` | **five** of the seven widths: 480×560, 571×700, 572×700, 901×760 and 902×760. Clean at 1180×820 and 1600×1000 |
+
+**Two rows changed shape rather than just size, and both are worth reading.**
+
+*The `.setting-row` row had stopped reaching its check at all.* `min-height: 0;
+height: 0` alone now reports **488 SPILL and 252 SMALL-TAP and zero
+COLLAPSED** — because `assets/main.css` sets `box-sizing: border-box` and
+`.setting-row` keeps `padding: 8px 12px`, so a row asked for zero height still
+measures 16 and `COLLAPSED`'s `height < 1` test never fires. The sabotage had
+quietly become a demonstration of two *other* checks. `padding: 0` is what
+takes the last 16px out and puts the row back on the check it was written for.
+That is the failure mode this whole table exists to catch, one level up: a
+sabotage that goes on producing findings looks exactly like a sabotage that
+still proves what it claims.
+
+*The `.window-drag` row was wrong in three ways at once* — 70 against a real
+180, `26px wide` against a real `0px`/`6px`, and "480×560 and 571×700 **only**"
+against five of the seven widths. The straddle claim went with it: this demo
+does **not** fall silent at 572, it goes on firing through 901 and 902 and only
+stops at 1180. So `flex: 1 0 96px` is doing work across most of the band's
+range rather than only at the floor, which is a stronger statement about the
+declaration than the one it replaces — but it is not the tidy echo of the first
+row that the paragraph below used to call it.
+
+The last three rows arrived with the window's own bar and each covers a way it
+can go wrong. `TITLE-TALLER` and `TITLE-COLLIDE` are the existing pane-header
 checks pointed at `.shell-chrome` as well, which costs the phone grid nothing
 because the phone has no such bar; `DRAG-GONE` is new, and it is the one that
 guards a control you cannot see. `src/main.rs` hides the macOS titlebar, which
 takes AppKit's own drag region with it, so `.window-drag` is the only thing
 left that can move the window — and it is a flex sibling of a title, a badge
 and a reservation that are all free to grow. Squeezed to nothing the window is
-simply stuck, with no clipping, no overflow and nothing else out of place. The
-demo fires at 480 and 571 and falls silent at 572, which is the same straddle
-earning its place as the first row, and it fires on the ordinarily-captured
-title rather than only the stressed one — so `flex: 1 0 96px` is doing work
-today rather than insuring against a hypothetical.
+simply stuck, with no clipping, no overflow and nothing else out of place. It
+fires on nine states, and **two of the nine carry no stressed string at all** —
+`desktop-recipes-detail` and `desktop-scheduler-detail`, exactly as captured —
+so `flex: 1 0 96px` is doing work against titles the app really produces rather
+than insuring against a hypothetical.
 
 **One check had to be taught what "not rendered" means.** `TITLE-TALLER`
 compared a heading's box against its bar's, and `assets/desktop.css` now takes
 the detail pane's heading out with `display: none` — which reports 0×0 at the
 origin, "outside the bar" by arithmetic and inside it by every meaning the
-check has. Measured: 392 findings, every one of them `div.titlegroup 0..0` or
-`h1.title.ellipsis 0..0`, all on desktop states and none on a phone one. The
-guard is `getClientRects().length` rather than a zero-size test, because a box
-of zero *height* is a real finding and an element with no boxes at all is not.
+check has. Re-measured at `d716047` by dropping the guard from a scratch copy
+of the script: **588 findings**, 336 `h1.title.ellipsis 0..0` and 252
+`div.titlegroup 0..0`, all on desktop states and none on a phone one. (It read
+392 when it was written, under the two-cell grid.) The guard is
+`getClientRects().length` rather than a zero-size test, because a box of zero
+*height* is a real finding and an element with no boxes at all is not.
 
 The first row is the one that matters most, because it is not hypothetical: the
 nav toggle used to be absolutely positioned against `.shell` and slid between
@@ -1633,9 +1742,27 @@ button** — a control you cannot press sitting exactly where you press to close
 the window. It was found by eye on a device, because nothing rendered a desktop
 state and no check asked the question. `CHROME-SLOT` asks it now, and the fact
 that it fires at 480 and 571 and falls silent at 572 is the straddle earning
-its place rather than sampling.
+its place rather than sampling. What it does *not* do is distinguish nav open
+from nav closed — `--nav-w` is set by the width tier and not by `data-nav`, so
+the toggle lands in the lights' corner in both — which is why that row reads
+224 and not the 112 recorded when the table was written.
 
-None of those five runs put a single finding on a phone state.
+None of those eight runs put a single finding on a phone state: checked by
+partitioning every run's output on the state key, and non-`desktop-` cells came
+to zero in all eight.
+
+**Owed: three checks with no calibration row.** `TITLE-DOUBLED`,
+`CONN-DOUBLED` and `TITLE-OUTBID` are in `docs/audit.js` today and none of them
+appears in the table above. Their commits each name a number — 392
+TITLE-DOUBLED and 632 CONN-DOUBLED with the three `display: none` rules
+removed; 52 TITLE-OUTBID with the rail rule removed — and **none of those three
+numbers has been re-derived here**, so none of them should be read as current:
+every one was measured before the grid's third cell, and the TITLE-OUTBID
+figure was measured against the same rail rule this document's own connection
+paragraph now describes. Do not scale them; run them. Whoever next touches
+those three checks owes this table three rows, derived the way the eight above
+were — the sabotage stated as declarations that can be appended, the count, the
+cells, and a line confirming the phone grid stayed at zero.
 
 #### The blind spots, named
 
