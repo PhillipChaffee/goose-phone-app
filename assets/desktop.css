@@ -507,6 +507,27 @@
   .navpane .drawer-group {
     display: none;
   }
+
+  /* THE CONNECTION LOSES ITS WORDS HERE, by the same argument that gave it
+   * them. The rule above keeps `.conn-label` — against `assets/main.css`'s
+   * `.topbar .conn-label { display: none }` — because the strip it sits in
+   * "was 1278px of nothing at a 1400pt window". That premise is about width,
+   * and it inverts: measured at the 480pt floor, `.window-drag` is down to its
+   * 96px minimum and the badge holds 135px, which is MORE than the 119px left
+   * for the name of the thing the window has open. Fifteen characters of a
+   * title beside a fully spelled-out agent version is the wrong way round.
+   *
+   * The dot stays, and it still carries the whole state in colour — the label
+   * was always the identification of a control, never the reading of one. So
+   * at the rail this is the phone's argument reaching the phone's answer, and
+   * it takes the phone's rule rather than inventing a second one. */
+  .shell-chrome > .conn-badge .conn-label {
+    display: none;
+  }
+
+  .shell-chrome > .conn-badge {
+    padding-right: 8px;
+  }
 }
 
 /* ── 2. chrome that no longer floats ────────────────────────────────────
