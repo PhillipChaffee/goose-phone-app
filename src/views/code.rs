@@ -2146,26 +2146,52 @@ mod tests {
     /// `diff_crumb`), and the New screen's name lives on an `aria-label`
     /// rather than in a heading at all.
     ///
-    /// What this proves, exactly: each string the window's bar paints is still
-    /// findable, quoted, somewhere else in this file. It cannot prove the
-    /// second occurrence is the header — a `contains` never can — so it is a
-    /// tripwire on a rename rather than a proof of identity. Two occurrences
-    /// and not one, because the crumb's own literal is the first.
+    /// What this proves, exactly: each string the window's bar paints is the
+    /// argument to a `Crumb` constructor AND the text of the pane's own name
+    /// node — its `h1.title`, or for the New screen the `aria-label` that
+    /// stands in for one. Two named halves, one assertion each, either of
+    /// which can fail on its own.
+    ///
+    /// COUNTING WAS TRIED AND IT DOES NOT WORK, twice over. The first version
+    /// read `include_str!("code.rs")` and asked for two occurrences of the
+    /// title, one for the crumb and one for the header — but `include_str!` of
+    /// this file includes this module, so `"Review".to_owned()` on the line
+    /// below was one of the two it counted: delete
+    /// `h1 { class: "title ellipsis", "Review" }` from `CodeDiffView` and the
+    /// test passed. Scanning `code_of` fixes that one and not the general
+    /// case, because a count is the wrong question: "Pull requests" is also
+    /// the label on the chip that opens the screen, so it stands at three
+    /// occurrences with the tests cut off and survives losing its heading at
+    /// two. Naming the node is what a count was standing in for.
+    ///
+    /// The cost is that it is coupled to how the header is written. Change
+    /// `h1.title.ellipsis` to something else and this goes red on a screen
+    /// that is fine — red on a refactor, which is the direction a guard is
+    /// allowed to be wrong in, and the message says which of the two shapes
+    /// it was looking for.
     #[test]
     fn the_window_bar_names_a_screen_the_way_the_pane_does() {
-        let source = include_str!("code.rs");
+        let source = crate::selfscan::code_of("src/views/code.rs", include_str!("code.rs"));
         for title in [
             new_crumb().title,
             "Review".to_owned(),
             "Pull requests".to_owned(),
         ] {
             let quoted = format!("{title:?}");
-            let seen = source.matches(&quoted).count();
             assert!(
-                seen >= 2,
-                "{quoted} appears {seen} time(s) in views/code.rs — the \
-                 window's bar calls a screen something the screen no longer \
-                 calls itself"
+                source.contains(&format!("Crumb::detailed({quoted}"))
+                    || source.contains(&format!("Crumb::plain({quoted}")),
+                "no Crumb in views/code.rs is built from {quoted}, so the \
+                 window's bar has stopped calling a screen that"
+            );
+            let heading = format!("h1 {{ class: \"title ellipsis\", {quoted} }}");
+            let labelled = format!("\"aria-label\": {quoted}");
+            assert!(
+                source.contains(&heading) || source.contains(&labelled),
+                "{quoted} is what the window's bar paints, and no screen in \
+                 views/code.rs carries it as `{heading}` or as `{labelled}` — \
+                 the bar calls a screen something the screen no longer calls \
+                 itself"
             );
         }
     }

@@ -41,6 +41,9 @@ mod recipes;
 
 mod scheduler;
 
+#[cfg(test)]
+mod selfscan;
+
 mod shell;
 
 mod skills;
