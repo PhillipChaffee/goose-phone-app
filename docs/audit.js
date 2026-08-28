@@ -1104,6 +1104,36 @@ const GEOMETRY = () => {
       out.push(`CONN-DOUBLED ${badges.length} connection badges rendered at once:`
         + ` ${badges.map((el) => name(el)).join(' + ')}`);
     }
+
+    // A SQUEEZED TITLE MUST OUTRANK THE BADGE BESIDE IT.
+    //
+    // Everything in this band is a flex item competing for one line, and the
+    // competition only has a wrong answer at the narrow end. Measured at the
+    // 480pt floor — `MIN_INNER`, the width the window cannot be dragged below —
+    // the title was cut to 119px while `.conn-badge` spent 135px spelling out
+    // an agent version: fifteen characters of the name of the thing you have
+    // open, beside a fully written connection state, on a window with no room
+    // for either. Nothing else in this file could see it. The band did not
+    // overflow, nothing collided and nothing clipped, because a correctly
+    // ellipsised title at any width is a perfectly well-behaved box.
+    //
+    // ASKED ONLY WHEN THE TITLE IS ACTUALLY CUT, which is what makes it a rule
+    // about the squeeze rather than about the strings. A short title is 128px
+    // because that is all it wants — narrower than the badge and entirely
+    // correct — so comparing widths unconditionally would fire on every state
+    // whose crumb happens to be one word. `scrollWidth > clientWidth` is the
+    // difference between "took what it needed" and "was given less than it
+    // asked for", and only the second is a question of priority.
+    const bandTitle = band[0] && band[0].querySelector('.chrome-heading');
+    if (bandTitle && badges.length === 1) {
+      const cut = bandTitle.scrollWidth > bandTitle.clientWidth + 0.5;
+      const t = band[0].getBoundingClientRect().width;
+      const c = badges[0].getBoundingClientRect().width;
+      if (cut && c > t + 0.5) {
+        out.push(`TITLE-OUTBID the band's title is cut to ${t.toFixed(0)}px while`
+          + ` ${name(badges[0])} holds ${c.toFixed(0)}px beside it`);
+      }
+    }
   }
 
   // THE WINDOW HAS TO STAY DRAGGABLE.
@@ -1690,7 +1720,7 @@ const compareFonts = async (states) => {
             if (issues.length) {
               findings += issues.length;
               console.log(`\n${state.label}  [${theme}, ${size.width}x${size.height}, root ${scale}px`
-                + `${nav ? `, nav ${nav}` : ''}]`);
+                + `${nav ? `, nav ${nav.nav}${nav.fullscreen === 'true' ? ', fullscreen' : ''}` : ''}]`);
               issues.forEach((str) => console.log(`  ${str}`));
             }
           }
