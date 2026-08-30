@@ -25,7 +25,11 @@
 use dioxus::prelude::*;
 
 use crate::icons::Icon;
-use crate::nav::{Destination, Group, DESTINATIONS};
+use crate::nav::Destination;
+// `render_group` is the only reader of both, and it is compiled on phones
+// alone — see the `cfg` on it below.
+#[cfg(any(target_os = "ios", target_os = "android"))]
+use crate::nav::{Group, DESTINATIONS};
 use crate::state::AppCtx;
 
 #[cfg(any(target_os = "ios", target_os = "android"))]
@@ -213,21 +217,25 @@ pub(crate) const fn nav_is_active(shell: Shell, at_root: bool, on_screen: bool) 
     }
 }
 
-/// One labelled band of destinations.
+/// One labelled band of destinations, for the phone drawer.
 ///
-/// Moved here from `app.rs` unchanged, because the overlay drawer and the
-/// pinned desktop nav paint the same list off the same table: two copies would
-/// disagree the first time a feature adds a row to `nav::DESTINATIONS`.
+/// THE PHONE'S ALONE now, and compiled only there. It used to serve both
+/// shells — the overlay drawer and the pinned desktop nav painted the same
+/// list off the same table — but the desktop arranges its nav by
+/// [`crate::nav::Plane`] rather than by [`Group`], so it iterates a plane's
+/// own destinations and calls [`render_destination`] directly. What the two
+/// shells still share is the ROW, which is where the two-copies-would-disagree
+/// argument moved with it.
+///
+/// The `cfg` rather than nothing: an ungated helper whose only caller is behind
+/// a `cfg` is dead code on every other target, which is the reasoning
+/// `nav::screen` already carries — and `cargo clippy -D warnings` is right to
+/// say so.
 ///
 /// An empty group renders nothing at all, header included: until the features
 /// land there is no Library to head, and a heading over a gap is the app
 /// promising something it does not have.
-///
-/// The `drawer_open.set(false)` at the end is the mobile shell's — the desktop
-/// nav has no drawer to close and the write lands on a signal nothing there
-/// reads. It stays because this function is the mobile drawer's body verbatim,
-/// and "verbatim" is what makes the no-change-to-mobile promise checkable by
-/// reading the diff.
+#[cfg(any(target_os = "ios", target_os = "android"))]
 pub(crate) fn render_group(ctx: &AppCtx, group: Group) -> Element {
     let items: Vec<&'static Destination> = DESTINATIONS
         .iter()
@@ -243,22 +251,43 @@ pub(crate) fn render_group(ctx: &AppCtx, group: Group) -> Element {
             div { class: "drawer-group", "{header}" }
         }
         for dest in items {
-            button {
-                key: "{dest.id}",
-                class: if nav_is_active(
-                    Shell::CURRENT,
-                    (dest.at_root)(&ctx),
-                    (dest.key)(&ctx).is_some(),
-                ) { "drawer-item active" } else { "drawer-item" },
-                title: nav_tooltip(Shell::CURRENT, dest.label),
-                onclick: move |_| {
-                    (dest.go)(&ctx);
-                    let mut open = ctx.drawer_open;
-                    open.set(false);
-                },
-                Icon { name: dest.icon }
-                "{dest.label}"
-            }
+            {render_destination(&ctx, dest)}
+        }
+    }
+}
+
+/// ONE destination, as a row you can press.
+///
+/// Extracted from [`render_group`] when the desktop stopped arranging its nav
+/// by [`Group`] and started arranging it by [`crate::nav::Plane`]. The two
+/// shells now choose DIFFERENT rows in a different order, and this is the part
+/// that has to stay identical: a second copy of this markup is how one shell
+/// grows a hover state, an `aria-current` or a keyboard affordance the other
+/// silently lacks.
+///
+/// The drawer close stays in here rather than moving to the phone's call site.
+/// It reads as phone-shaped and it is — but `ctx.drawer_open` is false on the
+/// desktop at all times and nothing there can open it, so this writes false
+/// over false. Hoisting it into `render_group` would put the one line two
+/// shells share in the one function only one of them calls.
+pub(crate) fn render_destination(ctx: &AppCtx, dest: &'static Destination) -> Element {
+    let ctx = *ctx;
+    rsx! {
+        button {
+            key: "{dest.id}",
+            class: if nav_is_active(
+                Shell::CURRENT,
+                (dest.at_root)(&ctx),
+                (dest.key)(&ctx).is_some(),
+            ) { "drawer-item active" } else { "drawer-item" },
+            title: nav_tooltip(Shell::CURRENT, dest.label),
+            onclick: move |_| {
+                (dest.go)(&ctx);
+                let mut open = ctx.drawer_open;
+                open.set(false);
+            },
+            Icon { name: dest.icon }
+            "{dest.label}"
         }
     }
 }

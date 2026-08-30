@@ -101,6 +101,26 @@ impl Detail {
 /// machine's own configuration. Only the last two carry a header — the first
 /// group needs no label, because everything above the first rule is obviously
 /// the top of the list.
+///
+/// THE PHONE'S TAXONOMY, and now only the phone's — the desktop arranges its
+/// nav by [`Plane`]. The two are held equal by
+/// `the_two_taxonomies_are_one_table` below, and this one is queued for
+/// deletion: when the phone adopts the switch, `Group`, `Group::ALL`,
+/// `Group::header`, [`Destination::group`] and `shell::render_group` go
+/// together.
+///
+/// **Why the drawer-only items below carry `allow` and not `expect`**, which is
+/// a deviation from this repo's policy and is deliberate. They are read by
+/// `render_group`, compiled on phones only, and by the tests in this file,
+/// which run on the host. So in a desktop build they are dead in the BINARY and
+/// live in the TEST binary of the same invocation, and `#[expect]` cannot say
+/// that: `cargo clippy --all-targets` builds both, the lint fires in one and
+/// not the other, and the half where it does not fire then fails as
+/// `unfulfilled_lint_expectation` under `-D warnings`. Measured rather than
+/// assumed — `expect` was written first and that is exactly what it did. The
+/// policy's reason for preferring `expect` is that an exception which stops
+/// being needed should fail the build rather than rot; what answers that here
+/// is the deletion above, which takes the attributes with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Group {
     Work,
@@ -111,9 +131,17 @@ pub(crate) enum Group {
 impl Group {
     /// Drawer order. Iterated rather than derived so the order is stated in
     /// one place instead of following from where a row happens to sit.
+    #[cfg_attr(
+        not(any(target_os = "ios", target_os = "android")),
+        allow(dead_code, reason = "the phone drawer's alone; see `Group`")
+    )]
     pub(crate) const ALL: [Self; 3] = [Self::Work, Self::Library, Self::Server];
 
     /// The section header, or `None` for the group that does not take one.
+    #[cfg_attr(
+        not(any(target_os = "ios", target_os = "android")),
+        allow(dead_code, reason = "the phone drawer's alone; see `Group`")
+    )]
     pub(crate) const fn header(self) -> Option<&'static str> {
         match self {
             Self::Work => None,
@@ -121,6 +149,161 @@ impl Group {
             Self::Server => Some("Server"),
         }
     }
+}
+
+/// Which half of the app a destination belongs to.
+///
+/// The desktop splits at the top level into a **Chat** half — goose's own
+/// things, where nothing touches a repo — and a **Code** half, which is the
+/// `OpenCode` plane and its working trees. The two are completely separate: own
+/// list, own library, own vocabulary, no screen that shows both and no
+/// abstraction over the pair. That is the decision this enum records, not a
+/// limitation of it.
+///
+/// [`Group`] says the same thing in the shape the PHONE drawer needs, and the
+/// two are held equal by `the_two_taxonomies_are_one_table` below for as long
+/// as both exist. That test is the point of having both: the phone keeps its
+/// flat drawer through this change, and when it adopts the switch `Group` is
+/// DELETED rather than reconciled — nothing in the plane taxonomy reads it, so
+/// there is no second derivation to redo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Plane {
+    Chat,
+    Code,
+}
+
+impl Plane {
+    /// Switch order, left to right. Iterated rather than derived, following
+    /// [`Group::ALL`]: the order is stated in one place instead of following
+    /// from where a row happens to sit.
+    #[cfg_attr(
+        any(target_os = "ios", target_os = "android"),
+        expect(
+            dead_code,
+            reason = "the plane taxonomy is the desktop shell's until the phone \
+                      adopts the switch, at which point this expectation fails \
+                      and takes itself out"
+        )
+    )]
+    pub(crate) const ALL: [Self; 2] = [Self::Chat, Self::Code];
+
+    /// What the segment says. The segment is the ONE control that names a
+    /// whole half of the app, so the word is a value here rather than a
+    /// literal in the shell — same reason [`Group::header`] is.
+    #[cfg_attr(
+        any(target_os = "ios", target_os = "android"),
+        expect(
+            dead_code,
+            reason = "the plane taxonomy is the desktop shell's until the phone \
+                      adopts the switch, at which point this expectation fails \
+                      and takes itself out"
+        )
+    )]
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Chat => "Chat",
+            Self::Code => "Code",
+        }
+    }
+
+    /// The glyph beside the label, from `src/icons.rs`.
+    ///
+    /// Deliberately the same two icons the `chats` and `code` destinations
+    /// already carry: the segment IS those destinations' plane, and a switch
+    /// that used a third pair of glyphs would be naming the same two things
+    /// twice in two alphabets.
+    #[cfg_attr(
+        any(target_os = "ios", target_os = "android"),
+        expect(
+            dead_code,
+            reason = "the plane taxonomy is the desktop shell's until the phone \
+                      adopts the switch, at which point this expectation fails \
+                      and takes itself out"
+        )
+    )]
+    pub(crate) const fn icon(self) -> &'static str {
+        match self {
+            Self::Chat => "message",
+            Self::Code => "code",
+        }
+    }
+}
+
+/// The destination a plane opens on, and whose list is the plane's own.
+///
+/// A `match` and not a search of [`DESTINATIONS`], so the compiler makes it
+/// total. The search version answers with an `Option`, and this file cannot
+/// unwrap one — `unwrap_used` and `expect_used` are on in the workspace lint
+/// table — so it would need [`current`]'s escape hatch instead: a fallback to
+/// `CHATS` that is unreachable and that nothing can prove is unreachable. On
+/// the Code plane that fallback would quietly render the chat list.
+///
+/// The cost is that the pairing is stated here rather than read off the table.
+/// `every_plane_opens_on_a_list_of_its_own` and
+/// `the_two_taxonomies_are_one_table` below are what keep the two in step.
+#[cfg_attr(
+    any(target_os = "ios", target_os = "android"),
+    expect(
+        dead_code,
+        reason = "the plane taxonomy is the desktop shell's until the phone \
+                  adopts the switch, at which point this expectation fails and \
+                  takes itself out"
+    )
+)]
+pub(crate) const fn primary(plane: Plane) -> &'static Destination {
+    match plane {
+        Plane::Chat => &CHATS,
+        Plane::Code => &CODE,
+    }
+}
+
+/// The rest of the plane: what you have saved, as against what you are doing.
+///
+/// Derived from [`primary`] rather than from [`Group::Library`], and that is
+/// the whole design of this pair. The plane taxonomy reads no part of the group
+/// taxonomy, so `Group` can be deleted whole when the phone adopts the switch.
+///
+/// Compared by `id` and not by pointer: `primary` returns a promoted `&CHATS`,
+/// which is a different address from the `CHATS` copy inside `DESTINATIONS`,
+/// so `ptr::eq` here would answer `false` for every row and put the primary in
+/// its own library.
+#[cfg_attr(
+    any(target_os = "ios", target_os = "android"),
+    expect(
+        dead_code,
+        reason = "the plane taxonomy is the desktop shell's until the phone \
+                  adopts the switch, at which point this expectation fails and \
+                  takes itself out"
+    )
+)]
+pub(crate) fn library(plane: Plane) -> Vec<&'static Destination> {
+    DESTINATIONS
+        .iter()
+        .filter(|dest| dest.plane == Some(plane) && dest.id != primary(plane).id)
+        .collect()
+}
+
+/// The destinations that belong to no half, which the desktop keeps in the
+/// sidebar's footer so they are reachable from either one.
+///
+/// A filter rather than a named `SETTINGS` const, so that the day a second
+/// plane-free row arrives it is a row in the table and not an edit here. What
+/// stops that from being a silent hole is `only_settings_belongs_to_neither_half`
+/// below: today this is Settings and the test says so out loud.
+#[cfg_attr(
+    any(target_os = "ios", target_os = "android"),
+    expect(
+        dead_code,
+        reason = "the plane taxonomy is the desktop shell's until the phone \
+                  adopts the switch, at which point this expectation fails and \
+                  takes itself out"
+    )
+)]
+pub(crate) fn plane_free() -> Vec<&'static Destination> {
+    DESTINATIONS
+        .iter()
+        .filter(|dest| dest.plane.is_none())
+        .collect()
 }
 
 /// One drawer destination and everything the shell needs to know about it.
@@ -138,7 +321,30 @@ pub(crate) struct Destination {
     pub id: &'static str,
     pub label: &'static str,
     pub icon: &'static str,
+    /// Which drawer section the PHONE files this under. See [`Group`] for why
+    /// this one is `allow` rather than `expect`, and what deletes it.
+    #[cfg_attr(
+        not(any(target_os = "ios", target_os = "android")),
+        allow(dead_code, reason = "the phone drawer's alone; see `Group`")
+    )]
     pub group: Group,
+    /// Which half of the app this belongs to, or `None` for the one row that
+    /// belongs to neither.
+    ///
+    /// Settings is that row: it configures the connection to BOTH servers, so
+    /// filing it under a plane would hide the code gateway's fields behind the
+    /// chat half. The desktop reaches it from the sidebar's footer, which is
+    /// present in either plane, rather than from a plane's own list.
+    #[cfg_attr(
+        any(target_os = "ios", target_os = "android"),
+        expect(
+            dead_code,
+            reason = "the plane taxonomy is the desktop shell's until the phone \
+                      adopts the switch, at which point this expectation fails \
+                      and takes itself out"
+        )
+    )]
+    pub plane: Option<Plane>,
     /// Make this destination the one on screen.
     ///
     /// It names a screen only where it has to. Chats and Settings share the
@@ -219,6 +425,7 @@ const CHATS: Destination = Destination {
     label: "Chats",
     icon: "message",
     group: Group::Work,
+    plane: Some(Plane::Chat),
     go: |ctx| {
         let (mut tab, mut screen) = (ctx.tab, ctx.screen);
         tab.set(Tab::Home);
@@ -240,6 +447,52 @@ const CHATS: Destination = Destination {
     },
 };
 
+/// Code: the working trees on the `OpenCode` plane, and whatever one has open.
+///
+/// Named separately from the table for [`primary`]'s sake, which is the same
+/// reason [`CHATS`] is: a plane's opening destination has to be nameable from
+/// a `match`, or the pairing becomes a search that answers with an `Option`
+/// this file is not allowed to unwrap.
+const CODE: Destination = Destination {
+    id: "code",
+    label: "Code",
+    icon: "code",
+    group: Group::Work,
+    plane: Some(Plane::Code),
+    // Nothing to name: Code owns `code_screen` outright, so it is left
+    // exactly where it was left.
+    go: |ctx| {
+        let mut tab = ctx.tab;
+        tab.set(Tab::Code);
+    },
+    // Root only, the same reading Chats has always had: from a code chat
+    // Code is where you came from. The drawer used to mark Code active
+    // anywhere inside the tab, which said "here" about a screen two
+    // pushes away.
+    at_root: |ctx| (ctx.tab)() == Tab::Code && (ctx.code_screen)() == CodeScreen::List,
+    root: Some(|_| rsx! { views::code::CodeSessionsView {} }),
+    detail: |ctx| match (ctx.code_screen)() {
+        CodeScreen::List => None,
+        CodeScreen::New => Some(Detail::new(
+            views::code::new_crumb(),
+            rsx! { views::code::CodeNewView {} },
+        )),
+        CodeScreen::Chat => Some(Detail::new(
+            views::code::chat_crumb(ctx),
+            rsx! { views::code::CodeChatView {} },
+        )),
+        CodeScreen::Diff => Some(Detail::new(
+            views::code::diff_crumb(ctx),
+            rsx! { views::code::CodeDiffView {} },
+        )),
+        CodeScreen::Pulls => Some(Detail::new(
+            views::code::pulls_crumb(ctx),
+            rsx! { views::code::CodePullsView {} },
+        )),
+    },
+    key: |ctx| ((ctx.tab)() == Tab::Code).then(|| code_key((ctx.code_screen)())),
+};
+
 /// Every drawer destination, in drawer order.
 ///
 /// The blank-line-separated comments are placeholders, one per feature branch
@@ -249,49 +502,13 @@ const CHATS: Destination = Destination {
 /// rename and search, and arrives inside a destination that already exists.
 pub(crate) const DESTINATIONS: &[Destination] = &[
     CHATS,
-    Destination {
-        id: "code",
-        label: "Code",
-        icon: "code",
-        group: Group::Work,
-        // Nothing to name: Code owns `code_screen` outright, so it is left
-        // exactly where it was left.
-        go: |ctx| {
-            let mut tab = ctx.tab;
-            tab.set(Tab::Code);
-        },
-        // Root only, the same reading Chats has always had: from a code chat
-        // Code is where you came from. The drawer used to mark Code active
-        // anywhere inside the tab, which said "here" about a screen two
-        // pushes away.
-        at_root: |ctx| (ctx.tab)() == Tab::Code && (ctx.code_screen)() == CodeScreen::List,
-        root: Some(|_| rsx! { views::code::CodeSessionsView {} }),
-        detail: |ctx| match (ctx.code_screen)() {
-            CodeScreen::List => None,
-            CodeScreen::New => Some(Detail::new(
-                views::code::new_crumb(),
-                rsx! { views::code::CodeNewView {} },
-            )),
-            CodeScreen::Chat => Some(Detail::new(
-                views::code::chat_crumb(ctx),
-                rsx! { views::code::CodeChatView {} },
-            )),
-            CodeScreen::Diff => Some(Detail::new(
-                views::code::diff_crumb(ctx),
-                rsx! { views::code::CodeDiffView {} },
-            )),
-            CodeScreen::Pulls => Some(Detail::new(
-                views::code::pulls_crumb(ctx),
-                rsx! { views::code::CodePullsView {} },
-            )),
-        },
-        key: |ctx| ((ctx.tab)() == Tab::Code).then(|| code_key((ctx.code_screen)())),
-    },
+    CODE,
     Destination {
         id: "recipes",
         label: "Recipes",
         icon: "book",
         group: Group::Library,
+        plane: Some(Plane::Chat),
         // Recipes owns `recipes.screen` outright, so — like Code — the
         // drawer leaves it wherever it was left.
         go: |ctx| {
@@ -324,6 +541,7 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         label: "Skills",
         icon: "sparkle",
         group: Group::Library,
+        plane: Some(Plane::Chat),
         // Nothing to name: Skills owns its own screen signal, so the drawer
         // leaves it where it was left — including on a skill's detail.
         go: |ctx| {
@@ -356,6 +574,7 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         // of a recipe rather than a setting of the machine: Recipes is where
         // one is born, Scheduler is where it is watched.
         group: Group::Library,
+        plane: Some(Plane::Chat),
         // Nothing to name: Scheduler owns its own screen signal, so the drawer
         // leaves it where it was left — including on a job's detail.
         go: |ctx| {
@@ -386,6 +605,15 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         label: "Extensions",
         icon: "package",
         group: Group::Server,
+        // Chat, not Server, and this is the one row where the two taxonomies
+        // genuinely disagree about shape rather than about spelling. An
+        // extension is a goose extension — it changes what the chat half can
+        // do and nothing about a working tree — so on the desktop it sits in
+        // the Chat library. The phone drawer goes on filing it under Server,
+        // because `Group` is a fact about the drawer and this is a fact about
+        // the plane; `the_two_taxonomies_are_one_table` covers exactly this by
+        // comparing Library and Server together against both libraries.
+        plane: Some(Plane::Chat),
         // Nothing to name: Extensions owns `extensions.screen` outright, so a
         // trip through the drawer leaves it exactly where it was.
         go: |ctx| {
@@ -418,6 +646,9 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         label: "Settings",
         icon: "gear",
         group: Group::Server,
+        // The one row that belongs to neither half — see the field's own
+        // comment. It configures both servers at once.
+        plane: None,
         go: |ctx| {
             let (mut tab, mut screen) = (ctx.tab, ctx.screen);
             tab.set(Tab::Home);
@@ -542,6 +773,119 @@ mod tests {
                 "{} has no root screen, so the desktop shell has nothing to \
                  keep in its list column while a detail is open",
                 dest.id
+            );
+        }
+    }
+
+    /// Ids, sorted and deduplicated — the shape every set comparison below is
+    /// written in, so a failure prints two readable lists rather than two
+    /// `Vec<&Destination>` debug dumps.
+    fn ids(dests: impl IntoIterator<Item = &'static Destination>) -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = dests.into_iter().map(|dest| dest.id).collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    fn ids_in(group: Group) -> Vec<&'static str> {
+        ids(DESTINATIONS.iter().filter(|dest| dest.group == group))
+    }
+
+    /// THE DRIFT GUARD, and the reason [`Plane`] and [`Group`] are allowed to
+    /// coexist at all.
+    ///
+    /// Two taxonomies over one table is a standing invitation for a feature
+    /// branch to add a row to whichever one it happened to be reading and
+    /// leave the other short — and the failure is silent on both shells, since
+    /// each renders only its own. Then the phone's adoption of the switch stops
+    /// being a deletion of `Group` and becomes a re-derivation of whatever the
+    /// two have drifted into.
+    ///
+    /// `Library` and `Server` are compared TOGETHER against both libraries
+    /// because the two taxonomies legitimately cut that region differently:
+    /// Extensions is `Group::Server` for the drawer and `Plane::Chat`'s library
+    /// for the desktop. What may not differ is the membership — which rows are
+    /// "something you have saved or configured" as against "the thing you are
+    /// doing" — and that is what this compares.
+    ///
+    /// Shown to fail: give `recipes` `plane: None` and the second assertion
+    /// reports `recipes` missing from the libraries; mark `skills` as
+    /// `Group::Work` and the first reports it as a third primary.
+    #[test]
+    fn the_two_taxonomies_are_one_table() {
+        assert_eq!(
+            ids_in(Group::Work),
+            ids(Plane::ALL.map(primary)),
+            "the drawer's Work group and the planes' opening destinations have \
+             drifted apart"
+        );
+
+        let saved = {
+            let mut both = ids_in(Group::Library);
+            both.extend(ids_in(Group::Server));
+            both.retain(|id| *id != "settings");
+            both.sort_unstable();
+            both
+        };
+        assert_eq!(
+            saved,
+            ids(Plane::ALL.into_iter().flat_map(library)),
+            "a destination is in one taxonomy's library and not the other's"
+        );
+    }
+
+    /// A plane whose opening destination has nothing to list is a sidebar with
+    /// nothing in it. `every_destination_but_settings_lists_something` does not
+    /// catch this: it proves every row except Settings has a root, and says
+    /// nothing about WHICH row a plane opens on.
+    ///
+    /// Shown to fail: set `CODE.root` to `None` — the other test then also
+    /// fails, which is the point, but this one names the plane.
+    #[test]
+    fn every_plane_opens_on_a_list_of_its_own() {
+        for plane in Plane::ALL {
+            let dest = primary(plane);
+            assert!(
+                dest.root.is_some(),
+                "{plane:?} opens on {}, which has no list for the sidebar to show",
+                dest.id
+            );
+            assert_eq!(
+                dest.plane,
+                Some(plane),
+                "{plane:?} opens on {}, which says it belongs to {:?}",
+                dest.id,
+                dest.plane
+            );
+        }
+    }
+
+    /// A destination in no plane is unreachable on the desktop, and only
+    /// Settings means it — the footer is its way in. Anything else that lands
+    /// here is a screen the sidebar cannot open, on a shell whose whole
+    /// navigation is the sidebar.
+    #[test]
+    fn only_settings_belongs_to_neither_half() {
+        for dest in DESTINATIONS {
+            assert_eq!(
+                dest.plane.is_none(),
+                dest.id == "settings",
+                "{} is in no plane, so nothing in the desktop sidebar reaches it",
+                dest.id
+            );
+        }
+    }
+
+    /// The primary is not in its own library, or the sidebar would list the
+    /// chat list underneath itself.
+    #[test]
+    fn a_plane_does_not_file_its_own_list_under_library() {
+        for plane in Plane::ALL {
+            assert!(
+                !library(plane)
+                    .iter()
+                    .any(|dest| dest.id == primary(plane).id),
+                "{plane:?} lists its opening destination in its own library"
             );
         }
     }

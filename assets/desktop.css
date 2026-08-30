@@ -238,6 +238,126 @@
   transition: visibility 0s 200ms;
 }
 
+/* ── the plane switch ───────────────────────────────────────────────────
+ *
+ * The one control in the app that crosses between its two halves: Chat is
+ * goose's own things, Code is the OpenCode plane and its working trees, and
+ * below this row nothing is shared — own list, own library, own vocabulary.
+ *
+ * A segmented control and not two destinations in a row, because the two are
+ * not siblings of the destinations beneath them: pressing one replaces the
+ * whole list below, and a control that changes what a panel contains has to
+ * look unlike the contents. The track is what says so.
+ *
+ * TIERED ROUNDING, per docs/design.md: `.navcard` holds this at --radius-xl,
+ * so the track it holds takes --radius-lg and the segments inside the track
+ * take --radius-md. Outer always larger than inner, or the corners cut. */
+.plane-switch {
+  /* Above the scroller, not in it. `.drawer-nav` is `flex: 1; overflow-y:
+   * auto`, so anything that must stay put while the destinations scroll has to
+   * be a sibling of it that refuses to grow. */
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+  /* 12px down to the destinations, which is `.navcard`'s own vertical padding
+   * — the switch is as far from the first destination as the card's edge is
+   * from the switch. The wordmark above already owns its 24px. */
+  margin: 0 0 12px;
+  /* The groove. 2px is the segment's inset on every side, and it is the whole
+   * of what makes this read as a track with something IN it rather than two
+   * buttons that happen to touch. */
+  padding: 2px;
+  /* A recessed surface under the card, mixed rather than a new token, and
+   * mixed against --nav-fill for the reason `.drawer-item:hover` states: the
+   * card paints --bg-primary in dark and --bg-secondary in light, so a fixed
+   * value would be a step in one theme and a smudge in the other. 30% is the
+   * shallowest mix that still separates from the card at both ends — the
+   * groove has to sit UNDER the selected segment, which is already spending
+   * --bg-tertiary at full strength. */
+  background: color-mix(in srgb, var(--bg-tertiary) 30%, var(--nav-fill));
+  border: 1px solid var(--shell-line);
+  border-radius: var(--radius-lg);
+}
+
+/* Each half. `flex: 1 1 0` and not `1 1 auto`, so the two segments are equal
+ * halves of the track rather than sized by their own words — "Chat" and "Code"
+ * are the same length today and the switch must not lurch the day one of them
+ * is renamed. `min-width: 0` licenses the label to ellipsize inside its half
+ * instead of pushing the track wider than the card. */
+.plane-seg {
+  flex: 1 1 0;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  /* 32px, which is `.nav-toggle`'s height: the switch and the collapse control
+   * are the two chrome controls of this shell and they sit 12px apart in the
+   * same eyeline. */
+  min-height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+/* WHICH HALF YOU ARE IN, in the token main.css already proved reads as
+ * selected — `--bg-tertiary`, the same one `.drawer-item.active` and
+ * `.session-item.on` spend. Three levels of "you are here" in one window
+ * sounds like too many until you notice they are nested: which half, which
+ * destination in it, which row of that destination.
+ *
+ * The outline is `.drawer-item.active`'s, for its reason verbatim:
+ * `--bg-tertiary` is 1.60:1 on the dark card and 1.13:1 on the light one, and
+ * a non-text indicator owes a 3:1 boundary. `box-shadow: inset` rather than a
+ * border so the label does not shift 1px on the segment that is highlighted. */
+.plane-seg.active {
+  background: var(--bg-tertiary);
+  box-shadow: inset 0 0 0 1px var(--border-secondary);
+  color: var(--text-primary);
+}
+
+/* Pointer tier, and it stops at the segment that is NOT selected — hovering
+ * the half you are already in must not paint a second selected-looking pill,
+ * which is `.drawer-item:hover:not(.active)`'s rule and its reason. Colour
+ * only, no fill: the track is already a fill, and a fill inside a fill inside
+ * a card is three surfaces deep. */
+.plane-seg:not(.active):hover {
+  color: var(--text-primary);
+}
+
+/* ── the footer ─────────────────────────────────────────────────────────
+ *
+ * What belongs to neither half. Settings configures both servers at once, so
+ * filing it under a plane would hide the code gateway's fields behind the chat
+ * half — see `nav::Destination::plane`.
+ *
+ * OUTSIDE `.drawer-nav`, so it stays on screen when the destination list is
+ * long enough to scroll. A settings row that scrolls off the bottom of a
+ * sidebar is the one row you cannot afford to lose: it is where the connection
+ * is configured, and an unconfigured app has nothing else on screen. */
+.nav-footer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* A rule rather than a gap. The footer is a different KIND of thing from the
+   * list above it, and 8px of nothing says "the list ended" less clearly than
+   * a line does — the same argument `.drawer-group` makes one level up. */
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--shell-line);
+}
+
 /* The collapse control. In flow in the bar, immediately after the room the
  * traffic lights need — so it is in the same place on every platform and at
  * every width, which is the property that matters most about the one control
@@ -531,6 +651,40 @@
   .navpane .drawer-brand,
   .navpane .drawer-group {
     display: none;
+  }
+
+  /* THE SWITCH STACKS, and does not disappear.
+   *
+   * Two segments side by side cannot fit: the rail's card is 56px wide less
+   * 4px of padding each side, so each half would be 24px — narrower than the
+   * 20px icon plus the 2px inset on both sides, before any label. Stacked they
+   * are two full-width rows in the same track, which is the same control read
+   * top-to-bottom.
+   *
+   * Hiding it instead was the alternative and it is not available: this is the
+   * only route between the two halves of the app, and unlike a destination —
+   * which the rail keeps, as an icon with a `title` — there is nothing else on
+   * screen that reaches the other half. A rail that dropped it would strand a
+   * narrow window in whichever half it was in.
+   *
+   * The label collapses exactly as `.drawer-item`'s does, and for the reason
+   * written there: `font-size: 0` leaves an anonymous inline box with no
+   * metrics, so the text stays in the accessibility tree and each segment
+   * keeps its name. `aria-checked` (src/shell/desktop.rs) carries which one is
+   * on, so the pair is still announced as a two-option choice with no glyph to
+   * read it by. */
+  .navpane .plane-switch {
+    flex-direction: column;
+  }
+
+  .navpane .plane-seg {
+    gap: 0;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .navpane .plane-seg .icon {
+    font-size: var(--icon-md);
   }
 
   /* THE CONNECTION LOSES ITS WORDS HERE, by the same argument that gave it
