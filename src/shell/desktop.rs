@@ -21,8 +21,8 @@
 use dioxus::prelude::*;
 
 use crate::icons::Icon;
-use crate::nav::{self, Destination, Group};
-use crate::shell::render_group;
+use crate::nav::{self, Destination, Plane};
+use crate::shell::render_destination;
 
 /// The smallest the window may be dragged to, in logical points.
 ///
@@ -400,6 +400,31 @@ pub(crate) fn AppShell() -> Element {
     let detail_open = detail.is_some();
     let crumb = detail.as_ref().map(|detail| detail.crumb.clone());
 
+    // WHICH HALF THE SIDEBAR IS SHOWING, derived rather than held.
+    //
+    // The destination already knows — `nav::Destination::plane` is a fact
+    // about the row — so holding the plane as state beside it would be two
+    // sources for one thing, and the failure mode is a switch that says Chat
+    // while a code session fills the pane. Every route into a plane goes
+    // through a destination: the switch below, the ⌘K palette later, and a
+    // deep link if one ever arrives.
+    //
+    // The signal is not that second source. It is memory for the ONE row that
+    // belongs to neither half — Settings — so that leaving Code for Settings
+    // and coming back does not silently land on Chat. The peek-then-set is
+    // `use_arrival`'s pattern below, and for its reason: `set` inside a render
+    // is only safe because the value is compared first.
+    let mut remembered = use_signal(|| Plane::Chat);
+    let plane = match dest.plane {
+        Some(plane) => {
+            if *remembered.peek() != plane {
+                remembered.set(plane);
+            }
+            plane
+        }
+        None => remembered(),
+    };
+
     rsx! {
         // `data-detail` is the one thing the CSS cannot work out for itself,
         // and it is a fact about the app rather than about the window: below
@@ -571,9 +596,60 @@ pub(crate) fn AppShell() -> Element {
             aside { class: "navpane",
                 div { class: "navcard",
                     h2 { class: "drawer-brand", "goose" }
+
+                    // THE PLANE SWITCH, and the top-level shape of this shell.
+                    //
+                    // Chat is goose's own things, where nothing touches a repo;
+                    // Code is the OpenCode plane and its working trees. The two
+                    // halves are separate all the way down — own list, own
+                    // library, own vocabulary — so this is the only control in
+                    // the app that crosses between them.
+                    //
+                    // `radiogroup` and not `tablist`, and the distinction is
+                    // the design's rather than the markup's: there are no tabs
+                    // anywhere in this shell, and a screen reader told these
+                    // were tabs would announce a tab panel that does not exist.
+                    // Two mutually exclusive modes IS a radio group, and it is
+                    // what the pattern is for.
+                    div { class: "plane-switch", role: "radiogroup", "aria-label": "Half",
+                        for half in Plane::ALL {
+                            button {
+                                key: "{half.label()}",
+                                class: if half == plane { "plane-seg active" } else { "plane-seg" },
+                                role: "radio",
+                                "aria-checked": if half == plane { "true" } else { "false" },
+                                // Go to the half's own opening destination
+                                // rather than setting a mode beside the
+                                // navigation: the plane is READ back off
+                                // whatever is on screen (see `plane` above), so
+                                // a switch that only set a signal would say
+                                // Code while a chat was open.
+                                onclick: move |_| (nav::primary(half).go)(&ctx),
+                                Icon { name: half.icon() }
+                                "{half.label()}"
+                            }
+                        }
+                    }
+
+                    // The half's own destinations, and only its own. Its list
+                    // first, then what it has saved — which for the Code plane
+                    // is nothing today, because the code gateway has no
+                    // commands, skills or MCP endpoints to list. That is an
+                    // empty `for` rather than a special case.
                     nav { class: "drawer-nav",
-                        for group in Group::ALL {
-                            {render_group(&ctx, group)}
+                        {render_destination(&ctx, nav::primary(plane))}
+                        for dest in nav::library(plane) {
+                            {render_destination(&ctx, dest)}
+                        }
+                    }
+
+                    // Below the fold, and outside the scroller: what belongs to
+                    // neither half. Settings configures BOTH servers, so filing
+                    // it under a plane would hide the code gateway's fields
+                    // behind the chat half.
+                    div { class: "nav-footer",
+                        for dest in nav::plane_free() {
+                            {render_destination(&ctx, dest)}
                         }
                     }
                 }
@@ -773,6 +849,114 @@ mod tests {
             "div { class: \"shell-body\",",
         )
         .to_owned()
+    }
+
+    /// What the sidebar renders: everything inside `.navcard`.
+    ///
+    /// The third slice, and the same question the other two ask — not whether
+    /// the file mentions a class but which ELEMENT carries it. The switch,
+    /// the destination list and the footer are three siblings whose ORDER is
+    /// the layout (`.drawer-nav` is the only one of the three that scrolls, so
+    /// a switch that drifted inside it would scroll away), and a file-wide
+    /// `contains` cannot tell any of them apart.
+    fn nav_card() -> String {
+        let code = shell_code();
+        block(
+            &code,
+            "div { class: \"navcard\",",
+            "if let Some(root) = dest.root",
+        )
+        .to_owned()
+    }
+
+    /// The sidebar writes the three class names `assets/desktop.css` styles,
+    /// and the sheet still styles all three.
+    ///
+    /// Two halves of one decision in two languages, which is the class of rule
+    /// `crate::selfscan` exists for: Rust emits a class, CSS is the only thing
+    /// that reads it, and a rename on either side leaves a control that is
+    /// visibly unstyled with nothing in the compiler to say so. The switch is
+    /// the worst case in this shell — unstyled, `.plane-seg` is two bare
+    /// buttons with no track, which reads as a layout bug rather than as a
+    /// missing rule, and it is the only route between the app's two halves.
+    ///
+    /// Shown to fail, both ways: renaming `plane-switch` to `plane-tabs` in
+    /// the rsx fails on the first assertion; deleting the `.plane-seg.active`
+    /// block from the sheet still passes (the base rule remains) but deleting
+    /// every `.plane-seg` rule fails on the second.
+    #[test]
+    fn the_sidebar_writes_the_classes_the_sheet_styles() {
+        let card = nav_card();
+        let sheet = include_str!("../../assets/desktop.css");
+        for class in ["plane-switch", "plane-seg", "nav-footer"] {
+            assert!(
+                card.contains(&format!("\"{class}")),
+                "the sidebar no longer renders `{class}`, which assets/desktop.css \
+                 still has rules for"
+            );
+            assert!(
+                sheet.contains(&format!(".{class}")),
+                "assets/desktop.css has no rule for `.{class}`, which the sidebar \
+                 renders — so the control ships unstyled"
+            );
+        }
+    }
+
+    /// Every half is reachable from the switch, and the one row that belongs
+    /// to neither half is reachable from the footer.
+    ///
+    /// Both are spelled as a loop over the table rather than as two literal
+    /// buttons, and this is what holds that: a third plane, or a second
+    /// plane-free destination, then arrives as a row in `src/nav.rs` and
+    /// appears here on its own. Written out because the failure is silent —
+    /// a hard-coded pair goes on rendering two perfectly good segments while
+    /// the third half of the app has no way in.
+    ///
+    /// Shown to fail: replace the `for half in Plane::ALL` loop with two
+    /// literal `Plane::Chat` / `Plane::Code` buttons and the first assertion
+    /// goes; drop the footer's loop and the second does.
+    #[test]
+    fn the_sidebar_is_generated_from_the_table_and_not_from_a_list() {
+        let card = nav_card();
+        assert!(
+            card.contains("Plane::ALL"),
+            "the plane switch no longer iterates `Plane::ALL`, so a half added \
+             to the table would have no control that reaches it"
+        );
+        assert!(
+            card.contains("nav::plane_free()"),
+            "the sidebar footer no longer iterates `nav::plane_free()`, so \
+             Settings — the one destination in neither half — has no way in"
+        );
+    }
+
+    /// Pressing a segment NAVIGATES; it does not set a mode beside the
+    /// navigation.
+    ///
+    /// The distinction is the whole reason `plane` is derived from
+    /// `dest.plane` rather than held in a signal, and getting it wrong is not
+    /// a visible bug on the day it is written: a switch that only set a local
+    /// signal would look right on every click and then say "Code" over a chat
+    /// the moment anything else navigated — ⌘R, the palette, an arrival
+    /// effect. Two sources for one fact, and the render is the one that loses.
+    ///
+    /// A source scan because there is nothing else to ask: the alternative is
+    /// mounting `AppShell`, which needs a `DesktopContext` and an `AppCtx`
+    /// with a live storage provider under it, and `crate::selfscan`'s module
+    /// comment records why faking those renders a component that is not the
+    /// one that ships.
+    ///
+    /// Shown to fail: replace the `onclick` with `plane_signal.set(half)` and
+    /// this goes red while every other test in the file stays green.
+    #[test]
+    fn the_switch_navigates_rather_than_setting_a_mode() {
+        let card = nav_card();
+        assert!(
+            card.contains("(nav::primary(half).go)(&ctx)"),
+            "a plane segment no longer navigates to that half's own \
+             destination, so the switch and the pane can disagree about which \
+             half the window is in"
+        );
     }
 
     /// One rsx block: what lies between the thing that opens it and the thing
