@@ -500,6 +500,22 @@ mod tests {
         let read: Option<Vec<AskRecord>> = Backing::get(&"lost_asks_test".to_owned());
         assert_eq!(read.as_ref(), Some(&journal));
 
-        let _ = std::fs::remove_dir_all(&dir);
+        // NO `remove_dir_all` HERE, and that is the fix rather than an
+        // omission. This test used to wipe the directory on its way out, back
+        // when it owned it; `crate::testkit::storage_dir` now hands the same
+        // path to every test that mounts a view, and those run concurrently
+        // with this one. `LocalStorage::set` does `create_dir_all` and then
+        // `File::create` as two steps (`client_storage/fs.rs:36-39`), so a
+        // delete landing between them panics the second — and Dioxus swallows
+        // a panic thrown during render, so the symptom is not this test failing
+        // but some unrelated view rendering zero bytes.
+        //
+        // Measured rather than reasoned: 2 failures in 30 `cargo test -p
+        // goose-mobile` runs with the line present, always inside a view mount
+        // and never here, against 0 in 30 with it gone.
+        //
+        // Nothing leaks. `storage_dir` builds a per-process temp path and wipes
+        // it on creation, so the next run starts clean and `cargo test` still
+        // keeps nothing anyone would want.
     }
 }
