@@ -200,7 +200,7 @@ pub(crate) fn format_bytes(n: u64) -> String {
 ///
 /// The gesture is owned by JavaScript, exactly as the phone's swipe and pull
 /// are and as the desktop's ⌘R is (`src/viewport.rs` says why at length, and
-/// `src/shell/desktop.rs` says it again for the chord): the native renderer round-trips
+/// `src/shell/desktop/mod.rs` says it again for the chord): the native renderer round-trips
 /// every listened-to event through a synchronous XHR, so by the time a Rust
 /// `onclick` handler could call `document::eval` the user gesture is over —
 /// and opening a file input outside one is the thing `WKWebView` refuses.

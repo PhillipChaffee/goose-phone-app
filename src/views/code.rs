@@ -1248,7 +1248,7 @@ fn chat_where(repo: &str, branch: &str) -> Option<String> {
 /// Read by two things that are never on screen together: the header below,
 /// and — on the desktop — the window's own bar, which takes the heading out of
 /// the pane and paints it in `.shell-chrome` instead
-/// (`src/shell/desktop.rs`, `assets/desktop.css`).
+/// (`src/shell/desktop/mod.rs`, `assets/desktop.css`).
 pub(crate) fn chat_crumb(ctx: &AppCtx) -> Crumb {
     let chat = ctx.code_chat.read();
     Crumb::detailed(chat.title.clone(), chat_where(&chat.repo, &chat.branch))

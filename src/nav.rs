@@ -25,7 +25,7 @@ use crate::views;
 /// A value rather than an `Element`, and that is the whole reason it exists.
 /// Dioxus has no portal, so nothing rendered inside a pane can be moved into
 /// the window's own bar — but a `String` travels anywhere. The desktop shell
-/// paints this in `.shell-chrome` (`src/shell/desktop.rs`) and
+/// paints this in `.shell-chrome` (`src/shell/desktop/mod.rs`) and
 /// `assets/desktop.css` takes the same heading back out of the pane below, so
 /// there is one title per window rather than one per column.
 ///

@@ -49,7 +49,7 @@ pub(crate) fn ExtensionsView() -> Element {
             // is a control that is wrong most of the time it is on screen. The
             // desktop has no pull and no button either — it re-fetches on
             // arrival, and ⌘R sends this same name
-            // (`src/shell/desktop.rs`).
+            // (`src/shell/desktop/mod.rs`).
             "data-refresh": "extensions",
             "data-refreshing": "{loading}",
 
@@ -191,7 +191,7 @@ fn ExtensionRow(entry: GooseExtensionEntry, toggle: Option<crate::extensions::To
 /// Read by two things that are never on screen together: the header below,
 /// and — on the desktop — the window's own bar, which takes the heading out of
 /// the pane and paints it in `.shell-chrome` instead
-/// (`src/shell/desktop.rs`, `assets/desktop.css`). The `None` arm is the
+/// (`src/shell/desktop/mod.rs`, `assets/desktop.css`). The `None` arm is the
 /// view's own fallback, and it is reachable: the list is refreshed under this
 /// screen, so an extension removed on the server disappears while its detail
 /// is up.

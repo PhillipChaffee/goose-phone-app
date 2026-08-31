@@ -47,7 +47,7 @@ enum PollSite {
 /// written for: one screen is mounted at a time, so the newer claim retires
 /// the older loop exactly as the older screen leaves.
 ///
-/// On the desktop the two are mounted TOGETHER — `src/shell/desktop.rs` puts
+/// On the desktop the two are mounted TOGETHER — `src/shell/desktop/mod.rs` puts
 /// the list in one column and what it opened in the next — and hand-over
 /// becomes a bug. The later claimant (the detail) retires the list's loop; then
 /// closing the detail unmounts the only surviving loop, `use_future` does not
@@ -270,7 +270,7 @@ fn row(ctx: &AppCtx, job: &ScheduledJob, started: &HashSet<String>, now: i64) ->
 /// Read by two things that are never on screen together: the header below,
 /// and — on the desktop — the window's own bar, which takes the heading out of
 /// the pane and paints it in `.shell-chrome` instead
-/// (`src/shell/desktop.rs`, `assets/desktop.css`).
+/// (`src/shell/desktop/mod.rs`, `assets/desktop.css`).
 ///
 /// The `None` arm is the view's own dead-end fallback and it is the one on
 /// this table that is genuinely reachable: the poll replaces the list under
