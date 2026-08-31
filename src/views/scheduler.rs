@@ -602,9 +602,113 @@ fn overlays(ctx: &AppCtx) -> Element {
 
 #[cfg(test)]
 mod tests {
-    use super::{claims_the_poll, PollSite};
-    use crate::scheduler::{dump_key, Screen};
+    //! The markup half of this file is asserted by rendering it, not by
+    //! reading it: `crate::testkit` puts a real `AppCtx` under a view and
+    //! hands back the HTML, so every "which sentence does this arm draw"
+    //! below is answered by the same `rsx!` the phone runs.
+    //! `src/selfscan.rs` is why that distinction is worth a paragraph.
+    //!
+    //! `Shell::CURRENT` is `Desktop` in a host `cargo test`, which shows up
+    //! in two places and only two: a row's tray buttons carry their word as
+    //! a `title` attribute rather than as text
+    //! (`views::chrome::row_action_words`), and a row can be marked as the
+    //! one the detail column has open. Assertions below stay on the word
+    //! itself wherever the shell would otherwise decide where it lives.
+
+    use dioxus::prelude::*;
+    use goose_acp_client::{ScheduledJob, SessionInfo};
+    use serde_json::{json, Map};
+
+    use super::{act, claims_the_poll, crumb, PollSite};
+    use crate::scheduler::{dump_key, Screen, Sheet};
     use crate::shell::Shell;
+    use crate::state::{AppCtx, ConnState, Remote, Tab};
+    use crate::testkit::{render, render_seeded, render_settled};
+
+    const JOB: &str = "nightly-dependency-audit";
+    const OTHER: &str = "weekly-changelog-digest";
+    /// Every day at 3am, in the six-field form goose stores.
+    const DAILY_3AM: &str = "0 0 3 * * *";
+    /// What `DAILY_3AM` reads as. Spelled out rather than computed, so a
+    /// change to `cron::describe` shows up here as a failure rather than as
+    /// two sides agreeing with each other.
+    const DAILY_3AM_WORDS: &str = "Runs every day at 3:00 AM";
+    /// A cron `crate::cron` deliberately cannot hold — a stepped minute — so
+    /// the cadence is a fact rather than a control.
+    const UNREADABLE: &str = "*/15 * * * *";
+
+    fn a_job(id: &str, cron: &str) -> ScheduledJob {
+        ScheduledJob {
+            id: id.to_owned(),
+            source: format!("/home/demo/.config/goose/scheduled-recipes/{id}.yaml"),
+            cron: cron.to_owned(),
+            last_run: None,
+            currently_running: false,
+            paused: false,
+            current_session_id: None,
+            job_start_time: None,
+            extra: Map::new(),
+        }
+    }
+
+    fn a_run(session_id: &str, cwd: Option<&str>) -> SessionInfo {
+        SessionInfo {
+            session_id: session_id.to_owned(),
+            cwd: cwd.map(ToOwned::to_owned),
+            title: Some("Dependency audit".to_owned()),
+            // Old enough that `relative_time` answers with a date, so the
+            // assertion does not age.
+            updated_at: Some("2024-03-14T09:00:00Z".to_owned()),
+            meta: Some(json!({
+                "messageCount": 12,
+                "lastMessageSnippet": "4 crates behind",
+            })),
+        }
+    }
+
+    fn settled<T>(items: Vec<T>) -> Remote<T> {
+        Remote {
+            items,
+            loading: false,
+            unsupported: false,
+            sticky: None,
+        }
+    }
+
+    /// A socket up and the Scheduler destination on screen — the state every
+    /// arm below except the offline ones is about.
+    fn go_online(ctx: &AppCtx) {
+        let mut conn = ctx.conn;
+        conn.set(ConnState::Connected {
+            agent: "goose 1.9".to_owned(),
+        });
+        let mut tab = ctx.tab;
+        tab.set(Tab::Scheduler);
+    }
+
+    fn hold(ctx: &AppCtx, jobs: Vec<ScheduledJob>) {
+        let mut list = ctx.scheduler.list;
+        list.set(settled(jobs));
+    }
+
+    fn opened(ctx: &AppCtx, id: &str) {
+        let mut open = ctx.scheduler.open;
+        open.set(Some(id.to_owned()));
+        let mut screen = ctx.scheduler.screen;
+        screen.set(Screen::Detail);
+    }
+
+    fn list_view() -> Element {
+        rsx! {
+            super::SchedulerView {}
+        }
+    }
+
+    fn detail_view() -> Element {
+        rsx! {
+            super::ScheduledJobView {}
+        }
+    }
 
     /// Exactly one loop, whatever is mounted.
     ///
@@ -642,5 +746,1100 @@ mod tests {
     fn the_two_screens_are_the_two_keys_the_gallery_expects() {
         assert_eq!(dump_key(Screen::List), "scheduler");
         assert_eq!(dump_key(Screen::Detail), "scheduler-detail");
+    }
+
+    // ------------------------------------------------- the list's six arms
+    //
+    // Three of them draw a screen with nothing on it, and they are three
+    // different facts: "this goose cannot schedule", "this phone cannot see
+    // it" and "there is nothing on a timer". Collapsing any pair into the
+    // other is a sentence that is simply untrue, which is the failure this
+    // whole `match` exists to prevent.
+
+    /// A goose started without `--enable-scheduler` is not a broken one. The
+    /// sentence has to name the flag, because the fix is on the machine
+    /// running goose and no amount of tapping on the phone reaches it — and
+    /// it must not be dressed as an error, or it invites a retry that could
+    /// never work.
+    #[test]
+    fn a_server_with_scheduling_off_is_told_which_flag_turns_it_on() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                let mut list = ctx.scheduler.list;
+                list.set(Remote {
+                    unsupported: true,
+                    ..settled(Vec::new())
+                });
+            },
+            list_view,
+        );
+        assert!(
+            html.contains("--enable-scheduler"),
+            "the unsupported arm no longer names the flag, so a reader is \
+             told scheduling does not work and not what to do about it: {html}"
+        );
+        assert!(
+            !html.contains("error-box"),
+            "a goose built without the scheduler is being painted as a \
+             failure, which offers a retry that cannot succeed: {html}"
+        );
+    }
+
+    /// Offline is deliberately not the empty state. The app has no idea
+    /// whether anything is on a timer, and "Nothing is on a timer" would be
+    /// the app stating something it cannot know.
+    #[test]
+    fn a_disconnected_phone_says_it_cannot_see_rather_than_that_there_is_nothing() {
+        let html = render(list_view);
+        assert!(
+            html.contains("Not connected. Schedules live on your goose server."),
+            "a cold launch is not showing the offline sentence: {html}"
+        );
+        assert!(
+            !html.contains("Nothing is on a timer"),
+            "an unreachable server is being reported as a server with no \
+             schedules, which is a claim this app cannot make: {html}"
+        );
+    }
+
+    /// A failed `schedules/list` gets said out loud. The alternative — an
+    /// empty list — is the same screen a working server with no jobs draws,
+    /// and there would be nothing on it to explain the difference.
+    #[test]
+    fn a_failed_fetch_shows_the_servers_own_words() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                let mut list = ctx.scheduler.list;
+                list.set(Remote {
+                    sticky: Some("schedules/list timed out".to_owned()),
+                    ..settled(Vec::new())
+                });
+            },
+            list_view,
+        );
+        assert!(
+            html.contains("schedules/list timed out"),
+            "the failure the server reported is not on screen, so the list \
+             reads as empty when it is actually broken: {html}"
+        );
+        assert!(
+            html.contains("error-box"),
+            "the failure is being shown as ordinary copy rather than as a \
+             failure: {html}"
+        );
+    }
+
+    /// The gap between asking and being answered is its own sentence.
+    /// Without it the first frame of every visit claims the server has
+    /// nothing scheduled.
+    #[test]
+    fn a_fetch_in_flight_says_so_instead_of_claiming_emptiness() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                let mut list = ctx.scheduler.list;
+                list.set(Remote {
+                    loading: true,
+                    ..settled(Vec::new())
+                });
+            },
+            list_view,
+        );
+        assert!(
+            html.contains("Loading schedules…"),
+            "a fetch in flight is drawing something other than the loading \
+             sentence: {html}"
+        );
+        assert!(
+            html.contains(r#"data-refreshing="true""#),
+            "the scroller is not advertising that it is refreshing, so the \
+             pull gesture's spinner never arms: {html}"
+        );
+    }
+
+    /// Nothing here can create a schedule — `schedules/create` wants a whole
+    /// recipe body this app does not author — so the empty state has to point
+    /// at the screen that can. A bare "no schedules" would be a dead end.
+    #[test]
+    fn an_empty_scheduler_sends_the_reader_to_recipes() {
+        let html = render_seeded(go_online, list_view);
+        assert!(
+            html.contains("Nothing is on a timer."),
+            "the empty state is not the empty state: {html}"
+        );
+        assert!(
+            html.contains("Open Recipes"),
+            "the empty Scheduler no longer offers the way to make a \
+             schedule, which leaves the screen a dead end: {html}"
+        );
+    }
+
+    /// The row is the whole list. Each of these four is a separate decision
+    /// taken in `crate::scheduler` and rendered here, and a row that lost any
+    /// of them still looks like a row.
+    #[test]
+    fn a_row_carries_the_jobs_name_its_age_its_state_and_its_actions() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+            },
+            list_view,
+        );
+        assert!(
+            html.contains("Nightly dependency audit"),
+            "the row is printing the raw job id instead of a name, so the \
+             list reads as a directory listing: {html}"
+        );
+        assert!(
+            html.contains(r#"<span class="session-age">never</span>"#),
+            "a job that has never run is not saying so: {html}"
+        );
+        assert!(
+            html.contains(&format!(
+                r#"<span class="dot on"></span> {DAILY_3AM_WORDS}"#
+            )),
+            "the row's dot and its cadence have come apart: {html}"
+        );
+        assert!(
+            html.contains("Pause") && html.contains("Delete"),
+            "the row's tray has lost an action: {html}"
+        );
+    }
+
+    /// Pause and Resume are the same button wearing the job's own state. Get
+    /// this backwards and a tap on a paused job pauses it again — the request
+    /// succeeds, and nothing on screen changes.
+    #[test]
+    fn a_paused_job_offers_resume_and_not_pause() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                let mut job = a_job(JOB, DAILY_3AM);
+                job.paused = true;
+                hold(ctx, vec![job]);
+            },
+            list_view,
+        );
+        assert!(
+            html.contains("Resume"),
+            "a paused job is not offering the way to un-pause it: {html}"
+        );
+        assert!(
+            !html.contains("Pause"),
+            "a paused job is offering Pause, which sends the request it is \
+             already the result of: {html}"
+        );
+        assert!(
+            html.contains(r#"<span class="dot off"></span> paused"#),
+            "a paused job is not wearing the paused dot: {html}"
+        );
+    }
+
+    /// The advisory flag is the whole reason a tap on Run now feels like
+    /// anything: the server does not report the run for up to thirty seconds,
+    /// and this device already knows. Promotion only — a job the server calls
+    /// paused shows as running while a run this phone started is in flight.
+    #[test]
+    fn a_run_this_device_started_shows_busy_before_the_server_agrees() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                let mut job = a_job(JOB, DAILY_3AM);
+                job.paused = true;
+                hold(ctx, vec![job]);
+                let mut started = ctx.scheduler.started_here;
+                started.set(std::iter::once(JOB.to_owned()).collect());
+            },
+            list_view,
+        );
+        assert!(
+            html.contains(r#"<span class="dot busy"></span> running"#),
+            "a run this device just started is not showing as running, so \
+             pressing Run now looks like it did nothing for up to thirty \
+             seconds: {html}"
+        );
+        assert!(
+            html.contains("Resume"),
+            "the tray has followed the advisory flag instead of the server's \
+             own paused flag, which is the one Resume acts on: {html}"
+        );
+    }
+
+    /// Which row the detail column came from. Only on the desktop, and only
+    /// while something is actually open: the id outlives the screen that set
+    /// it, so without the second half a row comes back from a detail still
+    /// highlighted beside a pane that says nothing is open.
+    #[test]
+    fn exactly_the_open_row_is_marked_and_only_while_one_is_open() {
+        let marked = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM), a_job(OTHER, DAILY_3AM)]);
+                opened(ctx, JOB);
+            },
+            list_view,
+        );
+        let count = marked.matches(r#"class="session-item on""#).count();
+        assert_eq!(
+            count, 1,
+            "the desktop list marks {count} of its two rows as the one the \
+             detail column is showing, and there is exactly one detail \
+             column: {marked}"
+        );
+
+        let at_root = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM), a_job(OTHER, DAILY_3AM)]);
+                let mut open = ctx.scheduler.open;
+                open.set(Some(JOB.to_owned()));
+            },
+            list_view,
+        );
+        assert!(
+            !at_root.contains(r#"class="session-item on""#),
+            "a row is painted as the one being shown while the detail column \
+             is closed, so the two columns say opposite things: {at_root}"
+        );
+    }
+
+    // --------------------------------------------------------- the overlays
+
+    /// With nothing open the view must render no overlay at all. A backdrop
+    /// left in the tree covers the list with an invisible sheet.
+    #[test]
+    fn no_sheet_means_no_backdrop() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+            },
+            list_view,
+        );
+        assert!(
+            !html.contains("modal-backdrop"),
+            "an overlay is being rendered over a list nobody opened one on: \
+             {html}"
+        );
+    }
+
+    /// Delete is for good, and the confirm has to say what survives it — the
+    /// recipe stays, so this is undoable by scheduling it again rather than by
+    /// an undo that does not exist.
+    #[test]
+    fn deleting_a_schedule_says_the_recipe_outlives_it() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+                let mut sheet = ctx.scheduler.sheet;
+                sheet.set(Sheet::ConfirmDelete(JOB.to_owned()));
+            },
+            list_view,
+        );
+        assert!(
+            html.contains("Delete this schedule?"),
+            "the delete confirmation is not on screen, so a swipe deletes \
+             with no confirm at all: {html}"
+        );
+        assert!(
+            html.contains("so you can schedule it again from Recipes"),
+            "the confirm no longer says what survives the delete: {html}"
+        );
+    }
+
+    /// Killing a run is not deleting a schedule, and the button is the last
+    /// chance to say so. The same modal wearing "Delete" would read as the
+    /// job being removed — which is the neighbouring sheet, on the same
+    /// screen.
+    #[test]
+    fn killing_a_run_is_not_worded_as_a_deletion() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                let mut job = a_job(JOB, DAILY_3AM);
+                job.currently_running = true;
+                hold(ctx, vec![job]);
+                opened(ctx, JOB);
+                let mut sheet = ctx.scheduler.sheet;
+                sheet.set(Sheet::ConfirmKill(JOB.to_owned()));
+            },
+            detail_view,
+        );
+        assert!(
+            html.contains("Kill this run?") && html.contains(">Kill</button>"),
+            "the kill confirmation is missing or unlabelled: {html}"
+        );
+        assert!(
+            html.contains("The schedule stays on"),
+            "the kill confirm no longer says the schedule survives, which is \
+             the whole difference from the sheet beside it: {html}"
+        );
+        assert!(
+            !html.contains("Delete"),
+            "stopping a run is being offered with the word for removing the \
+             job: {html}"
+        );
+    }
+
+    /// The cadence sheet opens on the cadence the job already has. Dropping
+    /// `current` would open it on the default schedule, so tapping Save
+    /// without touching anything would silently move the job.
+    #[test]
+    fn the_cadence_sheet_opens_on_the_cadence_the_job_already_has() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+                opened(ctx, JOB);
+                let mut sheet = ctx.scheduler.sheet;
+                sheet.set(Sheet::Cadence);
+            },
+            detail_view,
+        );
+        assert!(
+            html.contains(r#"<p class="modal-session">Nightly dependency audit</p>"#),
+            "the cadence sheet does not name the job it is about: {html}"
+        );
+        assert!(
+            html.contains(&format!(
+                r#"<span class="setting-name">Result</span><span class="setting-value">{DAILY_3AM_WORDS}</span>"#
+            )),
+            "the sheet opened on a schedule that is not this job's, so Save \
+             without a change would move it: {html}"
+        );
+    }
+
+    /// The poll replaces the list under the open detail, so a job deleted from
+    /// another client can vanish with its cadence sheet up. The sheet has
+    /// nothing to edit then, and guessing would rewrite a cron nobody chose.
+    ///
+    /// Rendered through the LIST, not the detail: the detail's own
+    /// job-is-gone arm returns before it reaches `overlays`, so a detail here
+    /// would draw no sheet for a reason that has nothing to do with this one.
+    #[test]
+    fn the_cadence_sheet_closes_itself_when_the_job_it_edits_is_gone() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, Vec::new());
+                opened(ctx, JOB);
+                let mut sheet = ctx.scheduler.sheet;
+                sheet.set(Sheet::Cadence);
+            },
+            list_view,
+        );
+        assert!(
+            !html.contains("modal-backdrop"),
+            "a cadence sheet is still up over a job that is no longer on the \
+             server, and Save would write a cron to an id that is gone: \
+             {html}"
+        );
+    }
+
+    /// A cron this app's grammar cannot hold is shown and left alone. Opening
+    /// the sheet on one could only rewrite it into something else, so the
+    /// sheet declines rather than offering choices that would replace it.
+    #[test]
+    fn the_cadence_sheet_refuses_a_cron_this_app_would_have_to_rewrite() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, UNREADABLE)]);
+                opened(ctx, JOB);
+                let mut sheet = ctx.scheduler.sheet;
+                sheet.set(Sheet::Cadence);
+            },
+            detail_view,
+        );
+        assert!(
+            !html.contains("modal-backdrop"),
+            "the sheet opened on a cron it cannot express, so saving would \
+             replace a schedule set elsewhere with this app's nearest guess: \
+             {html}"
+        );
+    }
+
+    // ------------------------------------------------------ the job's detail
+
+    /// The one dead end this app has already shipped once. The poll replaces
+    /// the list under this screen, so a job deleted from another client
+    /// disappears while its detail is up — and the back chevron has to
+    /// survive it.
+    #[test]
+    fn a_job_that_vanished_still_leaves_the_way_back() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                opened(ctx, JOB);
+            },
+            detail_view,
+        );
+        assert!(
+            html.contains("That schedule is no longer on the server."),
+            "the detail of a job that has gone says nothing about why it is \
+             blank: {html}"
+        );
+        assert!(
+            html.contains(r#"<h1 class="title ellipsis">Scheduled job</h1>"#),
+            "the fallback header lost its name, so the window bar and the \
+             pane disagree about what is open: {html}"
+        );
+        assert!(
+            html.contains(r#"class="icon-btn back""#),
+            "the back chevron is gone from a screen with nothing on it, \
+             which is the dead end this arm exists to prevent: {html}"
+        );
+    }
+
+    /// What the detail is made of: the recipe behind the job, when it last
+    /// ran, its cadence as a control, and the two buttons a scheduled job
+    /// earns. Each is a separate decision, and a screen missing any one of
+    /// them still renders.
+    #[test]
+    fn a_scheduled_jobs_detail_names_its_recipe_its_age_and_its_cadence() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+                opened(ctx, JOB);
+            },
+            detail_view,
+        );
+        assert!(
+            html.contains(r#"<span class="setting-value">nightly-dependency-audit</span>"#),
+            "the Recipe row is not naming the recipe file this job runs: \
+             {html}"
+        );
+        assert!(
+            html.contains(
+                "/home/demo/.config/goose/scheduled-recipes/nightly-dependency-audit.yaml"
+            ),
+            "the Recipe row dropped the path, which is the only way to find \
+             the file on the server: {html}"
+        );
+        assert!(
+            html.contains(&format!(
+                r#"<span class="setting-name">Cadence</span><span class="setting-value">{DAILY_3AM_WORDS}</span>"#
+            )),
+            "the Cadence row is not saying what the cadence is: {html}"
+        );
+        assert!(
+            html.contains("Run now") && html.contains("Pause"),
+            "a scheduled job has lost one of the two buttons it earns: {html}"
+        );
+        assert!(
+            !html.contains("Kill"),
+            "Kill is offered on a job with nothing running, where it can only \
+             fail: {html}"
+        );
+    }
+
+    /// A pause is something somebody chose, so it gets a banner rather than
+    /// an error box (design rule 7) — and it has to say what a pause does and
+    /// does not do, because the cadence is still there.
+    #[test]
+    fn a_paused_job_explains_the_pause_and_offers_the_way_out() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                let mut job = a_job(JOB, DAILY_3AM);
+                job.paused = true;
+                hold(ctx, vec![job]);
+                opened(ctx, JOB);
+            },
+            detail_view,
+        );
+        assert!(
+            html.contains(r#"<div class="banner">"#) && html.contains("will not fire until you"),
+            "the paused banner is gone, so the only sign a job is paused is \
+             the word beside a dot: {html}"
+        );
+        assert!(
+            !html.contains("error-box"),
+            "a pause somebody chose is being drawn as a failure: {html}"
+        );
+        assert!(
+            html.contains("Resume") && !html.contains(">Pause</button>"),
+            "the paused detail is offering Pause instead of Resume: {html}"
+        );
+    }
+
+    /// While a run is in flight, watching it is the thing to do — and it needs
+    /// a whole `SessionInfo`, which only the history has. The Kill button and
+    /// the Started fact belong to the same moment.
+    #[test]
+    fn a_running_job_offers_the_transcript_the_kill_and_how_long_it_has_been() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                let mut job = a_job(JOB, DAILY_3AM);
+                job.currently_running = true;
+                job.current_session_id = Some("sess-42".to_owned());
+                hold(ctx, vec![job]);
+                opened(ctx, JOB);
+                let mut history = ctx.scheduler.history;
+                history.set(settled(vec![a_run("sess-42", Some("/repo"))]));
+            },
+            detail_view,
+        );
+        assert!(
+            html.contains(r#"<button class="btn primary">"#) && html.contains("Watch it run"),
+            "a run in flight is not offering its transcript as the primary \
+             action, which is the best thing on this screen: {html}"
+        );
+        assert!(
+            html.contains("Kill"),
+            "a run in flight cannot be stopped from its own screen: {html}"
+        );
+        assert!(
+            html.contains(r#"<span class="setting-name">Started</span>"#),
+            "the Started fact is missing, so nothing says how long the run \
+             has been going: {html}"
+        );
+    }
+
+    /// "Watch it run" opens a transcript, and `session/load` needs the
+    /// session's `cwd`. A job whose current session is not in the history —
+    /// or is there without a working directory — has no answer, and a button
+    /// that opens the wrong directory is worse than no button.
+    #[test]
+    fn watch_is_not_offered_without_a_session_it_could_actually_open() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                let mut job = a_job(JOB, DAILY_3AM);
+                job.currently_running = true;
+                job.current_session_id = Some("sess-42".to_owned());
+                hold(ctx, vec![job]);
+                opened(ctx, JOB);
+                let mut history = ctx.scheduler.history;
+                history.set(settled(vec![a_run("sess-42", None)]));
+            },
+            detail_view,
+        );
+        assert!(
+            !html.contains("Watch it run"),
+            "the transcript is offered for a session with no working \
+             directory, so the tap opens a chat against the wrong one: {html}"
+        );
+        assert!(
+            html.contains(r#"<button class="btn primary">"#) && html.contains("Run now"),
+            "with Watch gone, Run now should have taken the one primary this \
+             screen gets: {html}"
+        );
+    }
+
+    /// A cadence this app's grammar cannot hold is evidence, not state: it is
+    /// the only way to recognise the schedule on the machine that can edit it.
+    /// So it renders as a fact that says where to change it, and not as a
+    /// control that would rewrite it.
+    #[test]
+    fn a_cron_this_app_cannot_express_is_shown_as_itself_and_not_as_a_control() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, UNREADABLE)]);
+                opened(ctx, JOB);
+            },
+            detail_view,
+        );
+        assert!(
+            html.contains(&format!(
+                r#"<span class="setting-name">Cadence</span><span class="setting-value">{UNREADABLE}</span>"#
+            )),
+            "the raw cron is not on screen, so there is no way to recognise \
+             this schedule on the client that set it: {html}"
+        );
+        assert!(
+            html.contains("in a form this phone cannot edit"),
+            "nothing says why the cadence is not editable here: {html}"
+        );
+        assert!(
+            !html.contains(r#"<span class="setting-name">Cadence</span></span>"#),
+            "the unreadable cadence is still a button, and tapping it can \
+             only replace a schedule this app did not write: {html}"
+        );
+    }
+
+    // ------------------------------------------------------- the run history
+    //
+    // `runs` is the six-way answer again, and this is where an empty-looking
+    // screen lies loudest: "No runs yet" is a statement about the JOB, and
+    // it is true only when the server was asked and said none.
+
+    /// A goose old enough to schedule but not to list a job's sessions is a
+    /// real server, not a failure — the method cache is per-method. It gets a
+    /// hint pointing at the screen that does have the sessions.
+    #[test]
+    fn a_goose_without_the_sessions_method_is_pointed_at_chats() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+                opened(ctx, JOB);
+                let mut history = ctx.scheduler.history;
+                history.set(Remote {
+                    unsupported: true,
+                    ..settled(Vec::new())
+                });
+            },
+            detail_view,
+        );
+        assert!(
+            html.contains("Its sessions are on the Chats screen."),
+            "a goose that cannot list a job's runs is not saying where the \
+             runs are instead: {html}"
+        );
+        assert!(
+            !html.contains("No runs yet"),
+            "a method this server does not have is being reported as a job \
+             that has never run: {html}"
+        );
+    }
+
+    /// A socket that died before the ask is an absence of an answer, not an
+    /// answer of absence.
+    #[test]
+    fn an_offline_phone_does_not_claim_the_job_has_never_run() {
+        let html = render_seeded(
+            |ctx| {
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+                opened(ctx, JOB);
+            },
+            detail_view,
+        );
+        assert!(
+            // Matched without the apostrophe, which `dioxus-ssr` writes as
+            // `&#39;`: the sentence is what is being asserted, not the entity.
+            html.contains("runs live on your goose server."),
+            "the offline history is not saying why it is empty: {html}"
+        );
+        assert!(
+            !html.contains("No runs yet"),
+            "an unreachable server is being reported as a job that has never \
+             run — the exact false statement this arm exists to stop: {html}"
+        );
+    }
+
+    /// A call that failed gets said. Dressed as an absence it becomes a wrong
+    /// statement about the job rather than a missing one.
+    #[test]
+    fn a_failed_history_fetch_is_reported_rather_than_shown_as_no_runs() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+                opened(ctx, JOB);
+                let mut history = ctx.scheduler.history;
+                history.set(Remote {
+                    sticky: Some("sessions/list refused the cursor".to_owned()),
+                    ..settled(Vec::new())
+                });
+            },
+            detail_view,
+        );
+        assert!(
+            html.contains("sessions/list refused the cursor"),
+            "the history's failure is not on screen: {html}"
+        );
+        assert!(
+            !html.contains("No runs yet"),
+            "a failed fetch is being reported as a job that has never run: \
+             {html}"
+        );
+    }
+
+    /// `open` arms the history slot before the screen paints, precisely so
+    /// this frame says "asking" rather than "none". Losing the loading arm
+    /// puts "No runs yet" on screen for the length of every fetch.
+    #[test]
+    fn a_history_still_loading_says_so() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+                opened(ctx, JOB);
+                let mut history = ctx.scheduler.history;
+                history.set(Remote {
+                    loading: true,
+                    ..settled(Vec::new())
+                });
+            },
+            detail_view,
+        );
+        assert!(
+            // The apostrophe is `&#39;` in the rendered markup; the sentence
+            // is what matters here, not the entity.
+            html.contains("Loading this job"),
+            "a history fetch in flight is drawing something else: {html}"
+        );
+        assert!(
+            !html.contains("No runs yet"),
+            "the screen claims the job has never run while it is still \
+             finding out: {html}"
+        );
+    }
+
+    /// The one arm entitled to say it: asked, and answered with none.
+    #[test]
+    fn a_job_the_server_says_has_never_run_is_the_only_one_told_so() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+                opened(ctx, JOB);
+            },
+            detail_view,
+        );
+        assert!(
+            html.contains("No runs yet. When it fires, the session it writes shows up here."),
+            "the one honest empty state is missing: {html}"
+        );
+    }
+
+    /// A run is a chat, so it is the Chats row unchanged — down to the
+    /// message count and the snippet. The one difference is that it carries
+    /// no actions: deleting a session belongs where sessions are deleted.
+    #[test]
+    fn a_run_renders_as_the_chat_row_it_is_and_offers_no_delete() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+                opened(ctx, JOB);
+                let mut history = ctx.scheduler.history;
+                history.set(settled(vec![a_run("sess-42", Some("/repo"))]));
+            },
+            detail_view,
+        );
+        assert!(
+            html.contains(r#"<div class="session-title">Dependency audit</div>"#),
+            "a run is not showing the session's own title: {html}"
+        );
+        assert!(
+            html.contains(r#"<span class="session-age">Mar 14</span>"#),
+            "a run is not showing when it happened: {html}"
+        );
+        assert!(
+            html.contains("12 msgs") && html.contains("4 crates behind"),
+            "the run row lost the count and the snippet that make it worth \
+             scanning: {html}"
+        );
+        assert!(
+            !html.contains("session-actions"),
+            "a run row grew a swipe tray, which would delete a chat from the \
+             one screen that is not the chats list: {html}"
+        );
+    }
+
+    // ------------------------------------------------- the name, and the acts
+
+    /// The window bar and the pane read the same expression, so a job cannot
+    /// be called one thing in one and something else in the other. The
+    /// subtitle is the row's own state label — the same fact the dot carries.
+    #[test]
+    fn the_crumb_names_the_open_job_and_what_it_is_doing() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+                opened(ctx, JOB);
+            },
+            CrumbProbe,
+        );
+        assert!(
+            html.contains("<p>Nightly dependency audit</p>"),
+            "the crumb is not naming the open job, so the desktop window bar \
+             says something other than the pane: {html}"
+        );
+        assert!(
+            html.contains(&format!("<p>{DAILY_3AM_WORDS}</p>")),
+            "the crumb lost the state line, so the bar names the job without \
+             saying what it is doing: {html}"
+        );
+    }
+
+    /// The reachable fallback: the poll replaces the list under the screen, so
+    /// the crumb has to answer for a job that is no longer there rather than
+    /// leaving the window bar holding the previous job's name.
+    #[test]
+    fn the_crumb_still_answers_for_a_job_that_is_gone() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                opened(ctx, JOB);
+            },
+            CrumbProbe,
+        );
+        assert!(
+            html.contains("<p>Scheduled job</p><p>—</p>"),
+            "a job deleted from another client leaves the crumb with no name \
+             or a stale one: {html}"
+        );
+    }
+
+    /// [`crumb`] renders nothing of its own, so the only way to see it is to
+    /// run it inside a scope that has an `AppCtx` and print what it returned.
+    #[expect(
+        non_snake_case,
+        reason = "a Dioxus component is named like a component"
+    )]
+    fn CrumbProbe() -> Element {
+        let ctx = crate::state::use_app_ctx();
+        let crumb = crumb(&ctx);
+        let subtitle = crumb.subtitle.unwrap_or_else(|| "—".to_owned());
+        rsx! {
+            p { "{crumb.title}" }
+            p { "{subtitle}" }
+        }
+    }
+
+    /// The ids `detail_actions` hands out and the calls behind them are two
+    /// lists that have to agree, and nothing but this checks that they do: a
+    /// button whose id has no arm renders, highlights and does nothing at all.
+    #[test]
+    fn every_detail_button_reaches_the_call_it_is_labelled_with() {
+        let html = render_seeded(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+            },
+            ActProbe,
+        );
+        assert!(
+            html.contains("<p>watch: home/chat/sess-42</p>"),
+            "\"Watch it run\" no longer opens the run's transcript: {html}"
+        );
+        assert!(
+            html.contains("<p>watch with nothing to watch: scheduler</p>"),
+            "\"Watch it run\" fired without a session to open, which lands \
+             on a chat built from nothing: {html}"
+        );
+        assert!(
+            html.contains("<p>kill: kill nightly-dependency-audit</p>"),
+            "Kill no longer opens its confirmation, so either nothing \
+             happens or a run is stopped without being asked about: {html}"
+        );
+        for left in [
+            "closed",
+            "cadence",
+            "delete nightly-dependency-audit",
+            "kill weekly-changelog-digest",
+        ] {
+            assert!(
+                html.contains(&format!("<p>an id from nowhere leaves: {left}</p>")),
+                "an id this table has no arm for changed what was on screen \
+                 — `{left}` should have survived it untouched: {html}"
+            );
+        }
+        assert!(
+            html.contains("<p>run: Not connected — reconnect in Settings</p>"),
+            "Run now is not reaching `run_now`, which is the one detail \
+             button whose failure is silent: {html}"
+        );
+    }
+
+    /// Which sheet is open, as a word a probe can print. `Sheet` carries the
+    /// id each confirm is about, and that is half of what is being asserted:
+    /// a confirm has to survive a re-list that moved the row it came from.
+    fn sheet_word(sheet: &Sheet) -> String {
+        match sheet {
+            Sheet::Closed => "closed".to_owned(),
+            Sheet::Cadence => "cadence".to_owned(),
+            Sheet::ConfirmKill(id) => format!("kill {id}"),
+            Sheet::ConfirmDelete(id) => format!("delete {id}"),
+        }
+    }
+
+    /// Where the app ended up: the chat it opened, or that it did not move.
+    fn place_word(ctx: &AppCtx) -> String {
+        if (ctx.tab)() == Tab::Home && (ctx.screen)() == crate::state::Screen::Chat {
+            let chat = ctx.chat.peek();
+            return format!(
+                "home/chat/{}",
+                chat.session_id.as_deref().unwrap_or("nothing")
+            );
+        }
+        "scheduler".to_owned()
+    }
+
+    /// [`act`] writes to the context and returns nothing, so each arm is run
+    /// here and what it changed is rendered as a line to assert on.
+    #[expect(
+        non_snake_case,
+        reason = "a Dioxus component is named like a component"
+    )]
+    fn ActProbe() -> Element {
+        let ctx = crate::state::use_app_ctx();
+        let lines = use_hook(move || {
+            let mut lines = Vec::new();
+
+            act(&ctx, "watch", JOB, Some(a_run("sess-42", Some("/repo"))));
+            lines.push(format!("watch: {}", place_word(&ctx)));
+
+            let mut tab = ctx.tab;
+            tab.set(Tab::Scheduler);
+            let mut screen = ctx.screen;
+            screen.set(crate::state::Screen::Sessions);
+            act(&ctx, "watch", JOB, None);
+            lines.push(format!("watch with nothing to watch: {}", place_word(&ctx)));
+
+            act(&ctx, "kill", JOB, None);
+            lines.push(format!("kill: {}", sheet_word(&ctx.scheduler.sheet.peek())));
+
+            // An id the table has no arm for must leave the screen exactly as
+            // it found it — whatever was open, still open, untouched.
+            for state in [
+                Sheet::Closed,
+                Sheet::Cadence,
+                Sheet::ConfirmDelete(JOB.to_owned()),
+                Sheet::ConfirmKill(OTHER.to_owned()),
+            ] {
+                let mut sheet = ctx.scheduler.sheet;
+                sheet.set(state);
+                act(&ctx, "definitely-not-an-action", JOB, None);
+                lines.push(format!(
+                    "an id from nowhere leaves: {}",
+                    sheet_word(&ctx.scheduler.sheet.peek())
+                ));
+            }
+            let mut sheet = ctx.scheduler.sheet;
+            sheet.set(Sheet::Closed);
+
+            // No client, which is what makes `run_now`'s own report the
+            // observable half: everything else it does is behind an await.
+            act(&ctx, "run", JOB, None);
+            let toast = ctx.toast.peek().clone();
+            lines.push(format!(
+                "run: {}",
+                toast.unwrap_or_else(|| "said nothing".to_owned())
+            ));
+
+            lines
+        });
+        rsx! {
+            for line in lines.iter() {
+                p { "{line}" }
+            }
+        }
+    }
+
+    // ----------------------------------------- what happens after the render
+    //
+    // `render` sees one pass. Everything below needs the scope's queued work
+    // to run, which is what `render_settled` is for — and what it can reach
+    // is what a task does before its first await.
+
+    /// The claim itself, through the real components rather than through the
+    /// `const fn` behind them.
+    ///
+    /// [`claims_the_poll`] is asserted twice above as plain data, and neither
+    /// assertion would notice the call site moving, losing its argument, or
+    /// being deleted: the list would simply stop polling, and the Scheduler
+    /// would go on showing whatever it had when you arrived — no error, no
+    /// warning, and a run history that never changes.
+    #[test]
+    fn the_list_takes_the_poll_epoch_and_the_desktops_detail_does_not() {
+        let list = render_settled(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+            },
+            PollProbe,
+        );
+        assert!(
+            list.contains("<p>poll=1</p>"),
+            "the Scheduler list mounted without claiming the poll epoch, so \
+             nothing is polling: the dots and the run history are frozen at \
+             whatever they were when the screen opened: {list}"
+        );
+
+        let detail = render_settled(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+                opened(ctx, JOB);
+            },
+            DetailPollProbe,
+        );
+        assert!(
+            detail.contains("<p>poll=0</p>"),
+            "the detail claimed the epoch on a shell that mounts it BESIDE \
+             the list, which retires the list's loop — and closing the detail \
+             then leaves no loop at all: {detail}"
+        );
+    }
+
+    /// The detail's fetch hangs off the connection rather than off the tap
+    /// that opened the screen, so that a job opened while offline still gets
+    /// its runs the moment the socket comes back. Claiming the slot is the
+    /// first thing that fetch does, and it is the half that is observable
+    /// without a server.
+    #[test]
+    fn a_connection_is_what_makes_the_open_job_fetch_its_runs() {
+        let online = render_settled(
+            |ctx| {
+                go_online(ctx);
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+                opened(ctx, JOB);
+            },
+            DetailPollProbe,
+        );
+        assert!(
+            online.contains("<p>history-of=nightly-dependency-audit</p>"),
+            "opening a job over a live connection never asked for its runs, \
+             so the screen says \"No runs yet\" about a job with runs until \
+             somebody happens to pull: {online}"
+        );
+
+        let offline = render_settled(
+            |ctx| {
+                hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+                opened(ctx, JOB);
+            },
+            DetailPollProbe,
+        );
+        assert!(
+            offline.contains("<p>history-of=nothing</p>"),
+            "a fetch was dispatched with no client to make it on, which \
+             claims the history slot for a request that can never answer: \
+             {offline}"
+        );
+    }
+
+    /// The list, with the poll epoch it claimed printed beside it.
+    #[expect(
+        non_snake_case,
+        reason = "a Dioxus component is named like a component"
+    )]
+    fn PollProbe() -> Element {
+        let ctx = crate::state::use_app_ctx();
+        // Read, not peeked: the claim happens in a task after this render, so
+        // the probe has to be subscribed to see the second one.
+        let generation = (ctx.scheduler.poll)();
+        rsx! {
+            super::SchedulerView {}
+            p { "poll={generation}" }
+        }
+    }
+
+    /// The detail, with the epoch and the history slot it claimed.
+    #[expect(
+        non_snake_case,
+        reason = "a Dioxus component is named like a component"
+    )]
+    fn DetailPollProbe() -> Element {
+        let ctx = crate::state::use_app_ctx();
+        let generation = (ctx.scheduler.poll)();
+        let claimed = (ctx.scheduler.history_of)().unwrap_or_else(|| "nothing".to_owned());
+        rsx! {
+            super::ScheduledJobView {}
+            p { "poll={generation}" }
+            p { "history-of={claimed}" }
+        }
     }
 }

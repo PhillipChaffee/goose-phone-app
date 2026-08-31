@@ -1691,12 +1691,16 @@ pub(crate) fn relative_time(epoch: i64) -> String {
         3_600..86_400 => format!("{}h", age / 3_600),
         86_400..604_800 => format!("{}d", age / 86_400),
         _ => {
-            // Walk back from the epoch day to a civil date for the label.
+            // Walk back from the epoch day to a civil date for the label: the
+            // exact inverse of `days_from_civil` above, Hinnant's
+            // `civil_from_days`. The `yoe` line is the load-bearing one and it
+            // has to be his: the obvious `days / 365` estimate overshoots by a
+            // year on the last few days before a March, and this used to say
+            // "Mar 0" for the 29th of February.
             let mut days = epoch.div_euclid(86_400) + 719_468;
             let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
             days -= era * 146_097;
-            let doy = days - (365 * (days / 365) + (days / 365) / 4 - (days / 365) / 100);
-            let yoe = (days - doy / 365) / 365;
+            let yoe = (days - days / 1_460 + days / 36_524 - days / 146_096) / 365;
             let doy = days - (365 * yoe + yoe / 4 - yoe / 100);
             let mp = (5 * doy + 2) / 153;
             let d = doy - (153 * mp + 2) / 5 + 1;
@@ -1741,14 +1745,23 @@ pub(crate) fn set_config_option(ctx: &AppCtx, config_id: &str, value: &str) {
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    reason = "test assertions: a failing unwrap is the failing check"
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test assertions: a failing unwrap, expect or wrong-variant panic is the \
+              failing check"
+)]
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "a mounted `App` holds the lock that keeps two of them from sharing the ask \
+              journal's process-global storage; dropping it early is exactly what must \
+              not happen, and the test's last line is where its turn ends"
 )]
 mod tests {
-    use super::{search_changed, Fetch, Remote};
-    use goose_acp_client::{
-        AcpError, Feature, SessionInfo, SessionKind, SessionListResponse, SessionQuery,
-    };
-    use serde_json::{json, Value};
+    use super::*;
+
+    use futures_util::FutureExt as _;
+    use goose_acp_client::Feature;
+    use serde_json::json;
 
     fn missing() -> AcpError {
         AcpError::Unsupported {
@@ -1952,5 +1965,1720 @@ mod tests {
             next.is_some(),
             "there is another page and the button says so"
         );
+    }
+
+    // ------------------------------------------------------------- harness
+    //
+    // `src/testkit.rs` mounts a VIEW and hands back markup, which is the right
+    // shape for `src/views/` and the wrong one for this file: almost nothing
+    // here draws anything. These are functions that move signals around, and
+    // the thing worth asserting is the signal.
+    //
+    // So the same idea is taken one step further down. A component whose only
+    // job is to run the real `use_app_ctx_provider` publishes the context it
+    // built; the test then calls the code under test inside that dom's
+    // runtime, exactly as the app does, and reads the signals back directly.
+
+    thread_local! {
+        /// Where `Probe` leaves the context it built, for `App::mount` to
+        /// collect. A thread-local and not a static: `cargo test` runs these
+        /// in parallel and two mounts on two threads must not see each other's.
+        static MOUNTED: std::cell::Cell<Option<AppCtx>> = const { std::cell::Cell::new(None) };
+    }
+
+    #[expect(
+        non_snake_case,
+        reason = "a Dioxus component is named like a component, not like a fn"
+    )]
+    fn Probe() -> Element {
+        let ctx = use_app_ctx_provider();
+        MOUNTED.with(|slot| slot.set(Some(ctx)));
+        rsx! { div {} }
+    }
+
+    /// A tokio runtime for the timers this module arms.
+    ///
+    /// `show_toast` spawns a task that sleeps for four seconds, and
+    /// `tokio::time::sleep` panics on construction when no runtime is in
+    /// scope. Nothing here waits for a timer to fire — entering a runtime is
+    /// only what keeps polling a spawned task from exploding, which is the
+    /// difference between testing the half of a function after its
+    /// `spawn_forever` and not.
+    fn tokio_rt() -> &'static tokio::runtime::Runtime {
+        static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+        RT.get_or_init(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("a current-thread tokio runtime for the toast timers")
+        })
+    }
+
+    /// Hold one receiver on the ask journal's storage channel open for as long
+    /// as the test binary lives.
+    ///
+    /// `dioxus-sdk-storage` keeps ONE process-global sender per storage key
+    /// (`client_storage/fs.rs`'s `SUBSCRIPTIONS`) and `.unwrap()`s the result
+    /// of sending on it, while every *receiver* belongs to the `VirtualDom`
+    /// that subscribed. So the moment the last mounted dom has been dropped
+    /// the sender has no receivers left, and the next mount panics inside
+    /// `use_app_ctx_provider` — before its own subscription exists to save it.
+    ///
+    /// Dioxus swallows a panic thrown during render, so the symptom is not a
+    /// stack trace: it is a provider that publishes nothing, in whichever test
+    /// happened to mount first after a gap. Measured before this existed: 4 of
+    /// 25 full-suite runs failed, in six different tests, none of them twice.
+    fn keep_the_journals_channel_open() {
+        use dioxus_sdk_storage::{LocalStorage, StorageSubscriber as _};
+        static ANCHOR: std::sync::OnceLock<
+            tokio::sync::watch::Receiver<dioxus_sdk_storage::StorageChannelPayload>,
+        > = std::sync::OnceLock::new();
+        let _ = ANCHOR.get_or_init(|| {
+            LocalStorage::subscribe::<Vec<crate::ask_journal::AskRecord>>(&"lost_asks".to_owned())
+        });
+    }
+
+    /// One mounted app at a time.
+    ///
+    /// The ask journal's storage is process-global by construction — one file,
+    /// one sender, one subscription map — so two mounts alive at once can
+    /// broadcast into each other's signals. Serialising is what makes a
+    /// failure here mean something about the code rather than about the order
+    /// `cargo test` happened to schedule its threads in.
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct App {
+        /// Held for the test's whole life; see [`ONE_AT_A_TIME`]. A poisoned
+        /// lock is taken anyway: one test panicking must not turn every later
+        /// one into a second, unrelated failure.
+        _turn: std::sync::MutexGuard<'static, ()>,
+        /// Kept alive for the whole test: every signal in `ctx` is owned by a
+        /// scope of this dom, and dropping it invalidates all of them.
+        dom: VirtualDom,
+        ctx: AppCtx,
+    }
+
+    impl App {
+        fn mount() -> Self {
+            Self::mount_over(&Vec::new())
+        }
+
+        /// Launch over a journal already on disk — which is the only way to
+        /// reach the startup reconcile, and the only way to write a test about
+        /// a process that is no longer running.
+        fn mount_over(journal: &Vec<crate::ask_journal::AskRecord>) -> Self {
+            use dioxus_sdk_storage::StorageBacking as _;
+
+            let turn = ONE_AT_A_TIME
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // The provider reaches filesystem-backed storage for the ask
+            // journal and panics without a directory; `testkit` owns the one
+            // the whole test binary uses.
+            //
+            // Laid down and then CHECKED, because the directory is not this
+            // module's to keep: `ask_journal`'s own disk test deletes it when
+            // it is done, and that test is not serialised against this lock.
+            // It can land between the write and the provider reading it back,
+            // and the symptom is a seeded journal that arrives empty.
+            for _ in 0..20 {
+                let _ = std::fs::create_dir_all(crate::testkit::storage_dir());
+                keep_the_journals_channel_open();
+                // The journal is the one signal backed by a real file, and the
+                // file outlives the test that wrote it, so every test here says
+                // what it is launching over rather than inheriting it.
+                dioxus_sdk_storage::LocalStorage::set("lost_asks".to_owned(), journal);
+
+                let mut dom = VirtualDom::new(Probe);
+                dom.rebuild_in_place();
+                let ctx = MOUNTED.with(std::cell::Cell::take).expect(
+                    "the probe component never published a context — Dioxus swallows a \
+                     panic thrown during render, so the provider itself failed",
+                );
+                if dom.in_runtime(|| ctx.lost_asks.peek().len()) == journal.len() {
+                    return Self {
+                        _turn: turn,
+                        dom,
+                        ctx,
+                    };
+                }
+                drop(dom);
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            panic!("the seeded ask journal never survived long enough to be read back")
+        }
+
+        /// Call into this module the way the app calls it: inside the Dioxus
+        /// runtime that owns the signals, and inside a tokio runtime so a
+        /// timer can be armed.
+        fn run<T>(&self, f: impl FnOnce(&AppCtx) -> T) -> T {
+            let _tokio = tokio_rt().enter();
+            self.dom.in_runtime(|| f(&self.ctx))
+        }
+
+        /// Poll whatever `spawn_forever` queued. The app's own event loop does
+        /// this; a test that skips it never reaches the body of a task.
+        fn drain(&mut self) {
+            let _tokio = tokio_rt().enter();
+            self.dom.process_events();
+        }
+
+        /// Put a chat on screen, the way `open_session` would have.
+        fn open_chat(&self, session_id: &str, title: &str) {
+            self.run(|ctx| {
+                ctx.chat.clone().set(ChatState {
+                    session_id: Some(session_id.to_owned()),
+                    title: title.to_owned(),
+                    ..ChatState::default()
+                });
+            });
+        }
+
+        fn items(&self) -> Vec<String> {
+            self.run(|ctx| transcript(&ctx.chat.peek().items))
+        }
+
+        fn toast(&self) -> Option<String> {
+            self.run(|ctx| ctx.toast.peek().clone())
+        }
+
+        fn journal(&self) -> Vec<crate::ask_journal::AskRecord> {
+            self.run(|ctx| ctx.lost_asks.peek().clone())
+        }
+    }
+
+    /// A compact rendering of the transcript, so a failing assertion names
+    /// what was actually folded rather than printing a length.
+    fn transcript(items: &[ChatItem]) -> Vec<String> {
+        items
+            .iter()
+            .map(|item| match item {
+                ChatItem::User { text, attachments } => {
+                    let names: Vec<&str> = attachments.iter().map(|a| a.name.as_str()).collect();
+                    format!("user:{text}:[{}]", names.join(","))
+                }
+                ChatItem::Assistant { message_id, text } => {
+                    format!("assistant:{}:{text}", message_id.as_deref().unwrap_or("-"))
+                }
+                ChatItem::Thought { message_id, text } => {
+                    format!("thought:{}:{text}", message_id.as_deref().unwrap_or("-"))
+                }
+                ChatItem::Tool {
+                    id,
+                    title,
+                    kind,
+                    status,
+                    output,
+                } => format!("tool:{id}:{title}:{kind}:{status}:{output}"),
+            })
+            .collect()
+    }
+
+    /// Run the event pump over a fixed list of events and let it finish.
+    ///
+    /// The sender is dropped before the pump starts, so `recv` answers from
+    /// the buffer and then reports the stream closed: the whole loop completes
+    /// on the first poll, with no executor to drive it.
+    fn pump_events(app: &App, events: Vec<AcpEvent>) {
+        app.run(|ctx| {
+            let (tx, rx) = mpsc::channel(64);
+            for event in events {
+                tx.try_send(event).expect("the test channel holds 64");
+            }
+            drop(tx);
+            pump(ctx, rx)
+                .now_or_never()
+                .expect("the pump parked on an event it should have taken from the buffer");
+        });
+    }
+
+    fn session(id: &str, title: Option<&str>) -> SessionInfo {
+        serde_json::from_value(json!({"sessionId": id, "title": title})).unwrap()
+    }
+
+    /// A `session/update` notification, parsed the way a real one is so a test
+    /// cannot invent a tag or a field name the server never sends.
+    fn notify(session_id: &str, raw: Value) -> AcpEvent {
+        AcpEvent::Update {
+            session_id: session_id.to_owned(),
+            update: SessionUpdate::from_value(raw),
+        }
+    }
+
+    fn ask(request_id: i64, session_id: &str, tool_call: Value) -> AcpEvent {
+        AcpEvent::Permission(PermissionRequest {
+            request_id: json!(request_id),
+            session_id: session_id.to_owned(),
+            tool_call: serde_json::from_value(tool_call).unwrap(),
+            options: Vec::new(),
+        })
+    }
+
+    // -------------------------------------------------------- pure helpers
+
+    /// The `serde(default)` on `Settings` is the difference between an upgrade
+    /// that keeps your server and one that silently forgets it: the storage
+    /// layer falls back to `Default` on a parse error, so a settings blob
+    /// written before the Code tab existed would take the goose URL, the
+    /// secret and the pin down with it.
+    #[test]
+    fn settings_saved_before_the_code_tab_existed_keep_their_server() {
+        let old = json!({
+            "server_url": "https://brain.tailnet.ts.net",
+            "secret_key": "hunter2",
+            "fingerprint": "AA:BB",
+            "working_dir": "/srv/work"
+        });
+        let parsed: Settings = serde_json::from_value(old).expect(
+            "settings written by a build without the code-agent fields no longer parse, so \
+             every upgrading user is handed a blank Settings screen",
+        );
+        assert_eq!(parsed.server_url, "https://brain.tailnet.ts.net");
+        assert_eq!(parsed.secret_key, "hunter2");
+        assert_eq!(parsed.working_dir, "/srv/work");
+        // The absent fields fall back to the same values a first launch has —
+        // compared against `Default` rather than against "" because a debug
+        // build may have been seeded with `GOOSE_DEV_*`.
+        let fresh = Settings::default();
+        assert_eq!(parsed.code_server_url, fresh.code_server_url);
+        assert_eq!(parsed.code_password, fresh.code_password);
+
+        // And the degenerate case the storage layer can hand back.
+        assert!(serde_json::from_str::<Settings>("{}").unwrap() == fresh);
+    }
+
+    /// The same rule one level down, for the Code tab's on-device transcript
+    /// cache. Without the default on `attachments`, one cached chat written by
+    /// an older build fails to parse and the whole cache goes with it — which
+    /// is the offline-readable transcript, gone.
+    #[test]
+    fn a_cached_transcript_from_before_attachments_still_parses() {
+        let old = json!([
+            {"User": {"text": "have a look at this"}},
+            {"Assistant": {"message_id": "m1", "text": "looking"}}
+        ]);
+        let items: Vec<ChatItem> = serde_json::from_value(old).expect(
+            "a transcript cached before messages carried attachments no longer parses, so the \
+             whole on-device cache is discarded",
+        );
+        assert_eq!(
+            transcript(&items),
+            ["user:have a look at this:[]", "assistant:m1:looking"]
+        );
+    }
+
+    /// The pin travels or the connection is refused; it never quietly becomes
+    /// "no pin". A `?` dropped from the fingerprint line would connect to a
+    /// server whose certificate nobody checked.
+    #[test]
+    fn a_malformed_fingerprint_refuses_the_connection_rather_than_dropping_the_pin() {
+        let pinned = Settings {
+            server_url: "https://brain.tailnet.ts.net".to_owned(),
+            secret_key: "hunter2".to_owned(),
+            fingerprint: "AA:".to_owned() + &"BB:".repeat(30) + "CC",
+            ..Settings::default()
+        };
+        let cfg = connect_config(&pinned).expect("a 32-byte colon-separated fingerprint parses");
+        assert_eq!(cfg.base_url, "https://brain.tailnet.ts.net");
+        assert_eq!(cfg.secret, "hunter2");
+        assert_eq!(
+            cfg.fingerprint.map(|fp| fp[0]),
+            Some(0xAA),
+            "the pin reached the connect config"
+        );
+
+        let unpinned = Settings {
+            fingerprint: "   ".to_owned(),
+            ..Settings::default()
+        };
+        assert_eq!(
+            connect_config(&unpinned).unwrap().fingerprint,
+            None,
+            "a blank fingerprint box means no pin, not a broken one"
+        );
+
+        let broken = Settings {
+            fingerprint: "not-a-fingerprint".to_owned(),
+            ..Settings::default()
+        };
+        let err = connect_config(&broken)
+            .expect_err("a fingerprint that is not 32 hex bytes was accepted and thrown away");
+        assert!(
+            err.contains("32 hex bytes"),
+            "the error has to name the format the box wants: {err}"
+        );
+    }
+
+    /// A list nobody has fetched yet is not a list that is loading. Derived
+    /// `Default` cannot be used here (it would demand `T: Default`), so this
+    /// is hand-written and could disagree with `new` — a `loading: true` would
+    /// put a spinner on every feature screen before its first request.
+    #[test]
+    fn an_unfetched_list_shows_neither_a_spinner_nor_a_failure() {
+        let fresh = Remote::<u8>::default();
+        assert!(fresh.items.is_empty());
+        assert!(
+            !fresh.loading,
+            "a screen that has not asked yet is not busy"
+        );
+        assert!(!fresh.unsupported);
+        assert!(fresh.sticky.is_none());
+    }
+
+    /// The rule that draws a time separator into the transcript. Too eager and
+    /// every pause for thought becomes a rule across the chat; too slow and
+    /// yesterday's conversation runs into today's with nothing between them.
+    #[test]
+    fn only_a_pause_of_minutes_puts_a_rule_in_the_transcript() {
+        let now = now_secs();
+
+        // The very first append has nothing to measure against.
+        let (mut marks, mut last_at) = (Vec::new(), 0);
+        mark_gap(0, &mut marks, &mut last_at);
+        assert!(marks.is_empty(), "a first message is not a resumption");
+        assert!(last_at >= now, "the append was stamped");
+
+        // A reply moments later belongs to the same conversation.
+        last_at = now - 30;
+        mark_gap(1, &mut marks, &mut last_at);
+        assert!(marks.is_empty(), "a 30-second pause is thinking, not a gap");
+
+        // Under the ten-minute threshold, still nothing.
+        last_at = now - 570;
+        mark_gap(1, &mut marks, &mut last_at);
+        assert!(marks.is_empty(), "nine and a half minutes is not a gap");
+
+        // Over it, and the mark points at the item about to be pushed.
+        last_at = now - 630;
+        mark_gap(7, &mut marks, &mut last_at);
+        assert_eq!(marks.len(), 1, "a ten-minute pause went unmarked");
+        assert_eq!(marks[0].0, 7, "the rule sits before the resuming item");
+        assert!(
+            marks[0].1 >= now,
+            "the rule is stamped with when things resumed, not when they stopped"
+        );
+    }
+
+    /// The badge on a list row. Each unit is what the reader is actually
+    /// tracking, and an off-by-one in a threshold reads as a chat that
+    /// happened "60m" ago rather than "1h".
+    #[test]
+    fn a_recent_row_is_counted_in_the_unit_the_reader_thinks_in() {
+        let now = now_secs();
+        assert_eq!(relative_time(now - 5), "now");
+        assert_eq!(relative_time(now - 30), "now");
+        assert_eq!(relative_time(now - 130), "2m");
+        assert_eq!(relative_time(now - 3_500), "58m");
+        assert_eq!(relative_time(now - 3_700), "1h");
+        assert_eq!(relative_time(now - 40_000), "11h");
+        assert_eq!(relative_time(now - 90_000), "1d");
+        assert_eq!(relative_time(now - 500_000), "5d");
+        // A clock that has gone backwards (or a server stamp from the near
+        // future) must still produce a badge rather than a negative one.
+        assert_eq!(relative_time(now + 3_600), "now");
+    }
+
+    /// Past a week the badge becomes a date, and the civil-date arithmetic
+    /// behind it is written out by hand here rather than pulled from a crate.
+    /// A month index off by one puts every row in the wrong month.
+    #[test]
+    fn an_old_row_is_dated_rather_than_counted() {
+        let on = |ts: &str| relative_time(rfc3339_to_epoch(ts).expect("a valid RFC3339 stamp"));
+        assert_eq!(on("2021-01-01T00:00:00Z"), "Jan 1");
+        assert_eq!(on("2020-02-29T12:00:00Z"), "Feb 29", "a leap day");
+        assert_eq!(on("2020-03-01T12:00:00Z"), "Mar 1", "the day after one");
+        assert_eq!(on("2021-03-01T12:00:00Z"), "Mar 1", "and a non-leap year");
+        assert_eq!(on("2019-07-04T23:59:59Z"), "Jul 4");
+        assert_eq!(on("2018-12-31T00:00:00Z"), "Dec 31");
+        assert_eq!(on("1999-11-15T06:30:00Z"), "Nov 15", "before the epoch era");
+        assert_eq!(on("1968-05-20T00:00:00Z"), "May 20", "before the epoch");
+    }
+
+    /// The `OpenCode` API reports timestamps as floats. The truncating cast is
+    /// what lets one badge function serve both backends; if it rounded the
+    /// wrong way the two tabs would disagree about the same instant.
+    #[test]
+    fn a_fractional_timestamp_reads_the_same_as_a_whole_one() {
+        let epoch = rfc3339_to_epoch("2019-07-04T23:59:59Z").unwrap();
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a 2019 epoch second is far inside f64's exact-integer range"
+        )]
+        let as_float = epoch as f64;
+        assert_eq!(relative_time_secs(as_float + 0.75), "Jul 4");
+        assert_eq!(relative_time_secs(as_float), relative_time(epoch));
+    }
+
+    // ------------------------------------------- lifecycle, toasts, loading
+
+    /// The state the window opens in. "Connecting is an explicit user action"
+    /// is a promise about a phone on somebody else's network: a launch that
+    /// landed on Chats, or one that dialled out on its own, would reach for
+    /// the tailnet before anyone asked it to.
+    #[test]
+    fn the_app_opens_disconnected_on_settings() {
+        let app = App::mount();
+        app.run(|ctx| {
+            assert!(matches!(*ctx.screen.peek(), Screen::Settings));
+            assert!(matches!(*ctx.tab.peek(), Tab::Home));
+            assert!(matches!(*ctx.conn.peek(), ConnState::Disconnected));
+            assert!(!ctx.conn.peek().is_connected());
+            assert!(!*ctx.want_connected.peek(), "nothing is dialling out yet");
+            assert!(ctx.client.peek().is_none());
+            assert!(!*ctx.drawer_open.peek());
+            assert!(
+                *ctx.code_diff_wrap.peek(),
+                "the review screen soft-wraps until somebody turns it off"
+            );
+        });
+    }
+
+    /// A toast says the newest thing, not the first thing. Two failures in
+    /// quick succession that left the older sentence up would report a problem
+    /// the reader has already moved past.
+    #[test]
+    fn a_toast_says_the_most_recent_thing() {
+        let app = App::mount();
+        assert_eq!(app.toast(), None, "nothing has gone wrong yet");
+        app.run(|ctx| show_toast(ctx, "Failed to list sessions"));
+        assert_eq!(app.toast().as_deref(), Some("Failed to list sessions"));
+        app.run(|ctx| show_toast(ctx, format!("Rename failed: {}", "timed out")));
+        assert_eq!(app.toast().as_deref(), Some("Rename failed: timed out"));
+    }
+
+    /// Disconnect has to take the *intent* down with the socket. The reconnect
+    /// loop and the pump's `Disconnected` arm both read `want_connected`, so a
+    /// disconnect that left it set would have the phone dialling back out
+    /// every thirty seconds after the user asked it to stop.
+    #[test]
+    fn disconnecting_stops_the_app_wanting_to_be_connected() {
+        let app = App::mount();
+        app.run(|ctx| {
+            ctx.want_connected.clone().set(true);
+            disconnect(ctx);
+            assert!(
+                !*ctx.want_connected.peek(),
+                "Disconnect left the app still trying to reconnect"
+            );
+        });
+    }
+
+    /// A server address that cannot be dialled is reported on the Settings
+    /// screen rather than swallowed, and it must not leave the app believing
+    /// it is connected — `want_connected` is what arms the reconnect loop, and
+    /// arming it here would retry a URL that can never work.
+    #[test]
+    fn an_unusable_server_address_fails_the_connection_rather_than_hanging() {
+        let app = App::mount();
+        app.run(|ctx| {
+            ctx.settings.clone().set(Settings {
+                server_url: String::new(),
+                ..Settings::default()
+            });
+            let connected = establish(ctx)
+                .now_or_never()
+                .expect("a blank address is refused before any socket is opened");
+            assert!(!connected);
+            match &*ctx.conn.peek() {
+                ConnState::Failed(message) => assert!(
+                    message.contains("empty"),
+                    "the Settings screen has to say what is wrong with the address: {message}"
+                ),
+                _ => panic!("a blank server address did not fail the connection"),
+            }
+            assert!(!*ctx.want_connected.peek(), "nothing to reconnect to");
+
+            // And the other refusal, one step earlier: the pin is unreadable,
+            // so the connection is not attempted at all.
+            ctx.settings.clone().set(Settings {
+                server_url: "https://brain.tailnet.ts.net".to_owned(),
+                fingerprint: "nonsense".to_owned(),
+                ..Settings::default()
+            });
+            assert!(!establish(ctx)
+                .now_or_never()
+                .expect("a bad pin is refused without opening a socket"));
+            match &*ctx.conn.peek() {
+                ConnState::Failed(message) => assert!(message.contains("32 hex bytes")),
+                _ => panic!("a malformed pin did not fail the connection"),
+            }
+        });
+    }
+
+    /// The shared fetch-into-a-list helper, driven through all three of its
+    /// endings. Every feature screen goes through it, so a mistake here is the
+    /// same mistake on five screens at once.
+    #[test]
+    fn a_feature_load_keeps_its_spinner_and_its_failure_in_step() {
+        let app = App::mount();
+        app.run(|ctx| {
+            // A failure over nothing stays on screen: a toast would fade and
+            // leave a blank page with no explanation on it. So it must not
+            // toast — checked while nothing has toasted yet, which is the only
+            // moment the absence can be told apart from a stale sentence.
+            let empty: Signal<Remote<u8>> = Signal::new_in_scope(Remote::new(), ScopeId::ROOT);
+            load_remote(ctx, empty, std::future::ready(Err(AcpError::Timeout)))
+                .now_or_never()
+                .expect("a ready fetch settles without an executor");
+            assert_eq!(empty.peek().sticky.as_deref(), Some("timed out"));
+            assert!(!empty.peek().loading, "the spinner outlived the failure");
+            assert_eq!(
+                *ctx.toast.peek(),
+                None,
+                "a failure kept on screen was ALSO toasted, so the reader is told twice \
+                 and one of the two disappears"
+            );
+
+            let slot: Signal<Remote<u8>> = Signal::new_in_scope(Remote::new(), ScopeId::ROOT);
+            load_remote(ctx, slot, std::future::ready(Ok(vec![1, 2, 3])))
+                .now_or_never()
+                .unwrap();
+            assert_eq!(slot.peek().items, vec![1, 2, 3]);
+            assert!(!slot.peek().loading, "the spinner outlived the response");
+            assert_eq!(*ctx.toast.peek(), None, "a success is not worth a sentence");
+
+            // A failure over a list you can still read is a toast, and the
+            // rows stay put underneath it.
+            load_remote(ctx, slot, std::future::ready(Err(AcpError::Timeout)))
+                .now_or_never()
+                .unwrap();
+            assert_eq!(slot.peek().items, vec![1, 2, 3], "the list is still there");
+            assert!(slot.peek().sticky.is_none());
+            assert_eq!(ctx.toast.peek().as_deref(), Some("timed out"));
+        });
+    }
+
+    // ------------------------------------------- the pump: folding a stream
+
+    /// The stream carries every session the agent is running, not just the one
+    /// on screen. Folding another chat's words into this transcript would put
+    /// a stranger's conversation in front of the reader.
+    #[test]
+    fn a_chunk_for_another_session_never_reaches_the_open_chat() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![
+                notify(
+                    "s2",
+                    json!({"sessionUpdate": "agent_message_chunk",
+                           "content": {"type": "text", "text": "not yours"}}),
+                ),
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "agent_message_chunk",
+                           "content": {"type": "text", "text": "yours"}}),
+                ),
+            ],
+        );
+        assert_eq!(app.items(), ["assistant:-:yours"]);
+    }
+
+    /// goose streams a reply a token at a time. Each chunk becoming a bubble
+    /// of its own is the difference between a paragraph and forty stacked
+    /// cards; a new `messageId` starting a bubble is what keeps two answers
+    /// apart.
+    #[test]
+    fn streamed_chunks_of_one_message_are_one_bubble() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        let chunk = |id: Option<&str>, text: &str| {
+            notify(
+                "s1",
+                json!({"sessionUpdate": "agent_message_chunk",
+                       "content": {"type": "text", "text": text},
+                       "messageId": id}),
+            )
+        };
+        pump_events(
+            &app,
+            vec![
+                chunk(Some("m1"), "The deploy "),
+                chunk(Some("m1"), "is green."),
+                // An empty chunk is not a bubble and not a break in one.
+                chunk(Some("m1"), ""),
+                chunk(Some("m2"), "Anything else?"),
+                // No id at all: goose's older shape, which appends to whatever
+                // is being written rather than starting a new bubble.
+                chunk(None, " (I'll wait.)"),
+            ],
+        );
+        assert_eq!(
+            app.items(),
+            [
+                "assistant:m1:The deploy is green.",
+                "assistant:m2:Anything else? (I'll wait.)"
+            ]
+        );
+    }
+
+    /// Reasoning and reply are two different things on screen — one is folded
+    /// away, the other is the answer — so a thought must never land in the
+    /// bubble beside it even when the two share a message id.
+    #[test]
+    fn a_thought_and_a_reply_do_not_share_a_bubble() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        let of = |tag: &str, text: &str| {
+            notify(
+                "s1",
+                json!({"sessionUpdate": tag,
+                       "content": {"type": "text", "text": text},
+                       "messageId": "m1"}),
+            )
+        };
+        pump_events(
+            &app,
+            vec![
+                of("agent_thought_chunk", "check the logs "),
+                of("agent_thought_chunk", "first"),
+                of("agent_message_chunk", "Logs look fine."),
+                of("agent_thought_chunk", "done"),
+            ],
+        );
+        assert_eq!(
+            app.items(),
+            [
+                "thought:m1:check the logs first",
+                "assistant:m1:Logs look fine.",
+                "thought:m1:done"
+            ]
+        );
+    }
+
+    /// Replaying a session hands back the reader's own turns. A photo comes
+    /// back as bytes and a mime type, and hanging it off the message is what
+    /// keeps the transcript from reading "[image: image/jpeg]" where a picture
+    /// used to be — with the name and the thumbnail this device still holds.
+    #[test]
+    fn a_replayed_photo_hangs_off_the_message_rather_than_becoming_its_text() {
+        let app = App::mount();
+        app.run(|ctx| {
+            ctx.chat.clone().set(ChatState {
+                session_id: Some("s1".to_owned()),
+                attach_replay: vec![crate::attach::Attachment {
+                    name: "roof.jpg".to_owned(),
+                    mime: "image/jpeg".to_owned(),
+                    size: 3,
+                    thumb: "THUMB".to_owned(),
+                }],
+                ..ChatState::default()
+            });
+        });
+        pump_events(
+            &app,
+            vec![
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "user_message_chunk",
+                           "content": {"type": "text", "text": "what is "}}),
+                ),
+                // goose splits a replayed message into blocks, and an
+                // untagged second one belongs to the turn already open — a
+                // bubble per block would break one sentence into two.
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "user_message_chunk",
+                           "content": {"type": "text", "text": "this?"}}),
+                ),
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "user_message_chunk",
+                           "content": {"type": "image", "data": "QUJD", "mimeType": "image/jpeg"}}),
+                ),
+            ],
+        );
+        assert_eq!(
+            app.items(),
+            ["user:what is this?:[roof.jpg]"],
+            "the photo either became text of its own or opened a second turn"
+        );
+        assert_eq!(
+            app.run(|ctx| ctx.chat.peek().items.len()),
+            1,
+            "one message with a photo is one turn, not two"
+        );
+
+        // A message that is nothing but a photo has no bubble to hang off, so
+        // it opens one — with an empty text, not a placeholder.
+        pump_events(
+            &app,
+            vec![
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "agent_message_chunk",
+                           "content": {"type": "text", "text": "a roof"}}),
+                ),
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "user_message_chunk",
+                           "content": {"type": "image", "data": "REVG", "mimeType": "image/png"}}),
+                ),
+            ],
+        );
+        assert_eq!(
+            app.items(),
+            [
+                "user:what is this?:[roof.jpg]",
+                "assistant:-:a roof",
+                "user::[Image]"
+            ]
+        );
+    }
+
+    /// A tool call and everything that happens to it are one row that changes,
+    /// not a row per notification. goose sends the title, the kind, the status
+    /// and the output in separate updates, and a row that failed to find its
+    /// call would leave the transcript showing "pending" forever.
+    #[test]
+    fn a_tool_call_and_its_updates_are_one_row() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![
+                // Only the id: everything else falls back.
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call", "toolCallId": "call_1"}),
+                ),
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call", "toolCallId": "call_2",
+                           "title": "shell: uname -a", "kind": "execute", "status": "pending"}),
+                ),
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": "call_2",
+                           "status": "completed",
+                           "content": [{"type": "content",
+                                        "content": {"type": "text", "text": "Linux brain"}}]}),
+                ),
+                // A second batch of output is appended, on its own line.
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": "call_2",
+                           "title": "shell", "kind": "other",
+                           "content": [{"type": "content",
+                                        "content": {"type": "text", "text": "6.1.0"}}]}),
+                ),
+                // And an update for a call that never arrived changes nothing.
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": "ghost",
+                           "status": "failed"}),
+                ),
+            ],
+        );
+        assert_eq!(
+            app.items(),
+            [
+                "tool:call_1:tool:other:pending:",
+                "tool:call_2:shell:other:completed:Linux brain\n6.1.0"
+            ]
+        );
+    }
+
+    /// When a tool reports no readable content, the raw result is better than
+    /// a blank row — it is the only thing on screen that says what happened.
+    /// And a later real output must not be replaced by it.
+    #[test]
+    fn a_tool_with_no_readable_content_falls_back_to_its_raw_result() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call", "toolCallId": "a", "title": "read"}),
+                ),
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": "a",
+                           "rawOutput": "just a string"}),
+                ),
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call", "toolCallId": "b", "title": "list"}),
+                ),
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": "b",
+                           "rawOutput": {"count": 2}}),
+                ),
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call", "toolCallId": "c", "title": "grep"}),
+                ),
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": "c",
+                           "rawOutput": true}),
+                ),
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call", "toolCallId": "d", "title": "find"}),
+                ),
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": "d",
+                           "rawOutput": ["a", "b"]}),
+                ),
+            ],
+        );
+        assert_eq!(
+            app.items(),
+            [
+                "tool:a:read:other:pending:just a string",
+                "tool:b:list:other:pending:{\n  \"count\": 2\n}",
+                // Neither a string nor a container: there is nothing worth
+                // putting in a transcript, so the row stays empty.
+                "tool:c:grep:other:pending:",
+                "tool:d:find:other:pending:[\n  \"a\",\n  \"b\"\n]"
+            ]
+        );
+    }
+
+    /// goose names a session from its first message and then changes its mind.
+    /// The name has to reach both places it is shown at once — the bar over the
+    /// open chat and the row in the list — because a refetch of the list would
+    /// take the reader's scroll position with it.
+    #[test]
+    fn a_generated_title_reaches_both_the_chat_and_its_row() {
+        let app = App::mount();
+        app.open_chat("s1", "quick question");
+        app.run(|ctx| {
+            ctx.sessions.clone().set(vec![
+                session("s1", Some("quick question")),
+                session("s2", None),
+            ]);
+        });
+        pump_events(
+            &app,
+            vec![
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "session_info_update", "title": "Tailscale cert rotation"}),
+                ),
+                // Another session's rename reaches its row and stops there.
+                notify(
+                    "s2",
+                    json!({"sessionUpdate": "session_info_update", "title": "Nightly standup"}),
+                ),
+                // An update with no title at all leaves both alone.
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "session_info_update", "updatedAt": "2026-08-29T09:00:00Z"}),
+                ),
+            ],
+        );
+        app.run(|ctx| {
+            assert_eq!(ctx.chat.peek().title, "Tailscale cert rotation");
+            let titles: Vec<Option<String>> = ctx
+                .sessions
+                .peek()
+                .iter()
+                .map(|s| s.title.clone())
+                .collect();
+            assert_eq!(
+                titles,
+                vec![
+                    Some("Tailscale cert rotation".to_owned()),
+                    Some("Nightly standup".to_owned())
+                ],
+                "a rename reached the bar but not the list, or the wrong row"
+            );
+        });
+    }
+
+    /// The context meter. It is the only warning a reader gets before a long
+    /// chat starts dropping its own history, so a usage update from a chat
+    /// they are not looking at must not move it.
+    #[test]
+    fn the_context_meter_follows_the_open_chat_only() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        let goose = |session_id: &str, update: Value| AcpEvent::GooseUpdate {
+            session_id: session_id.to_owned(),
+            update,
+        };
+        pump_events(
+            &app,
+            vec![goose(
+                "s1",
+                json!({"sessionUpdate": "usage_update", "used": 12_000, "contextLimit": 200_000}),
+            )],
+        );
+        assert_eq!(app.run(|ctx| *ctx.usage.peek()), Some((12_000, 200_000)));
+
+        pump_events(
+            &app,
+            vec![
+                goose(
+                    "s2",
+                    json!({"sessionUpdate": "usage_update", "used": 1, "contextLimit": 2}),
+                ),
+                // The right session, but a different kind of goose update.
+                goose("s1", json!({"sessionUpdate": "status", "text": "thinking"})),
+                // The right kind, but only half the numbers: a meter with no
+                // limit has nothing to draw.
+                goose("s1", json!({"sessionUpdate": "usage_update", "used": 99})),
+            ],
+        );
+        assert_eq!(
+            app.run(|ctx| *ctx.usage.peek()),
+            Some((12_000, 200_000)),
+            "the meter moved for something that was not this chat's usage"
+        );
+    }
+
+    /// The agent pushes the option set after every change, including changes
+    /// made from another client — but an empty push is goose saying nothing,
+    /// not goose saying "no options", and taking it literally would empty the
+    /// model picker mid-conversation.
+    #[test]
+    fn a_pushed_option_set_replaces_the_picker_and_an_empty_one_does_not() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![notify(
+                "s1",
+                json!({"sessionUpdate": "config_option_update", "configOptions": [
+                    {"id": "model", "name": "Model", "type": "select", "currentValue": "sonnet",
+                     "options": [{"value": "sonnet", "name": "Sonnet"},
+                                 {"value": "opus", "name": "Opus"}]}
+                ]}),
+            )],
+        );
+        app.run(|ctx| {
+            let opts = ctx.config_options.peek();
+            assert_eq!(opts.len(), 1);
+            assert_eq!(opts[0].config_id, "model");
+            assert_eq!(opts[0].current_label(), Some("Sonnet"));
+        });
+
+        pump_events(
+            &app,
+            vec![
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "config_option_update", "configOptions": []}),
+                ),
+                // And one for a session that is not open, which the picker
+                // still takes: the options belong to the agent, not the screen.
+                notify(
+                    "s2",
+                    json!({"sessionUpdate": "config_option_update", "configOptions": [
+                        {"id": "mode", "name": "Mode", "type": "select"}]}),
+                ),
+            ],
+        );
+        app.run(|ctx| {
+            let opts = ctx.config_options.peek();
+            assert_eq!(opts.len(), 1);
+            assert_eq!(
+                opts[0].config_id, "mode",
+                "an empty push emptied the picker, or a push from another \
+                 session was ignored"
+            );
+        });
+    }
+
+    // ------------------------------------------- asks, and how they are lost
+
+    /// An ask is written to the journal BEFORE it is queued, and what is
+    /// written has to be readable months later by someone whose app was killed
+    /// mid-turn. Both strings are resolved now because "now" is the only time
+    /// they are knowable: a reconnect rebuilds the chat and refetches the list.
+    #[test]
+    fn an_ask_is_written_down_under_a_name_the_reader_will_recognise() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        app.run(|ctx| {
+            ctx.sessions
+                .clone()
+                .set(vec![session("s2", Some("Nightly standup"))]);
+        });
+        pump_events(
+            &app,
+            vec![
+                ask(
+                    1,
+                    "s1",
+                    json!({"toolCallId": "t1", "title": "shell: uname -a"}),
+                ),
+                ask(2, "s2", json!({"toolCallId": "t2"})),
+                ask(3, "s3", json!({"toolCallId": "t3"})),
+            ],
+        );
+
+        let named: Vec<(String, String)> = app
+            .journal()
+            .into_iter()
+            .map(|r| (r.tool_call_id, r.session_title))
+            .collect();
+        assert_eq!(
+            named,
+            vec![
+                ("t1".to_owned(), "Deploy".to_owned()),
+                ("t2".to_owned(), "Nightly standup".to_owned()),
+                // Nothing knows this one's name, so the id is the honest
+                // answer rather than a blank card.
+                ("t3".to_owned(), "s3".to_owned()),
+            ]
+        );
+        assert!(
+            app.journal()
+                .iter()
+                .all(crate::ask_journal::AskRecord::is_open),
+            "an ask that has just arrived is open, not already lost"
+        );
+
+        // Queued in arrival order and never replaced: each one blocks a turn
+        // until it is answered, so dropping one hangs the agent.
+        let queued: Vec<String> = app.run(|ctx| {
+            ctx.permission
+                .peek()
+                .iter()
+                .map(|p| p.tool_call.tool_call_id.clone())
+                .collect()
+        });
+        assert_eq!(queued, ["t1", "t2", "t3"]);
+    }
+
+    /// The measured case the whole journal exists for (docs/permission-
+    /// durability.md section 0): the app is killed with an ask on screen, so
+    /// nothing in that process ever got to say what became of it. The
+    /// reconcile at the next launch is the only thing that can, and it has to
+    /// write its verdict back — a launch that only decided in memory would
+    /// call the same ask a fresh loss on every launch after this one.
+    #[test]
+    fn an_ask_the_app_was_killed_on_is_reported_at_the_next_launch() {
+        let stranded = crate::ask_journal::AskRecord::open(
+            "s1".to_owned(),
+            "Deploy".to_owned(),
+            "t1".to_owned(),
+            "shell: uname -a".to_owned(),
+            now_secs() - 60,
+        );
+        let app = App::mount_over(&vec![stranded]);
+        let journal = app.journal();
+        assert_eq!(journal.len(), 1, "the stranded ask was dropped at launch");
+        assert_eq!(journal[0].title, "shell: uname -a");
+        assert!(
+            matches!(
+                journal[0].state,
+                crate::ask_journal::AskState::Lost {
+                    cause: crate::ask_journal::LostCause::AppEnded,
+                    ..
+                }
+            ),
+            "an ask left open by a killed process is still being called open, so the \
+             round it belonged to is lost in silence"
+        );
+
+        // A launch with nothing to reconcile changes nothing — and costs no
+        // write, which is what the return value of the reconcile is for.
+        let settled = app.journal();
+        drop(app);
+        let again = App::mount_over(&settled);
+        assert_eq!(
+            again.journal(),
+            settled,
+            "a second launch re-dated the loss"
+        );
+    }
+
+    /// The card names the ask the way the modal named it. The fallback chain
+    /// has to be the same one, or a loss is reported for a tool the reader
+    /// never saw under that name.
+    #[test]
+    fn an_ask_with_no_title_falls_back_to_its_tool_and_then_to_a_sentence() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![
+                ask(
+                    1,
+                    "s1",
+                    json!({"toolCallId": "t1", "title": "shell: uname -a"}),
+                ),
+                ask(
+                    2,
+                    "s1",
+                    json!({"toolCallId": "t2",
+                           "_meta": {"goose": {"toolCall": {"toolName": "developer__shell"}}}}),
+                ),
+                ask(3, "s1", json!({"toolCallId": "t3"})),
+            ],
+        );
+        let titles: Vec<String> = app.journal().into_iter().map(|r| r.title).collect();
+        assert_eq!(
+            titles,
+            ["shell: uname -a", "developer__shell", "Run a tool"],
+            "a card with no name on it says nothing about what was lost"
+        );
+    }
+
+    /// The agent can take its own question back. There is then nothing left to
+    /// tell anyone, so the entry goes — a journal that kept it would report a
+    /// lost round that was never lost.
+    #[test]
+    fn an_ask_the_agent_takes_back_leaves_nothing_behind() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![
+                ask(1, "s1", json!({"toolCallId": "t1", "title": "one"})),
+                ask(2, "s1", json!({"toolCallId": "t2", "title": "two"})),
+                AcpEvent::RequestCancelled {
+                    request_id: json!(1),
+                },
+            ],
+        );
+        let left: Vec<String> = app.journal().into_iter().map(|r| r.tool_call_id).collect();
+        assert_eq!(left, ["t2"], "the withdrawn ask is still being reported");
+        let queued: Vec<String> = app.run(|ctx| {
+            ctx.permission
+                .peek()
+                .iter()
+                .map(|p| p.tool_call.tool_call_id.clone())
+                .collect()
+        });
+        assert_eq!(queued, ["t2"], "a withdrawn ask is still on screen");
+    }
+
+    /// The measured case (docs/permission-durability.md section 0): the socket
+    /// goes, the round is destroyed on the server, and nothing in the
+    /// transcript says so. This arm is the only thing that records the loss —
+    /// and it must clear the queue too, because a modal offering Allow over a
+    /// dead socket is a lie.
+    #[test]
+    fn a_dropped_connection_is_recorded_as_a_lost_round() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        app.run(|ctx| {
+            ctx.want_connected.clone().set(true);
+            ctx.running_sessions
+                .clone()
+                .set(std::iter::once("s1".to_owned()).collect());
+            ctx.chat.clone().write().running = true;
+        });
+        pump_events(
+            &app,
+            vec![
+                ask(1, "s1", json!({"toolCallId": "t1", "title": "shell"})),
+                AcpEvent::Disconnected {
+                    reason: "socket closed".to_owned(),
+                    cause: DisconnectCause::Transport,
+                },
+            ],
+        );
+
+        let journal = app.journal();
+        assert_eq!(journal.len(), 1);
+        assert!(
+            journal[0].is_unreported_loss(),
+            "the round was destroyed and the journal still calls the ask open"
+        );
+        assert!(matches!(
+            journal[0].state,
+            crate::ask_journal::AskState::Lost {
+                cause: crate::ask_journal::LostCause::Connection,
+                ..
+            }
+        ));
+        app.run(|ctx| {
+            assert!(
+                ctx.permission.peek().is_empty(),
+                "an unanswerable ask is still on screen"
+            );
+            assert!(ctx.client.peek().is_none());
+            assert!(!ctx.chat.peek().running, "the spinner outlived the socket");
+            assert!(ctx.running_sessions.peek().is_empty());
+            match &*ctx.conn.peek() {
+                ConnState::Failed(message) => {
+                    assert_eq!(message, "Connection lost: socket closed");
+                }
+                _ => panic!("a dropped connection did not report itself"),
+            }
+        });
+    }
+
+    /// The other cause, and the reason the transport reports one at all. The
+    /// user pressed Disconnect: they chose it, so there is nothing to narrate,
+    /// and the app must not come back to a card telling them a round was lost.
+    #[test]
+    fn a_disconnect_the_user_asked_for_narrates_nothing() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![
+                ask(1, "s1", json!({"toolCallId": "t1", "title": "shell"})),
+                AcpEvent::Disconnected {
+                    reason: "closed by client".to_owned(),
+                    cause: DisconnectCause::Local,
+                },
+            ],
+        );
+        assert!(
+            app.journal().is_empty(),
+            "pressing Disconnect left a lost-round card behind it"
+        );
+        app.run(|ctx| {
+            assert!(matches!(*ctx.conn.peek(), ConnState::Disconnected));
+        });
+    }
+
+    /// Answering an ask over a dead socket is theatre, so `send_prompt`'s
+    /// `Closed` arm drops the queue instead. What it must NOT do is decide the
+    /// round was lost: it cannot tell a dropped tailnet from a press of
+    /// Disconnect, and the pump's arm — which can — is the only place that
+    /// decides. An entry marked here would narrate a loss to a user who
+    /// pressed the button themselves.
+    #[test]
+    fn abandoning_a_dead_sessions_asks_leaves_the_verdict_to_the_pump() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![
+                ask(1, "s1", json!({"toolCallId": "t1", "title": "shell"})),
+                ask(2, "s2", json!({"toolCallId": "t2", "title": "write"})),
+            ],
+        );
+        app.run(|ctx| abandon_pending_permissions(ctx, "s1"));
+
+        let queued: Vec<String> = app.run(|ctx| {
+            ctx.permission
+                .peek()
+                .iter()
+                .map(|p| p.tool_call.tool_call_id.clone())
+                .collect()
+        });
+        assert_eq!(queued, ["t2"], "another session's ask was dropped with it");
+        assert!(
+            app.journal()
+                .iter()
+                .all(crate::ask_journal::AskRecord::is_open),
+            "the abandon path decided a round was lost, which is not its call"
+        );
+    }
+
+    /// Answering is keyed on the JSON-RPC id — one reply can settle several
+    /// queued asks — while the journal is keyed on the tool call, because the
+    /// id belongs to a socket that is gone by the time any of this matters.
+    /// Resolving the wrong one leaves a card reporting an ask that was
+    /// answered.
+    #[test]
+    fn answering_an_ask_clears_it_from_the_queue_and_the_journal() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![
+                ask(1, "s1", json!({"toolCallId": "t1", "title": "shell"})),
+                ask(1, "s1", json!({"toolCallId": "t2", "title": "shell again"})),
+                ask(2, "s1", json!({"toolCallId": "t3", "title": "write"})),
+            ],
+        );
+        app.run(|ctx| answer_permission(ctx, &json!(1), Some("allow_once".to_owned())));
+
+        let queued: Vec<String> = app.run(|ctx| {
+            ctx.permission
+                .peek()
+                .iter()
+                .map(|p| p.tool_call.tool_call_id.clone())
+                .collect()
+        });
+        assert_eq!(queued, ["t3"]);
+        let left: Vec<String> = app.journal().into_iter().map(|r| r.tool_call_id).collect();
+        assert_eq!(left, ["t3"], "an answered ask is still reported as pending");
+    }
+
+    /// Dismissal has to stick. The entry is kept rather than deleted so a
+    /// second sighting of the same ask cannot undo it, but it stops being a
+    /// loss the moment the reader has read it.
+    #[test]
+    fn a_dismissed_loss_stops_being_reported() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![
+                ask(1, "s1", json!({"toolCallId": "t1", "title": "shell"})),
+                AcpEvent::Disconnected {
+                    reason: "socket closed".to_owned(),
+                    cause: DisconnectCause::Transport,
+                },
+            ],
+        );
+        assert_eq!(
+            crate::ask_journal::loss_count(&app.journal(), "s1"),
+            1,
+            "the loss was never reported in the first place"
+        );
+
+        app.run(|ctx| dismiss_lost_ask(ctx, "t1"));
+        assert_eq!(
+            crate::ask_journal::loss_count(&app.journal(), "s1"),
+            0,
+            "a dismissed card came straight back"
+        );
+        assert_eq!(
+            app.journal().len(),
+            1,
+            "the entry was deleted, so the next sighting of this ask would \
+             undo the dismissal"
+        );
+    }
+
+    // ---------------------------------------- opening, sending, and offline
+
+    /// Walking into a different conversation. The draft, the attachment tray
+    /// and the transcript all belong to the chat that was open, and carrying
+    /// any of them across is how a photo picked for one chat ends up in
+    /// another chat's next message.
+    #[test]
+    fn opening_a_different_chat_leaves_the_last_ones_draft_and_tray_behind() {
+        let app = App::mount();
+        app.run(|ctx| {
+            ctx.chat.clone().set(ChatState {
+                session_id: Some("s1".to_owned()),
+                title: "Deploy".to_owned(),
+                items: vec![ChatItem::User {
+                    text: "look".to_owned(),
+                    attachments: vec![crate::attach::Attachment {
+                        name: "roof.jpg".to_owned(),
+                        ..crate::attach::Attachment::default()
+                    }],
+                }],
+                ..ChatState::default()
+            });
+            ctx.chat_draft.clone().set("half typed".to_owned());
+            ctx.attachments
+                .clone()
+                .set(vec![crate::attach::PendingAttachment {
+                    record: crate::attach::Attachment::default(),
+                    data: "QUJD".to_owned(),
+                    text: None,
+                }]);
+            ctx.running_sessions
+                .clone()
+                .set(std::iter::once("s2".to_owned()).collect());
+            ctx.usage.clone().set(Some((10, 100)));
+
+            open_session(ctx, session("s2", None));
+
+            let chat = ctx.chat.peek();
+            assert!(matches!(*ctx.screen.peek(), Screen::Chat));
+            assert_eq!(chat.session_id.as_deref(), Some("s2"));
+            assert_eq!(
+                chat.title, "s2",
+                "a session goose never named is shown by its id, not blank"
+            );
+            assert_eq!(chat.cwd, "/", "a session with no cwd still has one");
+            assert!(
+                chat.items.is_empty(),
+                "the last chat's transcript is still on screen"
+            );
+            assert!(chat.loading, "the replay is under way and nothing says so");
+            assert!(chat.running, "a session with a turn in flight opened idle");
+            assert!(
+                chat.attach_replay.is_empty(),
+                "another conversation's photos are waiting to be adopted here"
+            );
+            assert_eq!(
+                *ctx.chat_draft.peek(),
+                "",
+                "half a message followed the reader out"
+            );
+            assert!(ctx.attachments.peek().is_empty(), "the tray followed too");
+            assert_eq!(
+                *ctx.usage.peek(),
+                None,
+                "the old chat's context meter is still up"
+            );
+        });
+    }
+
+    /// Backing out of a chat and going straight back in replays it from
+    /// scratch, and the replay cannot say what a photo was called or what it
+    /// looked like. So what the transcript knew is carried across — and so is
+    /// what was being typed, because the conversation did not change.
+    #[test]
+    fn reopening_the_same_chat_keeps_what_was_typed_and_what_was_sent() {
+        let app = App::mount();
+        app.run(|ctx| {
+            ctx.chat.clone().set(ChatState {
+                session_id: Some("s3".to_owned()),
+                items: vec![ChatItem::User {
+                    text: "look".to_owned(),
+                    attachments: vec![crate::attach::Attachment {
+                        name: "roof.jpg".to_owned(),
+                        mime: "image/jpeg".to_owned(),
+                        size: 3,
+                        thumb: "THUMB".to_owned(),
+                    }],
+                }],
+                ..ChatState::default()
+            });
+            ctx.chat_draft.clone().set("keep me".to_owned());
+
+            let info: SessionInfo = serde_json::from_value(
+                json!({"sessionId": "s3", "title": "Roof", "cwd": "/srv/app"}),
+            )
+            .unwrap();
+            open_session(ctx, info);
+
+            let chat = ctx.chat.peek();
+            assert_eq!(chat.title, "Roof");
+            assert_eq!(chat.cwd, "/srv/app");
+            let carried: Vec<&str> = chat.attach_replay.iter().map(|a| a.name.as_str()).collect();
+            assert_eq!(
+                carried,
+                ["roof.jpg"],
+                "the replay has nothing to give the photo its name back with"
+            );
+            assert_eq!(
+                *ctx.chat_draft.peek(),
+                "keep me",
+                "leaving a chat and coming back ate what was being written"
+            );
+        });
+    }
+
+    /// Opening a chat with no connection has to end the spinner and say why.
+    /// The load runs on a task of its own, so the arm that answers this is
+    /// reached only after the scheduler gets a turn — which is exactly the
+    /// half of the function a test that never drains would miss.
+    #[test]
+    fn opening_a_chat_offline_stops_the_spinner_and_says_so() {
+        let mut app = App::mount();
+        app.run(|ctx| open_session(ctx, session("s2", Some("Nightly standup"))));
+        assert!(app.run(|ctx| ctx.chat.peek().loading));
+        assert_eq!(app.toast(), None, "nothing has been tried yet");
+
+        app.drain();
+        assert_eq!(
+            app.toast().as_deref(),
+            Some("Not connected — reconnect in Settings")
+        );
+        assert!(
+            !app.run(|ctx| ctx.chat.peek().loading),
+            "the chat is stuck showing a replay that will never arrive"
+        );
+    }
+
+    /// The working directory is a path on the *server*, and goose refuses a
+    /// relative one. Catching it here is the difference between a sentence
+    /// naming the Settings field and an RPC error nobody can act on.
+    #[test]
+    fn a_new_chat_needs_an_absolute_working_directory_before_anything_is_sent() {
+        let mut app = App::mount();
+        for bad in ["", "   ", "work/goose", "~/work"] {
+            app.run(|ctx| {
+                ctx.toast.clone().set(None);
+                ctx.settings.clone().set(Settings {
+                    working_dir: bad.to_owned(),
+                    ..Settings::default()
+                });
+                new_session(ctx);
+            });
+            let toast = app.toast();
+            assert_eq!(
+                toast.as_deref(),
+                Some("Set an absolute working directory (a path on the server) in Settings first"),
+                "`{bad}` was accepted as a working directory"
+            );
+            assert!(
+                matches!(app.run(|ctx| *ctx.screen.peek()), Screen::Settings),
+                "a refused new chat navigated anyway"
+            );
+        }
+
+        // An absolute one gets as far as the transport, and stops there.
+        app.run(|ctx| {
+            ctx.toast.clone().set(None);
+            ctx.settings.clone().set(Settings {
+                working_dir: "  /srv/work  ".to_owned(),
+                ..Settings::default()
+            });
+            new_session_with(ctx, json!({"recipeId": "standup"}));
+        });
+        assert_eq!(app.toast(), None, "the request has not been made yet");
+        app.drain();
+        assert_eq!(
+            app.toast().as_deref(),
+            Some("Not connected — reconnect in Settings")
+        );
+    }
+
+    /// A send that could not be handed to the transport must report false and
+    /// leave the composer alone — the caller clears the draft and the tray on
+    /// a `true`, so a wrong answer here is a message and its photos deleted
+    /// without ever being sent.
+    #[test]
+    fn a_send_that_cannot_reach_the_transport_keeps_the_message() {
+        let app = App::mount();
+        app.run(|ctx| {
+            // No chat open at all: nothing to send into, and nothing to say
+            // about it either.
+            assert!(!send_prompt(ctx, "hello".to_owned(), &[]));
+            assert_eq!(*ctx.toast.peek(), None);
+            assert!(ctx.chat.peek().items.is_empty());
+        });
+
+        app.open_chat("s1", "Deploy");
+        app.run(|ctx| {
+            assert!(!send_prompt(ctx, "hello".to_owned(), &[]));
+            assert_eq!(
+                ctx.toast.peek().as_deref(),
+                Some("Not connected — reconnect in Settings")
+            );
+            assert!(
+                ctx.chat.peek().items.is_empty(),
+                "the message was drawn into the transcript as though it had been sent"
+            );
+            assert!(
+                !ctx.chat.peek().running,
+                "a turn that never started is spinning"
+            );
+        });
+    }
+
+    /// Stop answers the open asks "cancelled" first, over a live socket. With
+    /// no socket there is nothing to answer into, so it does nothing — and
+    /// doing nothing has to include not quietly emptying the queue, or an ask
+    /// still blocking the agent would vanish off the screen.
+    #[test]
+    fn stopping_a_turn_with_no_socket_does_not_swallow_the_open_asks() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![ask(1, "s1", json!({"toolCallId": "t1", "title": "shell"}))],
+        );
+        app.run(|ctx| {
+            stop_turn(ctx);
+            assert_eq!(
+                ctx.permission.peek().len(),
+                1,
+                "the ask was dropped unanswered"
+            );
+        });
+
+        // And with no chat open there is not even a session to cancel.
+        app.run(|ctx| {
+            ctx.chat.clone().set(ChatState::default());
+            stop_turn(ctx);
+            assert_eq!(ctx.permission.peek().len(), 1);
+        });
+    }
+
+    /// Every route out of this module that needs the transport has to fail
+    /// closed: no spinner left up, no row rewritten, no picker changed, and
+    /// above all no transcript emptied for a replay that is never coming.
+    #[test]
+    fn nothing_pretends_to_have_reached_a_server_that_is_not_there() {
+        let app = App::mount();
+        app.run(|ctx| {
+            ctx.sessions
+                .clone()
+                .set(vec![session("s1", Some("old name"))]);
+            ctx.chat.clone().set(ChatState {
+                session_id: Some("s1".to_owned()),
+                title: "old name".to_owned(),
+                items: vec![ChatItem::Assistant {
+                    message_id: None,
+                    text: "yesterday's answer".to_owned(),
+                }],
+                ..ChatState::default()
+            });
+            ctx.config_options
+                .clone()
+                .set(serde_json::from_value(json!([{"id": "mode", "name": "Mode"}])).unwrap());
+
+            // A list refresh with no client must not arm the spinner it will
+            // never take back down.
+            refresh_sessions(ctx, false).now_or_never().unwrap();
+            assert!(
+                !*ctx.sessions_loading.peek(),
+                "an offline refresh left a spinner up"
+            );
+            assert_eq!(*ctx.sessions_epoch.peek(), 0, "it claimed the list anyway");
+
+            // A rename that never reached the server must not rewrite the row.
+            rename_session(ctx, "s1", "  ").now_or_never().unwrap();
+            rename_session(ctx, "s1", "new name")
+                .now_or_never()
+                .unwrap();
+            assert_eq!(
+                ctx.sessions.peek()[0].title.as_deref(),
+                Some("old name"),
+                "the row shows a name the server never agreed to"
+            );
+            assert_eq!(ctx.chat.peek().title, "old name");
+
+            // A reload must not clear the transcript it cannot replace.
+            reload_chat(ctx, "s1".to_owned(), "/srv".to_owned())
+                .now_or_never()
+                .unwrap();
+            assert_eq!(
+                transcript(&ctx.chat.peek().items),
+                ["assistant:-:yesterday's answer"],
+                "an offline reload blanked the chat and left it blank"
+            );
+            assert!(!ctx.chat.peek().loading);
+
+            // And a tap on the mode chip must not redraw it as though it took.
+            set_config_option(ctx, "mode", "chat");
+            assert_eq!(ctx.config_options.peek()[0].config_id, "mode");
+            assert_eq!(ctx.config_options.peek().len(), 1);
+        });
+    }
+
+    /// Typing in the search box retires the page after this one the instant
+    /// the query changes: goose ties a cursor to the filters it was minted
+    /// under and rejects a mismatched pair outright, so a "Load more" left
+    /// armed across a new search is an `invalid_params` waiting to happen.
+    /// A search that is not actually different must leave it alone, or every
+    /// space bar throws away the list you are reading.
+    #[test]
+    fn changing_the_search_retires_the_page_that_belonged_to_the_last_one() {
+        let app = App::mount();
+        app.run(|ctx| {
+            let armed = SessionQuery::new(&SessionKind::ALL, Some("deploy"))
+                .next_page(&page(&["chat_1"], Some("cursor-of-deploy")));
+            assert!(armed.is_some(), "the fixture never armed the button");
+
+            ctx.sessions_query.clone().set("deploy".to_owned());
+            ctx.sessions_next.clone().set(armed.clone());
+
+            search_sessions(ctx, "  deploy ".to_owned())
+                .now_or_never()
+                .unwrap();
+            assert_eq!(
+                *ctx.sessions_next.peek(),
+                armed,
+                "a trailing space threw away the page the reader was about to ask for"
+            );
+
+            search_sessions(ctx, "rollback".to_owned())
+                .now_or_never()
+                .unwrap();
+            assert_eq!(*ctx.sessions_query.peek(), "rollback");
+            assert_eq!(
+                *ctx.sessions_next.peek(),
+                None,
+                "\"Load more\" is still armed with the previous search's cursor"
+            );
+        });
     }
 }
