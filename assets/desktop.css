@@ -303,7 +303,28 @@
   font-size: var(--text-sm);
   line-height: var(--lh-sm);
   font-weight: 500;
-  color: var(--text-secondary);
+  /* --text-primary, and NOT --text-secondary, which is what this shipped as
+   * and what the first audit run over this control rejected.
+   *
+   * Measured, in light mode, at the 14px this label is set in: secondary
+   * (#6f6f6f) on the track (#eff1f3, the 30% mix below) is **4.44:1** against
+   * the 4.5 a control label owes — 28 findings, one per desktop state, and the
+   * only reason it had never been reported is that the gallery predated this
+   * rule. Primary on the same track is 8.77:1. Dark was never the problem
+   * (6.58:1 secondary, 13.06:1 primary).
+   *
+   * Lightening the track instead was the other route and it is worse: 20% mix
+   * gives 4.51:1 and 15% gives 4.55:1, so the whole control would rest on a
+   * hundredth of a point, and the groove is the thing that makes this read as
+   * a switch rather than two loose buttons.
+   *
+   * It is also the consistent answer. `.drawer-item` in assets/main.css is
+   * `color: var(--text-primary)`, so as secondary these two segments were
+   * DIMMER than the destinations they contain — the labels for the app's two
+   * halves, quieter than the rows inside one of them. Selection is carried by
+   * the fill and the outline below, which is two signals without spending a
+   * third that costs contrast. */
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -320,19 +341,41 @@
  * `--bg-tertiary` is 1.60:1 on the dark card and 1.13:1 on the light one, and
  * a non-text indicator owes a 3:1 boundary. `box-shadow: inset` rather than a
  * border so the label does not shift 1px on the segment that is highlighted. */
+/* `color` is not restated here: both segments are --text-primary now, for the
+ * contrast reason above. Selection is the fill plus the outline.
+ *
+ * --bg-tertiary is the token main.css already proved reads as selected (see
+ * `.drawer-item.active`), and the outline is that rule's, for its reason
+ * verbatim: --bg-tertiary is 1.60:1 on the dark card and 1.13:1 on the light
+ * one, and a non-text indicator owes a 3:1 boundary. `box-shadow: inset`
+ * rather than a border so the label does not shift 1px on the segment that is
+ * highlighted. */
 .plane-seg.active {
   background: var(--bg-tertiary);
   box-shadow: inset 0 0 0 1px var(--border-secondary);
-  color: var(--text-primary);
 }
 
 /* Pointer tier, and it stops at the segment that is NOT selected — hovering
  * the half you are already in must not paint a second selected-looking pill,
- * which is `.drawer-item:hover:not(.active)`'s rule and its reason. Colour
- * only, no fill: the track is already a fill, and a fill inside a fill inside
- * a card is three surfaces deep. */
+ * which is `.drawer-item:hover:not(.active)`'s rule and its reason.
+ *
+ * A fill and not a colour step, which is the reverse of what this rule did
+ * before: with both segments now at --text-primary there is no colour left to
+ * step, so hover takes the same shape `.drawer-item:hover:not(.active)` takes
+ * one level down — mixed rather than a fixed value so it is a step in both
+ * themes, for the reason that rule states.
+ *
+ * 65% is the MIDPOINT of the two ends this control already has: the track is
+ * 30% --bg-tertiary and the selected segment is 100% of it, so halfway is 65
+ * and the number is derived rather than dialled. It lands where a midpoint
+ * should — #e9ecef light and #3a4047 dark, 1.05:1 and 1.25:1 clear of the
+ * track, and the same distance again short of the selected fill, so hover
+ * never out-shouts selection (the failure `.drawer-item:hover` names).
+ * --text-primary on it measures 8.37:1 light and 10.48:1 dark, both far clear
+ * of the 4.5 this label owes — which is the whole reason the resting state
+ * moved off --text-secondary above. */
 .plane-seg:not(.active):hover {
-  color: var(--text-primary);
+  background: color-mix(in srgb, var(--bg-tertiary) 65%, var(--nav-fill));
 }
 
 /* ── the footer ─────────────────────────────────────────────────────────
