@@ -572,6 +572,7 @@ fn counted(count: usize, noun: &str) -> String {
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::expect_used,
     reason = "test fixtures: a failing unwrap is the failing check"
 )]
 mod tests {
@@ -581,8 +582,14 @@ mod tests {
     /// literal so the test says what is on the wire, which is the thing the
     /// screens are reading.
     fn entry(recipe: &Value, schedule_cron: &Value) -> RecipeListEntry {
+        entry_id("9f2c41ab6d3e0517", recipe, schedule_cron)
+    }
+
+    /// The same row with an id the caller chose, for the tests that need two
+    /// rows and care which one a call reached.
+    fn entry_id(id: &str, recipe: &Value, schedule_cron: &Value) -> RecipeListEntry {
         serde_json::from_value(json!({
-            "id": "9f2c41ab6d3e0517",
+            "id": id,
             "recipe": recipe,
             "file_path": "/home/me/.config/goose/recipes/x.yaml",
             "last_modified": "2026-08-23T18:42:11.508233+00:00",
@@ -757,6 +764,86 @@ mod tests {
         assert!(facts(&entry(&plain(), &Value::Null)).is_empty());
     }
 
+    /// The Model row's note is the only place the provider is ever shown, so
+    /// a recipe that names one has to say so and a recipe that names none
+    /// must not invent one.
+    ///
+    /// Getting this backwards is silent: both branches produce a sentence,
+    /// and the wrong one either drops the provider on a recipe that pinned
+    /// `openai/gpt-5` — leaving a bare model name that could belong to any
+    /// account — or prints `"None · pinned by the recipe"` where there is
+    /// nothing to name.
+    #[test]
+    fn the_model_row_names_the_provider_only_when_the_recipe_did() {
+        let with_provider = entry(
+            &json!({
+                "title": "T", "description": "D",
+                "settings": {"goose_provider": "anthropic", "goose_model": "claude-sonnet-4-5"},
+            }),
+            &Value::Null,
+        );
+        let rows = facts(&with_provider);
+        assert_eq!(
+            rows[0].note.as_deref(),
+            Some("anthropic · pinned by the recipe, not by the session.")
+        );
+
+        let bare_model = entry(
+            &json!({
+                "title": "T", "description": "D",
+                "settings": {"goose_model": "claude-sonnet-4-5"},
+            }),
+            &Value::Null,
+        );
+        let rows = facts(&bare_model);
+        assert_eq!(rows.len(), 1, "a model with no provider is still one row");
+        assert_eq!(rows[0].value, "claude-sonnet-4-5");
+        assert_eq!(
+            rows[0].note.as_deref(),
+            Some("The recipe pins this for its own runs."),
+            "a recipe that named no provider had one printed for it"
+        );
+    }
+
+    /// The facts card is where the missing Run button is explained, so the
+    /// Inputs row has to be *in* it.
+    ///
+    /// `inputs_fact` composing the right sentence is worth nothing if `facts`
+    /// never asks for it: the reader would open a parameterised recipe, find
+    /// no Run button and no card, and have nothing on screen telling them to
+    /// go to the desktop. That is design rule 11 failed rather than followed,
+    /// and it fails with no error anywhere.
+    #[test]
+    fn the_facts_card_carries_the_reason_the_run_button_is_missing() {
+        let blocked = entry(&with_parameters(&["required", "optional"]), &Value::Null);
+        assert_eq!(
+            run_offer(blocked.needs_input(), ScanState::Clean),
+            RunOffer::Blocked,
+            "the fixture has to be a recipe with no Run button, or this test \
+             is about nothing"
+        );
+        let rows = facts(&blocked);
+        let inputs = rows
+            .iter()
+            .find(|row| row.name == "Inputs")
+            .expect("a recipe whose Run button is missing must say why on the card");
+        assert_eq!(inputs.value, "2 inputs · asked for at launch");
+        assert!(
+            inputs
+                .note
+                .as_deref()
+                .is_some_and(|n| n.contains("desktop")),
+            "the note has to point somewhere the recipe can actually be run"
+        );
+
+        // A recipe whose inputs all have defaults still gets the row — it is
+        // a fact about the recipe — but not the sentence about the desktop.
+        let runnable = entry(&with_parameters(&["optional"]), &Value::Null);
+        let rows = facts(&runnable);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].value, "1 input");
+    }
+
     /// The three empty-looking states are three different sentences, and
     /// telling them apart is the only thing this function does.
     #[test]
@@ -773,6 +860,45 @@ mod tests {
         // Unsupported outranks offline: it is a fact about the server that
         // stays true whether or not the phone can reach it right now.
         assert_eq!(list_state(&remote, false), ListState::Unsupported);
+    }
+
+    /// A failure with nothing behind it is the one that has to stay on
+    /// screen, and it has to stay *below* the two facts that outrank it.
+    ///
+    /// Without the `sticky` arm the reader who hit a broken server gets the
+    /// same blank "No recipes yet" as the reader whose server has none — the
+    /// toast that carried the reason has already faded, so there would be
+    /// nothing left anywhere saying the list failed to load. And a phone that
+    /// went offline after that failure must go back to saying so: the stale
+    /// error names a request, and "this phone cannot reach the server" is the
+    /// thing to fix first.
+    #[test]
+    fn a_failure_over_an_empty_list_is_kept_where_the_toast_would_have_faded() {
+        let mut remote = Remote::<u8>::new();
+        let toast = remote.fail(&goose_acp_client::AcpError::Transport(
+            "no route".to_owned(),
+        ));
+        assert_eq!(
+            toast, None,
+            "a failure with an empty screen behind it must be kept, not \
+             toasted away"
+        );
+        assert_eq!(
+            list_state(&remote, true),
+            ListState::Failed("transport error: no route".to_owned())
+        );
+        assert_eq!(
+            list_state(&remote, false),
+            ListState::Offline,
+            "a disconnected phone reports the disconnection, not the request \
+             that failed while it still had a connection"
+        );
+        remote.settle(vec![1_u8]);
+        assert_eq!(
+            list_state(&remote, true),
+            ListState::Rows,
+            "a successful refetch left the old failure on screen"
+        );
     }
 
     /// A list you can still read is worth more than the reason the last
@@ -905,5 +1031,639 @@ mod tests {
         choose(&mut schedule, &mut on, "repeat", "daily");
         assert!(on);
         assert_eq!(crate::cron::build(schedule), "0 20 9 * * *");
+    }
+
+    /// The sheet's promise is that no tap in it can produce a cron the reader
+    /// did not pick, and the two ways that could happen are a row name this
+    /// file has no arm for and a value that is not a number.
+    ///
+    /// Both are the same class of bug and neither would report itself: a
+    /// mistyped row id in `schedule_rows`, or an id whose values stop being
+    /// integers, would leave the sheet visibly moving and the cron silently
+    /// stuck on whatever it already said. The recipe would then run at a time
+    /// nobody chose, which is a phone starting an agent unasked — the thing
+    /// this whole file is careful about.
+    #[test]
+    fn a_tap_this_file_cannot_read_leaves_the_schedule_exactly_as_it_was() {
+        let before = Schedule {
+            repeat: Repeat::Weekly,
+            weekday: 3,
+            hour: 7,
+            minute: 15,
+            ..Schedule::default()
+        };
+        let mut schedule = before;
+        let mut on = true;
+
+        choose(&mut schedule, &mut on, "second", "30");
+        choose(&mut schedule, &mut on, "", "");
+        choose(&mut schedule, &mut on, "hour", "half past noon");
+        choose(&mut schedule, &mut on, "weekday", "-1");
+        choose(&mut schedule, &mut on, "minute", "999");
+
+        assert!(on, "an unreadable tap turned the schedule off");
+        assert_eq!(
+            crate::cron::build(schedule),
+            crate::cron::build(before),
+            "an unreadable tap moved the schedule to a time nobody picked"
+        );
+
+        // Off is still reachable, and an unknown repeat id still means "not
+        // off" — the row said something, it just was not a repeat this build
+        // knows.
+        choose(&mut schedule, &mut on, "repeat", SCHEDULE_OFF);
+        assert!(!on);
+        choose(&mut schedule, &mut on, "repeat", "fortnightly");
+        assert!(
+            on,
+            "a repeat id this build does not know still means the schedule is on"
+        );
+        assert_eq!(
+            crate::cron::build(schedule),
+            crate::cron::build(before),
+            "an unknown repeat id rewrote the schedule"
+        );
+    }
+
+    // ------------------------------------------------------- the live actions
+    //
+    // Everything above this line is a decision taken over plain data. The
+    // actions are not: they write signals, and four of them spawn. So this
+    // half runs them against a real `AppCtx` inside a real `VirtualDom`, the
+    // way `src/shell/desktop` drives its arrival effect.
+    //
+    // The context is built here rather than by
+    // `crate::state::use_app_ctx_provider` deliberately. That hook opens the
+    // permission journal's real storage backing, whose directory is a
+    // process-wide `OnceLock` that `ask_journal`'s own test claims for the
+    // whole test binary — `set_directory` unwraps, so a second claimant
+    // panics whichever of the two loses the race. Nothing in this file reads
+    // the journal, so the struct is assembled here out of plain signals and
+    // touches no disk.
+    //
+    // What this cannot reach, and what nothing short of a live goose could:
+    // every branch past an `await` on an `AcpClient`. Constructing one means
+    // completing a WebSocket handshake against a real server, so the server's
+    // *answers* — a scan verdict, a delete that succeeded, a schedule refused
+    // as unsupported — are untested here. What is covered is the half that
+    // runs before the socket, which is where this file's two header rules
+    // live: what a tap does immediately, and what an action must not do until
+    // the server has agreed.
+
+    use std::cell::RefCell;
+    use std::collections::HashSet;
+    use std::time::Duration;
+
+    use crate::state::AppCtx;
+
+    thread_local! {
+        /// The context the probe built, published for the test driving it.
+        /// Per-thread, and the test harness gives every `#[test]` a thread of
+        /// its own, so two harnesses never see each other's.
+        static PROBE_CTX: RefCell<Option<AppCtx>> = const { RefCell::new(None) };
+    }
+
+    /// The app's whole context and no app: no shell, no screen, no storage.
+    #[component]
+    fn CtxProbe() -> Element {
+        let ctx = AppCtx {
+            screen: use_signal(|| crate::state::Screen::Settings),
+            settings: use_signal(crate::state::Settings::default),
+            conn: use_signal(|| crate::state::ConnState::Disconnected),
+            client: use_signal(|| None),
+            want_connected: use_signal(|| false),
+            sessions: use_signal(Vec::new),
+            sessions_next: use_signal(|| None),
+            sessions_loading: use_signal(|| false),
+            sessions_query: use_signal(String::new),
+            sessions_epoch: use_signal(|| 0),
+            chat: use_signal(crate::state::ChatState::default),
+            running_sessions: use_signal(HashSet::new),
+            permission: use_signal(Vec::new),
+            lost_asks: use_signal(Vec::new),
+            usage: use_signal(|| None),
+            config_options: use_signal(Vec::new),
+            chat_draft: use_signal(String::new),
+            toast: use_signal(|| None),
+            attachments: use_signal(Vec::new),
+            attach_reading: use_signal(Vec::new),
+            tab: use_signal(|| Tab::Home),
+            drawer_open: use_signal(|| false),
+            code_screen: use_signal(|| crate::code::CodeScreen::List),
+            code_client: use_signal(|| None),
+            code_conn: use_signal(|| crate::state::ConnState::Disconnected),
+            code_chats: use_signal(Vec::new),
+            code_chats_loading: use_signal(|| false),
+            code_repos: use_signal(Vec::new),
+            code_models: use_signal(Vec::new),
+            code_models_loading: use_signal(|| false),
+            code_agents: use_signal(Vec::new),
+            code_agents_from: use_signal(String::new),
+            code_agents_loading: use_signal(|| false),
+            code_branches: use_signal(crate::code::BranchList::default),
+            code_chat: use_signal(crate::code::CodeChatState::default),
+            code_permissions: use_signal(Vec::new),
+            code_answered: use_signal(HashSet::new),
+            code_cache: use_signal(crate::code::CodeCache::default),
+            code_epoch: use_signal(|| 0),
+            code_poll: use_signal(|| 0),
+            code_stream: use_signal(|| None),
+            code_diff: use_signal(crate::code::DiffState::default),
+            code_pulls: use_signal(crate::code::PullsState::default),
+            code_diff_wrap: use_signal(|| true),
+            code_draft: use_signal(String::new),
+            code_attachments: use_signal(Vec::new),
+            new_attachments: use_signal(Vec::new),
+            recipes: use_recipes(),
+            skills: crate::skills::use_ctx(),
+            scheduler: crate::scheduler::use_ctx(),
+            extensions: crate::extensions::use_ctx(),
+        };
+        use_context_provider(|| ctx);
+        PROBE_CTX.with(|slot| *slot.borrow_mut() = Some(ctx));
+        rsx! { div {} }
+    }
+
+    struct Harness {
+        rt: tokio::runtime::Runtime,
+        dom: VirtualDom,
+        ctx: AppCtx,
+    }
+
+    impl Harness {
+        fn new() -> Self {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("a current-thread tokio runtime for the spawned halves");
+            PROBE_CTX.with(|slot| *slot.borrow_mut() = None);
+            let mut dom = VirtualDom::new(CtxProbe);
+            dom.rebuild_in_place();
+            let ctx = PROBE_CTX
+                .with(|slot| *slot.borrow())
+                .expect("the probe rendered, so it published its context");
+            Self { rt, dom, ctx }
+        }
+
+        /// Touch signals inside the Dioxus runtime without letting anything
+        /// the call spawned run yet — which is how the immediate half of an
+        /// action is told apart from the half that waits on the server.
+        fn with<R>(&self, body: impl FnOnce(&AppCtx) -> R) -> R {
+            let ctx = self.ctx;
+            self.dom.in_runtime(move || body(&ctx))
+        }
+
+        /// Let the spawned tasks run. Dioxus queues them and polls from an
+        /// executor, so nothing spawned makes a step without this.
+        fn settle(&mut self) {
+            let Self { rt, dom, .. } = self;
+            rt.block_on(async {
+                for _ in 0..6 {
+                    let _ =
+                        tokio::time::timeout(Duration::from_millis(20), dom.wait_for_work()).await;
+                    dom.render_immediate_to_vec();
+                }
+            });
+        }
+
+        fn act(&mut self, body: impl FnOnce(&AppCtx)) {
+            self.with(body);
+            self.settle();
+        }
+    }
+
+    /// A recipes tab nobody has opened yet must not look like one that is
+    /// mid-scan, or one whose server has already refused to schedule.
+    ///
+    /// Both of those are states the detail screen draws differently and
+    /// neither is recoverable from the UI, because nothing in this file ever
+    /// sets them back: a `Warned` default puts every recipe behind a confirm
+    /// it never earned, and a `scheduler_off` default deletes the Schedule
+    /// row outright (rule 11) on a server that would happily have taken one.
+    #[test]
+    fn a_recipes_tab_starts_with_nothing_assumed_about_the_server() {
+        let h = Harness::new();
+        h.with(|ctx| {
+            assert!(
+                *ctx.recipes.screen.peek() == Screen::List,
+                "the tab opened on a detail screen with no recipe behind it"
+            );
+            assert!(
+                ctx.recipes.open.peek().is_none(),
+                "the tab opened holding a recipe nobody chose"
+            );
+            assert_eq!(
+                *ctx.recipes.scan.peek(),
+                ScanState::Unknown,
+                "a fresh tab is claiming a verdict goose has not given"
+            );
+            assert!(
+                !*ctx.recipes.scheduler_off.peek(),
+                "the Schedule row is gone before any server has refused one"
+            );
+            assert_eq!(
+                list_state(&ctx.recipes.list.peek(), true),
+                ListState::Empty,
+                "a tab that has never fetched must read as empty, not as \
+                 loading or as a server without the feature"
+            );
+        });
+    }
+
+    /// Going back has to let go of the recipe, not just change screens.
+    ///
+    /// The detail screen renders from `open`, and `delete` drops rows from
+    /// the list without touching it. Leave the recipe behind and the reader
+    /// who deletes one, backs out, and opens another arrives at a detail
+    /// screen still showing the deleted recipe — with a Run button on it.
+    #[test]
+    fn going_back_to_the_list_lets_go_of_the_recipe_it_was_showing() {
+        let mut h = Harness::new();
+        h.act(|ctx| open(ctx, entry(&plain(), &Value::Null)));
+        h.with(|ctx| {
+            close(ctx);
+            assert!(
+                *ctx.recipes.screen.peek() == Screen::List,
+                "Back did not return to the list"
+            );
+            assert!(
+                ctx.recipes.open.peek().is_none(),
+                "the closed detail screen is still holding its recipe"
+            );
+        });
+    }
+
+    /// The first of this file's two rules, run rather than read: **a tap on a
+    /// row opens the recipe, it does not run it.**
+    ///
+    /// Running one starts an agent on the reader's own machine with their own
+    /// tools. The two things `run` does that `open` must not — replace the
+    /// composer's draft and move the drawer to Home — are both silent and
+    /// both destructive, so this seeds a draft and a tab that would visibly
+    /// change if a tap ever started doing double duty.
+    #[test]
+    fn opening_a_recipe_shows_it_and_starts_nothing() {
+        let h = Harness::new();
+        h.with(|ctx| {
+            let (mut draft, mut tab) = (ctx.chat_draft, ctx.tab);
+            draft.set("half a message to someone else".to_owned());
+            tab.set(Tab::Recipes);
+        });
+        h.with(|ctx| open(ctx, entry_id("abc123", &plain(), &Value::Null)));
+
+        h.with(|ctx| {
+            assert!(
+                *ctx.recipes.screen.peek() == Screen::Detail,
+                "the tap did not open the recipe"
+            );
+            assert_eq!(
+                ctx.recipes.open.peek().as_ref().map(|e| e.id.clone()),
+                Some("abc123".to_owned()),
+                "the detail screen opened on a different recipe than the one \
+                 tapped"
+            );
+            assert_eq!(
+                *ctx.recipes.scan.peek(),
+                ScanState::Pending,
+                "the screen is claiming a verdict before the scan was asked \
+                 for"
+            );
+            assert_eq!(
+                ctx.chat_draft.peek().as_str(),
+                "half a message to someone else",
+                "opening a recipe overwrote the composer — that is what \
+                 running one does"
+            );
+            assert!(
+                *ctx.tab.peek() == Tab::Recipes,
+                "opening a recipe navigated away from the recipes tab"
+            );
+        });
+    }
+
+    /// A phone that cannot ask for a verdict has to stop asking.
+    ///
+    /// `Pending` is the state the detail screen spins in. Drop the
+    /// `ScanState::Unknown` on the no-client path and every recipe opened
+    /// while offline — the common case, since this app reaches its server
+    /// over a tailnet — spins forever on a screen whose Run button is
+    /// perfectly usable.
+    #[test]
+    fn a_scan_that_cannot_be_asked_for_settles_instead_of_spinning() {
+        let mut h = Harness::new();
+        h.act(|ctx| open(ctx, entry(&plain(), &Value::Null)));
+        h.with(|ctx| {
+            assert_eq!(
+                *ctx.recipes.scan.peek(),
+                ScanState::Unknown,
+                "the scan never resolved, so the detail screen is still \
+                 spinning at a reader who is simply offline"
+            );
+            assert_eq!(
+                run_offer(false, *ctx.recipes.scan.peek()),
+                RunOffer::Run,
+                "a verdict nobody could get must read as clean, or the Run \
+                 button disappears on every server without the method"
+            );
+        });
+    }
+
+    /// A refresh with no connection has to be a no-op, and the flag that
+    /// proves it is `loading`.
+    ///
+    /// `refresh` is called from the pull gesture and from an effect that runs
+    /// whenever this screen is mounted, so it fires while offline all the
+    /// time. `Remote::begin` is what `views/recipes.rs` hangs
+    /// `data-refreshing` off, and it clears `sticky` on the way past. Start
+    /// the fetch before checking for a client and the reader who walks out of
+    /// Wi-Fi and pulls down gets a spinner that spins until the app is
+    /// restarted, having first wiped the sentence that said why the last
+    /// load failed.
+    #[test]
+    fn refreshing_with_no_connection_does_not_start_a_spinner_that_cannot_stop() {
+        let mut h = Harness::new();
+        h.with(|ctx| {
+            let mut list = ctx.recipes.list;
+            list.write().settle(vec![
+                entry(&plain(), &Value::Null),
+                entry(&plain(), &json!("0 9 * * *")),
+            ]);
+            list.write().sticky = Some("transport error: no route".to_owned());
+        });
+        h.act(refresh);
+        h.with(|ctx| {
+            let list = ctx.recipes.list.peek();
+            assert_eq!(list.items.len(), 2, "the offline refresh emptied the list");
+            assert!(
+                !list.loading,
+                "the offline refresh left the pull-to-refresh spinner running, \
+                 and nothing is coming back to stop it"
+            );
+            assert_eq!(
+                list.sticky.as_deref(),
+                Some("transport error: no route"),
+                "the offline refresh cleared the last failure without \
+                 attempting one of its own"
+            );
+            assert_eq!(
+                list_state(&list, false),
+                ListState::Rows,
+                "the list that was already readable stopped being readable"
+            );
+        });
+    }
+
+    /// Nothing is dropped from the list until goose says it dropped the file.
+    ///
+    /// The row goes locally on success rather than by refetching, which is
+    /// only safe because the removal is on the *`Ok`* arm. Move it out and a
+    /// delete tapped with no connection removes the recipe from the screen
+    /// while the file is still on the server — and the list is refetched on
+    /// every return to it, so it comes back, which reads as the app having
+    /// undone the delete.
+    #[test]
+    fn a_delete_that_never_reached_the_server_keeps_the_row() {
+        let mut h = Harness::new();
+        h.with(|ctx| {
+            let mut list = ctx.recipes.list;
+            list.write().settle(vec![
+                entry_id("keep-me", &plain(), &Value::Null),
+                entry_id("delete-me", &plain(), &Value::Null),
+            ]);
+        });
+        h.act(|ctx| delete(ctx, "delete-me"));
+        h.with(|ctx| {
+            let ids: Vec<String> = ctx
+                .recipes
+                .list
+                .peek()
+                .items
+                .iter()
+                .map(|entry| entry.id.clone())
+                .collect();
+            assert_eq!(
+                ids,
+                ["keep-me", "delete-me"],
+                "a delete that never reached goose took the row off the \
+                 screen anyway"
+            );
+            assert_eq!(
+                ctx.toast.peek().as_deref(),
+                Some("Not connected — reconnect in Settings"),
+                "the delete did nothing and said nothing"
+            );
+        });
+    }
+
+    /// A schedule the server never accepted must not appear on the row.
+    ///
+    /// `apply_schedule` writes the cron into both copies of the recipe, and
+    /// the row's dot and its second line are drawn from that. Call it before
+    /// the RPC and a phone with no connection paints "Runs every day at 9:00
+    /// AM" on a recipe goose has never heard of a schedule for — a claim that
+    /// something will run unattended, made on the strength of nothing.
+    #[test]
+    fn a_schedule_that_never_reached_the_server_is_not_shown_as_set() {
+        let mut h = Harness::new();
+        h.with(|ctx| {
+            let (mut list, mut open) = (ctx.recipes.list, ctx.recipes.open);
+            list.write()
+                .settle(vec![entry_id("r1", &plain(), &Value::Null)]);
+            open.set(Some(entry_id("r1", &plain(), &Value::Null)));
+        });
+        h.act(|ctx| set_schedule(ctx, "r1", Some("0 0 9 * * *".to_owned())));
+        h.with(|ctx| {
+            assert_eq!(
+                row_meta(&ctx.recipes.list.peek().items[0]).schedule,
+                None,
+                "the row is advertising a schedule the server never took"
+            );
+            assert_eq!(
+                ctx.recipes
+                    .open
+                    .peek()
+                    .as_ref()
+                    .and_then(|e| e.schedule_cron.clone()),
+                None,
+                "the detail screen is showing a schedule the server never took"
+            );
+            assert!(
+                !*ctx.recipes.scheduler_off.peek(),
+                "a phone that was merely offline has concluded the server has \
+                 no scheduler, and nothing ever sets that back"
+            );
+            assert_eq!(
+                ctx.toast.peek().as_deref(),
+                Some("Not connected — reconnect in Settings")
+            );
+        });
+    }
+
+    /// An accepted schedule has to land on both copies of the recipe, and on
+    /// no others.
+    ///
+    /// The open recipe is a clone of its row, not a pointer into the list,
+    /// and goose pushes nothing when a schedule changes. Write only the open
+    /// copy and the sheet's confirmation is gone the moment the reader goes
+    /// back; write only the list and the screen they are looking at never
+    /// changes at all.
+    #[test]
+    fn an_accepted_schedule_lands_on_the_row_and_on_the_open_recipe() {
+        let h = Harness::new();
+        h.with(|ctx| {
+            let (mut list, mut open) = (ctx.recipes.list, ctx.recipes.open);
+            list.write().settle(vec![
+                entry_id("r1", &plain(), &Value::Null),
+                entry_id("r2", &plain(), &Value::Null),
+            ]);
+            open.set(Some(entry_id("r1", &plain(), &Value::Null)));
+        });
+
+        h.with(|ctx| {
+            apply_schedule(ctx, "r1", Some("0 30 8 * * 1-5"));
+            let list = ctx.recipes.list.peek();
+            assert_eq!(
+                row_meta(&list.items[0]).schedule.as_deref(),
+                Some("Runs every weekday at 8:30 AM"),
+                "the list row never learned about the schedule that was just \
+                 saved, so backing out of the sheet loses it"
+            );
+            assert_eq!(
+                row_meta(&list.items[1]).schedule,
+                None,
+                "scheduling one recipe scheduled another"
+            );
+            assert_eq!(
+                ctx.recipes
+                    .open
+                    .peek()
+                    .as_ref()
+                    .and_then(|e| e.schedule_cron.clone())
+                    .as_deref(),
+                Some("0 30 8 * * 1-5"),
+                "the screen the reader is looking at did not change"
+            );
+        });
+
+        // Scheduling a recipe that is not the open one must leave the open
+        // one alone: the two ids are compared for a reason.
+        h.with(|ctx| {
+            apply_schedule(ctx, "r2", Some("0 0 * * * *"));
+            assert_eq!(
+                ctx.recipes
+                    .open
+                    .peek()
+                    .as_ref()
+                    .and_then(|e| e.schedule_cron.clone())
+                    .as_deref(),
+                Some("0 30 8 * * 1-5"),
+                "another recipe's new schedule was written onto the open one"
+            );
+        });
+
+        // Off is the same path, and it has to clear both copies too.
+        h.with(|ctx| {
+            apply_schedule(ctx, "r1", None);
+            assert_eq!(
+                row_meta(&ctx.recipes.list.peek().items[0]).schedule,
+                None,
+                "the row is still showing a schedule that was turned off"
+            );
+            assert_eq!(
+                ctx.recipes
+                    .open
+                    .peek()
+                    .as_ref()
+                    .and_then(|e| e.schedule_cron.clone()),
+                None,
+                "the detail screen is still showing a schedule that was \
+                 turned off"
+            );
+        });
+
+        // And the reply can land after the reader has already gone back:
+        // `set_schedule` spawns, and `close` empties `open` while the call is
+        // still in flight. The row is then the only copy left, so it is the
+        // one that must not be missed.
+        h.with(|ctx| {
+            close(ctx);
+            apply_schedule(ctx, "r1", Some("0 30 8 * * 1-5"));
+            assert_eq!(
+                row_meta(&ctx.recipes.list.peek().items[0])
+                    .schedule
+                    .as_deref(),
+                Some("Runs every weekday at 8:30 AM"),
+                "a schedule goose accepted after the reader went back was \
+                 dropped, so the list says the recipe is on no timer while \
+                 the server runs it every weekday"
+            );
+        });
+    }
+
+    /// Run puts the recipe's prompt in the composer, exactly as stored, and
+    /// moves to the stack the chat will appear in.
+    ///
+    /// Verbatim is the point: the template markers are what tell the reader
+    /// this prompt has holes in it, and the second tap of a two-tap flow is
+    /// their last chance to read it before an agent acts. And the chat lives
+    /// in the Home stack — drop the `tab.set` and launching a recipe leaves
+    /// the drawer on Recipes while the chat opens out of sight behind it, so
+    /// the reader sees the list they started from and assumes nothing
+    /// happened.
+    #[test]
+    fn running_a_recipe_pre_fills_the_composer_and_follows_the_chat() {
+        let mut h = Harness::new();
+        let entry = entry(
+            &json!({
+                "title": "Draft release notes",
+                "description": "Notes since the last tag.",
+                "prompt": "Summarise {{ repo }} since {{ tag }}.",
+            }),
+            &Value::Null,
+        );
+        h.with(|ctx| {
+            let mut tab = ctx.tab;
+            tab.set(Tab::Recipes);
+        });
+        h.act(|ctx| run(ctx, &entry));
+        h.with(|ctx| {
+            assert_eq!(
+                ctx.chat_draft.peek().as_str(),
+                "Summarise {{ repo }} since {{ tag }}.",
+                "the prompt reached the composer changed, so the reader is \
+                 not reading what the recipe actually says"
+            );
+            assert!(
+                *ctx.tab.peek() == Tab::Home,
+                "the recipe's chat opens in the Home stack, and the drawer \
+                 stayed on Recipes"
+            );
+        });
+    }
+
+    /// A recipe with no prompt of its own opens an **empty** composer.
+    ///
+    /// The draft lives on the context, so it holds whatever was last typed
+    /// anywhere in the app. Set it only when the recipe has a prompt and a
+    /// prompt-less recipe opens its session with a stranger's half-written
+    /// message already in the box, looking exactly like something the recipe
+    /// put there — one tap from being sent to an agent.
+    #[test]
+    fn a_recipe_with_no_prompt_does_not_inherit_the_last_thing_you_typed() {
+        let mut h = Harness::new();
+        let entry = entry(&plain(), &Value::Null);
+        h.with(|ctx| {
+            let mut draft = ctx.chat_draft;
+            draft.set("rm -rf the staging bucket".to_owned());
+        });
+        h.act(|ctx| run(ctx, &entry));
+        h.with(|ctx| {
+            assert_eq!(
+                ctx.chat_draft.peek().as_str(),
+                "",
+                "a recipe with no prompt opened its session with someone \
+                 else's half-written message in the composer"
+            );
+        });
     }
 }

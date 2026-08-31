@@ -711,6 +711,92 @@ const fn code_key(screen: CodeScreen) -> &'static str {
 mod tests {
     use super::*;
 
+    use std::cell::Cell;
+
+    // The only way the table's row functions can be run at all.
+    //
+    // `go`, `at_root`, `root`, `detail` and `key` each take an `&AppCtx`, and
+    // an `AppCtx` is a bundle of Dioxus signals that exists only inside a
+    // mounted component. `crate::testkit::render_seeded` mounts one — but the
+    // view it takes is a bare `fn() -> Element` with nothing to capture with,
+    // so the question goes in through a thread-local and the answer comes back
+    // as the markup the mount rendered. One `#[test]` is one thread, so there
+    // is nothing here for two tests to collide over.
+    /// Something to ask the live context, answered as one line of text.
+    type Question = fn(&AppCtx) -> String;
+    /// Something to build out of the live context and render, the way the
+    /// shell renders a `root` or a `detail`.
+    type Scene = fn(&AppCtx) -> Element;
+
+    thread_local! {
+        static ASKED: Cell<Option<Question>> = const { Cell::new(None) };
+        static SHOWN: Cell<Option<Scene>> = const { Cell::new(None) };
+    }
+
+    fn asked_view() -> Element {
+        let ctx = crate::state::use_app_ctx();
+        let answer = ASKED
+            .take()
+            .map_or_else(String::new, |question| question(&ctx));
+        rsx! { "{answer}" }
+    }
+
+    fn shown_view() -> Element {
+        let ctx = crate::state::use_app_ctx();
+        SHOWN.take().map_or_else(|| rsx! {}, |view| view(&ctx))
+    }
+
+    /// Run `question` against a live `AppCtx` and hand back what it answered.
+    ///
+    /// Every caller asserts on an EXACT expected string rather than on a
+    /// substring, and that is not fussiness: Dioxus swallows a panic thrown
+    /// during render and renders nothing, so a mount that never reached the
+    /// question answers `""`. Against an exact expectation that is a loud
+    /// failure; against `contains` it would be a quiet pass over a test that
+    /// ran no production code at all.
+    fn ask(question: fn(&AppCtx) -> String) -> String {
+        ASKED.set(Some(question));
+        crate::testkit::render_seeded(|_| {}, asked_view)
+    }
+
+    /// Render whatever `view` builds out of a live `AppCtx`, and hand back the
+    /// markup — the half of the harness that can run the table's `root` and
+    /// `detail` screens rather than only ask about them.
+    fn show(view: fn(&AppCtx) -> Element) -> String {
+        SHOWN.set(Some(view));
+        crate::testkit::render_seeded(|_| {}, shown_view)
+    }
+
+    /// One answer per row, in table order, joined into a single line — so a
+    /// failure prints the whole table with the broken row named in it instead
+    /// of `false != true`.
+    fn per_destination(mut line: impl FnMut(&'static Destination) -> String) -> String {
+        DESTINATIONS
+            .iter()
+            .map(&mut line)
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
+    /// Push whatever this destination stacks on top of its root.
+    ///
+    /// Settings is deliberately absent: it has no stack: one screen, which is
+    /// its own detail. The tests that call this say so in their expectations.
+    fn push_detail(ctx: &AppCtx, id: &str) {
+        let (mut screen, mut code) = (ctx.screen, ctx.code_screen);
+        let (mut recipes, mut skills) = (ctx.recipes.screen, ctx.skills.screen);
+        let (mut scheduler, mut extensions) = (ctx.scheduler.screen, ctx.extensions.screen);
+        match id {
+            "chats" => screen.set(Screen::Chat),
+            "code" => code.set(CodeScreen::Chat),
+            "recipes" => recipes.set(crate::recipes::Screen::Detail),
+            "skills" => skills.set(crate::skills::Screen::Detail),
+            "scheduler" => scheduler.set(crate::scheduler::Screen::Detail),
+            "extensions" => extensions.set(crate::extensions::Screen::Detail),
+            _ => {}
+        }
+    }
+
     /// Settings shares the Home `screen` signal with Chats but is a
     /// destination of its own, so the Chats stack has to disown it — or the
     /// drawer marks Chats as where you are while Settings is on screen.
@@ -901,5 +987,442 @@ mod tests {
                 dest.id
             );
         }
+    }
+
+    /// A subtitle that arrives as `None` has to come out as a crumb with no
+    /// subtitle, not as one carrying an empty string: the window bar renders
+    /// `.subtitle` whenever it is `Some`, so an empty `Some` is a blank
+    /// second element pushing the title off its 52px band.
+    #[test]
+    fn a_crumb_with_nothing_to_add_is_a_plain_one() {
+        assert_eq!(
+            Crumb::detailed("Review", None),
+            Crumb::plain("Review"),
+            "a detail that computed no subtitle must be indistinguishable from \
+             a name on its own, or the window bar lays out a second line for \
+             nothing"
+        );
+        let named = Crumb::detailed("Review", Some("4 of 9 files".to_owned()));
+        assert_eq!(named.title, "Review");
+        assert_eq!(
+            named.subtitle.as_deref(),
+            Some("4 of 9 files"),
+            "the crumb dropped the half that says where the screen lives, so \
+             the window bar would name a diff with no repo behind it"
+        );
+    }
+
+    /// The drawer draws a rule and a header before a group that has one and
+    /// nothing before the group that does not. Give `Work` a header and the
+    /// top of the list gains a label above the first row; drop `Library`'s and
+    /// Recipes, Skills and Scheduler run on from Chats with no break.
+    #[test]
+    fn only_the_groups_that_want_a_label_carry_one() {
+        assert_eq!(
+            Group::ALL.map(Group::header),
+            [None, Some("Library"), Some("Server")],
+            "the drawer's section headers moved"
+        );
+    }
+
+    /// The switch is the ONE control that names a whole half of the app, and
+    /// its glyphs are deliberately the same two the `chats` and `code` rows
+    /// already carry — a third pair would be naming the same two things twice
+    /// in two alphabets. Change either row's icon without changing the plane's
+    /// and the segment stops matching the destination it opens.
+    #[test]
+    fn the_switch_wears_the_glyphs_of_the_destinations_it_opens() {
+        assert_eq!(Plane::ALL.map(Plane::label), ["Chat", "Code"]);
+        for plane in Plane::ALL {
+            assert_eq!(
+                plane.icon(),
+                primary(plane).icon,
+                "the {plane:?} segment and the destination it opens ({}) draw \
+                 different glyphs",
+                primary(plane).id
+            );
+        }
+    }
+
+    /// The sidebar reaches a destination through exactly one of three routes:
+    /// a plane's opening row, a plane's library, or the footer. A row in none
+    /// of them is a screen the desktop cannot open at all, and a row in two is
+    /// one the sidebar lists twice.
+    ///
+    /// Shown to fail: give `settings` a plane and the footer empties, so its
+    /// id goes missing from the left side.
+    #[test]
+    fn the_sidebar_reaches_every_destination_exactly_once() {
+        let mut reached: Vec<&'static str> = Plane::ALL
+            .into_iter()
+            .flat_map(|plane| {
+                let mut rows = vec![primary(plane)];
+                rows.extend(library(plane));
+                rows
+            })
+            .chain(plane_free())
+            .map(|dest| dest.id)
+            .collect();
+        let listed = reached.len();
+        reached.sort_unstable();
+        reached.dedup();
+        assert_eq!(
+            reached.len(),
+            listed,
+            "the sidebar lists a destination twice: {reached:?}"
+        );
+        assert_eq!(
+            reached,
+            ids(DESTINATIONS.iter()),
+            "the sidebar's three routes do not add up to the table"
+        );
+        assert_eq!(
+            ids(plane_free()),
+            ["settings"],
+            "the sidebar footer is not Settings alone"
+        );
+    }
+
+    /// The drawer's whole promise: tapping a row puts you on that row's root,
+    /// and the row then marks itself as where you are.
+    ///
+    /// Every `go` in the table is a different amount of work — Chats and
+    /// Settings name a screen because they share the Home signal, the other
+    /// five only set a tab because they own their screen signal — and a row
+    /// that sets the wrong one lands somewhere and lights up nothing. Change
+    /// Code's `go` to `Tab::Home` and its answer here turns `false` while the
+    /// drawer would go on showing the chat list under a highlighted Code.
+    #[test]
+    fn opening_a_destination_lands_on_its_own_root() {
+        assert_eq!(
+            ask(|ctx| per_destination(|dest| {
+                (dest.go)(ctx);
+                format!("{}={}", dest.id, (dest.at_root)(ctx))
+            })),
+            "chats=true | code=true | recipes=true | skills=true | \
+             scheduler=true | extensions=true | settings=true",
+            "a destination the drawer opened does not report itself as where \
+             you are"
+        );
+    }
+
+    /// Exactly one row is highlighted at a time. Two would be the drawer
+    /// claiming you are in two places; none would be a drawer with nothing lit
+    /// while a screen of its own is up.
+    ///
+    /// Shown to fail: drop `(ctx.tab)() == Tab::Home &&` from Chats' `at_root`
+    /// and every count from `code` onward becomes 2, because the Home screen
+    /// signal is still parked on `Sessions` underneath the tab you left it for.
+    #[test]
+    fn arriving_somewhere_leaves_everywhere_else() {
+        assert_eq!(
+            ask(|ctx| per_destination(|dest| {
+                (dest.go)(ctx);
+                let lit = DESTINATIONS.iter().filter(|d| (d.at_root)(ctx)).count();
+                format!("{}={lit}", dest.id)
+            })),
+            "chats=1 | code=1 | recipes=1 | skills=1 | scheduler=1 | \
+             extensions=1 | settings=1",
+            "the drawer highlights something other than exactly one row"
+        );
+    }
+
+    /// The second of the two rules this module exists to hold: a destination
+    /// is "here" only when its stack is at its root. From a chat, Chats is
+    /// somewhere to go BACK to — but it is still the destination whose stack
+    /// is on screen, which is why `at_root` and `current` have to disagree
+    /// here rather than being one function.
+    ///
+    /// Shown to fail: drop the screen half of any row's `at_root` and that
+    /// row answers `true` from two pushes deep, so the drawer says "here"
+    /// about a screen you would need the back chevron to reach.
+    ///
+    /// Settings is the row with no stack to push — one screen, which is its
+    /// own detail — and its expectation says so out loud.
+    #[test]
+    fn a_pushed_screen_is_not_where_the_drawer_says_you_are() {
+        assert_eq!(
+            ask(|ctx| per_destination(|dest| {
+                (dest.go)(ctx);
+                push_detail(ctx, dest.id);
+                format!("{}={},{}", dest.id, (dest.at_root)(ctx), current(ctx).id)
+            })),
+            "chats=false,chats | code=false,code | recipes=false,recipes | \
+             skills=false,skills | scheduler=false,scheduler | \
+             extensions=false,extensions | settings=true,settings",
+            "a destination two screens deep either marks itself active or \
+             stops owning the stack that is on screen"
+        );
+    }
+
+    /// THE GALLERY'S KEYS, walked over every screen the app has.
+    ///
+    /// `docs/style-gallery.html` and `docs/audit.js` are keyed on these exact
+    /// names, and a screen whose key changed silently drops out of every check
+    /// they run — which has happened to a whole branch of new UI before. The
+    /// answers are joined with `+`, so a state claimed by two destinations
+    /// prints as `chats+settings` and a state claimed by none prints as an
+    /// empty slot: one function per row answers both "is it mounted" and
+    /// "what is it showing", and this is what says the answers do not overlap.
+    #[test]
+    fn every_screen_reports_the_key_the_gallery_captured_it_under() {
+        assert_eq!(
+            ask(|ctx| {
+                let (mut tab, mut screen, mut code) = (ctx.tab, ctx.screen, ctx.code_screen);
+                let mut keys = Vec::new();
+                let claim = |ctx: &AppCtx| {
+                    DESTINATIONS
+                        .iter()
+                        .filter_map(|dest| (dest.key)(ctx))
+                        .collect::<Vec<_>>()
+                        .join("+")
+                };
+                tab.set(Tab::Home);
+                for at in [Screen::Sessions, Screen::Chat, Screen::Settings] {
+                    screen.set(at);
+                    keys.push(claim(ctx));
+                }
+                tab.set(Tab::Code);
+                for at in [
+                    CodeScreen::List,
+                    CodeScreen::New,
+                    CodeScreen::Chat,
+                    CodeScreen::Diff,
+                    CodeScreen::Pulls,
+                ] {
+                    code.set(at);
+                    keys.push(claim(ctx));
+                }
+                let mut recipes = ctx.recipes.screen;
+                tab.set(Tab::Recipes);
+                for at in [crate::recipes::Screen::List, crate::recipes::Screen::Detail] {
+                    recipes.set(at);
+                    keys.push(claim(ctx));
+                }
+                let mut skills = ctx.skills.screen;
+                tab.set(Tab::Skills);
+                for at in [crate::skills::Screen::List, crate::skills::Screen::Detail] {
+                    skills.set(at);
+                    keys.push(claim(ctx));
+                }
+                let mut scheduler = ctx.scheduler.screen;
+                tab.set(Tab::Scheduler);
+                for at in [
+                    crate::scheduler::Screen::List,
+                    crate::scheduler::Screen::Detail,
+                ] {
+                    scheduler.set(at);
+                    keys.push(claim(ctx));
+                }
+                let mut extensions = ctx.extensions.screen;
+                tab.set(Tab::Extensions);
+                for at in [
+                    crate::extensions::Screen::List,
+                    crate::extensions::Screen::Detail,
+                ] {
+                    extensions.set(at);
+                    keys.push(claim(ctx));
+                }
+                keys.join(" ")
+            }),
+            "chats chat settings code-list code-new code-chat code-diff \
+             code-pulls recipes-list recipes-detail skills skill scheduler \
+             scheduler-detail extensions extensions-detail",
+            "a screen's dump key moved, so the gallery and docs/audit.js stop \
+             seeing the screen they were keyed on"
+        );
+    }
+
+    /// A destination sitting on its root has nothing pushed, so the desktop's
+    /// third column shows its empty sentence rather than the list again.
+    /// Settings is the one row whose detail is unconditional — it has no list,
+    /// so the screen IS the detail and the shell draws two columns.
+    ///
+    /// Shown to fail: make Code's `CodeScreen::List` arm return a `Detail` and
+    /// `code=true` here, which on the desktop is the working-tree list drawn
+    /// in both columns at once.
+    #[test]
+    fn a_destination_at_its_root_has_nothing_pushed() {
+        assert_eq!(
+            ask(|ctx| per_destination(|dest| {
+                (dest.go)(ctx);
+                format!("{}={}", dest.id, (dest.detail)(ctx).is_some())
+            })),
+            "chats=false | code=false | recipes=false | skills=false | \
+             scheduler=false | extensions=false | settings=true",
+            "a destination at its root disagrees with the shell about whether \
+             the detail column has anything in it"
+        );
+    }
+
+    /// The window bar names what the detail column has open, and each row has
+    /// to reach for its OWN screen's name.
+    ///
+    /// This is the failure `Detail`'s own doc comment describes: wire a row's
+    /// crumb to a neighbour's expression and the app renders one screen while
+    /// the bar names another, with nothing to say so — the phone drops the
+    /// crumb on the floor, so no phone gate can see it either. The seeded
+    /// titles are ones nothing but the seed can put on screen.
+    #[test]
+    fn every_detail_names_its_own_screen_in_the_window_bar() {
+        assert_eq!(
+            ask(|ctx| {
+                let (mut chat, mut code_chat) = (ctx.chat, ctx.code_chat);
+                chat.write().title = "Rotating the Tailscale cert".to_owned();
+                code_chat.write().title = "Waking the worktree".to_owned();
+                per_destination(|dest| {
+                    (dest.go)(ctx);
+                    push_detail(ctx, dest.id);
+                    let named = (dest.detail)(ctx)
+                        .map_or_else(|| "nothing open".to_owned(), |open| open.crumb.title);
+                    format!("{}={named}", dest.id)
+                })
+            }),
+            "chats=Rotating the Tailscale cert | code=Waking the worktree | \
+             recipes=Recipe | skills=Skill | scheduler=Scheduled job | \
+             extensions=Extension | settings=Settings",
+            "the window bar names a screen other than the one the detail \
+             column is showing"
+        );
+    }
+
+    /// Code is the row with five screens rather than two, so it is the one
+    /// where the crumb and the view could most easily drift apart — and the
+    /// four names below are the whole of what the window bar can say about
+    /// the Code plane.
+    ///
+    /// Shown to fail: swap the `Diff` and `Pulls` arms and the bar reads
+    /// "Pull requests" over a diff.
+    #[test]
+    fn the_code_plane_names_each_of_its_four_pushed_screens() {
+        assert_eq!(
+            ask(|ctx| {
+                let mut code_chat = ctx.code_chat;
+                code_chat.write().title = "Waking the worktree".to_owned();
+                let mut code = ctx.code_screen;
+                [
+                    CodeScreen::List,
+                    CodeScreen::New,
+                    CodeScreen::Chat,
+                    CodeScreen::Diff,
+                    CodeScreen::Pulls,
+                ]
+                .into_iter()
+                .map(|at| {
+                    code.set(at);
+                    (CODE.detail)(ctx)
+                        .map_or_else(|| "nothing open".to_owned(), |open| open.crumb.title)
+                })
+                .collect::<Vec<_>>()
+                .join(" | ")
+            }),
+            "nothing open | New code session | Waking the worktree | Review | \
+             Pull requests",
+            "a Code screen is named after a different Code screen in the \
+             window bar"
+        );
+    }
+
+    /// The heading of the first `<h1 class="title...">` in `markup`, which is
+    /// what every list screen in this app calls itself.
+    fn heading(markup: &str) -> &str {
+        markup
+            .split_once("<h1 class=\"title")
+            .and_then(|(_, rest)| rest.split_once('>'))
+            .and_then(|(_, rest)| rest.split_once("</h1>"))
+            .map_or("no heading", |(text, _)| text)
+    }
+
+    /// Every list column renders the list that belongs to the row holding it.
+    ///
+    /// This is the reason the table carries a `root` at all rather than one
+    /// "render whatever is on top": the desktop draws the root and the detail
+    /// AT ONCE, so a `root` pointed at the wrong view is a middle column
+    /// showing another destination's list beside the right detail. The phone
+    /// never renders `root` while a detail is up, so no phone gate sees it —
+    /// this mounts all six at once and reads back what each one called itself.
+    #[test]
+    fn every_list_column_heads_itself_with_its_own_destinations_name() {
+        let markup = show(|ctx| {
+            let ctx = *ctx;
+            rsx! {
+                for dest in DESTINATIONS {
+                    if let Some(root) = dest.root {
+                        section { "data-dest": "{dest.id}", {root(&ctx)} }
+                    }
+                }
+            }
+        });
+        let named: Vec<String> = markup
+            .split("data-dest=\"")
+            .skip(1)
+            .map(|chunk| {
+                let (id, rest) = chunk.split_once('"').unwrap_or(("unlabelled", chunk));
+                format!("{id}={}", heading(rest))
+            })
+            .collect();
+        assert_eq!(
+            named.join(" | "),
+            "chats=Chats | code=Code | recipes=Recipes | skills=Skills | \
+             scheduler=Scheduler | extensions=Extensions",
+            "a destination's list column is headed by another destination's \
+             name, so the desktop shows one list beside the other's detail. \
+             Rendered {} bytes.",
+            markup.len()
+        );
+    }
+
+    /// The detail column renders the screen its own crumb names.
+    ///
+    /// The pair is what `Detail` exists to keep together: ONE function returns
+    /// both, so that "the app renders a diff and the window bar names the chat
+    /// it came from" cannot happen. This mounts every row's detail at once and
+    /// checks each pane says the same word the bar was handed — which is also
+    /// the desktop's stated rule that there is one title per window, taken out
+    /// of the pane by CSS rather than by rendering something else.
+    #[test]
+    fn each_detail_pane_says_the_same_name_its_crumb_does() {
+        let markup = show(|ctx| {
+            let ctx = *ctx;
+            let (mut chat, mut code_chat) = (ctx.chat, ctx.code_chat);
+            chat.write().title = "Rotating the Tailscale cert".to_owned();
+            code_chat.write().title = "Waking the worktree".to_owned();
+            for dest in DESTINATIONS {
+                push_detail(&ctx, dest.id);
+            }
+            rsx! {
+                for dest in DESTINATIONS {
+                    if let Some(open) = (dest.detail)(&ctx) {
+                        section { "data-dest": "{dest.id}", "data-crumb": "{open.crumb.title}",
+                            {open.view}
+                        }
+                    }
+                }
+            }
+        });
+        let checked: Vec<String> = markup
+            .split("data-dest=\"")
+            .skip(1)
+            .map(|chunk| {
+                let (id, rest) = chunk.split_once('"').unwrap_or(("unlabelled", chunk));
+                let crumb = rest
+                    .split_once("data-crumb=\"")
+                    .and_then(|(_, after)| after.split_once('"'))
+                    .map_or("no crumb", |(title, _)| title);
+                format!("{id}: bar {crumb} / pane {}", heading(rest))
+            })
+            .collect();
+        assert_eq!(
+            checked.join(" | "),
+            "chats: bar Rotating the Tailscale cert / pane Rotating the \
+             Tailscale cert | code: bar Waking the worktree / pane Waking the \
+             worktree | recipes: bar Recipe / pane Recipe | skills: bar Skill \
+             / pane Skill | scheduler: bar Scheduled job / pane Scheduled job \
+             | extensions: bar Extension / pane Extension | settings: bar \
+             Settings / pane Settings",
+            "a detail pane and the crumb handed to the window bar name \
+             different screens ({} bytes of markup)",
+            markup.len()
+        );
     }
 }

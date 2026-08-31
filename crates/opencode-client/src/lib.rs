@@ -1850,6 +1850,101 @@ mod tests {
         );
     }
 
+    /// The message record is what tells the transcript a new turn has started
+    /// and which session it belongs to. The parts that follow hang off it, so
+    /// losing this event leaves them with nothing to attach to.
+    #[test]
+    fn dispatches_the_message_record_and_degrades_without_one() {
+        match dispatch_event(json!({
+            "type": "message.updated",
+            "properties": {"info": {"id": "msg_1", "role": "assistant", "sessionID": "ses_1"}}
+        })) {
+            CodeEvent::MessageUpdated { info } => {
+                assert_eq!(info.id, "msg_1");
+                assert_eq!(info.role, "assistant");
+                assert_eq!(info.session_id, "ses_1");
+            }
+            other => panic!("wrong event: {other:?}"),
+        }
+        // A record in a shape this client cannot read still announced that
+        // something changed, so the event survives with an empty record rather
+        // than turning into a different kind of event entirely.
+        match dispatch_event(json!({"type": "message.updated", "properties": {"info": 7}})) {
+            CodeEvent::MessageUpdated { info } => assert_eq!(info.id, ""),
+            other => panic!("wrong event: {other:?}"),
+        }
+    }
+
+    /// The id is the only way to answer an ask. One without it must not open a
+    /// card the reader cannot dismiss and the server will never hear back on.
+    #[test]
+    fn a_permission_event_with_no_id_is_not_an_ask() {
+        match dispatch_event(json!({
+            "type": "permission.updated",
+            "properties": {"sessionID": "ses_1", "title": "Run git push"}
+        })) {
+            CodeEvent::Unknown { tag, raw } => {
+                assert_eq!(tag, "permission.updated");
+                assert_eq!(
+                    raw["title"],
+                    json!("Run git push"),
+                    "the payload is kept so the event can be diagnosed rather than vanishing"
+                );
+            }
+            other => panic!("wrong event: {other:?}"),
+        }
+    }
+
+    /// The reply event is what closes a card answered somewhere else — the
+    /// desktop, a second phone, or the server timing the ask out. Two spellings
+    /// of the same id are in the wild, and a card matched on neither is a card
+    /// that never goes away.
+    #[test]
+    fn a_replied_permission_is_identified_by_either_spelling_of_its_id() {
+        let id = |props: Value| match dispatch_event(
+            json!({"type": "permission.replied", "properties": props}),
+        ) {
+            CodeEvent::PermissionReplied { id } => id,
+            other => panic!("wrong event: {other:?}"),
+        };
+        assert_eq!(id(json!({"permissionID": "per_1"})), "per_1");
+        assert_eq!(id(json!({"id": "per_2"})), "per_2");
+        assert_eq!(
+            id(json!({"sessionID": "ses_1"})),
+            "",
+            "a reply naming no ask closes no card, and must not close an arbitrary one"
+        );
+    }
+
+    /// Frames end at a blank line and nowhere else. A buffer holding half a
+    /// frame that gets drained anyway is a JSON document parsed without its
+    /// beginning: the event is dropped and the token that arrived with it is
+    /// never drawn.
+    #[test]
+    fn a_frame_boundary_is_only_a_blank_line() {
+        assert_eq!(find_frame_end(b"data: {}\n\ndata: {"), Some(8));
+        assert_eq!(find_frame_end(b"data: {}\n"), None);
+        assert_eq!(find_frame_end(b""), None);
+    }
+
+    /// The stream carries frames that are not events: comments and bare
+    /// `event:` lines keep the connection warm, and the heartbeat is a real
+    /// event this client swallows rather than repainting the UI ten times a
+    /// minute for.
+    #[test]
+    fn a_frame_carrying_nothing_to_act_on_is_not_an_event() {
+        assert!(parse_sse_frame(b": keep-alive\n\n").is_none());
+        assert!(parse_sse_frame(b"event: ping\n\n").is_none());
+        assert!(
+            parse_sse_frame(b"data: not json at all\n\n").is_none(),
+            "a frame this client cannot parse is skipped, not guessed at"
+        );
+        assert!(
+            parse_sse_frame(b"data: {\"type\":\"server.heartbeat\"}\n\n").is_none(),
+            "a heartbeat delivered as an Unknown event would wake the caller every 10s"
+        );
+    }
+
     #[test]
     fn dispatches_global_envelope() {
         let raw = json!({

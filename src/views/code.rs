@@ -2128,12 +2128,52 @@ fn merge_confirm_body(pull: &PullRequest) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_choices, branch_chip_label, branch_choices, can_start, chat_ask, chat_where,
-        code_chip_label, code_mode_label, compose_placeholder, mode_icon, model_choices,
-        model_sheet_choices, new_crumb, new_model_label, repo_chip_label, repo_choices,
-        resolve_agent, Agent, BranchList, CodePermission, ModelInfo, RepoEntry, DEFAULT_AGENT,
+        agent_choices, branch_chip_label, branch_choices, can_start, chat_ask, chat_crumb,
+        chat_where, choose_repo, code_chip_label, code_mode_label, code_setting_rows,
+        compose_placeholder, diff_crumb, initial_mode, merge_confirm_body, mode_icon,
+        model_choices, model_sheet_choices, new_crumb, new_model_label, new_session_sheet,
+        offered_models, pulls_crumb, pulls_subtitle, repo_chip_label, repo_choices, resolve_agent,
+        unknown_model_note, withheld_note, Agent, BranchList, CodeChatView, CodeDiffView,
+        CodeNewView, CodePermission, CodePermissionModal, CodePullsView, CodeSessionsView,
+        FileStatus, ModelInfo, NewLists, NewPill, NewSheet, PullRequest, RepoEntry,
+        SessionSettingsSheet, DEFAULT_AGENT,
     };
-    use opencode_client::AgentMode;
+    use crate::code::{CodeChatState, DiffFile, DiffState, FileView, PullsState};
+    use crate::state::{use_app_ctx, AppCtx, ChatItem, ConnState};
+    use crate::testkit::{render as mount, render_seeded as mount_seeded};
+    use dioxus::prelude::*;
+    use opencode_client::{AgentMode, ChatMeta, Checks, FileDiff, ModelLimit, PullState};
+
+    /// A failure message in this module shows what came out instead, as
+    /// `{markup:.400}` — a `Display` precision on a string is the first 400
+    /// CHARACTERS, so a screen whose markup contains a `·` cannot make the
+    /// message itself panic on a byte boundary. Written as an inline format
+    /// argument rather than as a call to a truncating helper, because a helper
+    /// call in an `assert!`'s arguments only ever runs when the assertion
+    /// fails: ninety of them would be ninety lines this file could never cover.
+    ///
+    /// A mount, with the escapes `dioxus_ssr` applies to TEXT undone.
+    ///
+    /// Every apostrophe in this app's copy comes back as `&#39;`, and a suite
+    /// that spelled it that way would be asserting on the escaper rather than
+    /// on the words. It matters most for the NEGATIVE assertions: written
+    /// against the raw markup, `!html.contains("The server's default model")`
+    /// passes whatever the screen says, because that string can never appear.
+    ///
+    /// Only entities that stand for text are undone; the quotes around an
+    /// attribute value are written literally by the renderer and are still
+    /// there, so `class="…"` is still assertable.
+    fn render(view: fn() -> Element) -> String {
+        unescape(&mount(view))
+    }
+
+    fn render_seeded(seed: fn(&AppCtx), view: fn() -> Element) -> String {
+        unescape(&mount_seeded(seed, view))
+    }
+
+    fn unescape(html: &str) -> String {
+        html.replace("&#39;", "'").replace("&#34;", "\"")
+    }
 
     /// The window's bar and the pane below it must call a screen the same
     /// thing, and for three of this file's screens nothing in the compiler
@@ -2569,4 +2609,2544 @@ mod tests {
             "and the chip must not have named one it does not"
         );
     }
+
+    // ------------------------------------------------ the notes a picker gives
+
+    /// Four different reasons a model row has nothing to say, and they are not
+    /// interchangeable: "not loaded yet" is a wait, "no list" is a server that
+    /// cannot answer, "not in the catalogue" is a model running right now
+    /// under a name this app cannot resolve, and the fourth is simply an
+    /// unanswered question. Collapse any two and the row tells the reader to
+    /// do the wrong thing — wait for a list that is never coming, or go
+    /// looking for a fault where there is none.
+    #[test]
+    fn a_missing_catalogue_says_which_kind_of_missing_it_is() {
+        assert_eq!(
+            unknown_model_note(&[], true, false),
+            "Available once the model list has loaded."
+        );
+        assert_eq!(
+            unknown_model_note(&[], false, false),
+            "The chat server did not offer a model list."
+        );
+        let known = [model("opencode", "sonnet", "Sonnet")];
+        assert_eq!(
+            unknown_model_note(&known, false, true),
+            "This model is not in the chat server's catalogue."
+        );
+        assert_eq!(
+            unknown_model_note(&known, false, false),
+            "Pick a model above and this follows from it."
+        );
+    }
+
+    /// The one sentence that admits models are being kept back. It has to
+    /// count in English — one model "is" hidden, several "are" — and it has to
+    /// be absent entirely when nothing was withheld, because a picker that
+    /// always explained itself would be explaining a rule that is not in
+    /// force on the repo in front of you.
+    #[test]
+    fn withheld_models_are_counted_in_english_or_not_mentioned() {
+        assert_eq!(withheld_note(0), None);
+        assert_eq!(
+            withheld_note(1).as_deref(),
+            Some(
+                "1 free model is hidden \u{2014} they train on their input, and \
+                 this repo is not a public throwaway."
+            )
+        );
+        assert_eq!(
+            withheld_note(3).as_deref(),
+            Some(
+                "3 free models are hidden \u{2014} they train on their input, and \
+                 this repo is not a public throwaway."
+            )
+        );
+    }
+
+    /// Privacy hard rule 1, at the level both pickers share. A model that
+    /// trains on its input leaves the list for a repo that is not a public
+    /// throwaway, and the count of what left comes back with it — without that
+    /// number the sheet would silently come up short and the reader would
+    /// think the server simply had less to offer.
+    #[test]
+    fn a_private_repo_is_offered_only_the_models_that_do_not_train() {
+        let catalogue = [
+            model("opencode", "claude-sonnet-4-5", "Claude Sonnet 4.5"),
+            model("opencode", "big-pickle", "Big Pickle"),
+            model("opencode", "grok-code-free", "Grok Code Free"),
+        ];
+        let (offered, withheld) = offered_models(&catalogue, false);
+        assert_eq!(withheld, 2);
+        let ids: Vec<&str> = offered.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["claude-sonnet-4-5"],
+            "both the named free model and the one caught by the `free` \
+             substring net have to go"
+        );
+
+        let (everything, none_held) = offered_models(&catalogue, true);
+        assert_eq!(everything.len(), 3, "a throwaway repo sees the lot");
+        assert_eq!(none_held, 0);
+    }
+
+    /// What the mode pill reads before any list lands. A constant here rather
+    /// than a literal in two places, so the pair below cannot drift.
+    const DEFAULT_LABEL: &str = "Build";
+
+    /// The mode pill starts on nothing chosen, and that is what makes it read
+    /// `Build`: a turn whose body names no agent runs as `build`. Seeding it
+    /// with a literal name instead would make the pill a claim about a server
+    /// whose agent list has not been read yet.
+    #[test]
+    fn a_new_session_starts_with_no_agent_chosen() {
+        assert_eq!(initial_mode(), None);
+        assert_eq!(code_mode_label(initial_mode().as_deref()), DEFAULT_LABEL);
+    }
+
+    // ------------------------------------------------------- merging a pull
+
+    fn pull(
+        number: u64,
+        title: &str,
+        state: PullState,
+        checks: Checks,
+        mergeable: Option<bool>,
+    ) -> PullRequest {
+        PullRequest {
+            number,
+            title: title.to_owned(),
+            state,
+            checks,
+            mergeable,
+            base: "main".to_owned(),
+            url: "https://github.example/acme/infra/pull/42".to_owned(),
+            ..PullRequest::default()
+        }
+    }
+
+    /// The merge sheet is the last thing between a tap and a commit on GitHub,
+    /// and neither fact that decides whether merging *now* is right is on the
+    /// button: where it lands, and what the checks said.
+    #[test]
+    fn the_merge_confirm_names_the_base_and_the_checks() {
+        let body = merge_confirm_body(&pull(
+            7,
+            "Rotate the cert",
+            PullState::Open,
+            Checks::Pending,
+            Some(true),
+        ));
+        assert!(
+            body.contains("\u{201c}Rotate the cert\u{201d}"),
+            "the sheet must quote the pull request it is about: {body}"
+        );
+        assert!(
+            body.contains("merges into main on GitHub, straight away."),
+            "the base branch is where the merge lands and it is nowhere else \
+             on screen: {body}"
+        );
+        assert!(
+            body.contains("Its checks are still running."),
+            "the merge is offered WHILE checks run, so this is the only place a \
+             reader learns they have not answered yet: {body}"
+        );
+        assert!(
+            body.contains("It cannot be undone from here."),
+            "a one-way action has to say so: {body}"
+        );
+    }
+
+    /// Each check state gets a sentence of its own — "nothing runs checks here"
+    /// and "the checks could not be read" are opposite advice — and a pull
+    /// request whose base the manager did not send still reads as English
+    /// rather than as "merges into  on GitHub".
+    #[test]
+    fn every_check_state_has_its_own_sentence_and_a_missing_base_still_reads() {
+        for (checks, sentence) in [
+            (Checks::Passing, "Its checks have passed."),
+            (Checks::Failing, "Its checks are failing."),
+            (Checks::None, "Nothing runs checks on this repo."),
+            (Checks::Unknown, "Its check results could not be read."),
+        ] {
+            let mut subject = pull(7, "t", PullState::Open, checks, Some(true));
+            subject.base = String::new();
+            let body = merge_confirm_body(&subject);
+            assert!(
+                body.contains(sentence),
+                "this check state is being described as some other one: {body}"
+            );
+            assert!(
+                body.contains("merges into the base branch on GitHub"),
+                "a pull request with no base named still has to read as a \
+                 sentence: {body}"
+            );
+        }
+    }
+
+    // -------------------------------------------------------- the chat list
+
+    fn chat_meta(id: &str, title: &str, repo: &str, branch: &str, status: &str) -> ChatMeta {
+        ChatMeta {
+            id: id.to_owned(),
+            repo: repo.to_owned(),
+            title: title.to_owned(),
+            branch: branch.to_owned(),
+            base: String::new(),
+            status: status.to_owned(),
+            model: None,
+            last_active: 0.0,
+        }
+    }
+
+    fn permission(id: &str, title: &str) -> CodePermission {
+        CodePermission {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            ..CodePermission::default()
+        }
+    }
+
+    fn connect(ctx: &AppCtx) {
+        let mut conn = ctx.code_conn;
+        conn.set(ConnState::Connected {
+            agent: "opencode".to_owned(),
+        });
+    }
+
+    /// Before a URL has been typed there is nothing to connect to, and the tab
+    /// says where to type it. An empty list here would read as "you have no
+    /// sessions" to someone who has plenty on a server the app cannot reach.
+    #[test]
+    fn an_unconfigured_code_tab_points_at_settings() {
+        let html = render(|| rsx! { CodeSessionsView {} });
+        assert!(
+            html.contains("Set the code server URL and password in Settings"),
+            "an offline Code tab must say what is missing: {html:.400}"
+        );
+        assert!(
+            html.contains("conn-label\">offline<"),
+            "and the badge must agree with it: {html:.400}"
+        );
+        assert!(
+            !html.contains("New session"),
+            "there is nothing to start a session on"
+        );
+    }
+
+    /// A row is the whole of what a scroll down this list tells you: what the
+    /// session is, which repo and branch it is on, and what its container is
+    /// doing right now. `running` with no turn of ours in flight is idle, not
+    /// working — the manager's index cannot see inside a container.
+    #[test]
+    fn a_code_row_states_the_repo_the_branch_and_what_the_container_is_doing() {
+        let html = render_seeded(
+            |ctx| {
+                connect(ctx);
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    chat_meta(
+                        "c1",
+                        "Rotate the Tailscale cert",
+                        "acme/infra",
+                        "agent/c1",
+                        "running",
+                    ),
+                    chat_meta("c2", "Tidy the audit script", "acme/tools", "", "stopped"),
+                ]);
+            },
+            || rsx! { CodeSessionsView {} },
+        );
+        assert!(
+            html.contains("Rotate the Tailscale cert") && html.contains("Tidy the audit script"),
+            "both seeded sessions have to be on screen: {html:.400}"
+        );
+        assert!(
+            html.contains("acme/infra") && html.contains("agent/c1"),
+            "a row that does not name its repo and branch cannot be told from \
+             another session on the same repo: {html:.400}"
+        );
+        assert!(
+            html.contains(">idle<"),
+            "a container that is up with no turn of ours running is idle: {html:.400}"
+        );
+        assert!(
+            html.contains(">asleep<"),
+            "a stopped container reads as asleep, not as an error: {html:.400}"
+        );
+        assert!(
+            !html.contains("No code sessions yet"),
+            "the empty state rendered alongside two rows"
+        );
+        assert!(
+            html.contains("New session"),
+            "a connected list offers the way to start one"
+        );
+    }
+
+    /// A chat parked on a permission is the one thing in this list that wants
+    /// something from you, and the row has to say all of it: the dot on the
+    /// tile, the status chip, the ask itself, and how many more of ITS OWN are
+    /// behind it. It must not say "idle" — that line sat directly above the
+    /// "Approve or deny" panel until the ask outranked the container status.
+    #[test]
+    fn a_row_with_an_ask_stops_claiming_it_is_idle() {
+        let html = render_seeded(
+            |ctx| {
+                connect(ctx);
+                let mut chats = ctx.code_chats;
+                chats.set(vec![chat_meta(
+                    "c1",
+                    "Rotate the cert",
+                    "acme/infra",
+                    "agent/c1",
+                    "running",
+                )]);
+                let mut asks = ctx.code_permissions;
+                asks.set(vec![
+                    ("c1".to_owned(), permission("p1", "Write to src/main.rs")),
+                    ("c1".to_owned(), permission("p2", "Run cargo test")),
+                    ("c2".to_owned(), permission("p3", "Push the branch")),
+                ]);
+            },
+            || rsx! { CodeSessionsView {} },
+        );
+        assert!(
+            html.contains("Approve or deny Write to src/main.rs"),
+            "the front of this chat's queue is the ask on the card: {html:.400}"
+        );
+        assert!(
+            !html.contains("Run cargo test"),
+            "a card is not the place to work through a backlog — the rest is \
+             counted, not listed"
+        );
+        assert!(
+            html.contains("+1 more waiting"),
+            "the count is this chat's own, and the third ask belongs to another \
+             chat entirely: {html:.400}"
+        );
+        assert!(
+            html.contains("session-tile attention"),
+            "rule 8: the tile's dot is what makes a scroll answer \"which one \
+             wants me\" without reading a word"
+        );
+        assert!(
+            html.contains(">waiting on you<") && !html.contains(">idle<"),
+            "an outstanding ask outranks the container status: {html:.400}"
+        );
+        assert!(
+            html.contains(">Deny<") && html.contains(">Approve<"),
+            "the two answers you can give without reading anything else: {html:.400}"
+        );
+        assert!(
+            !html.contains("Always allow"),
+            "the third answer changes what the agent may do unattended and \
+             belongs to the modal, with the conversation in front of you"
+        );
+    }
+
+    /// A connection that failed says what failed and offers the retry. It is
+    /// not the offline state — that one sends you to Settings, and sending
+    /// someone to Settings over a dropped TLS handshake is wrong advice.
+    #[test]
+    fn a_failed_code_connection_shows_the_error_and_a_way_back() {
+        let html = render_seeded(
+            |ctx| {
+                let mut conn = ctx.code_conn;
+                conn.set(ConnState::Failed("tls handshake failed".to_owned()));
+            },
+            || rsx! { CodeSessionsView {} },
+        );
+        assert!(
+            html.contains("tls handshake failed"),
+            "the server's own words are the only clue there is: {html:.400}"
+        );
+        assert!(
+            html.contains(">Retry<"),
+            "a failure with no retry leaves the tab dead until the app is \
+             restarted: {html:.400}"
+        );
+        assert!(
+            html.contains("conn-label\">error<"),
+            "the badge has to agree with the box below it: {html:.400}"
+        );
+        assert!(
+            !html.contains("Set the code server URL"),
+            "a configured server that refused is not an unconfigured one"
+        );
+    }
+
+    /// Connecting is neither offline nor connected, and saying either would be
+    /// a claim the app cannot back yet: no Settings advice, no empty-list
+    /// verdict, no way to start a session against a server that has not
+    /// answered.
+    #[test]
+    fn a_connecting_code_tab_claims_nothing_yet() {
+        let html = render_seeded(
+            |ctx| {
+                let mut conn = ctx.code_conn;
+                conn.set(ConnState::Connecting);
+            },
+            || rsx! { CodeSessionsView {} },
+        );
+        assert!(
+            html.contains("conn-label\">connecting\u{2026}<") && html.contains("dot busy"),
+            "the badge is the whole of what this state says: {html:.400}"
+        );
+        assert!(
+            !html.contains("Set the code server URL"),
+            "connecting is not offline"
+        );
+        assert!(
+            !html.contains("No code sessions yet"),
+            "no verdict on a list nobody has read"
+        );
+        assert!(
+            !html.contains("New session"),
+            "nothing to create a session on until the server answers"
+        );
+    }
+
+    /// "You have no sessions" is a verdict, and it is only true once the list
+    /// has been read. Rendering it while the first fetch is in flight makes
+    /// every cold open flash it before the rows arrive.
+    #[test]
+    fn an_empty_code_list_says_so_only_once_it_has_been_read() {
+        let settled = render_seeded(connect, || rsx! { CodeSessionsView {} });
+        assert!(
+            settled.contains("No code sessions yet \u{2014} start one against a repo."),
+            "a settled empty list says so and says what to do: {settled:.400}"
+        );
+
+        let inflight = render_seeded(
+            |ctx| {
+                connect(ctx);
+                let mut loading = ctx.code_chats_loading;
+                loading.set(true);
+            },
+            || rsx! { CodeSessionsView {} },
+        );
+        assert!(
+            !inflight.contains("No code sessions yet"),
+            "the verdict was rendered while the fetch was still in flight: {inflight:.400}"
+        );
+        assert!(
+            inflight.contains("data-refreshing=\"true\""),
+            "the scroller is what the pull gesture and \u{2318}R read the \
+             in-flight state off: {inflight:.400}"
+        );
+    }
+
+    // -------------------------------------------------- the permission modal
+
+    /// The modal interrupts, so it is scoped to the conversation you are IN.
+    /// With no chat open, or with a queue full of other containers' asks, it
+    /// renders nothing at all — those are answered on their own cards.
+    #[test]
+    fn the_modal_stays_out_of_the_way_of_other_chats_asks() {
+        assert_eq!(
+            render(|| rsx! { CodePermissionModal {} }),
+            "",
+            "with no chat open there is nothing to be interrupted about"
+        );
+
+        let elsewhere = render_seeded(
+            |ctx| {
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    chat_id: Some("c1".to_owned()),
+                    ..CodeChatState::default()
+                });
+                let mut asks = ctx.code_permissions;
+                asks.set(vec![("c2".to_owned(), permission("p1", "Push the branch"))]);
+            },
+            || rsx! { CodePermissionModal {} },
+        );
+        assert_eq!(
+            elsewhere, "",
+            "an ask from a chat you are not in threw a modal over the one you \
+             are"
+        );
+    }
+
+    /// The open chat's ask, with the three answers, the session named the way
+    /// the list names it, the tool's own arguments available, and the rest of
+    /// THAT chat's queue counted.
+    #[test]
+    fn the_open_chats_ask_gets_the_modal_and_all_three_answers() {
+        let html = render_seeded(
+            |ctx| {
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    chat_id: Some("c1".to_owned()),
+                    ..CodeChatState::default()
+                });
+                let mut chats = ctx.code_chats;
+                chats.set(vec![chat_meta(
+                    "c1",
+                    "Rotate the cert",
+                    "acme/infra",
+                    "agent/c1",
+                    "running",
+                )]);
+                let mut asks = ctx.code_permissions;
+                let mut first = permission("p1", "Write a file");
+                first.metadata = serde_json::json!({ "target": "Cargo.toml" });
+                asks.set(vec![
+                    ("c1".to_owned(), first),
+                    ("c1".to_owned(), permission("p2", "Run cargo test")),
+                ]);
+            },
+            || rsx! { CodePermissionModal {} },
+        );
+        assert!(
+            html.contains("Session: Rotate the cert"),
+            "the sheet names the session by its title, not by its id: {html:.400}"
+        );
+        assert!(
+            html.contains("modal-tool\">Write a file<"),
+            "the ask's own title is what the sheet is about: {html:.400}"
+        );
+        assert!(
+            html.contains("Cargo.toml") && html.contains("<pre>"),
+            "the tool's arguments are the difference between approving a write \
+             and approving A write: {html:.400}"
+        );
+        assert!(
+            html.contains("Allow once") && html.contains("Always allow") && html.contains("Reject"),
+            "all three answers belong here: {html:.400}"
+        );
+        assert!(
+            html.contains("+1 more waiting"),
+            "answering one of two must not look like answering the last: {html:.400}"
+        );
+    }
+
+    /// A chat the index has not caught up with is still nameable, an ask with
+    /// no title of its own is still named by the tool it is for, and an ask
+    /// carrying no arguments must not render an empty disclosure triangle.
+    #[test]
+    fn an_ask_degrades_to_the_ids_it_has_rather_than_to_blanks() {
+        let html = render_seeded(
+            |ctx| {
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    chat_id: Some("c9".to_owned()),
+                    ..CodeChatState::default()
+                });
+                let mut asks = ctx.code_permissions;
+                let mut bare = permission("p1", "");
+                bare.kind = "bash".to_owned();
+                asks.set(vec![("c9".to_owned(), bare)]);
+            },
+            || rsx! { CodePermissionModal {} },
+        );
+        assert!(
+            html.contains("Session: c9"),
+            "a chat missing from the index falls back to its id rather than to \
+             \"Session: \": {html:.400}"
+        );
+        assert!(
+            html.contains("modal-tool\">bash<"),
+            "an untitled ask is named by its tool kind: {html:.400}"
+        );
+        assert!(
+            !html.contains("<details"),
+            "null metadata must not render an empty Details disclosure: {html:.400}"
+        );
+        assert!(!html.contains("more waiting"), "one ask is not a backlog");
+    }
+
+    // ------------------------------------------------ the new-session screen
+
+    fn seed_repos(ctx: &AppCtx) {
+        let mut repos = ctx.code_repos;
+        repos.set(vec![
+            repo("PhillipChaffee/personal-ai-setup", false),
+            repo("PhillipChaffee/scratch", true),
+        ]);
+    }
+
+    /// The field's placeholder is a SENTENCE naming the repo and the branch, so
+    /// both have to be settled before anything is tapped — otherwise the screen
+    /// cannot describe itself until you have opened two sheets, which is the
+    /// form this composer replaced.
+    #[test]
+    fn the_new_screen_settles_a_repo_and_a_branch_before_anything_is_tapped() {
+        let html = render_seeded(
+            |ctx| {
+                seed_repos(ctx);
+                let mut branches = ctx.code_branches;
+                branches.set(BranchList {
+                    repo: "PhillipChaffee/personal-ai-setup".to_owned(),
+                    default: Some("main".to_owned()),
+                    names: vec!["main".to_owned(), "release/2.x".to_owned()],
+                    truncated: false,
+                    loading: false,
+                });
+            },
+            || rsx! { CodeNewView {} },
+        );
+        assert!(
+            html.contains(
+                "Start a task in PhillipChaffee/personal-ai-setup on branch main\u{2026}"
+            ),
+            "the first allowlisted repo and its default branch are what the \
+             sentence is built from: {html:.400}"
+        );
+        assert!(
+            html.contains("chip-name\">personal-ai-setup<"),
+            "the repo pill drops the owner the placeholder above spells out: {html:.400}"
+        );
+        assert!(
+            html.contains("chip-name\">main<"),
+            "the branch pill says the resolved default rather than the word \
+             \"Default\": {html:.400}"
+        );
+        assert!(
+            html.contains("composer-chip action model needed"),
+            "the one pill still holding the session back wears the dot, because \
+             a disabled send button says nothing about which of three it is: {html:.400}"
+        );
+        assert!(
+            html.contains("chip-model\">Model<"),
+            "and it is the one place a chip may name its own control: {html:.400}"
+        );
+    }
+
+    /// The pill and the picker it opens are built from ONE resolution, so on a
+    /// server whose list has no `build` the pill must name an agent that list
+    /// really has — not the default it would fall back to if the list were
+    /// empty, which is how the chip came to say `Build` over a picker with no
+    /// Build row in it.
+    #[test]
+    fn the_new_screens_mode_pill_names_an_agent_the_server_really_has() {
+        let html = render_seeded(
+            |ctx| {
+                seed_repos(ctx);
+                let mut agents = ctx.code_agents;
+                agents.set(vec![
+                    agent("plan", AgentMode::Primary, None),
+                    agent("review", AgentMode::Primary, None),
+                ]);
+            },
+            || rsx! { CodeNewView {} },
+        );
+        assert!(
+            html.contains("chip-label\">Plan<"),
+            "the pill has to name the first primary agent this server offers: {html:.400}"
+        );
+        assert!(
+            !html.contains("chip-label\">Build<"),
+            "the pill named an agent the picker beside it cannot offer"
+        );
+    }
+
+    // ----------------------------------------------- the new-session sheets
+
+    /// One screen's worth of new-session state, built where a renderer can hold
+    /// it. `CodeNewView`'s own five signals are local to it and no seed can
+    /// reach them, so the sheets are mounted from here instead — this is the
+    /// same struct the composer hands `new_session_sheet`.
+    fn new_sheet(pill: Option<NewPill>, repo: &str) -> NewSheet {
+        let repo = repo.to_owned();
+        NewSheet {
+            sheet: use_signal(move || pill),
+            repo: use_signal(move || repo),
+            branch: use_signal(|| None),
+            model: use_signal(|| None),
+            agent: use_signal(|| None),
+        }
+    }
+
+    fn repo_sheet_probe() -> Element {
+        let ctx = use_app_ctx();
+        let sheet = new_sheet(Some(NewPill::Repo), "PhillipChaffee/personal-ai-setup");
+        let repos = (ctx.code_repos)();
+        let branches = BranchList::default();
+        new_session_sheet(
+            &ctx,
+            sheet,
+            &NewLists {
+                repos: &repos,
+                models: &[],
+                agents: &[],
+                branches: &branches,
+            },
+            false,
+            false,
+        )
+    }
+
+    fn branch_sheet_probe() -> Element {
+        let ctx = use_app_ctx();
+        let sheet = new_sheet(Some(NewPill::Branch), "acme/infra");
+        let branches = (ctx.code_branches)();
+        new_session_sheet(
+            &ctx,
+            sheet,
+            &NewLists {
+                repos: &[],
+                models: &[],
+                agents: &[],
+                branches: &branches,
+            },
+            false,
+            false,
+        )
+    }
+
+    fn model_sheet_probe() -> Element {
+        let ctx = use_app_ctx();
+        let sheet = new_sheet(Some(NewPill::Model), "acme/infra");
+        let models = (ctx.code_models)();
+        let loading = (ctx.code_models_loading)();
+        let branches = BranchList::default();
+        new_session_sheet(
+            &ctx,
+            sheet,
+            &NewLists {
+                repos: &[],
+                models: &models,
+                agents: &[],
+                branches: &branches,
+            },
+            loading,
+            false,
+        )
+    }
+
+    fn mode_sheet_probe() -> Element {
+        let ctx = use_app_ctx();
+        let sheet = new_sheet(Some(NewPill::Mode), "acme/infra");
+        let agents = (ctx.code_agents)();
+        let loading = (ctx.code_agents_loading)();
+        let branches = BranchList::default();
+        new_session_sheet(
+            &ctx,
+            sheet,
+            &NewLists {
+                repos: &[],
+                models: &[],
+                agents: &agents,
+                branches: &branches,
+            },
+            false,
+            loading,
+        )
+    }
+
+    fn closed_sheet_probe() -> Element {
+        let ctx = use_app_ctx();
+        let sheet = new_sheet(None, "acme/infra");
+        let branches = BranchList::default();
+        new_session_sheet(
+            &ctx,
+            sheet,
+            &NewLists {
+                repos: &[],
+                models: &[],
+                agents: &[],
+                branches: &branches,
+            },
+            false,
+            false,
+        )
+    }
+
+    /// With no pill tapped there is no sheet. A backdrop rendered over the
+    /// composer with nothing in it would swallow every tap on the screen.
+    #[test]
+    fn no_pill_open_means_no_sheet_at_all() {
+        assert_eq!(render(closed_sheet_probe), "");
+    }
+
+    /// The repo sheet counts what it is offering in its own title, says whose
+    /// list it is, and puts the owner under each name — the app's grammar is
+    /// name-then-explanation, and the owner is what tells two forks apart.
+    #[test]
+    fn the_repo_sheet_counts_the_allowlist_and_states_each_owner() {
+        let html = render_seeded(seed_repos, repo_sheet_probe);
+        assert!(
+            html.contains("Repositories (2)"),
+            "the title carries the count: {html:.400}"
+        );
+        assert!(
+            html.contains("from the brain's allowlist"),
+            "whose list this is, said in place of \"applies from your next \
+             message\" — there is no next message on this screen: {html:.400}"
+        );
+        assert!(
+            html.contains(">personal-ai-setup<") && html.contains(">PhillipChaffee<"),
+            "the bare name with the owner under it: {html:.400}"
+        );
+        assert!(
+            html.contains("PhillipChaffee \u{b7} public throwaway"),
+            "the one flag this app acts on is stated on the row it decides the \
+             model list for: {html:.400}"
+        );
+    }
+
+    /// The manager stops reading at 500 branches, and a filter over a list that
+    /// has been cut short would answer "Nothing matches" about a branch that
+    /// exists. Said above the rows so it is read before the filter is believed.
+    #[test]
+    fn a_truncated_branch_list_says_it_is_truncated() {
+        let html = render_seeded(
+            |ctx| {
+                let mut branches = ctx.code_branches;
+                branches.set(BranchList {
+                    repo: "acme/infra".to_owned(),
+                    default: Some("main".to_owned()),
+                    names: vec!["main".to_owned(), "release/2.x".to_owned()],
+                    truncated: true,
+                    loading: false,
+                });
+            },
+            branch_sheet_probe,
+        );
+        assert!(
+            html.contains("Choose base branch"),
+            "the branch pill's sheet: {html:.400}"
+        );
+        assert!(
+            html.contains(
+                "2 branches \u{2014} this repo has more than the manager will \
+                 read, so one that is missing here may still exist."
+            ),
+            "a short list that looks complete is worse than no list: {html:.400}"
+        );
+        assert!(
+            html.contains(">release/2.x<"),
+            "the tail of the list is still offered: {html:.400}"
+        );
+    }
+
+    /// "Asking GitHub" and "this manager cannot answer" want opposite responses
+    /// — wait, or accept the repo's default — so the empty branch sheet has to
+    /// know which one it is in.
+    #[test]
+    fn an_empty_branch_sheet_tells_a_wait_from_a_dead_end() {
+        let inflight = render_seeded(
+            |ctx| {
+                let mut branches = ctx.code_branches;
+                branches.set(BranchList {
+                    repo: "acme/infra".to_owned(),
+                    loading: true,
+                    ..BranchList::default()
+                });
+            },
+            branch_sheet_probe,
+        );
+        assert!(
+            inflight.contains("Asking GitHub for this repo's branches\u{2026}"),
+            "a fetch in flight reads as a wait: {inflight:.400}"
+        );
+
+        let settled = render(branch_sheet_probe);
+        assert!(
+            settled.contains(
+                "This manager cannot list branches \u{2014} the session starts \
+                 on the repo's default."
+            ),
+            "and a settled empty list says what happens instead: {settled:.400}"
+        );
+    }
+
+    /// The model sheet offers nothing while the catalogue is in flight, and
+    /// says so. The escape hatch — the manager's own default — is deliberately
+    /// withheld then: the fetch starts on the tap that opens this sheet, so
+    /// offering it would make it the fastest row on screen every single time.
+    #[test]
+    fn a_model_sheet_in_flight_offers_nothing_and_says_why() {
+        let html = render_seeded(
+            |ctx| {
+                let mut loading = ctx.code_models_loading;
+                loading.set(true);
+            },
+            model_sheet_probe,
+        );
+        assert!(
+            html.contains("Asking a session's container for its model catalogue\u{2026}"),
+            "the sheet has to account for its own empty list: {html:.400}"
+        );
+        assert!(
+            !html.contains("The server's default model"),
+            "the escape hatch must not be offered while the catalogue is still \
+             coming"
+        );
+    }
+
+    /// A catalogue every model of which this repo may not see is a dead end,
+    /// and the sheet says the two ways out. The manager's own default is NOT
+    /// offered here — it would be one of these same models with the rule not
+    /// applied to it.
+    #[test]
+    fn a_catalogue_a_private_repo_may_not_see_names_the_way_out() {
+        let html = render_seeded(
+            |ctx| {
+                let mut models = ctx.code_models;
+                models.set(vec![
+                    model("opencode", "big-pickle", "Big Pickle"),
+                    model("opencode", "grok-code-free", "Grok Code Free"),
+                ]);
+            },
+            model_sheet_probe,
+        );
+        assert!(
+            html.contains("start this session on a repo flagged public_throwaway"),
+            "a dead end has to say how to get out of it: {html:.400}"
+        );
+        assert!(
+            !html.contains("The server's default model"),
+            "the escape hatch would be one of the withheld models with the rule \
+             not applied"
+        );
+    }
+
+    /// When only SOME models are withheld the sheet lists the rest and says
+    /// what went, in the same sentence the settings sheet uses.
+    #[test]
+    fn a_part_withheld_catalogue_lists_the_rest_and_says_what_went() {
+        let html = render_seeded(
+            |ctx| {
+                let mut models = ctx.code_models;
+                models.set(vec![
+                    model("anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5"),
+                    model("opencode", "big-pickle", "Big Pickle"),
+                ]);
+            },
+            model_sheet_probe,
+        );
+        assert!(
+            html.contains(">Claude Sonnet 4.5<"),
+            "the models this repo may see are still offered: {html:.400}"
+        );
+        assert!(
+            !html.contains(">Big Pickle<"),
+            "a model that trains on its input reached a repo that is not a \
+             public throwaway"
+        );
+        assert!(
+            html.contains("1 free model is hidden"),
+            "a list that is silently short reads as a server with less to \
+             offer: {html:.400}"
+        );
+    }
+
+    /// `GET /agent` is a route on a chat's own server, and a repo with no chat
+    /// on it has none to ask — so the app borrows another repo's list. A
+    /// repository can define agents of its own, which makes a borrowed list a
+    /// good guess rather than an answer, and the sheet says whose it is.
+    #[test]
+    fn a_borrowed_agent_list_says_whose_it_is() {
+        let borrowed = render_seeded(
+            |ctx| {
+                let mut agents = ctx.code_agents;
+                agents.set(vec![
+                    agent("build", AgentMode::Primary, Some("Full tool access.")),
+                    agent("reviewer", AgentMode::Subagent, None),
+                ]);
+                let mut from = ctx.code_agents_from;
+                from.set("c9".to_owned());
+                let mut chats = ctx.code_chats;
+                chats.set(vec![chat_meta(
+                    "c9",
+                    "Other work",
+                    "other/x",
+                    "",
+                    "running",
+                )]);
+            },
+            mode_sheet_probe,
+        );
+        assert!(
+            borrowed.contains("Borrowed from other/x"),
+            "a list from another repo passed off as this repo's is a claim the \
+             app cannot back: {borrowed:.400}"
+        );
+        assert!(
+            borrowed.contains(">Build<"),
+            "the primary agents are still the choices: {borrowed:.400}"
+        );
+        assert!(
+            !borrowed.contains(">Reviewer<"),
+            "a subagent cannot hold a session and must not be offered"
+        );
+
+        let own = render_seeded(
+            |ctx| {
+                let mut agents = ctx.code_agents;
+                agents.set(vec![agent("build", AgentMode::Primary, None)]);
+            },
+            mode_sheet_probe,
+        );
+        assert!(
+            !own.contains("Borrowed from"),
+            "a list that IS this repo's must not apologise for itself: {own:.400}"
+        );
+    }
+
+    /// An empty agent list is not an error, and the two ways it can be empty
+    /// want different words: one is a wait, the other is a server that has no
+    /// agent to run a session on, in which case the session still starts.
+    #[test]
+    fn an_empty_mode_sheet_tells_a_wait_from_a_server_with_none() {
+        let inflight = render_seeded(
+            |ctx| {
+                let mut loading = ctx.code_agents_loading;
+                loading.set(true);
+            },
+            mode_sheet_probe,
+        );
+        assert!(
+            inflight.contains("Asking a session's container which agents it has\u{2026}"),
+            "a fetch in flight reads as a wait: {inflight:.400}"
+        );
+
+        let settled = render(mode_sheet_probe);
+        assert!(
+            settled.contains(
+                "No agent list yet \u{2014} the session starts on the server's \
+                 default."
+            ),
+            "and no list at all still leaves the session startable: {settled:.400}"
+        );
+    }
+
+    // ------------------------------------------------ the chat settings sheet
+
+    /// The code tab's settings sheet, mounted exactly as `CodeChatView` mounts
+    /// it, so the rows under test are the rows the reader gets. The sheet's own
+    /// open/closed state is local to the chat view and no seed can reach it.
+    fn settings_sheet_probe() -> Element {
+        let ctx = use_app_ctx();
+        let models = (ctx.code_models)();
+        let loading = (ctx.code_models_loading)();
+        rsx! {
+            SessionSettingsSheet {
+                backend: "code agent",
+                rows: code_setting_rows(&ctx, &models, loading),
+                onchoose: move |_: (String, String)| {},
+                onclose: move |()| {},
+            }
+        }
+    }
+
+    fn sonnet() -> ModelInfo {
+        let mut variants = std::collections::BTreeMap::new();
+        variants.insert("low".to_owned(), serde_json::Value::Null);
+        variants.insert("high".to_owned(), serde_json::Value::Null);
+        ModelInfo {
+            id: "claude-sonnet-4-5".to_owned(),
+            provider_id: "anthropic".to_owned(),
+            name: "Claude Sonnet 4.5".to_owned(),
+            limit: ModelLimit { context: 200_000.0 },
+            variants,
+        }
+    }
+
+    /// With no catalogue and no model recorded, all three rows have to state
+    /// what is unknown rather than showing blanks — and the effort and context
+    /// rows must give the SAME reason as each other, because they are missing
+    /// for the same one.
+    #[test]
+    fn a_settings_sheet_with_no_catalogue_states_what_it_does_not_know() {
+        let html = render(settings_sheet_probe);
+        assert!(
+            html.contains("The chat server did not offer a model list."),
+            "a settled empty catalogue is not a wait: {html:.400}"
+        );
+        assert!(
+            html.contains("setting-value\">Default<"),
+            "\"Default\" is the real value OpenCode records for a turn that \
+             asked for no variant: {html:.400}"
+        );
+        assert!(
+            html.contains("Thinking effort") && html.contains("Context length"),
+            "all three rows are always present: {html:.400}"
+        );
+        assert!(
+            html.contains("setting-value\">\u{2014}<"),
+            "an unknown value is an em dash, not an empty span: {html:.400}"
+        );
+    }
+
+    /// While the catalogue is in flight the same rows say so, which is a
+    /// different instruction from "this server has no list".
+    #[test]
+    fn a_settings_sheet_waiting_on_the_catalogue_says_it_is_waiting() {
+        let html = render_seeded(
+            |ctx| {
+                let mut loading = ctx.code_models_loading;
+                loading.set(true);
+            },
+            settings_sheet_probe,
+        );
+        assert!(
+            html.contains("Available once the model list has loaded."),
+            "a fetch in flight must not read as a server that cannot answer: {html:.400}"
+        );
+    }
+
+    /// With a model recognised in the catalogue every row has a real answer:
+    /// its catalogue name, the tier the next turn will really ask for, and the
+    /// context window the model is fixed at.
+    #[test]
+    fn a_recognised_model_fills_in_all_three_rows() {
+        let html = render_seeded(
+            |ctx| {
+                let mut models = ctx.code_models;
+                models.set(vec![sonnet(), model("opencode", "kimi-k2", "Kimi K2")]);
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    model: Some("anthropic/claude-sonnet-4-5".to_owned()),
+                    effort: Some("high".to_owned()),
+                    ..CodeChatState::default()
+                });
+            },
+            settings_sheet_probe,
+        );
+        assert!(
+            html.contains("setting-value\">Claude Sonnet 4.5<"),
+            "the catalogue name, not the bare reference: {html:.400}"
+        );
+        assert!(
+            html.contains("setting-value\">High<"),
+            "the tier is shown as UI copy rather than as the wire's own word: {html:.400}"
+        );
+        assert!(
+            html.contains("setting-value\">200k tokens<"),
+            "the context window is catalogue metadata and is reported, not \
+             offered: {html:.400}"
+        );
+        assert!(
+            html.contains("Fixed by the model. Nothing a message carries changes it."),
+            "and the row says why it is not a control: {html:.400}"
+        );
+        assert!(
+            !html.contains("not in the chat server's catalogue"),
+            "a model that IS in the catalogue was reported as missing from it"
+        );
+    }
+
+    /// A model with no thinking-effort tiers says so. `OpenCode` returns no
+    /// variants at all for several whole model families, so this is a normal
+    /// answer and not a failure — and it must not borrow the wording for a
+    /// catalogue that could not be read.
+    #[test]
+    fn a_model_without_tiers_says_it_has_none() {
+        let html = render_seeded(
+            |ctx| {
+                let mut models = ctx.code_models;
+                let mut kimi = model("opencode", "kimi-k2", "Kimi K2");
+                kimi.limit = ModelLimit { context: 128_000.0 };
+                models.set(vec![kimi]);
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    model: Some("opencode/kimi-k2".to_owned()),
+                    ..CodeChatState::default()
+                });
+            },
+            settings_sheet_probe,
+        );
+        assert!(
+            html.contains("This model has no thinking-effort tiers."),
+            "an empty variant list is a fact about the model, not a gap in the \
+             catalogue: {html:.400}"
+        );
+        assert!(
+            html.contains("setting-value\">128k tokens<"),
+            "and the rest of the row still reports: {html:.400}"
+        );
+    }
+
+    /// A chat running on a model the catalogue does not list is a real state —
+    /// the session record names it and `/config/providers` never mentioned it —
+    /// and the effort row is the one that has to explain why it can offer
+    /// nothing.
+    #[test]
+    fn a_model_outside_the_catalogue_is_named_as_such() {
+        let html = render_seeded(
+            |ctx| {
+                let mut models = ctx.code_models;
+                models.set(vec![sonnet()]);
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    model: Some("opencode/ghost-model".to_owned()),
+                    ..CodeChatState::default()
+                });
+            },
+            settings_sheet_probe,
+        );
+        assert!(
+            html.contains("This model is not in the chat server's catalogue."),
+            "the reader is told the app cannot resolve what is running, rather \
+             than being shown a blank: {html:.400}"
+        );
+        assert!(
+            html.contains("setting-value\">Opencode/ghost-model<"),
+            "and the row still names what the session record says is running: {html:.400}"
+        );
+    }
+
+    /// The chip says "Default" and this row is where that gets explained: the
+    /// chat was created without a model, has never been prompted, and
+    /// `GET /config` could not be read either. Only reachable with the
+    /// catalogue in hand, which is what makes it a statement rather than a
+    /// guess.
+    #[test]
+    fn a_chat_with_no_model_named_explains_what_will_run() {
+        let html = render_seeded(
+            |ctx| {
+                let mut models = ctx.code_models;
+                models.set(vec![sonnet()]);
+            },
+            settings_sheet_probe,
+        );
+        assert!(
+            html.contains("Running on the model this chat's container is configured with."),
+            "the sheet has to account for a chip that says Default: {html:.400}"
+        );
+    }
+
+    /// The withheld-models sentence outranks every other note on the Model row,
+    /// because it is the only one that says the list itself is short.
+    #[test]
+    fn the_withheld_sentence_outranks_the_other_model_notes() {
+        let html = render_seeded(
+            |ctx| {
+                let mut repos = ctx.code_repos;
+                repos.set(vec![repo("acme/infra", false)]);
+                let mut models = ctx.code_models;
+                models.set(vec![
+                    sonnet(),
+                    model("opencode", "big-pickle", "Big Pickle"),
+                ]);
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    repo: "acme/infra".to_owned(),
+                    ..CodeChatState::default()
+                });
+            },
+            settings_sheet_probe,
+        );
+        assert!(
+            html.contains("1 free model is hidden"),
+            "the sheet has to admit the list is short: {html:.400}"
+        );
+        assert!(
+            !html.contains("Running on the model this chat's container is configured with."),
+            "two notes on one row is how a row ends up with more explanation \
+             than value"
+        );
+    }
+
+    // -------------------------------------------------------- the chat screen
+
+    /// The heading, the subtitle and the window bar's crumb are three readings
+    /// of one chat, and the pane's own heading is literally `chat_crumb`'s
+    /// title. This mounts the crumb beside the pane so a change to either half
+    /// shows up as a disagreement between them.
+    fn chat_crumb_probe() -> Element {
+        let ctx = use_app_ctx();
+        let crumb = chat_crumb(&ctx);
+        let subtitle = crumb.subtitle.clone().unwrap_or_default();
+        rsx! {
+            span { class: "probe", "{crumb.title}|{subtitle}" }
+            CodeChatView {}
+        }
+    }
+
+    fn seed_open_chat(ctx: &AppCtx) {
+        let mut chat = ctx.code_chat;
+        chat.set(CodeChatState {
+            chat_id: Some("c1".to_owned()),
+            title: "Rotate the Tailscale cert".to_owned(),
+            repo: "acme/infra".to_owned(),
+            branch: "agent/c1".to_owned(),
+            items: vec![
+                ChatItem::User {
+                    text: "rotate the cert".to_owned(),
+                    attachments: Vec::new(),
+                },
+                ChatItem::Assistant {
+                    message_id: None,
+                    text: "Rotated it.".to_owned(),
+                },
+            ],
+            ..CodeChatState::default()
+        });
+    }
+
+    /// A code chat names itself and says where it is, in the pane and in the
+    /// window's bar, from one expression — and the transcript under it is the
+    /// conversation, not a placeholder.
+    #[test]
+    fn an_open_code_chat_names_itself_and_where_it_is() {
+        let html = render_seeded(seed_open_chat, chat_crumb_probe);
+        assert!(
+            html.contains("probe\">Rotate the Tailscale cert|acme/infra \u{b7} agent/c1<"),
+            "the window's bar has stopped describing the chat the pane has \
+             open: {html:.400}"
+        );
+        assert!(
+            html.contains("<h1 class=\"title ellipsis\">Rotate the Tailscale cert</h1>"),
+            "the pane's own heading is the crumb's title: {html:.400}"
+        );
+        assert!(
+            html.contains("acme/infra") && html.contains("agent/c1"),
+            "the subtitle carries the repo and the branch: {html:.400}"
+        );
+        assert!(
+            html.contains("rotate the cert") && html.contains("Rotated it."),
+            "the transcript is the screen: {html:.400}"
+        );
+        assert!(
+            !html.contains("Loading history\u{2026}"),
+            "a loaded transcript must not also claim to be loading"
+        );
+        assert!(
+            !html.contains("dot-anim"),
+            "nothing is running, so there is no typing indicator"
+        );
+    }
+
+    /// A container that is asleep is woken behind the cached transcript, and
+    /// the screen has to say so — otherwise cached history reads as a live
+    /// conversation that has stopped answering. The composer is closed while it
+    /// wakes, because a cached transcript is read-only until the server is
+    /// authoritative.
+    #[test]
+    fn a_waking_chat_says_the_transcript_is_cached_and_closes_the_composer() {
+        let html = render_seeded(
+            |ctx| {
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    chat_id: Some("c1".to_owned()),
+                    title: "Rotate the cert".to_owned(),
+                    waking: true,
+                    ..CodeChatState::default()
+                });
+            },
+            || rsx! { CodeChatView {} },
+        );
+        assert!(
+            html.contains("Waking the container \u{2014} showing the cached transcript\u{2026}"),
+            "a cached transcript passed off as live is the whole failure this \
+             banner exists for: {html:.400}"
+        );
+        assert!(
+            html.contains("placeholder=\"Waking\u{2026}\""),
+            "the field says why it is closed: {html:.400}"
+        );
+    }
+
+    /// An empty transcript that is still loading says so; one that has items
+    /// already must not, or every open of a cached chat flashes "Loading
+    /// history" over history that is on screen.
+    #[test]
+    fn loading_history_is_said_only_when_there_is_nothing_to_show() {
+        let cold = render_seeded(
+            |ctx| {
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    chat_id: Some("c1".to_owned()),
+                    loading: true,
+                    ..CodeChatState::default()
+                });
+            },
+            || rsx! { CodeChatView {} },
+        );
+        assert!(
+            cold.contains("Loading history\u{2026}"),
+            "a cold open with nothing cached has to say what it is doing: {cold:.400}"
+        );
+
+        let warm = render_seeded(
+            |ctx| {
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    chat_id: Some("c1".to_owned()),
+                    loading: true,
+                    items: vec![ChatItem::Assistant {
+                        message_id: None,
+                        text: "Cached answer.".to_owned(),
+                    }],
+                    ..CodeChatState::default()
+                });
+            },
+            || rsx! { CodeChatView {} },
+        );
+        assert!(
+            warm.contains("Cached answer.") && !warm.contains("Loading history\u{2026}"),
+            "a cached transcript is shown instantly and the loading line stays \
+             out of its way: {warm:.400}"
+        );
+    }
+
+    /// A turn in flight replaces send with stop. Both at once would offer to
+    /// queue a message the container cannot take; neither would leave a running
+    /// turn unstoppable.
+    #[test]
+    fn a_running_turn_swaps_send_for_stop() {
+        let html = render_seeded(
+            |ctx| {
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    chat_id: Some("c1".to_owned()),
+                    running: true,
+                    ..CodeChatState::default()
+                });
+            },
+            || rsx! { CodeChatView {} },
+        );
+        assert!(
+            html.contains("dot-anim"),
+            "a running turn shows the transcript is alive: {html:.400}"
+        );
+        assert!(
+            html.contains("send stop") && html.contains("title=\"Stop\""),
+            "a running turn has to be stoppable: {html:.400}"
+        );
+        assert!(
+            !html.contains("title=\"Send\""),
+            "send and stop were offered at the same time"
+        );
+    }
+
+    /// "+0 −0" and a pull-request count of 0 are claims, and before either
+    /// fetch lands the app cannot back them — so the chips carry no numbers at
+    /// all until there is an answer, and the real ones once there is.
+    #[test]
+    fn the_action_chips_carry_numbers_only_once_there_is_an_answer() {
+        let silent = render(|| rsx! { CodeChatView {} });
+        assert!(
+            silent.contains("Diff</button>") && silent.contains("Pull requests</button>"),
+            "both chips are always offered — the pull chip is answered from \
+             GitHub and works on a chat that is fast asleep: {silent:.400}"
+        );
+        assert!(
+            !silent.contains("stat add") && !silent.contains("stat count"),
+            "a count nobody has read is not zero: {silent:.400}"
+        );
+
+        let answered = render_seeded(
+            |ctx| {
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    files: vec![
+                        diff_file("src/a.rs", FileStatus::Modified, 9, 2, MODIFIED_PATCH),
+                        diff_file("src/b.rs", FileStatus::Added, 3, 1, MODIFIED_PATCH),
+                    ],
+                    ..DiffState::default()
+                });
+                let mut pulls = ctx.code_pulls;
+                pulls.set(PullsState {
+                    pulls: vec![
+                        pull(42, "Rotate", PullState::Open, Checks::Passing, Some(true)),
+                        pull(43, "Retry", PullState::Merged, Checks::Passing, None),
+                    ],
+                    loaded: true,
+                    ..PullsState::default()
+                });
+            },
+            || rsx! { CodeChatView {} },
+        );
+        assert!(
+            answered.contains("stat add\">+12<") && answered.contains("stat del\">\u{2212}3<"),
+            "the diff chip totals every file in the session's diff: {answered:.400}"
+        );
+        assert!(
+            answered.contains("stat count\">2<"),
+            "the pull chip counts what GitHub answered for this branch: {answered:.400}"
+        );
+    }
+
+    /// The composer's two chips name what the NEXT message will run on. The
+    /// model comes from the catalogue when it is known, the tier is shortened
+    /// to fit beside it, and the mode is the resolved agent — the same
+    /// resolution the picker ticks.
+    #[test]
+    fn the_composer_chips_name_what_the_next_message_runs_on() {
+        let html = render_seeded(
+            |ctx| {
+                let mut models = ctx.code_models;
+                models.set(vec![sonnet()]);
+                let mut agents = ctx.code_agents;
+                agents.set(vec![agent("plan", AgentMode::Primary, None)]);
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    chat_id: Some("c1".to_owned()),
+                    model: Some("anthropic/claude-sonnet-4-5".to_owned()),
+                    effort: Some("medium".to_owned()),
+                    agent: Some("plan".to_owned()),
+                    ..CodeChatState::default()
+                });
+            },
+            || rsx! { CodeChatView {} },
+        );
+        assert!(
+            html.contains("chip-model\">Claude Sonnet 4.5<"),
+            "the chip names the model, not its reference: {html:.400}"
+        );
+        assert!(
+            html.contains("chip-effort\">Med<"),
+            "`medium` is shortened because the model name beside it needs the \
+             room: {html:.400}"
+        );
+        assert!(
+            html.contains("chip-label\">Plan<"),
+            "the mode chip names the resolved agent: {html:.400}"
+        );
+
+        let bare = render(|| rsx! { CodeChatView {} });
+        assert!(
+            bare.contains("chip-model\">Default<"),
+            "with no model known the chip states what will happen rather than \
+             naming the control: {bare:.400}"
+        );
+        assert!(
+            !bare.contains("chip-effort"),
+            "a default tier is not worth saying — spelling it out turns the one \
+             place effort is visible at a glance into noise"
+        );
+    }
+
+    // ------------------------------------------------------ the review screen
+
+    const MODIFIED_PATCH: &str = "@@ -1,4 +1,4 @@\n fn main() {\n-    old();\n+    new();\n }\n";
+
+    const DELETED_PATCH: &str = "@@ -1,2 +0,0 @@\n-gone one\n-gone two\n";
+
+    const METADATA_ONLY_PATCH: &str = "@@ -0,0 +0,0 @@\n";
+
+    const TRUNCATED_LINE_PATCH: &str =
+        "@@ -1,1 +1,1 @@\n-old\n+new\n\\ No newline at end of file\n";
+
+    fn diff_file(
+        file: &str,
+        status: FileStatus,
+        additions: u32,
+        deletions: u32,
+        patch: &str,
+    ) -> DiffFile {
+        DiffFile::from(FileDiff {
+            file: file.to_owned(),
+            patch: patch.to_owned(),
+            additions,
+            deletions,
+            status,
+        })
+    }
+
+    /// A band's head is the whole of what a scroll down a twenty-file review
+    /// tells you, and its body is the change itself.
+    #[test]
+    fn a_diff_band_shows_the_path_the_counts_and_the_lines() {
+        let html = render_seeded(
+            |ctx| {
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    files: vec![diff_file(
+                        "src/main.rs",
+                        FileStatus::Modified,
+                        1,
+                        1,
+                        MODIFIED_PATCH,
+                    )],
+                    ..DiffState::default()
+                });
+            },
+            || rsx! { CodeDiffView {} },
+        );
+        assert!(
+            html.contains("diff-dir\">src/<") && html.contains("diff-name\">main.rs<"),
+            "the filename is what a reader scans for and the directory is the \
+             part allowed to give way: {html:.400}"
+        );
+        assert!(
+            html.contains("add\">+1<") && html.contains("del\">\u{2212}1<"),
+            "the head carries the file's own counts: {html:.400}"
+        );
+        assert!(
+            html.contains("diff-line add")
+                && html.contains("diff-line del")
+                && html.contains("diff-line ctx"),
+            "an open band renders all three kinds of row: {html:.400}"
+        );
+        assert!(
+            html.contains("diff-code\">    new();<"),
+            "the changed line itself has to be on screen: {html:.400}"
+        );
+        assert!(
+            html.contains("aria-pressed=\"false\"") && html.contains("Viewed"),
+            "unreviewed is an empty labelled box, not a bare tick that is \
+             present either way: {html:.400}"
+        );
+        assert!(
+            html.contains("subtitle ellipsis\">1 file \u{b7} +1 \u{2212}1<"),
+            "one file is counted in the singular: {html:.400}"
+        );
+        assert!(
+            !html.contains("diff-progress"),
+            "a one-file review has no progress to report"
+        );
+    }
+
+    /// The window's bar and the review pane must count the same diff. Two call
+    /// sites of one expression, with nothing in the compiler holding them
+    /// together.
+    fn diff_crumb_probe() -> Element {
+        let ctx = use_app_ctx();
+        let crumb = diff_crumb(&ctx);
+        let subtitle = crumb.subtitle.clone().unwrap_or_default();
+        rsx! {
+            span { class: "probe", "{crumb.title}|{subtitle}" }
+            CodeDiffView {}
+        }
+    }
+
+    fn seed_three_files(ctx: &AppCtx) {
+        let files = vec![
+            diff_file("src/a.rs", FileStatus::Modified, 1, 1, MODIFIED_PATCH),
+            diff_file("src/b.rs", FileStatus::Added, 2, 0, MODIFIED_PATCH),
+            diff_file("src/c.rs", FileStatus::Modified, 3, 1, MODIFIED_PATCH),
+        ];
+        let mut view = std::collections::HashMap::new();
+        view.insert(
+            "src/a.rs".to_owned(),
+            FileView {
+                seen: Some(files[0].fingerprint),
+                ..FileView::default()
+            },
+        );
+        let mut diff = ctx.code_diff;
+        diff.set(DiffState {
+            files,
+            view,
+            ..DiffState::default()
+        });
+    }
+
+    /// A multi-file review keeps score, folds what you have finished with, and
+    /// offers the bulk mark only while there is something left to mark. The
+    /// window's bar carries the same count.
+    #[test]
+    fn a_multi_file_review_keeps_score_and_folds_what_is_done() {
+        let html = render_seeded(seed_three_files, diff_crumb_probe);
+        assert!(
+            html.contains("1 of 3 files reviewed"),
+            "the progress line is how a long review stays finishable: {html:.400}"
+        );
+        assert!(
+            html.contains("style=\"width: 33%\""),
+            "the bar has to follow the count it sits under: {html:.400}"
+        );
+        assert!(
+            html.contains(">Mark all<"),
+            "with files left unreviewed the bulk action is offered: {html:.400}"
+        );
+        assert!(
+            html.contains("probe\">Review|3 files \u{b7} +6 \u{2212}2<"),
+            "the window's bar has stopped counting the diff the pane is \
+             showing: {html:.400}"
+        );
+        assert_eq!(
+            html.matches("diff-body").count(),
+            2,
+            "marking a file reviewed folds it away, which is what stops a long \
+             diff making you scroll past work you have finished with"
+        );
+        assert!(
+            html.contains("aria-pressed=\"true\""),
+            "the reviewed file's box is ticked: {html:.400}"
+        );
+    }
+
+    /// Nothing left to mark, no button to mark it with — rule 11. The progress
+    /// line still reports, because "2 of 2" is the answer the reader came for.
+    #[test]
+    fn a_finished_review_stops_offering_the_bulk_mark() {
+        let html = render_seeded(
+            |ctx| {
+                let files = vec![
+                    diff_file("src/a.rs", FileStatus::Modified, 1, 1, MODIFIED_PATCH),
+                    diff_file("src/b.rs", FileStatus::Modified, 1, 1, MODIFIED_PATCH),
+                ];
+                let mut view = std::collections::HashMap::new();
+                for file in &files {
+                    view.insert(
+                        file.info.file.clone(),
+                        FileView {
+                            seen: Some(file.fingerprint),
+                            ..FileView::default()
+                        },
+                    );
+                }
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    files,
+                    view,
+                    ..DiffState::default()
+                });
+            },
+            || rsx! { CodeDiffView {} },
+        );
+        assert!(
+            html.contains("2 of 2 files reviewed") && html.contains("style=\"width: 100%\""),
+            "a finished review still reports: {html:.400}"
+        );
+        assert!(
+            !html.contains(">Mark all<"),
+            "a control that can do nothing must not be on screen"
+        );
+    }
+
+    /// The three kinds of file nobody reviews line by line, each with the note
+    /// that stands in for a body — and the deleted one with the way to see it
+    /// anyway, because "not shown by default" is not "not available".
+    #[test]
+    fn the_bodies_not_worth_rendering_say_so_in_their_own_words() {
+        let html = render_seeded(
+            |ctx| {
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    files: vec![
+                        diff_file("assets/logo.png", FileStatus::Modified, 0, 0, ""),
+                        diff_file("src/old.rs", FileStatus::Deleted, 0, 2, DELETED_PATCH),
+                        diff_file(
+                            "src/moved.rs",
+                            FileStatus::Modified,
+                            0,
+                            0,
+                            METADATA_ONLY_PATCH,
+                        ),
+                    ],
+                    ..DiffState::default()
+                });
+            },
+            || rsx! { CodeDiffView {} },
+        );
+        assert!(
+            html.contains("Binary file \u{2014} not shown.")
+                && html.contains("diff-badge\">binary<"),
+            "a binary file's badge IS its stat — there are no counts to show: {html:.400}"
+        );
+        assert!(
+            html.contains("File deleted \u{b7} 2 lines removed")
+                && html.contains("diff-badge\">deleted<"),
+            "a deletion's patch is one `-` row per line of the file that used to \
+             be there, and nobody reviews that: {html:.400}"
+        );
+        assert!(
+            html.contains("Show removed lines"),
+            "not shown by default is not unavailable: {html:.400}"
+        );
+        assert!(
+            html.contains("No line changes \u{2014} file metadata only."),
+            "a file whose patch carries no rows still needs a body that says \
+             something: {html:.400}"
+        );
+        assert!(
+            !html.contains("gone one"),
+            "the deleted file's lines were rendered without being asked for"
+        );
+    }
+
+    /// Asking for a deletion's lines gives them, and the note that stood in for
+    /// them goes.
+    #[test]
+    fn a_deletion_hands_its_lines_over_when_they_are_asked_for() {
+        let html = render_seeded(
+            |ctx| {
+                let mut view = std::collections::HashMap::new();
+                view.insert(
+                    "src/old.rs".to_owned(),
+                    FileView {
+                        show_removed: true,
+                        ..FileView::default()
+                    },
+                );
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    files: vec![diff_file(
+                        "src/old.rs",
+                        FileStatus::Deleted,
+                        0,
+                        2,
+                        DELETED_PATCH,
+                    )],
+                    view,
+                    ..DiffState::default()
+                });
+            },
+            || rsx! { CodeDiffView {} },
+        );
+        assert!(
+            html.contains("diff-code\">gone one<") && html.contains("diff-code\">gone two<"),
+            "the removed lines are what the reveal is for: {html:.400}"
+        );
+        assert!(
+            !html.contains("Show removed lines"),
+            "the reveal is still offered after it has been taken"
+        );
+    }
+
+    /// The added badge and the no-newline note: two facts about a file that
+    /// nothing else on the row carries.
+    #[test]
+    fn an_added_file_and_a_file_with_no_trailing_newline_both_say_so() {
+        let html = render_seeded(
+            |ctx| {
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    files: vec![diff_file(
+                        "src/new.rs",
+                        FileStatus::Added,
+                        1,
+                        1,
+                        TRUNCATED_LINE_PATCH,
+                    )],
+                    ..DiffState::default()
+                });
+            },
+            || rsx! { CodeDiffView {} },
+        );
+        assert!(
+            html.contains("diff-badge\">added<"),
+            "a new file is a different reading from a heavily edited one: {html:.400}"
+        );
+        assert!(
+            html.contains("No newline at end of file"),
+            "the patch's own note about the line above it: {html:.400}"
+        );
+    }
+
+    fn gapped_patch() -> String {
+        let mut patch = String::from("@@ -1,22 +1,22 @@\n+added at the top\n");
+        for i in 0..20 {
+            patch.push_str(" context line ");
+            patch.push_str(&i.to_string());
+            patch.push('\n');
+        }
+        patch.push_str("+added at the bottom\n");
+        patch
+    }
+
+    /// `Snapshot.diffFull` sends the WHOLE file in one hunk, so a three-line
+    /// change arrives as twelve hundred rows. The band standing in for the
+    /// untouched middle is what makes that readable, and it has to say how much
+    /// it is hiding.
+    #[test]
+    fn an_untouched_middle_collapses_into_a_band_that_says_how_much() {
+        let html = render_seeded(
+            |ctx| {
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    files: vec![diff_file(
+                        "src/wide.rs",
+                        FileStatus::Modified,
+                        2,
+                        0,
+                        &gapped_patch(),
+                    )],
+                    ..DiffState::default()
+                });
+            },
+            || rsx! { CodeDiffView {} },
+        );
+        assert!(
+            html.contains("\u{22ef} 14 unchanged lines"),
+            "the band has to say how much it is hiding: {html:.400}"
+        );
+        assert!(
+            html.contains("added at the top") && html.contains("added at the bottom"),
+            "the changes either side of the band are the point of it: {html:.400}"
+        );
+        assert!(
+            !html.contains("diff-code\">context line 10<"),
+            "the middle of the band was rendered after all"
+        );
+    }
+
+    /// Expanding a band gives lines back from BOTH ends, so the context grows
+    /// towards the changes either side of it rather than out of one of them.
+    #[test]
+    fn expanding_a_band_gives_lines_back_from_both_of_its_ends() {
+        let html = render_seeded(
+            |ctx| {
+                let mut expanded = std::collections::HashMap::new();
+                expanded.insert(4_usize, 6_usize);
+                let mut view = std::collections::HashMap::new();
+                view.insert(
+                    "src/wide.rs".to_owned(),
+                    FileView {
+                        expanded,
+                        ..FileView::default()
+                    },
+                );
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    files: vec![diff_file(
+                        "src/wide.rs",
+                        FileStatus::Modified,
+                        2,
+                        0,
+                        &gapped_patch(),
+                    )],
+                    view,
+                    ..DiffState::default()
+                });
+            },
+            || rsx! { CodeDiffView {} },
+        );
+        assert!(
+            html.contains("\u{22ef} 8 unchanged lines"),
+            "the band has to shrink by what it gave back: {html:.400}"
+        );
+        assert!(
+            html.contains("diff-code\">context line 3<"),
+            "the top of the band grew towards the change above it: {html:.400}"
+        );
+        assert!(
+            html.contains("diff-code\">context line 16<"),
+            "and the bottom towards the change below it: {html:.400}"
+        );
+    }
+
+    /// One capped file, rendered. The patch travels through a thread-local
+    /// because a seed is a plain `fn` pointer and cannot carry one.
+    fn render_capped(patch: String) -> String {
+        CAPPED_PATCH.with(|slot| slot.replace(patch));
+        render_seeded(
+            |ctx| {
+                let patch = CAPPED_PATCH.with(|slot| slot.borrow().clone());
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    files: vec![diff_file(
+                        "src/huge.rs",
+                        FileStatus::Modified,
+                        900,
+                        0,
+                        &patch,
+                    )],
+                    ..DiffState::default()
+                });
+            },
+            || rsx! { CodeDiffView {} },
+        )
+    }
+
+    thread_local! {
+        static CAPPED_PATCH: std::cell::RefCell<String> =
+            const { std::cell::RefCell::new(String::new()) };
+    }
+
+    /// A file too long to render in one screen is capped, and the note has to
+    /// say whether the screen is hiding EDITS or only context. The cap fills in
+    /// document order, so a file whose changes are scattered through it can
+    /// exhaust the budget early and lose changes off the end — "too long to
+    /// render" would describe that as mere overflow.
+    #[test]
+    fn a_capped_render_says_whether_it_dropped_changes_or_only_context() {
+        let mut all_changes = String::from("@@ -1,900 +1,900 @@\n");
+        for i in 0..900 {
+            all_changes.push_str("+added ");
+            all_changes.push_str(&i.to_string());
+            all_changes.push('\n');
+        }
+        let html = render_capped(all_changes);
+        assert!(
+            html.contains("100 more lines, 100 of them changes"),
+            "a reader has to know the screen is hiding edits, not just lines: {html:.400}"
+        );
+
+        let mut context_tail = String::from("@@ -1,900 +1,900 @@\n");
+        for i in 0..800 {
+            context_tail.push_str("+added ");
+            context_tail.push_str(&i.to_string());
+            context_tail.push('\n');
+        }
+        for i in 0..100 {
+            context_tail.push_str(" tail ");
+            context_tail.push_str(&i.to_string());
+            context_tail.push('\n');
+        }
+        let html = render_capped(context_tail);
+        assert!(
+            html.contains("100 more unchanged lines"),
+            "dropping only context is a milder claim and gets its own sentence: {html:.400}"
+        );
+    }
+
+    /// The review screen has three ways to have nothing on it and they are not
+    /// the same: the fetch failed, the fetch is running, or the branch really
+    /// has no changes. Only the last is good news.
+    #[test]
+    fn an_empty_review_says_which_kind_of_empty_it_is() {
+        let broken = render_seeded(
+            |ctx| {
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    error: Some("container is not responding".to_owned()),
+                    ..DiffState::default()
+                });
+            },
+            || rsx! { CodeDiffView {} },
+        );
+        assert!(
+            broken.contains("container is not responding"),
+            "the failure's own words: {broken:.400}"
+        );
+        assert!(
+            !broken.contains("Nothing has changed on this branch yet."),
+            "a failed fetch was reported as a clean branch, which is the one \
+             wrong answer here"
+        );
+
+        let inflight = render_seeded(
+            |ctx| {
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    loading: true,
+                    ..DiffState::default()
+                });
+            },
+            || rsx! { CodeDiffView {} },
+        );
+        assert!(
+            inflight.contains(
+                "Reading the working tree \u{2014} waking the container if it \
+                 was asleep\u{2026}"
+            ),
+            "reading a diff can wake a container, which is why the wait is \
+             explained: {inflight:.400}"
+        );
+        assert!(
+            !inflight.contains("Nothing has changed on this branch yet."),
+            "a verdict was given before the answer arrived"
+        );
+
+        let clean = render(|| rsx! { CodeDiffView {} });
+        assert!(
+            clean.contains("Nothing has changed on this branch yet."),
+            "a settled empty diff is the good case and says so: {clean:.400}"
+        );
+    }
+
+    /// The soft-wrap toggle is the reader's and the body has to follow it — a
+    /// no-wrap body is its own horizontal scrollport. The control names what
+    /// pressing it will do, not what is already true.
+    #[test]
+    fn the_wrap_toggle_reaches_the_body_and_the_control_names_the_other_way() {
+        let wrapped = render_seeded(
+            |ctx| {
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    files: vec![diff_file(
+                        "src/main.rs",
+                        FileStatus::Modified,
+                        1,
+                        1,
+                        MODIFIED_PATCH,
+                    )],
+                    ..DiffState::default()
+                });
+            },
+            || rsx! { CodeDiffView {} },
+        );
+        assert!(
+            wrapped.contains("class=\"diff-body\"") && !wrapped.contains("diff-body nowrap"),
+            "the app wraps by default: {wrapped:.400}"
+        );
+        assert!(
+            wrapped.contains("title=\"Scroll long lines instead of wrapping\""),
+            "the control names the other way, not the way it already is: {wrapped:.400}"
+        );
+
+        let scrolling = render_seeded(
+            |ctx| {
+                let mut wrap = ctx.code_diff_wrap;
+                wrap.set(false);
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    files: vec![diff_file(
+                        "src/main.rs",
+                        FileStatus::Modified,
+                        1,
+                        1,
+                        MODIFIED_PATCH,
+                    )],
+                    ..DiffState::default()
+                });
+            },
+            || rsx! { CodeDiffView {} },
+        );
+        assert!(
+            scrolling.contains("diff-body nowrap"),
+            "the toggle has to reach the body: {scrolling:.400}"
+        );
+        assert!(
+            scrolling.contains("title=\"Wrap long lines\""),
+            "and the title flips with it: {scrolling:.400}"
+        );
+    }
+
+    /// With no diff read there is nothing to count, so the review screen falls
+    /// back to naming the chat it belongs to rather than reporting "0 files".
+    #[test]
+    fn a_review_with_no_diff_read_names_the_chat_instead() {
+        let html = render_seeded(
+            |ctx| {
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    title: "Rotate the cert".to_owned(),
+                    ..CodeChatState::default()
+                });
+            },
+            diff_crumb_probe,
+        );
+        assert!(
+            html.contains("probe\">Review|Rotate the cert<"),
+            "a count of nothing is not a subtitle: {html:.400}"
+        );
+        assert!(
+            html.contains("subtitle ellipsis\">Rotate the cert<"),
+            "and the pane below the bar says the same: {html:.400}"
+        );
+        assert!(
+            !html.contains("0 files"),
+            "the count was reported before there was anything to count"
+        );
+    }
+
+    // ------------------------------------------------ the pull-request screen
+
+    fn pulls_crumb_probe() -> Element {
+        let ctx = use_app_ctx();
+        let crumb = pulls_crumb(&ctx);
+        let subtitle = crumb.subtitle.clone().unwrap_or_default();
+        rsx! {
+            span { class: "probe", "{crumb.title}|{subtitle}" }
+            CodePullsView {}
+        }
+    }
+
+    /// A row says where the pull request stands, what its checks said, and the
+    /// one reason for not offering the merge that neither of those chips can
+    /// carry. The merge itself is offered only where it would work.
+    #[test]
+    fn a_pull_row_states_where_it_stands_and_offers_merge_only_where_it_works() {
+        let html = render_seeded(
+            |ctx| {
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    repo: "acme/infra".to_owned(),
+                    branch: "agent/c1".to_owned(),
+                    ..CodeChatState::default()
+                });
+                let mut pulls = ctx.code_pulls;
+                pulls.set(PullsState {
+                    pulls: vec![
+                        pull(
+                            42,
+                            "Rotate the cert",
+                            PullState::Open,
+                            Checks::Passing,
+                            Some(true),
+                        ),
+                        pull(
+                            43,
+                            "Retry logic",
+                            PullState::Open,
+                            Checks::Pending,
+                            Some(false),
+                        ),
+                    ],
+                    loaded: true,
+                    ..PullsState::default()
+                });
+            },
+            pulls_crumb_probe,
+        );
+        assert!(
+            html.contains("probe\">Pull requests|acme/infra \u{b7} agent/c1<"),
+            "the screen is scoped to this branch and both places have to say \
+             so: {html:.400}"
+        );
+        assert!(
+            html.contains("Rotate the cert") && html.contains("session-age\">#42<"),
+            "a pull request is identified by its number: {html:.400}"
+        );
+        assert!(
+            html.contains(">open<") && html.contains(">checks passing<"),
+            "state and checks are the two chips every row carries: {html:.400}"
+        );
+        assert!(
+            html.contains(">conflicts<"),
+            "an open pull request GitHub says conflicts renders exactly like one \
+             it says can merge, minus the button — this chip is that fact: {html:.400}"
+        );
+        assert_eq!(
+            html.matches("pull-actions").count(),
+            1,
+            "merge was offered on a pull request that cannot take it"
+        );
+        assert!(
+            html.contains(">Merge<"),
+            "the mergeable one is offered the merge: {html:.400}"
+        );
+    }
+
+    /// A merge in flight says so on the button that started it, and on that
+    /// button alone — the other rows stay usable.
+    #[test]
+    fn a_merge_in_flight_is_reported_on_its_own_row() {
+        let html = render_seeded(
+            |ctx| {
+                let mut pulls = ctx.code_pulls;
+                pulls.set(PullsState {
+                    pulls: vec![
+                        pull(42, "Rotate", PullState::Open, Checks::Passing, Some(true)),
+                        pull(44, "Tidy", PullState::Open, Checks::None, Some(true)),
+                    ],
+                    loaded: true,
+                    merging: Some(42),
+                    ..PullsState::default()
+                });
+            },
+            || rsx! { CodePullsView {} },
+        );
+        assert!(
+            html.contains("Merging\u{2026}"),
+            "the row that is merging has to say it is: {html:.400}"
+        );
+        assert_eq!(
+            html.matches(">Merge<").count(),
+            1,
+            "the other row's merge button was taken away by somebody else's \
+             merge"
+        );
+        assert!(
+            html.contains(">no checks<"),
+            "\"nothing runs checks here\" is a different fact from \"the checks \
+             could not be read\": {html:.400}"
+        );
+    }
+
+    /// GitHub computes mergeability asynchronously, and a `null` answer is a
+    /// wait rather than a refusal — the row says which, because the merge
+    /// button's absence alone cannot.
+    #[test]
+    fn a_mergeability_github_has_not_worked_out_reads_as_a_wait() {
+        let html = render_seeded(
+            |ctx| {
+                let mut pulls = ctx.code_pulls;
+                pulls.set(PullsState {
+                    pulls: vec![
+                        pull(42, "Rotate", PullState::Open, Checks::Unknown, None),
+                        pull(43, "Old work", PullState::Merged, Checks::Passing, None),
+                        pull(
+                            44,
+                            "Sketch",
+                            PullState::Unknown,
+                            Checks::Failing,
+                            Some(true),
+                        ),
+                    ],
+                    loaded: true,
+                    ..PullsState::default()
+                });
+            },
+            || rsx! { CodePullsView {} },
+        );
+        assert!(
+            html.contains(">mergeability pending<"),
+            "a wait must not read as a refusal: {html:.400}"
+        );
+        assert!(
+            html.contains(">checks unknown<"),
+            "the manager's PAT cannot read check runs on a private repo, and \
+             that is a real answer rather than a parse failure: {html:.400}"
+        );
+        assert!(
+            html.contains(">merged<") && html.contains(">state unknown<"),
+            "a state this client has not heard of must not read as anything \
+             reassuring: {html:.400}"
+        );
+        assert!(
+            !html.contains("pull-actions"),
+            "none of these three can be merged from here"
+        );
+    }
+
+    /// Three ways for this screen to be empty, and only one of them means the
+    /// agent has not pushed yet.
+    #[test]
+    fn an_empty_pull_screen_says_which_kind_of_empty_it_is() {
+        let broken = render_seeded(
+            |ctx| {
+                let mut pulls = ctx.code_pulls;
+                pulls.set(PullsState {
+                    error: Some("GitHub said 403".to_owned()),
+                    ..PullsState::default()
+                });
+            },
+            || rsx! { CodePullsView {} },
+        );
+        assert!(
+            broken.contains("GitHub said 403"),
+            "the failure's own words: {broken:.400}"
+        );
+        assert!(
+            !broken.contains("Nothing from this branch yet"),
+            "a refused request was reported as a branch with no pull requests"
+        );
+
+        let inflight = render_seeded(
+            |ctx| {
+                let mut pulls = ctx.code_pulls;
+                pulls.set(PullsState {
+                    loading: true,
+                    ..PullsState::default()
+                });
+            },
+            || rsx! { CodePullsView {} },
+        );
+        assert!(
+            inflight.contains("Asking GitHub\u{2026}")
+                && !inflight.contains("Nothing from this branch yet"),
+            "a verdict was given before GitHub answered: {inflight:.400}"
+        );
+
+        let settled = render(|| rsx! { CodePullsView {} });
+        assert!(
+            settled.contains("the push is permission-gated, so it will ask you first"),
+            "the empty state says what to do next and what that will cost: {settled:.400}"
+        );
+    }
+
+    /// The screen is scoped to one branch and names it, in all four states the
+    /// open chat can be in. A repo's other pull requests have nothing to do
+    /// with this conversation, so a subtitle that lost the branch would make
+    /// the chip's count read as a number about the repo.
+    fn pulls_subtitle_probe() -> Element {
+        let ctx = use_app_ctx();
+        rsx! { span { class: "probe", "{pulls_subtitle(&ctx)}" } }
+    }
+
+    #[test]
+    fn the_pull_screen_names_whatever_it_can_of_the_branch_it_is_scoped_to() {
+        let both = render_seeded(
+            |ctx| {
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    repo: "acme/infra".to_owned(),
+                    branch: "agent/c1".to_owned(),
+                    ..CodeChatState::default()
+                });
+            },
+            pulls_subtitle_probe,
+        );
+        assert!(
+            both.contains("probe\">acme/infra \u{b7} agent/c1<"),
+            "repo and branch, joined: {both:.400}"
+        );
+
+        let repo_only = render_seeded(
+            |ctx| {
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    repo: "acme/infra".to_owned(),
+                    ..CodeChatState::default()
+                });
+            },
+            pulls_subtitle_probe,
+        );
+        assert!(
+            repo_only.contains("probe\">acme/infra<"),
+            "a chat with no branch yet still says where it is: {repo_only:.400}"
+        );
+
+        let branch_only = render_seeded(
+            |ctx| {
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    branch: "agent/c1".to_owned(),
+                    ..CodeChatState::default()
+                });
+            },
+            pulls_subtitle_probe,
+        );
+        assert!(
+            branch_only.contains("probe\">agent/c1<"),
+            "and so does one whose repo the app has not been told: {branch_only:.400}"
+        );
+
+        let neither = render_seeded(
+            |ctx| {
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    title: "Rotate the cert".to_owned(),
+                    ..CodeChatState::default()
+                });
+            },
+            pulls_subtitle_probe,
+        );
+        assert!(
+            neither.contains("probe\">Rotate the cert<"),
+            "with neither known the chat's own name is the last thing left to \
+             say: {neither:.400}"
+        );
+    }
+
+    // ------------------------------------ pointing a draft session at a repo
+
+    /// Three things belong to the repo rather than to the new-session screen,
+    /// and this is the one place that moves all three at once. The probe reads
+    /// the signals back out after the move, because that — not any markup — is
+    /// what `choose_repo` produces.
+    fn moved_to_a_private_repo() -> Element {
+        let ctx = use_app_ctx();
+        let repo = use_signal(|| "PhillipChaffee/scratch".to_owned());
+        let branch = use_signal(|| Some("release/2.x".to_owned()));
+        let model = use_signal(|| Some("opencode/big-pickle".to_owned()));
+        choose_repo(&ctx, "acme/infra", repo, branch, model);
+        let (name, base, chosen) = (repo(), branch(), model());
+        rsx! { span { class: "probe", "{name}|{base:?}|{chosen:?}" } }
+    }
+
+    fn moved_to_a_throwaway_repo() -> Element {
+        let ctx = use_app_ctx();
+        let repo = use_signal(|| "acme/infra".to_owned());
+        let branch = use_signal(|| Some("release/2.x".to_owned()));
+        let model = use_signal(|| Some("opencode/big-pickle".to_owned()));
+        choose_repo(&ctx, "PhillipChaffee/scratch", repo, branch, model);
+        let (name, base, chosen) = (repo(), branch(), model());
+        rsx! { span { class: "probe", "{name}|{base:?}|{chosen:?}" } }
+    }
+
+    fn moved_to_the_repo_it_is_already_on() -> Element {
+        let ctx = use_app_ctx();
+        let repo = use_signal(|| "acme/infra".to_owned());
+        let branch = use_signal(|| Some("release/2.x".to_owned()));
+        let model = use_signal(|| Some("opencode/big-pickle".to_owned()));
+        choose_repo(&ctx, "acme/infra", repo, branch, model);
+        let (name, base, chosen) = (repo(), branch(), model());
+        rsx! { span { class: "probe", "{name}|{base:?}|{chosen:?}" } }
+    }
+
+    fn seed_two_repos(ctx: &AppCtx) {
+        let mut repos = ctx.code_repos;
+        repos.set(vec![
+            repo("acme/infra", false),
+            repo("PhillipChaffee/scratch", true),
+        ]);
+    }
+
+    /// Privacy hard rule 1, at the moment it can be broken: a free model picked
+    /// while a public throwaway was selected must not ride into a repo that is
+    /// not one. The manager would refuse it at create time, and a refusal after
+    /// the fact is a worse way to learn the rule than the pill going blank in
+    /// front of you.
+    #[test]
+    fn moving_a_draft_to_a_private_repo_clears_a_model_that_trains() {
+        let html = render_seeded(seed_two_repos, moved_to_a_private_repo);
+        assert!(
+            html.contains("probe\">acme/infra|None|None<"),
+            "the repo moved, its branch went with it, and the free model was \
+             cleared: {html:.400}"
+        );
+
+        let toast = render_seeded(seed_two_repos, moved_to_a_private_repo_toast);
+        assert!(
+            toast.contains("That model trains on its input"),
+            "a pill that empties itself without saying why is the app changing \
+             a decision behind your back: {toast:.400}"
+        );
+    }
+
+    fn moved_to_a_private_repo_toast() -> Element {
+        let ctx = use_app_ctx();
+        let repo = use_signal(|| "PhillipChaffee/scratch".to_owned());
+        let branch = use_signal(|| Some("release/2.x".to_owned()));
+        let model = use_signal(|| Some("opencode/big-pickle".to_owned()));
+        choose_repo(&ctx, "acme/infra", repo, branch, model);
+        let said = ctx.toast.peek().clone().unwrap_or_default();
+        rsx! { span { class: "probe", "{said}" } }
+    }
+
+    /// The same move onto a repo the rule allows keeps the model. The branch
+    /// still goes, because a branch belongs to the repo it was read from.
+    #[test]
+    fn moving_a_draft_to_a_throwaway_keeps_the_model_and_still_drops_the_branch() {
+        let html = render_seeded(seed_two_repos, moved_to_a_throwaway_repo);
+        assert!(
+            html.contains("probe\">PhillipChaffee/scratch|None|Some(\"opencode/big-pickle\")<"),
+            "a public throwaway is exactly where a model that trains on its \
+             input is allowed: {html:.400}"
+        );
+    }
+
+    /// Re-choosing the repo already selected changes nothing. Without the
+    /// guard, every re-render of the picker would throw away a base branch the
+    /// reader had chosen by hand.
+    #[test]
+    fn choosing_the_repo_already_selected_throws_nothing_away() {
+        let html = render_seeded(seed_two_repos, moved_to_the_repo_it_is_already_on);
+        assert!(
+            html.contains(
+                "probe\">acme/infra|Some(\"release/2.x\")|Some(\"opencode/big-pickle\")<"
+            ),
+            "a no-op move cleared the branch and the model: {html:.400}"
+        );
+    }
+
+    /// A repo name with no owner in it and no flag on it has nothing to say
+    /// under its name, and must get no note rather than an empty line.
+    #[test]
+    fn a_repo_with_nothing_to_add_carries_no_note() {
+        let rows = repo_choices(&[repo("testrepo", false)]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "testrepo");
+        assert_eq!(rows[0].note, None);
+    }
+
+    /// "Working" is the one status the manager's index cannot tell you: it
+    /// knows a container is up, not that a turn is in flight inside it. Only
+    /// the chat the app has open can say that, and only about itself.
+    #[test]
+    fn the_chat_the_app_has_open_is_the_only_one_that_can_read_as_working() {
+        let html = render_seeded(
+            |ctx| {
+                connect(ctx);
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    chat_meta("c1", "Rotating", "acme/infra", "agent/c1", "running"),
+                    chat_meta("c2", "Idle work", "acme/tools", "agent/c2", "running"),
+                ]);
+                let mut chat = ctx.code_chat;
+                chat.set(CodeChatState {
+                    chat_id: Some("c1".to_owned()),
+                    running: true,
+                    ..CodeChatState::default()
+                });
+            },
+            || rsx! { CodeSessionsView {} },
+        );
+        assert!(
+            html.contains(">working<"),
+            "the open chat's turn is in flight and its row has to say so: \
+             {html:.400}"
+        );
+        assert_eq!(
+            html.matches(">idle<").count(),
+            1,
+            "the OTHER running container must still read as idle — nothing in \
+             the index says whether it is mid-turn"
+        );
+    }
+    // APPEND-HERE
 }

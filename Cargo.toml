@@ -125,6 +125,23 @@ dioxus = { version = "0.7.10", features = ["mobile"] }
 [dev-dependencies]
 dioxus-ssr = "0.7"
 
+# A runtime for the tests that touch code which constructs a `tokio` timer or
+# spawns onto one — `show_toast`'s four-second dismissal, `spawn_forever` in the
+# state pump. The runtime is entered so those constructions do not panic;
+# nothing waits on it.
+tokio = { version = "1", features = ["rt", "net", "macros", "time", "sync"] }
+
+# `AcpClient` has no constructor that is not `connect`, so the only way to
+# drive the half of a feature module that runs WITH a client is to put a socket
+# in front of it. `src/scheduler.rs`'s harness stands up a plain-`ws://`
+# JSON-RPC server on a loopback port and connects to that; `ws_url` only reaches
+# for TLS on an `https://` base, so no certificate is involved.
+#
+# Both versions are ones the workspace already resolves for
+# `crates/mock-goose-server`, so neither adds a package to `Cargo.lock`.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+futures-util = { version = "0.3", features = ["sink"] }
+
 [lints]
 workspace = true
 

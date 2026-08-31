@@ -101,6 +101,46 @@ pub(crate) fn render_seeded(seed: fn(&AppCtx), view: fn() -> Element) -> String 
     dioxus_ssr::render(&dom)
 }
 
+/// Render a view and then let its ASYNC work finish before reading the markup.
+///
+/// [`render_seeded`] renders exactly one pass, which is the right thing for a
+/// view whose output is a pure function of the context. It is the wrong thing
+/// for one that fetches on mount: a `use_effect` that spawns has not run when
+/// the first pass ends, so the view is caught mid-flight and the test asserts
+/// on a loading state it did not ask for.
+///
+/// The loop is bounded on purpose. An effect that has not fired after eight
+/// 20ms slices is not going to, and the point of a bound is that a view whose
+/// tasks never settle cannot hang the suite — which matters more than usual
+/// here, because two `VirtualDom`s sharing `dioxus-sdk-storage`'s process-wide
+/// subscription map can feed each other and spin (measured at 7 wedged runs in
+/// 40 while that was unguarded).
+///
+/// The runtime is current-thread with a timer, entered only so the `tokio`
+/// sleeps inside the app's own spawned tasks can be constructed. Nothing here
+/// waits on wall-clock time.
+pub(crate) fn render_settled(seed: fn(&AppCtx), view: fn() -> Element) -> String {
+    const SETTLE_PASSES: usize = 8;
+    const SETTLE_SLICE: std::time::Duration = std::time::Duration::from_millis(20);
+
+    let _ = storage_dir();
+    let mut dom = VirtualDom::new_with_props(Harness, Mount { seed, view });
+    dom.rebuild_in_place();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build();
+    if let Ok(runtime) = runtime {
+        runtime.block_on(async {
+            for _ in 0..SETTLE_PASSES {
+                let _ = tokio::time::timeout(SETTLE_SLICE, dom.wait_for_work()).await;
+                dom.render_immediate_to_vec();
+            }
+        });
+    }
+    dioxus_ssr::render(&dom)
+}
+
 /// WHERE THE TEST BINARY'S PERSISTENT STORAGE GOES, and the single place
 /// allowed to decide it.
 ///

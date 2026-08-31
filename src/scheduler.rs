@@ -791,9 +791,22 @@ pub(crate) fn watch(ctx: &AppCtx, info: SessionInfo) {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test scaffolding: a harness that cannot start is the failing check"
+)]
 mod tests {
+    use std::cell::RefCell;
+    use std::sync::{Arc, Mutex};
+
+    use futures_util::{SinkExt as _, StreamExt as _};
+    use goose_acp_client::{AcpClient, ConnectConfig};
+    use serde_json::{json, Map, Value};
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::tungstenite::Message;
+
     use super::*;
-    use serde_json::Map;
 
     fn job(id: &str, cron: &str, running: bool, paused: bool) -> ScheduledJob {
         ScheduledJob {
@@ -987,6 +1000,21 @@ mod tests {
         );
     }
 
+    /// A running row says how long the run has been going — not the bare word
+    /// "running", and above all not the cadence. The cadence is what the job
+    /// will do *next*, which is not what somebody watching a run in flight is
+    /// looking at the row to find out.
+    #[test]
+    fn a_running_row_says_how_long_the_run_has_been_going() {
+        let mut running = job("nightly", "0 30 9 * * 1-5", true, false);
+        running.job_start_time = Some("2026-01-02T03:00:00Z".to_owned());
+        let epoch = rfc3339_to_epoch("2026-01-02T03:00:00Z").unwrap_or_default();
+        assert_eq!(
+            state_label(&running, ScheduleState::Running, epoch + 2 * 3_600),
+            "running 2h"
+        );
+    }
+
     #[test]
     fn a_job_title_is_a_name_and_not_a_file_stem() {
         assert_eq!(
@@ -1155,5 +1183,1268 @@ mod tests {
                 ("Started", "running 5m"),
             ]
         );
+    }
+
+    // ------------------------------------------------------------- harness
+    //
+    // Everything under "actions" above needs three things none of the checks
+    // so far needed: an `AppCtx` to write into, a Dioxus runtime to hold its
+    // signals and poll the tasks `spawn_forever` starts, and — for anything
+    // past the first `let Some(client)` — a live `AcpClient`.
+    //
+    // The third is why there is a socket in here. `AcpClient` has no
+    // constructor that is not `connect`, so the only way to drive the half of
+    // this module that talks to a server is to put a server in front of it:
+    // a plain-`ws://` JSON-RPC listener on a loopback port, answering the
+    // `_goose/unstable/schedules/*` methods and logging what it was asked.
+    // `ws_url` only reaches for TLS on an `https://` base, so `http://` here
+    // means no certificate and no fingerprint.
+
+    thread_local! {
+        /// The context `Probe` built, so a test can reach it.
+        static PUBLISHED: RefCell<Option<AppCtx>> = const { RefCell::new(None) };
+    }
+
+    /// One component holding one `AppCtx`, built field by field.
+    ///
+    /// Deliberately **not** `state::use_app_ctx_provider`. Two of its fields
+    /// are persistent, and the filesystem backing behind them *panics* unless
+    /// a process-wide `set_directory` has already run (`dioxus-sdk-storage`
+    /// `client_storage/fs.rs:44`). That `OnceLock` is claimed — and can only
+    /// be claimed once — by `ask_journal`'s
+    /// `the_journals_storage_backing_really_reaches_the_disk`, so a harness
+    /// that called the real provider would either panic or make *that* test
+    /// panic, depending on which of the two the test runner started first.
+    /// This one touches no disk at all.
+    ///
+    /// The cost is that a new field on `AppCtx` fails to compile here. That
+    /// is the intended trade: the alternative is a harness that silently
+    /// hands a screen a context the app never builds.
+    #[component]
+    fn Probe() -> Element {
+        let ctx = AppCtx {
+            screen: use_signal(|| HomeScreen::Settings),
+            settings: use_signal(crate::state::Settings::default),
+            conn: use_signal(|| crate::state::ConnState::Disconnected),
+            client: use_signal(|| None),
+            want_connected: use_signal(|| false),
+            sessions: use_signal(Vec::new),
+            sessions_next: use_signal(|| None),
+            sessions_loading: use_signal(|| false),
+            sessions_query: use_signal(String::new),
+            sessions_epoch: use_signal(|| 0),
+            chat: use_signal(crate::state::ChatState::default),
+            running_sessions: use_signal(HashSet::new),
+            permission: use_signal(Vec::new),
+            lost_asks: use_signal(Vec::new),
+            usage: use_signal(|| None),
+            config_options: use_signal(Vec::new),
+            chat_draft: use_signal(String::new),
+            toast: use_signal(|| None),
+            attachments: use_signal(Vec::new),
+            attach_reading: use_signal(Vec::new),
+            tab: use_signal(|| Tab::Home),
+            drawer_open: use_signal(|| false),
+            code_screen: use_signal(|| crate::code::CodeScreen::List),
+            code_client: use_signal(|| None),
+            code_conn: use_signal(|| crate::state::ConnState::Disconnected),
+            code_chats: use_signal(Vec::new),
+            code_chats_loading: use_signal(|| false),
+            code_repos: use_signal(Vec::new),
+            code_models: use_signal(Vec::new),
+            code_models_loading: use_signal(|| false),
+            code_agents: use_signal(Vec::new),
+            code_agents_from: use_signal(String::new),
+            code_agents_loading: use_signal(|| false),
+            code_branches: use_signal(crate::code::BranchList::default),
+            code_chat: use_signal(crate::code::CodeChatState::default),
+            code_permissions: use_signal(Vec::new),
+            code_answered: use_signal(HashSet::new),
+            code_cache: use_signal(crate::code::CodeCache::default),
+            code_epoch: use_signal(|| 0),
+            code_poll: use_signal(|| 0),
+            code_stream: use_signal(|| None),
+            code_diff: use_signal(crate::code::DiffState::default),
+            code_pulls: use_signal(crate::code::PullsState::default),
+            code_diff_wrap: use_signal(|| true),
+            code_draft: use_signal(String::new),
+            code_attachments: use_signal(Vec::new),
+            new_attachments: use_signal(Vec::new),
+            extensions: crate::extensions::use_ctx(),
+            skills: crate::skills::use_ctx(),
+            recipes: crate::recipes::use_recipes(),
+            scheduler: use_ctx(),
+        };
+        use_context_provider(|| ctx);
+        PUBLISHED.with(|slot| *slot.borrow_mut() = Some(ctx));
+        rsx! { div {} }
+    }
+
+    /// The reply the mock server sends for one request: how long it sits on
+    /// it, then a JSON-RPC `result` or `error`.
+    ///
+    /// The delay is not decoration. Two of the rules in this module are about
+    /// *ordering* — a stale history answer must not overwrite a newer one, and
+    /// a second Run now while the first is still out must not start a second
+    /// run — and neither can be provoked on a server that answers in the order
+    /// it was asked.
+    type Reply = (Duration, Result<Value, Value>);
+
+    /// What a mock server answers, per method. A plain `fn` and never a
+    /// closure, so the whole script of a test is one readable `match`.
+    type Script = fn(&str, &Value) -> Reply;
+
+    fn ok(result: Value) -> Reply {
+        (Duration::ZERO, Ok(result))
+    }
+
+    fn rpc_error(code: i64, message: &str) -> Reply {
+        (
+            Duration::ZERO,
+            Err(json!({ "code": code, "message": message })),
+        )
+    }
+
+    /// Not a reply at all: the server hangs up instead of answering.
+    ///
+    /// The only way to reach [`AcpError::Closed`], which `run_now` treats
+    /// differently from every other failure.
+    fn hang_up() -> Reply {
+        (Duration::ZERO, Err(Value::Null))
+    }
+
+    /// The method name with goose's namespace taken off, which is what the
+    /// assertions below read.
+    fn short(method: &str) -> &str {
+        method.trim_start_matches("_goose/unstable/schedules/")
+    }
+
+    struct Server {
+        base_url: String,
+        calls: Arc<Mutex<Vec<(String, Value)>>>,
+    }
+
+    impl Server {
+        /// Every request this server was sent, in order, by short name. The
+        /// handshake is left out: it is the harness's, not the screen's.
+        fn methods(&self) -> Vec<String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(method, _)| short(method).to_owned())
+                .filter(|method| method != "initialize")
+                .collect()
+        }
+
+        fn count(&self, method: &str) -> usize {
+            self.methods().iter().filter(|m| *m == method).count()
+        }
+
+        /// The params of the `n`th call to `method`.
+        fn params(&self, method: &str, n: usize) -> Value {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(m, _)| short(m) == method)
+                .nth(n)
+                .map(|(_, params)| params.clone())
+                .expect("the call the assertion is about was never made")
+        }
+    }
+
+    /// A goose that answers everything happily, with one scheduled job.
+    fn happy(method: &str, _params: &Value) -> Reply {
+        match short(method) {
+            "list" => ok(json!({ "jobs": [wire_job("nightly", false)] })),
+            "sessions/list" => ok(json!({ "sessions": [wire_session("run-1")] })),
+            "update" => ok(json!({ "job": wire_job("nightly", false) })),
+            "running-job/kill" => ok(json!({ "message": "Successfully killed running job" })),
+            "run-now" => ok(json!({ "status": "completed", "sessionId": "run-9" })),
+            _ => ok(json!({})),
+        }
+    }
+
+    fn wire_job(id: &str, running: bool) -> Value {
+        json!({
+            "id": id,
+            "source": format!("/home/demo/.config/goose/scheduled-recipes/{id}.yaml"),
+            "cron": "0 0 2 * * *",
+            "lastRun": null,
+            "currentlyRunning": running,
+            "paused": false,
+            "currentSessionId": null,
+            "jobStartTime": null,
+        })
+    }
+
+    fn wire_session(id: &str) -> Value {
+        json!({ "sessionId": id, "cwd": "/home/demo", "title": null })
+    }
+
+    struct Harness {
+        dom: VirtualDom,
+        rt: tokio::runtime::Runtime,
+        ctx: AppCtx,
+        /// The connection's event stream, parked here for its lifetime. The
+        /// client's actor gives up the socket when this end goes away, so a
+        /// harness that dropped it would have a connection that died between
+        /// the handshake and the first request.
+        events: Option<tokio::sync::mpsc::Receiver<goose_acp_client::AcpEvent>>,
+    }
+
+    impl Harness {
+        /// A mounted app context with no connection: the offline half of every
+        /// action.
+        fn offline() -> Self {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let mut dom = VirtualDom::new(Probe);
+            dom.rebuild_in_place();
+            let ctx = PUBLISHED
+                .with(|slot| *slot.borrow())
+                .expect("the probe rendered, so it published its context");
+            Self {
+                dom,
+                rt,
+                ctx,
+                events: None,
+            }
+        }
+
+        /// The same, plus a live client talking to a server running `script`.
+        fn connected(script: Script) -> (Self, Server) {
+            let mut harness = Self::offline();
+            let server = harness.serve(script);
+            let cfg = ConnectConfig {
+                base_url: server.base_url.clone(),
+                secret: String::new(),
+                fingerprint: None,
+            };
+            let (client, events, _info) = harness
+                .rt
+                .block_on(AcpClient::connect(&cfg))
+                .expect("the mock server accepted the handshake");
+            harness.events = Some(events);
+            harness.with(|ctx| ctx.client.clone().set(Some(client)));
+            (harness, server)
+        }
+
+        fn serve(&self, script: Script) -> Server {
+            let listener = self
+                .rt
+                .block_on(async { TcpListener::bind("127.0.0.1:0").await.unwrap() });
+            let port = listener.local_addr().unwrap().port();
+            let calls: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+            let log = Arc::clone(&calls);
+            self.rt.spawn(async move {
+                while let Ok((socket, _)) = listener.accept().await {
+                    let log = Arc::clone(&log);
+                    tokio::spawn(async move { session_loop(socket, log, script).await });
+                }
+            });
+            Server {
+                base_url: format!("http://127.0.0.1:{port}"),
+                calls,
+            }
+        }
+
+        /// Read or write the context. Signals belong to the virtual DOM's
+        /// runtime and panic outside it, so every touch goes through here.
+        fn with<T>(&self, f: impl FnOnce(&AppCtx) -> T) -> T {
+            let ctx = self.ctx;
+            self.dom.in_runtime(|| f(&ctx))
+        }
+
+        /// Let the queued Dioxus tasks — and the socket under them — run.
+        ///
+        /// Dioxus polls a spawned task from its own executor, so nothing an
+        /// action started happens without this; the timeout is what lets the
+        /// tokio runtime carrying the WebSocket actor make progress while the
+        /// virtual DOM has nothing to do.
+        ///
+        /// The budget is 400 ms of *idle* — an iteration with work in it
+        /// returns at once — against a longest scripted delay of 60 ms, so a
+        /// loaded machine has room before this becomes a flake.
+        fn settle(&mut self) {
+            let dom = &mut self.dom;
+            self.rt.block_on(async {
+                for _ in 0..40 {
+                    let _ =
+                        tokio::time::timeout(Duration::from_millis(10), dom.wait_for_work()).await;
+                    dom.render_immediate_to_vec();
+                }
+            });
+        }
+
+        /// One poll tick's fetch, run to completion. `poll_once` is an `async
+        /// fn` on the context, so it has to go on the same executor the
+        /// screen's `use_future` would put it on.
+        fn poll(&mut self) {
+            self.with(|ctx| {
+                let ctx = *ctx;
+                spawn_forever(async move {
+                    poll_once(&ctx).await;
+                });
+            });
+            self.settle();
+        }
+
+        fn toast(&self) -> Option<String> {
+            self.with(|ctx| ctx.toast.peek().clone())
+        }
+
+        fn runs(&self) -> Vec<String> {
+            self.with(|ctx| {
+                ctx.scheduler
+                    .history
+                    .peek()
+                    .items
+                    .iter()
+                    .map(|info| info.session_id.clone())
+                    .collect()
+            })
+        }
+
+        fn jobs(&self) -> Vec<String> {
+            self.with(|ctx| {
+                ctx.scheduler
+                    .list
+                    .peek()
+                    .items
+                    .iter()
+                    .map(|job| job.id.clone())
+                    .collect()
+            })
+        }
+    }
+
+    async fn session_loop(
+        socket: tokio::net::TcpStream,
+        log: Arc<Mutex<Vec<(String, Value)>>>,
+        script: Script,
+    ) {
+        let Ok(ws) = tokio_tungstenite::accept_async(socket).await else {
+            return;
+        };
+        let (mut sink, mut stream) = ws.split();
+        let (out, mut outbox) = tokio::sync::mpsc::unbounded_channel::<String>();
+        tokio::spawn(async move {
+            while let Some(text) = outbox.recv().await {
+                if text.is_empty() {
+                    // The hang-up: a close frame and no answer, which is what
+                    // reaches the client as `AcpError::Closed`.
+                    let _ = sink.send(Message::Close(None)).await;
+                    break;
+                }
+                if sink.send(Message::Text(text.into())).await.is_err() {
+                    break;
+                }
+            }
+        });
+        while let Some(Ok(msg)) = stream.next().await {
+            let Message::Text(text) = msg else { continue };
+            let Ok(frame) = serde_json::from_str::<Value>(text.as_str()) else {
+                continue;
+            };
+            let Some(id) = frame.get("id").cloned() else {
+                continue;
+            };
+            let method = frame
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let params = frame.get("params").cloned().unwrap_or(Value::Null);
+            log.lock().unwrap().push((method.clone(), params.clone()));
+            let out = out.clone();
+            // Answered on a task of its own, so a scripted delay holds up one
+            // reply rather than the whole socket.
+            tokio::spawn(async move {
+                let (delay, body) = if method == "initialize" {
+                    ok(json!({
+                        "protocolVersion": 1,
+                        "agentInfo": { "name": "mock", "version": "0" },
+                    }))
+                } else {
+                    script(&method, &params)
+                };
+                tokio::time::sleep(delay).await;
+                let frame = match body {
+                    Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+                    Err(Value::Null) => {
+                        let _ = out.send(String::new());
+                        return;
+                    }
+                    Err(error) => json!({ "jsonrpc": "2.0", "id": id, "error": error }),
+                };
+                let _ = out.send(frame.to_string());
+            });
+        }
+    }
+
+    // -------------------------------------------------- navigation, offline
+
+    /// A fresh Scheduler is on its list with nothing claimed. Every other
+    /// field here is a claim some later action releases — the open job, the
+    /// history's owner, the advisory flags — and one that started life
+    /// non-empty would be a claim nothing ever made.
+    #[test]
+    fn the_scheduler_opens_on_the_list_with_nothing_claimed() {
+        let h = Harness::offline();
+        h.with(|ctx| {
+            let s = ctx.scheduler;
+            assert!(
+                matches!(*s.screen.peek(), Screen::List),
+                "the tab opened straight into a detail, which has no job to show"
+            );
+            assert_eq!(s.open.peek().as_deref(), None);
+            assert_eq!(s.history_of.peek().as_deref(), None);
+            assert!(!s.sheet.peek().is_open());
+            assert_eq!(*s.poll.peek(), 0);
+            assert!(s.started_here.peek().is_empty());
+            let list = s.list.peek();
+            assert!(
+                list.items.is_empty() && !list.loading && !list.unsupported,
+                "a list that starts loading has a spinner nothing will ever stop"
+            );
+        });
+    }
+
+    /// The history slot has to be claimed *synchronously*, in the same beat as
+    /// the navigation. An effect runs after the render that mounted it, so a
+    /// slot left settled and empty paints one committed frame of "No runs
+    /// yet" — the exact sentence this arrangement exists to stop the screen
+    /// saying about runs it has not asked for.
+    #[test]
+    fn opening_a_job_marks_its_history_as_asked_for_before_the_screen_paints() {
+        let h = Harness::offline();
+        h.with(|ctx| open(ctx, "nightly"));
+        h.with(|ctx| {
+            assert!(matches!(*ctx.scheduler.screen.peek(), Screen::Detail));
+            assert_eq!(ctx.scheduler.open.peek().as_deref(), Some("nightly"));
+            assert!(
+                ctx.scheduler.history.peek().loading,
+                "the detail paints one frame of \"No runs yet\" before its own \
+                 fetch is even armed"
+            );
+        });
+    }
+
+    /// Backing out has to take the history with it. It belongs to a job that
+    /// is no longer on screen, and a slot left holding job A's runs — still
+    /// claimed by A's id — would show them under B's title the moment B is
+    /// opened, until B's own fetch answered.
+    #[test]
+    fn closing_the_detail_lets_go_of_the_job_and_of_its_runs() {
+        let h = Harness::offline();
+        h.with(|ctx| {
+            open(ctx, "nightly");
+            let (mut sheet, mut history, mut of) = (
+                ctx.scheduler.sheet,
+                ctx.scheduler.history,
+                ctx.scheduler.history_of,
+            );
+            sheet.set(Sheet::Cadence);
+            history
+                .write()
+                .settle(vec![session("run-1", Some("/home/demo"))]);
+            of.set(Some("nightly".to_owned()));
+        });
+        h.with(close);
+        h.with(|ctx| {
+            assert!(matches!(*ctx.scheduler.screen.peek(), Screen::List));
+            assert_eq!(ctx.scheduler.open.peek().as_deref(), None);
+            assert!(
+                !ctx.scheduler.sheet.peek().is_open(),
+                "a confirm left open over the list is a question about a job \
+                 that is no longer on screen"
+            );
+            assert!(ctx.scheduler.history.peek().items.is_empty());
+            assert_eq!(
+                ctx.scheduler.history_of.peek().as_deref(),
+                None,
+                "the identity check is still armed against a job nobody has open"
+            );
+        });
+    }
+
+    /// `open_session` sets the *Home* screen and never the tab, because every
+    /// other caller is already on Home. Without the tab line the transcript
+    /// loads into a stack nothing is rendering, and "Watch it run" looks like
+    /// a dead button.
+    #[test]
+    fn watching_a_run_moves_to_the_tab_that_draws_the_transcript() {
+        let h = Harness::offline();
+        h.with(|ctx| {
+            let mut tab = ctx.tab;
+            tab.set(Tab::Scheduler);
+            watch(ctx, session("run-1", Some("/home/demo")));
+        });
+        h.with(|ctx| {
+            assert!(
+                matches!(*ctx.tab.peek(), Tab::Home),
+                "the chat was opened on the Scheduler tab, which does not draw it"
+            );
+            assert!(matches!(*ctx.screen.peek(), HomeScreen::Chat));
+            let chat = ctx.chat.peek();
+            assert_eq!(chat.session_id.as_deref(), Some("run-1"));
+            assert_eq!(
+                chat.cwd, "/home/demo",
+                "the transcript would replay against the wrong directory"
+            );
+        });
+    }
+
+    /// A tap has to be answered. Nothing else on this screen changes when
+    /// there is no socket — the row stays exactly as it was — so a mutation
+    /// that returned quietly would be indistinguishable from one that worked.
+    #[test]
+    fn every_mutation_says_so_when_there_is_no_connection() {
+        const OFFLINE: &str = "Not connected — reconnect in Settings";
+        let mut h = Harness::offline();
+
+        h.with(|ctx| set_cadence(ctx, "nightly", "0 0 2 * * *"));
+        h.settle();
+        assert_eq!(h.toast().as_deref(), Some(OFFLINE), "saving a cadence");
+        h.with(|ctx| ctx.toast.clone().set(None));
+
+        h.with(|ctx| set_paused(ctx, "nightly", true));
+        h.settle();
+        assert_eq!(h.toast().as_deref(), Some(OFFLINE), "pausing");
+        h.with(|ctx| ctx.toast.clone().set(None));
+
+        h.with(|ctx| delete(ctx, "nightly"));
+        h.settle();
+        assert_eq!(h.toast().as_deref(), Some(OFFLINE), "deleting");
+        h.with(|ctx| ctx.toast.clone().set(None));
+
+        h.with(|ctx| kill(ctx, "nightly"));
+        h.settle();
+        assert_eq!(h.toast().as_deref(), Some(OFFLINE), "killing a run");
+        h.with(|ctx| ctx.toast.clone().set(None));
+
+        h.with(|ctx| run_now(ctx, "nightly"));
+        h.settle();
+        assert_eq!(h.toast().as_deref(), Some(OFFLINE), "running now");
+        h.with(|ctx| {
+            assert!(
+                ctx.scheduler.started_here.peek().is_empty(),
+                "the busy dot was lit for a request that was never sent, and \
+                 nothing will ever take it off: the flag's life is the \
+                 request's, and there was no request"
+            );
+        });
+    }
+
+    /// The fetches are silent when there is no socket, and the mutations above
+    /// are not. The difference is deliberate: the connection badge already
+    /// says the phone is offline, so a toast on top of it says it twice — but
+    /// a tap on a *button* has to be answered, because nothing else on the
+    /// screen moves. What a fetch must not do either way is spoil what is
+    /// already on screen: a job opened while offline is meant to stay
+    /// readable, and a spinner armed here has no request behind it to stop it.
+    #[test]
+    fn the_fetches_say_nothing_when_there_is_no_socket_and_spoil_nothing() {
+        let mut h = Harness::offline();
+        h.with(|ctx| {
+            let (mut list, mut history) = (ctx.scheduler.list, ctx.scheduler.history);
+            list.write()
+                .settle(vec![job("nightly", "0 0 2 * * *", false, false)]);
+            open(ctx, "nightly");
+            history
+                .write()
+                .settle(vec![session("run-1", Some("/home"))]);
+            refresh(ctx);
+            load_history(ctx, "nightly");
+        });
+        h.poll();
+
+        assert_eq!(
+            h.toast(),
+            None,
+            "a fetch with no socket said what the connection badge is already saying"
+        );
+        assert_eq!(
+            h.jobs(),
+            ["nightly"],
+            "a fetch that never left the device emptied the list it could not replace"
+        );
+        assert_eq!(h.runs(), ["run-1"]);
+        h.with(|ctx| {
+            assert!(
+                !ctx.scheduler.list.peek().loading && !ctx.scheduler.history.peek().loading,
+                "the spinner is armed with no request behind it to ever stop it"
+            );
+        });
+    }
+
+    // ------------------------------------------------------------ the fetch
+
+    /// The first visit fetches, and only the first. `ensure_loaded` runs from
+    /// the list's connection-reactive effect, so one that asked again on a
+    /// list it already had would put a request on the wire every time you
+    /// walked back into the tab.
+    #[test]
+    fn the_first_visit_fetches_the_list_and_a_second_one_does_not() {
+        let (mut h, server) = Harness::connected(happy);
+        h.with(ensure_loaded);
+        h.settle();
+        assert_eq!(h.jobs(), ["nightly"], "the first visit fetched nothing");
+        h.with(ensure_loaded);
+        h.settle();
+        assert_eq!(
+            server.count("list"),
+            1,
+            "arriving at a list already in hand asked for it again"
+        );
+        // The pull gesture is the loud one, and it always asks.
+        h.with(refresh);
+        h.settle();
+        assert_eq!(
+            server.count("list"),
+            2,
+            "the pull gesture asked for nothing"
+        );
+    }
+
+    /// One gesture for both scrollers: the dot on a row and the buttons on
+    /// that row's detail are the same fact, so a pull has to ask for both
+    /// halves of what is on screen.
+    #[test]
+    fn the_pull_gesture_asks_for_the_list_and_for_the_open_jobs_runs() {
+        let (mut h, server) = Harness::connected(happy);
+        h.with(pull_refresh);
+        h.settle();
+        assert_eq!(
+            server.methods(),
+            ["list"],
+            "a pull on the list fetched a history nothing is showing"
+        );
+
+        h.with(|ctx| open(ctx, "nightly"));
+        h.with(pull_refresh);
+        h.settle();
+        assert_eq!(
+            server.count("sessions/list"),
+            1,
+            "the runs were not re-read"
+        );
+        assert_eq!(
+            server.params("sessions/list", 0),
+            json!({ "scheduleId": "nightly", "limit": RUN_HISTORY }),
+        );
+        assert_eq!(h.runs(), ["run-1"]);
+    }
+
+    /// The poll is quiet and the pull is loud, and that is the whole reason
+    /// `poll_once` does not go through `load_remote`. A tick that armed the
+    /// spinner would put the screen into "Loading…" every five seconds
+    /// forever; a tick that reported a transient failure would stack a
+    /// sentence on the screen every five seconds while a tailnet blinked —
+    /// over a list that is still perfectly readable.
+    #[test]
+    fn a_poll_tick_keeps_a_readable_list_and_says_nothing_about_a_hiccup() {
+        fn flaky(method: &str, params: &Value) -> Reply {
+            if short(method) == "list" {
+                return rpc_error(-32000, "the scheduler is having a moment");
+            }
+            happy(method, params)
+        }
+        let (mut h, _server) = Harness::connected(flaky);
+        h.with(|ctx| {
+            let mut list = ctx.scheduler.list;
+            list.write()
+                .settle(vec![job("nightly", "0 0 2 * * *", false, false)]);
+        });
+
+        h.poll();
+        assert_eq!(
+            h.jobs(),
+            ["nightly"],
+            "a failed tick threw away the list the reader was looking at"
+        );
+        assert_eq!(
+            h.toast(),
+            None,
+            "the tick reported a hiccup the connection badge is already reporting"
+        );
+        h.with(|ctx| {
+            let list = ctx.scheduler.list.peek();
+            assert!(!list.loading, "the tick armed the pull spinner");
+            assert_eq!(list.sticky, None, "the tick left a failure on the screen");
+        });
+
+        // The pull gesture, over the same failure, does report it — that
+        // difference is the point.
+        h.with(refresh);
+        h.settle();
+        assert_eq!(
+            h.toast().as_deref(),
+            Some("the scheduler is having a moment"),
+            "a pull that failed said nothing, so the gesture looks broken"
+        );
+    }
+
+    /// `-32601` is goose's own signal that the server was started without
+    /// `--enable-scheduler`. Latched rather than shrugged off: it is a fact
+    /// about the server, and it is what makes the screen explain itself
+    /// instead of showing an empty list with a Retry that cannot work.
+    #[test]
+    fn a_server_with_the_scheduler_switched_off_is_remembered_by_the_poll() {
+        fn switched_off(_method: &str, _params: &Value) -> Reply {
+            rpc_error(-32601, "Scheduled recipe execution is not enabled")
+        }
+        let (mut h, _server) = Harness::connected(switched_off);
+        h.with(|ctx| {
+            let mut list = ctx.scheduler.list;
+            list.write()
+                .settle(vec![job("nightly", "0 0 2 * * *", false, false)]);
+        });
+        h.poll();
+        h.with(|ctx| {
+            let list = ctx.scheduler.list.peek();
+            assert!(
+                list.unsupported,
+                "the screen goes on showing a list of jobs a server without \
+                 --enable-scheduler cannot run"
+            );
+            assert!(list.items.is_empty());
+        });
+        assert_eq!(
+            h.toast(),
+            None,
+            "a switched-off feature was toasted as a failure"
+        );
+    }
+
+    /// A run that just finished has written a session the history does not
+    /// have, and the history is the best thing on this screen — so the tick
+    /// that noticed the dot go out is the right moment to fetch it, rather
+    /// than making somebody pull.
+    #[test]
+    fn a_poll_that_sees_the_open_jobs_run_end_re_reads_its_history() {
+        let (mut h, server) = Harness::connected(happy);
+        h.with(|ctx| {
+            open(ctx, "nightly");
+            let mut list = ctx.scheduler.list;
+            list.write()
+                .settle(vec![job("nightly", "0 0 2 * * *", true, false)]);
+        });
+        h.poll();
+        assert_eq!(
+            h.runs(),
+            ["run-1"],
+            "the run that just ended is missing from the history until the \
+             reader pulls"
+        );
+        assert_eq!(server.count("sessions/list"), 1);
+    }
+
+    /// The other half of the same rule: a tick that changed nothing about the
+    /// open job must not fetch its history. At the busy cadence that is a
+    /// second request every five seconds, for a list that did not move.
+    #[test]
+    fn a_poll_that_changes_nothing_fetches_no_history() {
+        let (mut h, server) = Harness::connected(happy);
+        h.with(|ctx| {
+            open(ctx, "nightly");
+            let mut list = ctx.scheduler.list;
+            list.write()
+                .settle(vec![job("nightly", "0 0 2 * * *", false, false)]);
+        });
+        h.poll();
+        assert_eq!(
+            server.count("sessions/list"),
+            0,
+            "every tick refetches the history, at up to one request per five seconds"
+        );
+    }
+
+    /// Two opens in quick succession put two requests in flight for one slot,
+    /// and they answer in whatever order the server chooses. The slot belongs
+    /// to the newest open, so the older answer is dropped — settling it would
+    /// put job A's runs under job B's title.
+    #[test]
+    fn a_history_answer_for_a_job_that_is_no_longer_open_is_dropped() {
+        fn slow_for_nightly(method: &str, params: &Value) -> Reply {
+            if short(method) == "sessions/list" {
+                let id = params["scheduleId"].as_str().unwrap_or_default();
+                let delay = if id == "nightly" {
+                    Duration::from_millis(60)
+                } else {
+                    Duration::ZERO
+                };
+                return (
+                    delay,
+                    Ok(json!({ "sessions": [wire_session(&format!("run-of-{id}"))] })),
+                );
+            }
+            happy(method, params)
+        }
+        let (mut h, _server) = Harness::connected(slow_for_nightly);
+        h.with(|ctx| {
+            load_history(ctx, "nightly");
+            load_history(ctx, "weekly");
+        });
+        h.settle();
+        h.with(|ctx| {
+            assert_eq!(ctx.scheduler.history_of.peek().as_deref(), Some("weekly"));
+        });
+        assert_eq!(
+            h.runs(),
+            ["run-of-weekly"],
+            "the slower answer, for a job that is no longer open, overwrote the \
+             open one's runs"
+        );
+    }
+
+    /// A failure with nothing behind it stays on screen; a failure over a
+    /// history you can still read is a toast that fades. Both come out of the
+    /// same call, and getting them the wrong way round means either an empty
+    /// screen that says nothing or a sentence you cannot dismiss.
+    #[test]
+    fn a_history_that_will_not_load_is_stated_where_there_is_room_for_it() {
+        fn no_sessions(method: &str, params: &Value) -> Reply {
+            if short(method) == "sessions/list" {
+                return rpc_error(-32000, "history is unavailable");
+            }
+            happy(method, params)
+        }
+        let (mut h, _server) = Harness::connected(no_sessions);
+
+        h.with(|ctx| load_history(ctx, "nightly"));
+        h.settle();
+        h.with(|ctx| {
+            assert_eq!(
+                ctx.scheduler.history.peek().sticky.as_deref(),
+                Some("history is unavailable"),
+                "the detail says \"No runs yet\" about runs it failed to read"
+            );
+        });
+        assert_eq!(
+            h.toast(),
+            None,
+            "a failure with an empty screen behind it was toasted away"
+        );
+
+        // With runs already on screen the failure is a toast instead: the
+        // list stays readable.
+        h.with(|ctx| {
+            let mut history = ctx.scheduler.history;
+            history
+                .write()
+                .settle(vec![session("run-1", Some("/home"))]);
+            load_history(ctx, "nightly");
+        });
+        h.settle();
+        assert_eq!(h.toast().as_deref(), Some("history is unavailable"));
+        assert_eq!(h.runs(), ["run-1"], "a failed refetch emptied the history");
+    }
+
+    // -------------------------------------------------------- the mutations
+
+    /// What is shown is what the server holds: the cadence is re-listed
+    /// rather than patched onto the row, and the toast is the sheet's answer
+    /// in words rather than the cron it just sent.
+    #[test]
+    fn saving_a_cadence_says_what_it_is_now_and_re_reads_the_list() {
+        let (mut h, server) = Harness::connected(happy);
+        h.with(|ctx| set_cadence(ctx, "nightly", "0 30 9 * * 1-5"));
+        h.settle();
+        assert_eq!(
+            h.toast().as_deref(),
+            Some("Runs every weekday at 9:30 AM"),
+            "the sheet closed without saying what it saved"
+        );
+        assert_eq!(
+            server.params("update", 0),
+            json!({ "scheduleId": "nightly", "cron": "0 30 9 * * 1-5" }),
+        );
+        assert_eq!(
+            server.methods(),
+            ["update", "list"],
+            "the cadence was saved and the screen went on showing the old one"
+        );
+    }
+
+    /// A write that failed must not be followed by a re-list dressed up as a
+    /// success, and the sentence has to name what did not happen.
+    #[test]
+    fn a_cadence_that_would_not_save_says_so_and_re_reads_nothing() {
+        fn refuses_update(method: &str, params: &Value) -> Reply {
+            if short(method) == "update" {
+                return rpc_error(-32002, "no such schedule");
+            }
+            happy(method, params)
+        }
+        let (mut h, server) = Harness::connected(refuses_update);
+        h.with(|ctx| set_cadence(ctx, "nightly", "0 30 9 * * 1-5"));
+        h.settle();
+        assert_eq!(
+            h.toast().as_deref(),
+            Some("Cadence not saved: no such schedule")
+        );
+        assert_eq!(server.methods(), ["update"]);
+    }
+
+    /// One control, two methods — and two sentences, because "Pause failed"
+    /// under a button that says Resume names the wrong thing.
+    #[test]
+    fn a_pause_and_a_resume_fail_in_their_own_words() {
+        fn refuses_both(method: &str, params: &Value) -> Reply {
+            match short(method) {
+                "pause" | "unpause" => rpc_error(-32002, "no such schedule"),
+                _ => happy(method, params),
+            }
+        }
+        let (mut h, server) = Harness::connected(refuses_both);
+        h.with(|ctx| set_paused(ctx, "nightly", true));
+        h.settle();
+        assert_eq!(h.toast().as_deref(), Some("Pause failed: no such schedule"));
+
+        h.with(|ctx| set_paused(ctx, "nightly", false));
+        h.settle();
+        assert_eq!(
+            h.toast().as_deref(),
+            Some("Resume failed: no such schedule")
+        );
+        assert_eq!(
+            server.methods(),
+            ["pause", "unpause"],
+            "the toggle sent one method for both directions"
+        );
+    }
+
+    /// A pause that worked says nothing and re-reads instead: the row's own
+    /// dot is the answer, and a toast repeating it is a sentence the reader
+    /// has to dismiss to see what they just did.
+    #[test]
+    fn pausing_re_reads_the_list_rather_than_flipping_the_row_in_place() {
+        let (mut h, server) = Harness::connected(happy);
+        h.with(|ctx| set_paused(ctx, "nightly", true));
+        h.settle();
+        assert_eq!(server.methods(), ["pause", "list"]);
+        assert_eq!(h.jobs(), ["nightly"]);
+        assert_eq!(
+            h.toast(),
+            None,
+            "a successful pause toasted over its own row"
+        );
+    }
+
+    /// The detail of a job that no longer exists has nothing to show, so a
+    /// delete that succeeded from it takes the screen back with it — and only
+    /// when it is *that* job: deleting one row must not close the detail of
+    /// another.
+    #[test]
+    fn deleting_the_open_job_takes_the_screen_back_to_the_list() {
+        let (mut h, _server) = Harness::connected(happy);
+        h.with(|ctx| {
+            open(ctx, "nightly");
+            delete(ctx, "weekly");
+        });
+        h.settle();
+        h.with(|ctx| {
+            assert_eq!(
+                ctx.scheduler.open.peek().as_deref(),
+                Some("nightly"),
+                "deleting one job closed another job's detail"
+            );
+        });
+
+        h.with(|ctx| delete(ctx, "nightly"));
+        h.settle();
+        h.with(|ctx| {
+            assert!(
+                matches!(*ctx.scheduler.screen.peek(), Screen::List),
+                "the detail of a deleted job is still on screen, showing a job \
+                 that is gone"
+            );
+            assert_eq!(ctx.scheduler.open.peek().as_deref(), None);
+        });
+    }
+
+    #[test]
+    fn a_delete_that_failed_says_so_and_leaves_the_detail_alone() {
+        fn refuses_delete(method: &str, params: &Value) -> Reply {
+            if short(method) == "delete" {
+                return rpc_error(-32002, "no such schedule");
+            }
+            happy(method, params)
+        }
+        let (mut h, _server) = Harness::connected(refuses_delete);
+        h.with(|ctx| {
+            open(ctx, "nightly");
+            delete(ctx, "nightly");
+        });
+        h.settle();
+        assert_eq!(
+            h.toast().as_deref(),
+            Some("Delete failed: no such schedule")
+        );
+        h.with(|ctx| {
+            assert_eq!(
+                ctx.scheduler.open.peek().as_deref(),
+                Some("nightly"),
+                "the detail of a job that is still there was closed anyway"
+            );
+        });
+    }
+
+    /// The advisory flag outlives the request that set it only until that
+    /// request resolves — but a kill resolves a *different* request, so it has
+    /// to clear the flag itself. Otherwise the row keeps a busy dot on a job
+    /// that is not running, and the poll cannot take it off: the flag only
+    /// ever promotes.
+    #[test]
+    fn killing_a_run_this_device_started_takes_its_dot_back_off() {
+        let (mut h, server) = Harness::connected(happy);
+        h.with(|ctx| {
+            let (mut tab, mut started) = (ctx.tab, ctx.scheduler.started_here);
+            tab.set(Tab::Scheduler);
+            started.write().insert("nightly".to_owned());
+            kill(ctx, "nightly");
+        });
+        h.settle();
+        h.with(|ctx| {
+            assert!(
+                !ctx.scheduler.started_here.peek().contains("nightly"),
+                "a killed run keeps a busy dot forever: the poll only ever \
+                 promotes, so nothing can take this flag off"
+            );
+        });
+        assert_eq!(
+            h.toast().as_deref(),
+            Some("Stopped. The schedule is still on.")
+        );
+        assert_eq!(
+            server.params("running-job/kill", 0),
+            json!({ "jobId": "nightly" }),
+        );
+        assert_eq!(server.methods(), ["running-job/kill", "list"]);
+    }
+
+    #[test]
+    fn a_kill_that_failed_says_the_run_is_still_going() {
+        fn refuses_kill(method: &str, params: &Value) -> Reply {
+            if short(method) == "running-job/kill" {
+                return rpc_error(-32602, "no job is running");
+            }
+            happy(method, params)
+        }
+        let (mut h, server) = Harness::connected(refuses_kill);
+        h.with(|ctx| {
+            let mut tab = ctx.tab;
+            tab.set(Tab::Scheduler);
+            kill(ctx, "nightly");
+        });
+        h.settle();
+        assert_eq!(
+            h.toast().as_deref(),
+            Some("Could not stop it: no job is running")
+        );
+        assert_eq!(
+            server.methods(),
+            ["running-job/kill"],
+            "a kill that failed re-listed as though it had worked"
+        );
+    }
+
+    /// The re-fetch a mutation earns, in full: the list, *and* the open job's
+    /// runs. Killing a run is the moment the history gains a row, and the
+    /// history is the best thing on this screen — leaving it to the poll means
+    /// the screen the tap came from is the one screen that does not update.
+    #[test]
+    fn killing_the_open_jobs_run_re_reads_that_jobs_runs_too() {
+        let (mut h, server) = Harness::connected(happy);
+        h.with(|ctx| {
+            let mut tab = ctx.tab;
+            tab.set(Tab::Scheduler);
+            open(ctx, "nightly");
+            kill(ctx, "nightly");
+        });
+        h.settle();
+        assert_eq!(
+            server.methods(),
+            ["running-job/kill", "list", "sessions/list"]
+        );
+        assert_eq!(
+            h.runs(),
+            ["run-1"],
+            "the run that was just stopped is missing from the history it wrote"
+        );
+    }
+
+    /// A mutation can resolve long after the screen is gone — `run-now`
+    /// answers when the run ends, minutes later — and a phone in a pocket
+    /// must not put a request on the wire because something finished in the
+    /// background.
+    #[test]
+    fn a_mutation_that_lands_after_you_left_the_tab_fetches_nothing() {
+        let (mut h, server) = Harness::connected(happy);
+        h.with(|ctx| {
+            let mut tab = ctx.tab;
+            tab.set(Tab::Home);
+            open(ctx, "nightly");
+            kill(ctx, "nightly");
+        });
+        h.settle();
+        assert_eq!(
+            server.methods(),
+            ["running-job/kill"],
+            "a background mutation woke the socket for a screen nobody is looking at"
+        );
+    }
+
+    /// The other guard on the same re-fetch: `load_history` claims
+    /// `history_of` as its first act, so firing it for a job whose detail has
+    /// already been closed re-arms the identity check against an id that is
+    /// not on screen — which is the one thing that check exists to get right.
+    #[test]
+    fn a_mutation_on_a_job_nobody_has_open_re_reads_no_history() {
+        let (mut h, server) = Harness::connected(happy);
+        h.with(|ctx| {
+            let mut tab = ctx.tab;
+            tab.set(Tab::Scheduler);
+            kill(ctx, "nightly");
+        });
+        h.settle();
+        assert_eq!(server.count("sessions/list"), 0);
+        h.with(|ctx| {
+            assert_eq!(
+                ctx.scheduler.history_of.peek().as_deref(),
+                None,
+                "the closed detail's identity check was re-armed against a job \
+                 that is not on screen"
+            );
+        });
+    }
+
+    // ---------------------------------------------------------- the run-now
+
+    /// The dot and the toast happen *before* the await, because the request
+    /// does not answer until the run is over — a whole agent turn. And a
+    /// second tap while the first is out must start nothing: `run-now` is not
+    /// idempotent on the server, so it would be a second run.
+    #[test]
+    fn run_now_lights_the_dot_at_once_and_a_second_tap_starts_nothing() {
+        fn slow_run(method: &str, params: &Value) -> Reply {
+            if short(method) == "run-now" {
+                return (
+                    Duration::from_millis(60),
+                    Ok(json!({ "status": "completed", "sessionId": "run-9" })),
+                );
+            }
+            happy(method, params)
+        }
+        let (mut h, server) = Harness::connected(slow_run);
+        h.with(|ctx| {
+            let mut tab = ctx.tab;
+            tab.set(Tab::Scheduler);
+            run_now(ctx, "nightly");
+        });
+        h.with(|ctx| {
+            assert!(
+                ctx.scheduler.started_here.peek().contains("nightly"),
+                "the dot waits on a request that is minutes away, so the tap \
+                 looks like it did nothing"
+            );
+        });
+        assert_eq!(
+            h.toast().as_deref(),
+            Some("Started — it'll show up in this job's history")
+        );
+
+        h.with(|ctx| run_now(ctx, "nightly"));
+        h.settle();
+        assert_eq!(
+            server.count("run-now"),
+            1,
+            "a second tap started a second run"
+        );
+        h.with(|ctx| {
+            assert!(
+                ctx.scheduler.started_here.peek().is_empty(),
+                "the advisory flag outlived the request whose life it is"
+            );
+        });
+    }
+
+    /// A cancellation is the one `run-now` outcome worth a sentence: it is the
+    /// only one where the thing that was asked for did not happen. A clean
+    /// finish says nothing, because the toast would land minutes later, quite
+    /// possibly on another screen, to repeat what the new history row says.
+    #[test]
+    fn only_a_cancelled_run_is_reported_when_it_ends() {
+        fn cancels(method: &str, params: &Value) -> Reply {
+            if short(method) == "run-now" {
+                return ok(json!({ "status": "cancelled", "sessionId": null }));
+            }
+            happy(method, params)
+        }
+        let (mut h, _server) = Harness::connected(cancels);
+        h.with(|ctx| run_now(ctx, "nightly"));
+        h.settle();
+        assert_eq!(h.toast().as_deref(), Some("That run was cancelled"));
+
+        // A completed one leaves the "Started" toast as the last word.
+        let (mut clean, _server) = Harness::connected(happy);
+        clean.with(|ctx| run_now(ctx, "nightly"));
+        clean.settle();
+        assert_eq!(
+            clean.toast().as_deref(),
+            Some("Started — it'll show up in this job's history"),
+            "a run that finished cleanly toasted minutes after the tap, quite \
+             possibly on another screen"
+        );
+    }
+
+    /// A dead socket says nothing, and that silence is deliberate: this client
+    /// stopped listening and the job did not stop running, so "Run failed"
+    /// would be a false statement about a run that is going fine. The
+    /// connection badge already reports the part that did fail.
+    #[test]
+    fn a_socket_that_dies_under_a_run_is_not_reported_as_a_failed_run() {
+        fn hangs_up(method: &str, params: &Value) -> Reply {
+            if short(method) == "run-now" {
+                return hang_up();
+            }
+            happy(method, params)
+        }
+        let (mut h, _server) = Harness::connected(hangs_up);
+        h.with(|ctx| run_now(ctx, "nightly"));
+        h.settle();
+        assert_eq!(
+            h.toast().as_deref(),
+            Some("Started — it'll show up in this job's history"),
+            "a socket this client lost was reported as a run that failed"
+        );
+        h.with(|ctx| {
+            assert!(
+                ctx.scheduler.started_here.peek().is_empty(),
+                "a request that died on a dead socket pinned the dot on forever"
+            );
+        });
+    }
+
+    /// The failure that *is* the run's: goose refused it. That one gets a
+    /// sentence, because nothing else on the screen will ever show a run that
+    /// never started.
+    #[test]
+    fn a_run_goose_refused_is_reported() {
+        fn refuses_run(method: &str, params: &Value) -> Reply {
+            if short(method) == "run-now" {
+                return rpc_error(-32002, "no such schedule");
+            }
+            happy(method, params)
+        }
+        let (mut h, _server) = Harness::connected(refuses_run);
+        h.with(|ctx| run_now(ctx, "nightly"));
+        h.settle();
+        assert_eq!(h.toast().as_deref(), Some("Run failed: no such schedule"));
     }
 }
