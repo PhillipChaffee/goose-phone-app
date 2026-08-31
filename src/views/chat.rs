@@ -28,7 +28,7 @@ const SCROLL_ID: &str = "chat-scroll";
 /// Read by two things that are never on screen together: the header below,
 /// and — on the desktop — the window's own bar, which takes the heading out of
 /// the pane and paints it in `.shell-chrome` instead
-/// (`src/shell/desktop.rs`, `assets/desktop.css`).
+/// (`src/shell/desktop/mod.rs`, `assets/desktop.css`).
 pub(crate) fn crumb(ctx: &crate::state::AppCtx) -> crate::nav::Crumb {
     crate::nav::Crumb::plain(ctx.chat.read().title.clone())
 }

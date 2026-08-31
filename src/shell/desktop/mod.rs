@@ -781,13 +781,13 @@ mod tests {
     /// agreeing.
     #[test]
     fn the_stylesheet_breaks_where_the_arithmetic_says() {
-        let sheet = include_str!("../../assets/desktop.css");
+        let sheet = include_str!("../../../assets/desktop.css");
         for edge in [THREE_PANE, TWO_PANE] {
             let rule = format!("@media (max-width: {}px)", edge - 1);
             assert!(
                 sheet.contains(&rule),
                 "assets/desktop.css has no `{rule}`, so the columns do not \
-                 reflow where src/shell/desktop.rs says they do"
+                 reflow where src/shell/desktop/mod.rs says they do"
             );
         }
     }
@@ -798,7 +798,7 @@ mod tests {
     // thing the stylesheet reads", which is a question no compiler in this
     // build can answer: Rust writes an attribute or a class, CSS is the only
     // thing that reads it, and nothing connects them. They were written as
-    // `include_str!("desktop.rs")` and a `contains` — and the file that pulls
+    // `include_str!` of the shell's own file and a `contains` — and the file that pulls
     // in is THIS one, test module and all, so each needle was supplied by the
     // assertion asking for it and the suite could not fail. Measured: with
     // `use_fullscreen`, its call site and the `data-fullscreen` attribute all
@@ -824,10 +824,10 @@ mod tests {
     // `data-fullscreen` on `.shell` itself before it measures, so it would
     // report a clean grid against a shell that writes neither.
 
-    /// `src/shell/desktop.rs` with this test module, and every comment, taken
+    /// `src/shell/desktop/mod.rs` with this test module, and every comment, taken
     /// out of it.
     fn shell_code() -> String {
-        crate::selfscan::code_of("src/shell/desktop.rs", include_str!("desktop.rs"))
+        crate::selfscan::code_of("src/shell/desktop/mod.rs", include_str!("mod.rs"))
     }
 
     /// The attributes on the `.shell` div — the element `assets/desktop.css`
@@ -887,7 +887,7 @@ mod tests {
     #[test]
     fn the_sidebar_writes_the_classes_the_sheet_styles() {
         let card = nav_card();
-        let sheet = include_str!("../../assets/desktop.css");
+        let sheet = include_str!("../../../assets/desktop.css");
         for class in ["plane-switch", "plane-seg", "nav-footer"] {
             assert!(
                 card.contains(&format!("\"{class}")),
@@ -972,7 +972,7 @@ mod tests {
         let after = code.split_once(opens).map(|(_, rest)| rest);
         assert!(
             after.is_some(),
-            "src/shell/desktop.rs no longer contains `{opens}`, so the block \
+            "src/shell/desktop/mod.rs no longer contains `{opens}`, so the block \
              this test reads is not there to be read"
         );
         let after = after.unwrap_or_default();
@@ -996,7 +996,7 @@ mod tests {
     ///
     /// The one scan in this module that could already fail, and it was
     /// checked rather than assumed: `class: "traffic-slotz"` in the render
-    /// fails it with "src/shell/desktop.rs no longer renders .traffic-slot",
+    /// fails it with "src/shell/desktop/mod.rs no longer renders .traffic-slot",
     /// because the needle is `class: "…"` and the list below holds the bare
     /// name. It reads `shell_code()` all the same, so that this stays true of
     /// the next name somebody adds to that list.
@@ -1004,8 +1004,8 @@ mod tests {
     fn every_class_the_shell_renders_is_styled_somewhere() {
         let shell = shell_code();
         let sheets = concat!(
-            include_str!("../../assets/desktop.css"),
-            include_str!("../../assets/platform/macos.css"),
+            include_str!("../../../assets/desktop.css"),
+            include_str!("../../../assets/platform/macos.css"),
         );
         // A selector, not a substring. `.contains(".window-drag")` is
         // satisfied by `.window-draggg`, so the first draft of this test
@@ -1035,7 +1035,7 @@ mod tests {
         ] {
             assert!(
                 shell.contains(&format!("class: \"{class}\"")),
-                "src/shell/desktop.rs no longer renders .{class}"
+                "src/shell/desktop/mod.rs no longer renders .{class}"
             );
             assert!(
                 styled(class),
@@ -1062,7 +1062,7 @@ mod tests {
     /// band.
     ///
     /// REPRODUCED, because as shipped it could not fail. Both shell-side
-    /// assertions read `include_str!("desktop.rs")`, which includes this
+    /// assertions read `include_str!` of this very file, which includes this
     /// module, so the two needles below were supplied by the two lines
     /// containing them: delete `crate::views::ConnBadge {}` from the band and
     /// `"data-detail"` from the `.shell` div and all ten tests in this module
@@ -1072,7 +1072,7 @@ mod tests {
     /// data-detail" — and putting them back is green again.
     #[test]
     fn the_pane_gives_up_what_the_window_bar_took() {
-        let sheet = include_str!("../../assets/desktop.css");
+        let sheet = include_str!("../../../assets/desktop.css");
 
         assert!(
             chrome_band().contains("crate::views::ConnBadge {}"),
@@ -1108,15 +1108,15 @@ mod tests {
     /// REPRODUCED, and it is the reason `shell_code()` exists. Delete
     /// `use_fullscreen`, its call site and the attribute — the whole feature,
     /// leaving nothing but the doc comment — and the version of this test that
-    /// read `include_str!("desktop.rs")` passed, along with the other 230:
+    /// read the shell's own source passed, along with the other 230:
     /// both of its needles were on the two assertion lines below. Reading the
     /// `.shell` div's own attributes instead, that same deletion fails here
     /// with "the `.shell` div must SET the attribute the sheet reads"
     /// (measured: 234 passed, 1 failed); restoring the feature is green again.
     #[test]
     fn the_window_chrome_is_reserved_only_where_the_titlebar_is_hidden() {
-        let desktop = include_str!("../../assets/desktop.css");
-        let macos = include_str!("../../assets/platform/macos.css");
+        let desktop = include_str!("../../../assets/desktop.css");
+        let macos = include_str!("../../../assets/platform/macos.css");
         assert!(
             desktop.contains("--traffic-w: 0px"),
             "assets/desktop.css must default the traffic-light slot to zero — \
@@ -1179,7 +1179,7 @@ mod tests {
     /// data-nav" (measured: 234 passed, 1 failed); restored, it is green.
     #[test]
     fn the_stylesheet_acts_on_the_attribute_the_shell_sets() {
-        let sheet = include_str!("../../assets/desktop.css");
+        let sheet = include_str!("../../../assets/desktop.css");
         for rule in [r#"[data-nav="closed"]"#, ".nav-toggle", ".navcard"] {
             assert!(
                 sheet.contains(rule),
@@ -1222,7 +1222,7 @@ mod tests {
     /// `src/viewport.rs`'s own test guards from the other end.
     #[test]
     fn every_destination_with_a_list_can_be_refreshed_by_name() {
-        let dispatch = include_str!("../viewport.rs");
+        let dispatch = include_str!("../../viewport.rs");
         for dest in DESTINATIONS {
             if dest.root.is_none() {
                 continue;

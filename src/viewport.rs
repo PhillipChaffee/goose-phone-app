@@ -60,7 +60,7 @@ pub(crate) fn use_visual_viewport() {
 // inference exists to drop stayed on, and `assets/platform/macos.css`'s
 // `[data-fullscreen="true"]` block was dead in every window that ever ran.
 //
-// It is now read off the window instead, in `src/shell/desktop.rs`, where the
+// It is now read off the window instead, in `src/shell/desktop/mod.rs`, where the
 // answer is a fact rather than a guess. Kept as a note because the shape of
 // the mistake is worth more than the code was: a heuristic with no test can
 // be wrong for the whole life of a feature and look exactly like one that
@@ -410,7 +410,7 @@ pub(crate) fn use_pull_to_refresh() {
 ///
 /// Three routes arrive here and there is one `match` for exactly that reason:
 /// the phone's pull gesture above, and on the desktop ⌘R and arriving at a
-/// destination (`src/shell/desktop.rs`). A list that could be refreshed by one
+/// destination (`src/shell/desktop/mod.rs`). A list that could be refreshed by one
 /// route and not the others is a list that is stale depending on how you
 /// asked.
 ///

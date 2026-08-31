@@ -116,7 +116,7 @@ fn launch() {
 /// logical (9, 9). So the strip in `assets/desktop.css` is sized to where
 /// macOS actually puts them, and `--traffic-w` records where they end.
 ///
-/// `src/shell/desktop.rs` renders the region that drags the window: with the
+/// `src/shell/desktop/mod.rs` renders the region that drags the window: with the
 /// bar gone, `AppKit` no longer has a strip of its own to drag by, and a
 /// window you cannot move is a worse bug than a grey bar.
 ///

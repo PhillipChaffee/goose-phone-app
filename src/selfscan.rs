@@ -68,7 +68,7 @@
 pub(crate) fn code_of(file: &str, source: &str) -> String {
     // The cut. `#[cfg(test)]` is where the test module starts in every file in
     // this crate and it appears exactly once in each of them — checked, in
-    // `src/views/code.rs` and `src/shell/desktop.rs`, which are the two
+    // `src/views/code.rs` and `src/shell/desktop/mod.rs`, which are the two
     // callers. A file with no test module at all is not an error: the whole of
     // it is then code, which is what `map_or` hands back, and the
     // post-condition below is what decides whether that was true.
@@ -123,7 +123,7 @@ mod tests {
     /// The bug, in miniature, on a fixture rather than on a real file.
     ///
     /// A source whose test module names a thing its code no longer does — the
-    /// exact shape `src/shell/desktop.rs` shipped — and the assertion is that
+    /// exact shape `src/shell/desktop/mod.rs` shipped — and the assertion is that
     /// the scan does not hand it back. Written as a fixture because the real
     /// files are supposed to be correct, so a test that read one of them could
     /// only ever say "still fine": this one can say "the mechanism works",

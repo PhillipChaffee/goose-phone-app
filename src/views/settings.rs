@@ -14,7 +14,7 @@ use crate::views::Confirm;
 /// Read by two things that are never on screen together: this view's own
 /// header, and — on the desktop — the window's bar, which takes the heading
 /// out of the pane and paints it in `.shell-chrome` instead
-/// (`src/shell/desktop.rs`). One expression, so the window and the pane cannot
+/// (`src/shell/desktop/mod.rs`). One expression, so the window and the pane cannot
 /// end up calling the same screen two different things.
 pub(crate) fn crumb() -> Crumb {
     Crumb::plain("Settings")

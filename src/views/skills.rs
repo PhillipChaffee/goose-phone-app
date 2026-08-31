@@ -44,7 +44,7 @@ pub fn SkillsView() -> Element {
             // On the phone: pull, not a button. A refresh control in the bar
             // would be a 44px invitation to re-download every skill's full
             // text. The desktop has no pull; arriving here re-fetches, and ⌘R
-            // does the same re-download on demand (`src/shell/desktop.rs`) —
+            // does the same re-download on demand (`src/shell/desktop/mod.rs`) —
             // which for Skills is the only refresh there is either way,
             // because `ensure_loaded` is a cache.
             "data-refresh": "skills",
@@ -156,7 +156,7 @@ fn file_count(files: usize) -> String {
 /// Read by two things that are never on screen together: the header below,
 /// and — on the desktop — the window's own bar, which takes the heading out of
 /// the pane and paints it in `.shell-chrome` instead
-/// (`src/shell/desktop.rs`, `assets/desktop.css`). The `None` arm is the
+/// (`src/shell/desktop/mod.rs`, `assets/desktop.css`). The `None` arm is the
 /// view's own dead-end fallback, for the reason stated there.
 pub(crate) fn crumb(ctx: &AppCtx) -> Crumb {
     (ctx.skills.open)().map_or_else(
