@@ -474,20 +474,19 @@ mod tests {
     /// So the alias is what `crate::state` is required to name, and this is
     /// what the alias is required to be.
     ///
-    /// `set_directory` writes a process-wide `OnceLock`, so this test owns it
-    /// for the whole binary; `main` is not run in a test binary, so nothing
-    /// else has claimed it. Pointed at a temp path rather than the real app
-    /// directory, so `cargo test` writes nothing anyone would keep.
+    /// `set_directory` writes a process-wide `OnceLock` and `.unwrap()`s the
+    /// result, so exactly ONE caller in a test binary may set it. This test
+    /// used to be that caller and claimed the binary for itself; it is not any
+    /// more, because `crate::testkit` has to reach the same storage to mount a
+    /// view and the second caller panics. `testkit::storage_dir` is the single
+    /// owner and hands back the path — still a temp path, so `cargo test`
+    /// writes nothing anyone would keep.
     #[test]
     fn the_journals_storage_backing_really_reaches_the_disk() {
         use super::Backing;
         use dioxus_sdk_storage::StorageBacking;
 
-        let dir = std::env::temp_dir().join(format!("goose-mobile-journal-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        // What `set_dir!()` expands to on a non-wasm target, minus the macro,
-        // which only takes a literal.
-        dioxus_sdk_storage::set_directory(dir.clone());
+        let dir = crate::testkit::storage_dir();
 
         let mut journal = Vec::new();
         note(&mut journal, ask("call_01a0"), NOW);
@@ -501,6 +500,22 @@ mod tests {
         let read: Option<Vec<AskRecord>> = Backing::get(&"lost_asks_test".to_owned());
         assert_eq!(read.as_ref(), Some(&journal));
 
-        let _ = std::fs::remove_dir_all(&dir);
+        // NO `remove_dir_all` HERE, and that is the fix rather than an
+        // omission. This test used to wipe the directory on its way out, back
+        // when it owned it; `crate::testkit::storage_dir` now hands the same
+        // path to every test that mounts a view, and those run concurrently
+        // with this one. `LocalStorage::set` does `create_dir_all` and then
+        // `File::create` as two steps (`client_storage/fs.rs:36-39`), so a
+        // delete landing between them panics the second — and Dioxus swallows
+        // a panic thrown during render, so the symptom is not this test failing
+        // but some unrelated view rendering zero bytes.
+        //
+        // Measured rather than reasoned: 2 failures in 30 `cargo test -p
+        // goose-mobile` runs with the line present, always inside a view mount
+        // and never here, against 0 in 30 with it gone.
+        //
+        // Nothing leaks. `storage_dir` builds a per-process temp path and wipes
+        // it on creation, so the next run starts clean and `cargo test` still
+        // keeps nothing anyone would want.
     }
 }
