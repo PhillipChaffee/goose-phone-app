@@ -110,6 +110,21 @@ dioxus = { version = "0.7.10", features = ["desktop"] }
 [target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
 dioxus = { version = "0.7.10", features = ["mobile"] }
 
+# Test-only, and it buys the difference between a test that EXECUTES a view and
+# one that asserts something about it. Rendering a component in a `VirtualDom`
+# runs its body — which is all coverage counts — but with no way to read the
+# output back, every view test would be `it did not panic`, which is coverage
+# theatre and would make the 95% bar actively misleading.
+#
+# `dioxus-ssr` and not `dioxus = { features = ["ssr"] }`, deliberately: the
+# feature form unions `ssr` into the `dioxus` entry that `dx`'s platform
+# autodetection reads (`dioxus-cli-0.7.10/src/build/renderer.rs:7-30`), and the
+# three measured facts recorded under `[features]` below are all about how
+# easily that detection is broken. A separate dev-dependency cannot reach it.
+# Checked after adding: `dx check` still resolves the desktop renderer.
+[dev-dependencies]
+dioxus-ssr = "0.7"
+
 [lints]
 workspace = true
 

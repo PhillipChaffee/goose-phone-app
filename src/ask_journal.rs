@@ -474,20 +474,19 @@ mod tests {
     /// So the alias is what `crate::state` is required to name, and this is
     /// what the alias is required to be.
     ///
-    /// `set_directory` writes a process-wide `OnceLock`, so this test owns it
-    /// for the whole binary; `main` is not run in a test binary, so nothing
-    /// else has claimed it. Pointed at a temp path rather than the real app
-    /// directory, so `cargo test` writes nothing anyone would keep.
+    /// `set_directory` writes a process-wide `OnceLock` and `.unwrap()`s the
+    /// result, so exactly ONE caller in a test binary may set it. This test
+    /// used to be that caller and claimed the binary for itself; it is not any
+    /// more, because `crate::testkit` has to reach the same storage to mount a
+    /// view and the second caller panics. `testkit::storage_dir` is the single
+    /// owner and hands back the path — still a temp path, so `cargo test`
+    /// writes nothing anyone would keep.
     #[test]
     fn the_journals_storage_backing_really_reaches_the_disk() {
         use super::Backing;
         use dioxus_sdk_storage::StorageBacking;
 
-        let dir = std::env::temp_dir().join(format!("goose-mobile-journal-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        // What `set_dir!()` expands to on a non-wasm target, minus the macro,
-        // which only takes a literal.
-        dioxus_sdk_storage::set_directory(dir.clone());
+        let dir = crate::testkit::storage_dir();
 
         let mut journal = Vec::new();
         note(&mut journal, ask("call_01a0"), NOW);

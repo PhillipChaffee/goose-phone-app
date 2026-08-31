@@ -50,6 +50,11 @@ mod skills;
 
 mod state;
 
+// Mounts a view with a real `AppCtx` under it and hands back the markup.
+// `cfg(test)` like `selfscan` above, so none of it is in any binary.
+#[cfg(test)]
+mod testkit;
+
 mod viewport;
 
 mod views;
