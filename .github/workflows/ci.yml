@@ -81,21 +81,50 @@ jobs:
 
       - uses: taiki-e/install-action@cargo-llvm-cov
 
+      # The same three the check-and-test job installs, and now needed here for
+      # the same reason: measuring `--workspace` builds `goose-mobile`, which
+      # reaches dioxus-desktop -> wry -> webkit2gtk. While this job measured
+      # only the two protocol libraries it had no GUI dependency at all, and
+      # widening the scope to the workspace is what made these load-bearing.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
+
       - uses: Swatinem/rust-cache@v2
 
-      # Coverage is measured on the two protocol libraries: they are the
-      # UI-independent, unit-testable half of the workspace. The Dioxus crate
-      # needs a renderer to execute at all, so counting its lines would report
-      # a number about the test setup rather than about the code.
+      # THE WHOLE WORKSPACE, and it is a gate rather than a report.
+      #
+      # This used to measure the two protocol libraries alone, on the argument
+      # that the Dioxus crate "needs a renderer to execute at all, so counting
+      # its lines would report a number about the test setup rather than about
+      # the code". That argument is now false: `src/testkit.rs` mounts a view
+      # in a VirtualDom with a real `AppCtx` and reads the markup back,
+      # `src/serverkit.rs` puts a real goose on a loopback port in front of an
+      # `AcpClient`, and `src/views/press.rs` dispatches real DOM events into a
+      # mounted dom. Between them the UI crate went from 52% to over 95%.
+      #
+      # `--fail-under-lines 95` is the bar the owner set. It is checked on
+      # LINES rather than regions because a line is the unit a human can point
+      # at in a diff; regions and functions are reported below for context and
+      # gate nothing.
+      #
+      # `--workspace` deliberately includes `crates/mock-goose-server`. It is a
+      # test double rather than shipped code, but it is also 1,700 lines that
+      # the seven wire-level test binaries depend on being correct, and it was
+      # the single largest blind spot here: its `main.rs` and `turn.rs` read
+      # 0.00% for months because the harness SIGKILLed the process and a killed
+      # process never writes its `.profraw`. Closing its stdin instead took
+      # those two files to 78% and 86% without one new test.
       - name: Generate coverage
         run: >
-          cargo llvm-cov --package goose-acp-client --package opencode-client
+          cargo llvm-cov --workspace
+          --fail-under-lines 95
           --lcov --output-path lcov.info
 
       - name: Coverage summary
-        run: >
-          cargo llvm-cov report --package goose-acp-client --package opencode-client
-          --summary-only
+        run: cargo llvm-cov report --workspace --summary-only
 
       # Coveralls authenticates with the GITHUB_TOKEN that Actions provides
       # automatically: no account to create, no repository secret, and it

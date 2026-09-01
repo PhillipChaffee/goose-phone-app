@@ -790,13 +790,23 @@ pub(crate) fn watch(ctx: &AppCtx, info: SessionInfo) {
     crate::state::open_session(ctx, info);
 }
 
+/// The socket in here is `pub(crate)` from the waist down.
+///
+/// [`serve`] and the [`Script`] it takes are the only way anything in this
+/// crate can drive a real [`AcpClient`]: the type has no constructor but
+/// `connect`, so a request body, a reply and every arm behind an `await` were
+/// unreachable until a server existed to put in front of it. `src/recipes.rs`
+/// has the same four shapes of unreachable code — a verdict, a delete that
+/// succeeded, a schedule refused as unsupported — and re-typing a WebSocket
+/// JSON-RPC listener per module would be re-typing the one part of this that
+/// is fiddly rather than the part that is interesting.
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
     reason = "test scaffolding: a harness that cannot start is the failing check"
 )]
-mod tests {
+pub(crate) mod tests {
     use std::cell::RefCell;
     use std::sync::{Arc, Mutex};
 
@@ -1288,17 +1298,17 @@ mod tests {
     /// a second Run now while the first is still out must not start a second
     /// run — and neither can be provoked on a server that answers in the order
     /// it was asked.
-    type Reply = (Duration, Result<Value, Value>);
+    pub(crate) type Reply = (Duration, Result<Value, Value>);
 
     /// What a mock server answers, per method. A plain `fn` and never a
     /// closure, so the whole script of a test is one readable `match`.
-    type Script = fn(&str, &Value) -> Reply;
+    pub(crate) type Script = fn(&str, &Value) -> Reply;
 
-    fn ok(result: Value) -> Reply {
+    pub(crate) fn ok(result: Value) -> Reply {
         (Duration::ZERO, Ok(result))
     }
 
-    fn rpc_error(code: i64, message: &str) -> Reply {
+    pub(crate) fn rpc_error(code: i64, message: &str) -> Reply {
         (
             Duration::ZERO,
             Err(json!({ "code": code, "message": message })),
@@ -1319,12 +1329,20 @@ mod tests {
         method.trim_start_matches("_goose/unstable/schedules/")
     }
 
-    struct Server {
-        base_url: String,
+    pub(crate) struct Server {
+        pub(crate) base_url: String,
         calls: Arc<Mutex<Vec<(String, Value)>>>,
     }
 
     impl Server {
+        /// Every request this server was sent, in order, with its params and
+        /// its method spelled in full. The one accessor that does not assume
+        /// goose's scheduler namespace, so another feature's methods come back
+        /// readable.
+        pub(crate) fn log(&self) -> Vec<(String, Value)> {
+            self.calls.lock().unwrap().clone()
+        }
+
         /// Every request this server was sent, in order, by short name. The
         /// handshake is left out: it is the harness's, not the screen's.
         fn methods(&self) -> Vec<String> {
@@ -1434,22 +1452,7 @@ mod tests {
         }
 
         fn serve(&self, script: Script) -> Server {
-            let listener = self
-                .rt
-                .block_on(async { TcpListener::bind("127.0.0.1:0").await.unwrap() });
-            let port = listener.local_addr().unwrap().port();
-            let calls: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
-            let log = Arc::clone(&calls);
-            self.rt.spawn(async move {
-                while let Ok((socket, _)) = listener.accept().await {
-                    let log = Arc::clone(&log);
-                    tokio::spawn(async move { session_loop(socket, log, script).await });
-                }
-            });
-            Server {
-                base_url: format!("http://127.0.0.1:{port}"),
-                calls,
-            }
+            serve(&self.rt, script)
         }
 
         /// Read or write the context. Signals belong to the virtual DOM's
@@ -1519,6 +1522,28 @@ mod tests {
                     .map(|job| job.id.clone())
                     .collect()
             })
+        }
+    }
+
+    /// A goose that answers `script`, on a loopback port, over plain `ws://`.
+    ///
+    /// `http://` in the base URL is what keeps this certificate-free: `ws_url`
+    /// only reaches for TLS on an `https://` base, so there is no fingerprint
+    /// to pin and nothing to sign.
+    pub(crate) fn serve(rt: &tokio::runtime::Runtime, script: Script) -> Server {
+        let listener = rt.block_on(async { TcpListener::bind("127.0.0.1:0").await.unwrap() });
+        let port = listener.local_addr().unwrap().port();
+        let calls: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+        let log = Arc::clone(&calls);
+        rt.spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let log = Arc::clone(&log);
+                tokio::spawn(async move { session_loop(socket, log, script).await });
+            }
+        });
+        Server {
+            base_url: format!("http://127.0.0.1:{port}"),
+            calls,
         }
     }
 

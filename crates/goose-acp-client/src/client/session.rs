@@ -278,9 +278,14 @@ impl AcpClient {
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    reason = "test assertions: a failing unwrap is the failing check"
+    clippy::panic,
+    reason = "test assertions: a failing unwrap or a wrong-variant panic is the check"
 )]
 mod tests {
+    use std::sync::Arc;
+
+    use tokio::sync::mpsc;
+
     use super::*;
     use crate::types::SessionKind;
 
@@ -392,6 +397,160 @@ mod tests {
         assert_eq!(
             SessionQuery::new(&[SessionKind::User], Some(" deploy ")).query(),
             Some("deploy")
+        );
+    }
+
+    // ---- what each wrapper puts on the wire --------------------------------
+    //
+    // A handle over a channel the test drains itself. Every wrapper below is
+    // one method name and one params object, and both are goose's spelling
+    // rather than this crate's — a mis-keyed field here is a call the server
+    // answers `-32602` to, or worse answers happily while ignoring the half it
+    // could not read.
+
+    fn detached() -> (AcpClient, mpsc::UnboundedReceiver<Cmd>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (
+            AcpClient {
+                tx,
+                unsupported: Arc::default(),
+            },
+            rx,
+        )
+    }
+
+    /// Answer the one request the call under test sends, and hand back the
+    /// method and params it went out with.
+    async fn answer(rx: &mut mpsc::UnboundedReceiver<Cmd>, result: Value) -> (String, Value) {
+        match rx.recv().await {
+            Some(Cmd::Request {
+                method,
+                params,
+                reply,
+            }) => {
+                let _ = reply.send(Ok(result));
+                (method, params)
+            }
+            _ => panic!("the call should have sent exactly one request"),
+        }
+    }
+
+    /// Opening an existing chat. The server replays the whole history as
+    /// `session/update` events before this answers, so a key it cannot read is
+    /// a chat that opens empty with no error anywhere — and `mcpServers` is
+    /// required by the schema even though this client never sends one.
+    #[tokio::test]
+    async fn session_load_names_the_session_and_the_directory() {
+        let (client, mut rx) = detached();
+        let (loaded, sent) = tokio::join!(
+            client.session_load("20260821_1", "/home/demo"),
+            answer(&mut rx, json!({"configOptions": []})),
+        );
+
+        assert_eq!(sent.0, "session/load");
+        assert_eq!(
+            sent.1,
+            json!({"sessionId": "20260821_1", "cwd": "/home/demo", "mcpServers": []})
+        );
+        assert_eq!(
+            loaded.unwrap(),
+            json!({"configOptions": []}),
+            "the reply is handed back whole: the caller reads the options out of it"
+        );
+    }
+
+    /// The discriminator goose reads is `type: "id"` with `value` flattened
+    /// beside it, not nested under it — and the reply is the whole option set,
+    /// which is what the sheet re-renders itself from. A wrong shape here
+    /// changes nothing on the server and leaves the sheet showing the old
+    /// value as if the change had taken.
+    #[tokio::test]
+    async fn set_config_option_sends_the_id_discriminator_and_returns_the_new_set() {
+        let (client, mut rx) = detached();
+        let reply = json!({"configOptions": [
+            {"configId": "model", "name": "Model", "type": "select",
+             "currentValue": "claude-opus-4",
+             "options": [{"value": "claude-opus-4", "name": "Opus 4"},
+                         {"value": "claude-sonnet-4", "name": "Sonnet 4"}]}
+        ]});
+        let (options, sent) = tokio::join!(
+            client.set_config_option("20260821_1", "model", "claude-opus-4"),
+            answer(&mut rx, reply),
+        );
+
+        assert_eq!(sent.0, "session/set_config_option");
+        assert_eq!(
+            sent.1,
+            json!({"sessionId": "20260821_1", "configId": "model",
+                   "type": "id", "value": "claude-opus-4"})
+        );
+
+        let options = options.unwrap();
+        assert_eq!(options.len(), 1, "the caller re-renders from the reply");
+        assert_eq!(options[0].config_id, "model");
+        assert_eq!(options[0].current_label(), Some("Opus 4"));
+    }
+
+    /// A reply that carries no `configOptions` is an empty set rather than an
+    /// error: goose has answered, the option took, and there is nothing for
+    /// the sheet to redraw.
+    #[tokio::test]
+    async fn a_config_reply_with_nothing_in_it_is_not_a_failure() {
+        let (client, mut rx) = detached();
+        let (options, _sent) = tokio::join!(
+            client.set_config_option("20260821_1", "mode", "auto"),
+            answer(&mut rx, json!({})),
+        );
+        assert!(options.unwrap().is_empty());
+    }
+
+    /// Cancelling is a notification, and has to stay one: the request it is
+    /// cancelling is the `session/prompt` still holding the turn open, so a
+    /// `cancel` that waited for a reply would be waiting on the thing it is
+    /// trying to stop.
+    #[test]
+    fn cancel_is_a_notification_naming_the_session() {
+        let (client, mut rx) = detached();
+        client.cancel("20260821_1");
+        match rx.try_recv() {
+            Ok(Cmd::Notify { method, params }) => {
+                assert_eq!(method, "session/cancel");
+                assert_eq!(params, json!({"sessionId": "20260821_1"}));
+            }
+            _ => panic!("cancel must go out as a notification, not a request"),
+        }
+    }
+
+    /// Both answers to a permission prompt, in the shape ACP asks for: an
+    /// outcome object inside an `outcome` key. A dismissed sheet has to send
+    /// `cancelled` rather than nothing at all — the agent's turn is blocked on
+    /// this reply, and silence is a chat that never finishes.
+    #[test]
+    fn a_permission_prompt_is_answered_either_way() {
+        let (client, mut rx) = detached();
+        client.respond_permission(json!("perm-1"), Some("allow_once".to_string()));
+        client.respond_permission(json!(7), None);
+
+        let mut answers = Vec::new();
+        while let Ok(cmd) = rx.try_recv() {
+            match cmd {
+                Cmd::Respond {
+                    id,
+                    result: Ok(outcome),
+                } => answers.push((id, outcome)),
+                _ => panic!("a permission answer is a response, and never an error"),
+            }
+        }
+        assert_eq!(
+            answers,
+            vec![
+                (
+                    json!("perm-1"),
+                    json!({"outcome": {"outcome": "selected", "optionId": "allow_once"}})
+                ),
+                (json!(7), json!({"outcome": {"outcome": "cancelled"}})),
+            ],
+            "the id is echoed back as it arrived, and the outcome is nested twice"
         );
     }
 }

@@ -37,6 +37,14 @@ const SECRET: &str = "harness-secret";
 /// that matters.
 pub(crate) struct Server {
     child: Child,
+    /// The child's stdin, kept only so that dropping it closes the pipe.
+    ///
+    /// That close is what lets the server exit through `main` instead of being
+    /// `SIGKILL`ed, and the only reason it matters is coverage: a killed process
+    /// never writes its `.profraw`, so `main.rs` and `turn.rs` measured 0.00%
+    /// while seven test binaries were driving them. See the note beside the
+    /// accept loop in `src/main.rs`.
+    stdin: Option<std::process::ChildStdin>,
     /// The client's event stream: `session/update` notifications, permission
     /// requests, and the final `Disconnected`. Held here rather than dropped
     /// so a test can await what a call pushed back at it.
@@ -60,6 +68,21 @@ pub(crate) struct Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
+        // Close stdin first and give the server a moment to leave through
+        // `main`, so its coverage profile is written. `kill` stays as the
+        // backstop: a server wedged in a handler must not hang the suite, and
+        // a test that has already panicked must not be held up by one.
+        drop(self.stdin.take());
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                _ => break,
+            }
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -97,7 +120,12 @@ pub(crate) async fn spawn_mock_with(env: &[(&str, &str)]) -> (Server, AcpClient)
     for (key, value) in env {
         command.env(key, value);
     }
-    let mut child = command.stdout(Stdio::piped()).spawn().unwrap();
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdin = child.stdin.take();
 
     // The banner is written after `bind`, so having read it is proof the
     // listener is up: no polling, no sleep-and-hope.
@@ -130,6 +158,7 @@ pub(crate) async fn spawn_mock_with(env: &[(&str, &str)]) -> (Server, AcpClient)
     (
         Server {
             child,
+            stdin,
             events,
             _stdout: stdout,
             cfg,

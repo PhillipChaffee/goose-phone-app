@@ -1759,9 +1759,13 @@ pub(crate) fn set_config_option(ctx: &AppCtx, config_id: &str, value: &str) {
 mod tests {
     use super::*;
 
-    use futures_util::FutureExt as _;
+    use std::sync::{Arc, Mutex, PoisonError};
+
+    use futures_util::{FutureExt as _, SinkExt as _, StreamExt as _};
     use goose_acp_client::Feature;
     use serde_json::json;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::tungstenite::Message;
 
     fn missing() -> AcpError {
         AcpError::Unsupported {
@@ -1996,21 +2000,28 @@ mod tests {
         rsx! { div {} }
     }
 
-    /// A tokio runtime for the timers this module arms.
+    /// A tokio runtime for the timers this module arms, and for the sockets
+    /// the second half of this file talks over.
     ///
     /// `show_toast` spawns a task that sleeps for four seconds, and
     /// `tokio::time::sleep` panics on construction when no runtime is in
-    /// scope. Nothing here waits for a timer to fire — entering a runtime is
-    /// only what keeps polling a spawned task from exploding, which is the
-    /// difference between testing the half of a function after its
-    /// `spawn_forever` and not.
+    /// scope. *Entering* one is what keeps polling a spawned task from
+    /// exploding, which is the difference between testing the half of a
+    /// function after its `spawn_forever` and not; *driving* one — with
+    /// [`App::settle`] or [`App::drive`], both of which `block_on` — is what
+    /// makes a timer fire and a WebSocket frame move.
+    ///
+    /// One runtime for the whole binary, and current-thread because
+    /// `rt-multi-thread` is not among the dev-dependency's features. Only the
+    /// test holding [`ONE_AT_A_TIME`] ever touches it, so nothing here calls
+    /// `block_on` from two threads at once.
     fn tokio_rt() -> &'static tokio::runtime::Runtime {
         static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
         RT.get_or_init(|| {
             tokio::runtime::Builder::new_current_thread()
-                .enable_time()
+                .enable_all()
                 .build()
-                .expect("a current-thread tokio runtime for the toast timers")
+                .expect("a current-thread tokio runtime for the toast timers and the sockets")
         })
     }
 
@@ -2121,6 +2132,93 @@ mod tests {
         fn drain(&mut self) {
             let _tokio = tokio_rt().enter();
             self.dom.process_events();
+        }
+
+        /// Run one of this module's async functions to completion, inside both
+        /// runtimes: the Dioxus one owns every signal it touches, the tokio one
+        /// carries the socket underneath it.
+        fn drive<F: std::future::Future>(&self, f: impl FnOnce(AppCtx) -> F) -> F::Output {
+            let ctx = self.ctx;
+            self.dom.in_runtime(|| tokio_rt().block_on(f(ctx)))
+        }
+
+        /// Poll the dom — and the sockets under it — until `done`, or until the
+        /// budget runs out.
+        ///
+        /// Dioxus polls a spawned task from its own executor, so nothing a tap
+        /// started happens without this; the timeout is what lets the tokio
+        /// runtime carrying the WebSocket actor make progress while the virtual
+        /// DOM has nothing to do.
+        fn settle_until(&mut self, budget: Duration, done: fn(&AppCtx) -> bool) {
+            let ctx = self.ctx;
+            let dom = &mut self.dom;
+            tokio_rt().block_on(async {
+                let deadline = tokio::time::Instant::now() + budget;
+                loop {
+                    let _ =
+                        tokio::time::timeout(Duration::from_millis(5), dom.wait_for_work()).await;
+                    dom.render_immediate_to_vec();
+                    if dom.in_runtime(|| done(&ctx)) || tokio::time::Instant::now() >= deadline {
+                        return;
+                    }
+                }
+            });
+        }
+
+        /// Let whatever is in flight finish, when there is no one flag that
+        /// says it has. Two hundred milliseconds of *consecutive* idle — an
+        /// iteration with work in it resets the count — against loopback round
+        /// trips measured in microseconds.
+        fn settle(&mut self) {
+            let dom = &mut self.dom;
+            tokio_rt().block_on(async {
+                let mut idle = 0;
+                while idle < 20 {
+                    if tokio::time::timeout(Duration::from_millis(10), dom.wait_for_work())
+                        .await
+                        .is_err()
+                    {
+                        idle += 1;
+                    } else {
+                        idle = 0;
+                    }
+                    dom.render_immediate_to_vec();
+                }
+            });
+        }
+
+        /// Point the app at `server` and press Connect, the way the Settings
+        /// screen does.
+        fn dial(&self, server: &Server) -> bool {
+            let base = server.base_url.clone();
+            self.run(|ctx| {
+                ctx.settings.clone().set(Settings {
+                    server_url: base,
+                    ..Settings::default()
+                });
+            });
+            self.drive(|ctx| async move { establish(&ctx).await })
+        }
+
+        /// A live client with no `establish` behind it, for the tests that are
+        /// about what a request does rather than about how the connection was
+        /// opened.
+        ///
+        /// The event stream comes back to the caller and has to be kept: the
+        /// transport gives up the socket when the last receiver goes away, so a
+        /// test that dropped it would have a connection that died between the
+        /// handshake and the first request.
+        fn attach(&self, server: &Server) -> mpsc::Receiver<AcpEvent> {
+            let cfg = ConnectConfig {
+                base_url: server.base_url.clone(),
+                secret: String::new(),
+                fingerprint: None,
+            };
+            let (client, events, _info) = tokio_rt()
+                .block_on(AcpClient::connect(&cfg))
+                .expect("the mock server accepted the handshake");
+            self.run(|ctx| ctx.client.clone().set(Some(client)));
+            events
         }
 
         /// Put a chat on screen, the way `open_session` would have.
@@ -3680,5 +3778,1620 @@ mod tests {
                 "\"Load more\" is still armed with the previous search's cursor"
             );
         });
+    }
+
+    // ------------------------------------------------ a goose on a loopback port
+    //
+    // Everything above this line runs with no socket, and that is only half of
+    // this file. The other half — the successful arm of `establish`, the
+    // reconnect loop, and the body of every request — is reachable only with a
+    // live `AcpClient`, which has no constructor that is not `connect`. So the
+    // tests below put a server in front of it: a plain-`ws://` JSON-RPC
+    // listener on a loopback port that logs every frame it is sent and answers
+    // from a script. `ws_url` only reaches for TLS on an `https://` base, so
+    // `http://` here means no certificate and no pin.
+    //
+    // The technique is `src/scheduler.rs`'s. What is different is that these
+    // tests mount the REAL provider through `App`, so the pump reading the
+    // socket is the app's own and the ask journal is a real file.
+
+    /// The reply to one request: how long the server sits on it, then a
+    /// JSON-RPC `result` or `error`.
+    ///
+    /// The delay is not decoration. Two of the rules in this file are about
+    /// *ordering* — a page that answers after a newer search has claimed the
+    /// list must write nowhere, and must not take that newer fetch's spinner
+    /// down on its way past — and neither can be provoked on a server that
+    /// answers in the order it was asked.
+    type Reply = (Duration, Result<Value, Value>);
+
+    /// What a server answers, per method. A plain `fn` and never a closure, so
+    /// a test's whole script is one readable `match`.
+    type Script = fn(&str, &Value) -> Reply;
+
+    fn ok(result: Value) -> Reply {
+        (Duration::ZERO, Ok(result))
+    }
+
+    fn rpc_error(code: i64, message: &str) -> Reply {
+        (
+            Duration::ZERO,
+            Err(json!({ "code": code, "message": message })),
+        )
+    }
+
+    /// Not a reply at all: the server hangs up instead of answering. The only
+    /// way to reach [`AcpError::Closed`], which `send_prompt` treats
+    /// differently from every other failure.
+    fn hang_up() -> Reply {
+        (Duration::ZERO, Err(Value::Null))
+    }
+
+    /// One `configOptions` entry in goose's own spelling — `id`, not
+    /// `configId` — so a test cannot assert against a shape no server sends.
+    fn wire_option(id: &str, current: &str) -> Value {
+        json!({"id": id, "name": id, "type": "select", "currentValue": current,
+               "options": [{"value": current, "name": current}]})
+    }
+
+    /// A goose that answers everything.
+    ///
+    /// The stop reason it ends a turn with is whatever the message said, so
+    /// one script can drive every arm of `send_prompt`'s post-turn match.
+    fn happy(method: &str, params: &Value) -> Reply {
+        match method {
+            "initialize" => ok(json!({
+                "protocolVersion": 1,
+                "agentInfo": {"name": "goose", "version": "1.46.0"},
+            })),
+            "session/list" => ok(json!({"sessions": [{"sessionId": "chat_1"}]})),
+            "session/load" => ok(json!({"configOptions": [wire_option("model", "sonnet")]})),
+            "session/new" => ok(json!({
+                "sessionId": "s_new",
+                "configOptions": [wire_option("mode", "auto")],
+            })),
+            "session/prompt" => ok(json!({"stopReason": prompt_text(params)})),
+            "session/set_config_option" => {
+                ok(json!({"configOptions": [wire_option("mode", "chat")]}))
+            }
+            _ => ok(json!({})),
+        }
+    }
+
+    /// The first text block of a `session/prompt`, which the scripts read as
+    /// the test's instruction to the server.
+    fn prompt_text(params: &Value) -> String {
+        params
+            .pointer("/prompt/0/text")
+            .and_then(Value::as_str)
+            .unwrap_or("end_turn")
+            .to_owned()
+    }
+
+    struct Server {
+        base_url: String,
+        /// Every frame the app sent, in order: requests, notifications, and the
+        /// answers it gave to the agent's own asks.
+        frames: Arc<Mutex<Vec<Value>>>,
+    }
+
+    impl Server {
+        fn log(&self) -> Vec<Value> {
+            self.frames
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        }
+
+        /// What the app sent, in order, one word each: the method it called, or
+        /// `answer` for a reply to one of the agent's own requests. The
+        /// handshake is left out — it is the harness's, not the screen's.
+        fn traffic(&self) -> Vec<String> {
+            self.log()
+                .iter()
+                .map(|frame| {
+                    frame
+                        .get("method")
+                        .and_then(Value::as_str)
+                        .unwrap_or("answer")
+                        .to_owned()
+                })
+                .filter(|word| word != "initialize")
+                .collect()
+        }
+
+        fn methods(&self) -> Vec<String> {
+            self.traffic()
+                .into_iter()
+                .filter(|w| w != "answer")
+                .collect()
+        }
+
+        fn count(&self, method: &str) -> usize {
+            self.methods().iter().filter(|m| *m == method).count()
+        }
+
+        /// The params of the `n`th call to `method`.
+        fn params(&self, method: &str, n: usize) -> Value {
+            self.log()
+                .iter()
+                .filter(|frame| frame.get("method").and_then(Value::as_str) == Some(method))
+                .nth(n)
+                .and_then(|frame| frame.get("params").cloned())
+                .expect("the call the assertion is about was never made")
+        }
+
+        /// The outcome of every permission reply the app sent, in order.
+        fn answers(&self) -> Vec<Value> {
+            self.log()
+                .iter()
+                .filter(|frame| frame.get("method").is_none())
+                .filter_map(|frame| frame.get("result").cloned())
+                .collect()
+        }
+    }
+
+    /// Stand a goose up on a loopback port, answering from `script`.
+    fn serve(script: Script) -> Server {
+        let listener = tokio_rt()
+            .block_on(TcpListener::bind("127.0.0.1:0"))
+            .expect("a loopback port for the mock server");
+        let port = listener
+            .local_addr()
+            .expect("the listener has an address")
+            .port();
+        let frames: Arc<Mutex<Vec<Value>>> = Arc::default();
+        let log = Arc::clone(&frames);
+        tokio_rt().spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let log = Arc::clone(&log);
+                tokio::spawn(session_loop(socket, log, script));
+            }
+        });
+        Server {
+            base_url: format!("http://127.0.0.1:{port}"),
+            frames,
+        }
+    }
+
+    async fn session_loop(
+        socket: tokio::net::TcpStream,
+        log: Arc<Mutex<Vec<Value>>>,
+        script: Script,
+    ) {
+        let Ok(ws) = tokio_tungstenite::accept_async(socket).await else {
+            return;
+        };
+        let (mut sink, mut stream) = ws.split();
+        let (out, mut outbox) = mpsc::unbounded_channel::<String>();
+        tokio::spawn(async move {
+            while let Some(text) = outbox.recv().await {
+                if text.is_empty() {
+                    // The hang-up: a close frame and no answer, which is what
+                    // reaches the client as `AcpError::Closed`.
+                    let _ = sink.send(Message::Close(None)).await;
+                    break;
+                }
+                if sink.send(Message::Text(text.into())).await.is_err() {
+                    break;
+                }
+            }
+        });
+        while let Some(Ok(msg)) = stream.next().await {
+            let Message::Text(text) = msg else { continue };
+            let Ok(frame) = serde_json::from_str::<Value>(text.as_str()) else {
+                continue;
+            };
+            log.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(frame.clone());
+            // A frame with no method is the app ANSWERING one of the agent's
+            // own asks, and one with no id is a notification. Neither is a
+            // question, so neither gets a reply.
+            let (Some(method), Some(id)) = (
+                frame
+                    .get("method")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                frame.get("id").cloned(),
+            ) else {
+                continue;
+            };
+            let params = frame.get("params").cloned().unwrap_or(Value::Null);
+            let out = out.clone();
+            // Answered on a task of its own, so a scripted delay holds up one
+            // reply rather than the whole socket.
+            tokio::spawn(async move {
+                let (delay, body) = script(&method, &params);
+                tokio::time::sleep(delay).await;
+                let reply = match body {
+                    Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+                    Err(Value::Null) => {
+                        let _ = out.send(String::new());
+                        return;
+                    }
+                    Err(error) => json!({"jsonrpc": "2.0", "id": id, "error": error}),
+                };
+                let _ = out.send(reply.to_string());
+            });
+        }
+    }
+
+    /// Wait for a connection's event stream to say it is over, and report who
+    /// ended it.
+    fn ended(events: &mut mpsc::Receiver<AcpEvent>) -> Option<DisconnectCause> {
+        tokio_rt().block_on(async {
+            loop {
+                match tokio::time::timeout(Duration::from_secs(2), events.recv()).await {
+                    Ok(Some(AcpEvent::Disconnected { cause, .. })) => return Some(cause),
+                    Ok(Some(_)) => {}
+                    Ok(None) | Err(_) => return None,
+                }
+            }
+        })
+    }
+
+    /// A loopback address with nothing listening on it: bound to learn a free
+    /// port and then let go. A connection to it is refused at once, which is
+    /// what a tailnet that is not up yet does — and is not the 20-second
+    /// connect timeout a blackholed address would cost.
+    fn dead_port() -> String {
+        let listener = tokio_rt()
+            .block_on(TcpListener::bind("127.0.0.1:0"))
+            .expect("a loopback port to let go of again");
+        let port = listener
+            .local_addr()
+            .expect("the listener has an address")
+            .port();
+        drop(listener);
+        format!("http://127.0.0.1:{port}")
+    }
+
+    /// A photo in the composer, picked and read and not yet sent.
+    fn pending(name: &str) -> crate::attach::PendingAttachment {
+        crate::attach::PendingAttachment {
+            record: crate::attach::Attachment {
+                name: name.to_owned(),
+                mime: "image/jpeg".to_owned(),
+                size: 3,
+                thumb: "THUMB".to_owned(),
+            },
+            data: "QUJD".to_owned(),
+            text: None,
+        }
+    }
+
+    // ------------------------------------------------------- the connection
+
+    /// The successful half of Connect, which the Settings button and every
+    /// reconnect run through. The agent's name is what the connection badge
+    /// shows — the only thing on screen that says which server this is — and
+    /// `want_connected` is what arms the reconnect loop, so a connection that
+    /// came up without setting it would never come back from a tailnet blink.
+    #[test]
+    fn connecting_names_the_agent_and_arms_the_reconnect_loop() {
+        let app = App::mount();
+        let server = serve(happy);
+        assert!(
+            app.dial(&server),
+            "the handshake failed against a server that answered it"
+        );
+        app.run(|ctx| {
+            match &*ctx.conn.peek() {
+                ConnState::Connected { agent } => assert_eq!(
+                    agent, "goose 1.46.0",
+                    "the badge names the agent and the version it reported"
+                ),
+                _ => panic!("a handshake that succeeded did not leave the app connected"),
+            }
+            assert!(
+                ctx.client.peek().is_some(),
+                "connected with nothing to make a request over"
+            );
+            assert!(
+                *ctx.want_connected.peek(),
+                "a connection that came up did not arm the reconnect loop"
+            );
+        });
+        assert!(
+            server.methods().is_empty(),
+            "connecting asked the server for something else: {:?}",
+            server.methods()
+        );
+    }
+
+    /// The other half of the same line. goose's `agentInfo` may carry no
+    /// version, and joining on it unconditionally would put a trailing space
+    /// in the badge.
+    #[test]
+    fn an_agent_that_reports_no_version_is_named_by_itself() {
+        fn versionless(method: &str, params: &Value) -> Reply {
+            if method == "initialize" {
+                return ok(json!({"protocolVersion": 1, "agentInfo": {"name": "goose"}}));
+            }
+            happy(method, params)
+        }
+        let app = App::mount();
+        let server = serve(versionless);
+        assert!(app.dial(&server));
+        app.run(|ctx| match &*ctx.conn.peek() {
+            ConnState::Connected { agent } => assert_eq!(agent, "goose"),
+            _ => panic!("a handshake that succeeded did not leave the app connected"),
+        });
+    }
+
+    /// Pressing Connect over a live connection has to hang the old socket up
+    /// before opening another. Left running, that connection goes on answering
+    /// the agent's asks from a screen nobody is looking at — and holds a
+    /// session open on the server for as long as the app lives.
+    #[test]
+    fn connecting_over_a_live_connection_hangs_the_old_socket_up() {
+        let app = App::mount();
+        let old = serve(happy);
+        let mut old_events = app.attach(&old);
+        // A second handle on that connection, held here so that *replacing*
+        // `ctx.client` cannot be what ends it. Only `close` can.
+        let held = app
+            .run(|ctx| ctx.client.peek().clone())
+            .expect("the client the harness just attached");
+
+        let fresh = serve(happy);
+        assert!(app.dial(&fresh));
+        assert!(
+            matches!(ended(&mut old_events), Some(DisconnectCause::Local)),
+            "the previous connection is still up after Connect opened another"
+        );
+        drop(held);
+    }
+
+    /// Disconnect has to reach the socket and not just the flag. The other
+    /// half of it — that the app stops wanting to be connected — is checked
+    /// above; this is the half that lets go of the connection.
+    #[test]
+    fn disconnecting_hangs_the_socket_up() {
+        let app = App::mount();
+        let server = serve(happy);
+        let mut events = app.attach(&server);
+        let held = app
+            .run(|ctx| ctx.client.peek().clone())
+            .expect("the client the harness just attached");
+        app.run(disconnect);
+        assert!(
+            matches!(ended(&mut events), Some(DisconnectCause::Local)),
+            "Disconnect left the socket open"
+        );
+        drop(held);
+    }
+
+    /// The whole recovery path, end to end: the tailnet drops mid-chat, the
+    /// pump records it and arms a retry, the retry dials back out, and the open
+    /// chat is replayed.
+    ///
+    /// `session/load` is the ONE channel through which goose could ever
+    /// re-raise an ask it still holds, so a reconnect that skipped it would
+    /// close the only door a parked round can come back through.
+    #[test]
+    fn a_dropped_tailnet_dials_back_out_and_replays_the_open_chat() {
+        let mut app = App::mount();
+        let server = serve(happy);
+        app.run(|ctx| {
+            ctx.settings.clone().set(Settings {
+                server_url: server.base_url.clone(),
+                ..Settings::default()
+            });
+            ctx.want_connected.clone().set(true);
+            ctx.chat.clone().set(ChatState {
+                session_id: Some("s1".to_owned()),
+                cwd: "/srv/work".to_owned(),
+                title: "Deploy".to_owned(),
+                items: vec![ChatItem::Assistant {
+                    message_id: None,
+                    text: "before the drop".to_owned(),
+                }],
+                ..ChatState::default()
+            });
+        });
+        pump_events(
+            &app,
+            vec![AcpEvent::Disconnected {
+                reason: "socket closed".to_owned(),
+                cause: DisconnectCause::Transport,
+            }],
+        );
+
+        // The first rung of the ramp is two seconds; the budget is the slack.
+        app.settle_until(Duration::from_secs(15), |ctx| {
+            !ctx.config_options.peek().is_empty()
+        });
+
+        app.run(|ctx| {
+            assert!(
+                ctx.conn.peek().is_connected(),
+                "the phone never dialled back out"
+            );
+            assert!(ctx.client.peek().is_some());
+            let chat = ctx.chat.peek();
+            assert!(
+                chat.items.is_empty(),
+                "the transcript survived the reconnect, so the replay lands underneath \
+                 a copy of itself"
+            );
+            assert!(!chat.loading, "the replay's spinner was never taken down");
+            assert_eq!(
+                ctx.config_options.peek()[0].config_id,
+                "model",
+                "the options the reload answered with were dropped, so the model \
+                 picker stays empty until the agent happens to push another set"
+            );
+        });
+        assert_eq!(
+            server.params("session/load", 0),
+            json!({"sessionId": "s1", "cwd": "/srv/work", "mcpServers": []}),
+            "the replay went out for the wrong session or against the wrong directory"
+        );
+    }
+
+    /// The reconnect loop sleeps first and asks afterwards, so both of its
+    /// questions are asked at the moment they matter. A loop that asked before
+    /// sleeping would dial out for a user who pressed Disconnect during the
+    /// ramp, and would hang a second connection off a phone that had already
+    /// come back some other way.
+    #[test]
+    fn a_reconnect_gives_up_when_there_is_nothing_left_to_reconnect() {
+        let app = App::mount();
+        let server = serve(happy);
+        app.run(|ctx| {
+            ctx.settings.clone().set(Settings {
+                server_url: server.base_url.clone(),
+                ..Settings::default()
+            });
+        });
+
+        // The user pressed Disconnect while the first rung was sleeping.
+        app.drive(|ctx| async move { reconnect_loop(&ctx).await });
+        app.run(|ctx| {
+            assert!(
+                ctx.client.peek().is_none(),
+                "the phone dialled back out after the user pressed Disconnect"
+            );
+            assert!(matches!(*ctx.conn.peek(), ConnState::Disconnected));
+        });
+
+        // And a connection that came back another way ends the loop rather
+        // than being closed and replaced by one of its own.
+        app.run(|ctx| {
+            ctx.want_connected.clone().set(true);
+            ctx.conn.clone().set(ConnState::Connected {
+                agent: "goose".to_owned(),
+            });
+        });
+        app.drive(|ctx| async move { reconnect_loop(&ctx).await });
+        app.run(|ctx| {
+            assert!(
+                ctx.client.peek().is_none(),
+                "a second connection was opened over a live one"
+            );
+        });
+        assert!(
+            server.traffic().is_empty(),
+            "the loop reached the server: {:?}",
+            server.traffic()
+        );
+    }
+
+    /// The loop is a *loop*. A phone coming out of a tunnel finds a tailnet
+    /// that is not up yet, and the attempt that finally works is rarely the
+    /// first one — a loop that gave up on a refused connection would leave the
+    /// app disconnected with nothing left to bring it back but the user
+    /// noticing. And a phone with no chat open has nothing to replay, so it
+    /// must not ask the server to load one.
+    #[test]
+    fn a_reconnect_keeps_trying_until_the_server_is_there() {
+        let mut app = App::mount();
+        let server = serve(happy);
+        app.run(|ctx| {
+            ctx.settings.clone().set(Settings {
+                server_url: dead_port(),
+                ..Settings::default()
+            });
+            ctx.want_connected.clone().set(true);
+            let ctx = *ctx;
+            spawn_forever(async move { reconnect_loop(&ctx).await });
+        });
+
+        // The first rung of the ramp is two seconds, and the attempt at the end
+        // of it is refused.
+        app.settle_until(Duration::from_secs(15), |ctx| {
+            matches!(*ctx.conn.peek(), ConnState::Failed(_))
+        });
+        app.run(|ctx| {
+            assert!(
+                ctx.client.peek().is_none(),
+                "a connection that was refused was kept anyway"
+            );
+        });
+
+        // The tailnet comes up while the second rung is sleeping.
+        app.run(|ctx| {
+            ctx.settings.clone().set(Settings {
+                server_url: server.base_url.clone(),
+                ..Settings::default()
+            });
+        });
+        app.settle_until(Duration::from_secs(20), |ctx| {
+            ctx.conn.peek().is_connected()
+        });
+        app.run(|ctx| {
+            assert!(
+                ctx.conn.peek().is_connected(),
+                "the loop gave up after one refused connection"
+            );
+        });
+        assert!(
+            server.methods().is_empty(),
+            "a reconnect with no chat open asked the server to replay one: {:?}",
+            server.methods()
+        );
+    }
+
+    /// A `session/load` takes as long as the transcript is — the server
+    /// replays the whole thing before it answers — and the reader can walk
+    /// into another chat while it does. An answer that lands in a chat nobody
+    /// is looking at has to write nothing at all: not the spinner, not the
+    /// options, and above all not a failure about a session that is no longer
+    /// on screen.
+    #[test]
+    fn a_replay_that_answers_after_the_reader_moved_on_writes_nothing() {
+        fn dawdles(method: &str, params: &Value) -> Reply {
+            if method == "session/load"
+                && params.get("sessionId").and_then(Value::as_str) == Some("slow")
+            {
+                return (
+                    Duration::from_millis(400),
+                    Err(json!({"code": -32000, "message": "too late to matter"})),
+                );
+            }
+            happy(method, params)
+        }
+        let mut app = App::mount();
+        let server = serve(dawdles);
+        let _events = app.attach(&server);
+
+        let slow: SessionInfo =
+            serde_json::from_value(json!({"sessionId": "slow", "cwd": "/srv"})).unwrap();
+        app.run(|ctx| open_session(ctx, slow));
+        app.settle_until(Duration::from_millis(80), |_| false);
+        let quick: SessionInfo =
+            serde_json::from_value(json!({"sessionId": "quick", "cwd": "/srv"})).unwrap();
+        app.run(|ctx| open_session(ctx, quick));
+        app.settle_until(Duration::from_millis(900), |_| false);
+
+        assert_eq!(
+            app.toast(),
+            None,
+            "a chat the reader had already left reported its own failure over the \
+             one they are now reading"
+        );
+        app.run(|ctx| {
+            assert_eq!(ctx.chat.peek().session_id.as_deref(), Some("quick"));
+            assert!(!ctx.chat.peek().loading);
+        });
+        assert_eq!(server.count("session/load"), 2);
+
+        // The same rule one function over, for the reload a reconnect runs.
+        app.run(|ctx| {
+            let ctx = *ctx;
+            spawn_forever(async move {
+                reload_chat(&ctx, "slow".to_owned(), "/srv".to_owned()).await;
+            });
+        });
+        app.settle_until(Duration::from_millis(80), |_| false);
+        app.run(|ctx| {
+            ctx.chat.clone().set(ChatState {
+                session_id: Some("quick".to_owned()),
+                loading: true,
+                ..ChatState::default()
+            });
+        });
+        app.settle_until(Duration::from_millis(900), |_| false);
+        assert_eq!(app.toast(), None, "the same failure, one function over");
+        app.run(|ctx| {
+            assert!(
+                ctx.chat.peek().loading,
+                "a reload belonging to a chat the reader had left took down the \
+                 spinner of the chat that replaced it"
+            );
+        });
+    }
+
+    /// A reload that the server refuses still empties the transcript — the
+    /// replay is what refills it and there is no half measure — so the failure
+    /// has to be said out loud, and what this device knows about the photos in
+    /// it has to be kept for the replay that will bring them back.
+    #[test]
+    fn a_reload_the_server_refuses_says_so_and_keeps_the_photos_for_the_replay() {
+        fn refuses(method: &str, params: &Value) -> Reply {
+            if method == "session/load" {
+                return rpc_error(-32602, "unknown session id");
+            }
+            happy(method, params)
+        }
+        let app = App::mount();
+        let server = serve(refuses);
+        let _events = app.attach(&server);
+        app.run(|ctx| {
+            ctx.chat.clone().set(ChatState {
+                session_id: Some("s1".to_owned()),
+                cwd: "/srv".to_owned(),
+                items: vec![ChatItem::User {
+                    text: "look".to_owned(),
+                    attachments: vec![crate::attach::Attachment {
+                        name: "roof.jpg".to_owned(),
+                        mime: "image/jpeg".to_owned(),
+                        size: 3,
+                        thumb: "THUMB".to_owned(),
+                    }],
+                }],
+                ..ChatState::default()
+            });
+        });
+        app.drive(|ctx| async move { reload_chat(&ctx, "s1".to_owned(), "/srv".to_owned()).await });
+
+        assert_eq!(
+            app.toast().as_deref(),
+            Some("Failed to reload session: unknown session id"),
+            "a replay that never happened left the chat blank and said nothing"
+        );
+        app.run(|ctx| {
+            let chat = ctx.chat.peek();
+            assert!(
+                !chat.loading,
+                "the chat is stuck showing a replay that is not coming"
+            );
+            let carried: Vec<&str> = chat.attach_replay.iter().map(|a| a.name.as_str()).collect();
+            assert_eq!(
+                carried,
+                ["roof.jpg"],
+                "the replay has nothing left to give the photo its name back with"
+            );
+        });
+    }
+
+    // -------------------------------------------------------- the chats list
+
+    /// Paging. goose binds a cursor to the filters it was minted under, so the
+    /// only cursor that may go out is the one the last page answered with —
+    /// and "Load more" over a list that is already whole must ask for nothing,
+    /// rather than silently re-fetching page one on top of itself.
+    #[test]
+    fn the_chats_list_pages_from_the_cursor_the_server_minted() {
+        fn paged(method: &str, params: &Value) -> Reply {
+            if method == "session/list" {
+                return match params.get("cursor").and_then(Value::as_str) {
+                    None => {
+                        ok(json!({"sessions": [{"sessionId": "chat_1"}], "nextCursor": "cursor-1"}))
+                    }
+                    Some("cursor-1") => {
+                        ok(json!({"sessions": [{"sessionId": "chat_2"}], "nextCursor": null}))
+                    }
+                    Some(_) => rpc_error(-32602, "session list cursor does not match filters"),
+                };
+            }
+            happy(method, params)
+        }
+        let app = App::mount();
+        let server = serve(paged);
+        let _events = app.attach(&server);
+
+        app.drive(|ctx| async move { refresh_sessions(&ctx, false).await });
+        app.run(|ctx| {
+            assert_eq!(ids(&ctx.sessions.peek()), ["chat_1"]);
+            assert!(
+                ctx.sessions_next.peek().is_some(),
+                "the server offered another page and \"Load more\" is not armed"
+            );
+            assert!(
+                !*ctx.sessions_loading.peek(),
+                "the spinner outlived the page"
+            );
+            assert_eq!(
+                *ctx.sessions_epoch.peek(),
+                1,
+                "the fetch never claimed the list"
+            );
+        });
+        assert_eq!(
+            server.params("session/list", 0),
+            json!({"_meta": {
+                "types": ["user", "scheduled", "acp"],
+                "goose": {"includeLastMessageSnippet": true},
+            }}),
+            "page one went out with a cursor on it, or asking for the wrong kinds"
+        );
+
+        app.drive(|ctx| async move { refresh_sessions(&ctx, true).await });
+        app.run(|ctx| {
+            assert_eq!(
+                ids(&ctx.sessions.peek()),
+                ["chat_1", "chat_2"],
+                "\"Load more\" replaced the list instead of adding to it"
+            );
+            assert_eq!(
+                *ctx.sessions_next.peek(),
+                None,
+                "the last page still offers one after it"
+            );
+        });
+        assert_eq!(
+            server.params("session/list", 1).get("cursor"),
+            Some(&json!("cursor-1")),
+            "the next page was asked for without the cursor that names it"
+        );
+
+        // The list is whole, so there is nothing left to ask for.
+        app.drive(|ctx| async move { refresh_sessions(&ctx, true).await });
+        assert_eq!(
+            server.count("session/list"),
+            2,
+            "\"Load more\" over a complete list re-fetched page one"
+        );
+    }
+
+    /// The three ways a `session/list` ends other than well, and what each one
+    /// is allowed to touch.
+    #[test]
+    fn a_list_that_fails_or_answers_late_leaves_the_chats_on_screen_alone() {
+        /// Keyed on the search box: `boom` fails at once, `late` fails slowly,
+        /// and the empty search answers slowly.
+        fn contrary(method: &str, params: &Value) -> Reply {
+            if method != "session/list" {
+                return happy(method, params);
+            }
+            match params.pointer("/_meta/query").and_then(Value::as_str) {
+                Some("boom") => rpc_error(-32000, "the session store is unavailable"),
+                Some(_) => (
+                    Duration::from_millis(120),
+                    Err(json!({"code": -32000, "message": "too late to matter"})),
+                ),
+                None => (
+                    Duration::from_millis(120),
+                    Ok(json!({"sessions": [{"sessionId": "stale"}],
+                              "nextCursor": "cursor-of-a-search-nobody-is-running"})),
+                ),
+            }
+        }
+        let mut app = App::mount();
+        let server = serve(contrary);
+        let _events = app.attach(&server);
+        app.run(|ctx| {
+            ctx.sessions
+                .clone()
+                .set(vec![session("chat_1", Some("Deploy"))]);
+            ctx.sessions_query.clone().set("boom".to_owned());
+        });
+
+        // A failure over a list you can still read is a toast, and the rows
+        // stay put underneath it. `-32601` would be too: `session/list` is base
+        // ACP, so a server that cannot answer it is broken rather than one with
+        // a feature switched off.
+        app.drive(|ctx| async move { refresh_sessions(&ctx, false).await });
+        assert_eq!(
+            app.toast().as_deref(),
+            Some("Failed to list sessions: the session store is unavailable")
+        );
+        app.run(|ctx| {
+            assert_eq!(
+                ids(&ctx.sessions.peek()),
+                ["chat_1"],
+                "a failed refresh emptied the list the reader was looking at"
+            );
+            assert!(!*ctx.sessions_loading.peek());
+        });
+
+        // A page that answers after a newer fetch has claimed the list writes
+        // nowhere: not the rows, not the cursor, and not the spinner — that one
+        // belongs to the fetch which superseded it and is still running.
+        app.run(|ctx| {
+            ctx.sessions_query.clone().set(String::new());
+            ctx.toast.clone().set(None);
+            let ctx = *ctx;
+            spawn_forever(async move { refresh_sessions(&ctx, false).await });
+        });
+        app.settle_until(Duration::from_secs(2), |ctx| *ctx.sessions_loading.peek());
+        app.run(|ctx| ctx.sessions_epoch.clone().set(99));
+        app.settle_until(Duration::from_millis(500), |_| false);
+        app.run(|ctx| {
+            assert_eq!(
+                ids(&ctx.sessions.peek()),
+                ["chat_1"],
+                "a superseded page landed in the list under another search's rows"
+            );
+            assert_eq!(
+                *ctx.sessions_next.peek(),
+                None,
+                "and re-armed \"Load more\" with a cursor minted under filters \
+                 nobody is looking at any more"
+            );
+            assert!(
+                *ctx.sessions_loading.peek(),
+                "the superseded fetch took down a spinner belonging to the fetch \
+                 that replaced it"
+            );
+        });
+
+        // And the same for a failure that arrives late: the fetch that
+        // superseded it will report its own, and two sentences about one list
+        // is one more than there is news.
+        app.run(|ctx| {
+            ctx.sessions_query.clone().set("late".to_owned());
+            ctx.sessions_epoch.clone().set(0);
+            let ctx = *ctx;
+            spawn_forever(async move { refresh_sessions(&ctx, false).await });
+        });
+        app.settle_until(Duration::from_secs(2), |ctx| {
+            *ctx.sessions_epoch.peek() == 1
+        });
+        app.run(|ctx| ctx.sessions_epoch.clone().set(99));
+        app.settle_until(Duration::from_millis(500), |_| false);
+        assert_eq!(
+            app.toast(),
+            None,
+            "a superseded failure was reported over a list it no longer says anything about"
+        );
+    }
+
+    /// A rename the server agreed to has to reach both places the name is
+    /// shown — the bar over the open chat and the row in the list — because a
+    /// refetch of the list would take the reader's scroll position with it. And
+    /// the title goes out trimmed: the sheet leaves whatever was typed.
+    #[test]
+    fn a_rename_the_server_agreed_to_reaches_both_the_row_and_the_bar() {
+        fn picky(method: &str, params: &Value) -> Reply {
+            if method == "_goose/unstable/session/rename"
+                && params.get("title").and_then(Value::as_str) == Some("no")
+            {
+                return rpc_error(-32000, "titles are immutable here");
+            }
+            happy(method, params)
+        }
+        let app = App::mount();
+        let server = serve(picky);
+        let _events = app.attach(&server);
+        app.run(|ctx| {
+            ctx.sessions.clone().set(vec![
+                session("s1", Some("quick question")),
+                session("s2", None),
+            ]);
+        });
+        app.open_chat("s1", "quick question");
+
+        app.drive(
+            |ctx| async move { rename_session(&ctx, "s1", "  Tailscale cert rotation  ").await },
+        );
+        assert_eq!(
+            server.params("_goose/unstable/session/rename", 0),
+            json!({"sessionId": "s1", "title": "Tailscale cert rotation"}),
+            "the title went out with the whitespace the sheet left on it"
+        );
+        app.run(|ctx| {
+            let titles: Vec<Option<String>> = ctx
+                .sessions
+                .peek()
+                .iter()
+                .map(|s| s.title.clone())
+                .collect();
+            assert_eq!(
+                titles,
+                vec![Some("Tailscale cert rotation".to_owned()), None],
+                "the rename reached the wrong row, or every row"
+            );
+            assert_eq!(
+                ctx.chat.peek().title,
+                "Tailscale cert rotation",
+                "the bar over the chat being renamed still shows the old name"
+            );
+        });
+
+        // A rename the server refused changes nothing on screen.
+        app.drive(|ctx| async move { rename_session(&ctx, "s1", "no").await });
+        assert_eq!(
+            app.toast().as_deref(),
+            Some("Rename failed: titles are immutable here")
+        );
+        app.run(|ctx| {
+            assert_eq!(
+                ctx.sessions.peek()[0].title.as_deref(),
+                Some("Tailscale cert rotation"),
+                "the row shows a name the server refused"
+            );
+        });
+    }
+
+    // -------------------------------------------------- opening and creating
+
+    /// Opening a chat replays its history and takes the agent's option set off
+    /// the reply, which is the only place a `session/load` carries one. A
+    /// replay the server cannot do has to end the spinner and say why, or the
+    /// chat sits under "Loading…" for the rest of the session.
+    #[test]
+    fn opening_a_chat_replays_it_and_takes_the_agents_options_off_the_reply() {
+        fn picky(method: &str, params: &Value) -> Reply {
+            if method == "session/load"
+                && params.get("sessionId").and_then(Value::as_str) == Some("gone")
+            {
+                return rpc_error(-32602, "no such session");
+            }
+            happy(method, params)
+        }
+        let mut app = App::mount();
+        let server = serve(picky);
+        let _events = app.attach(&server);
+
+        let info: SessionInfo = serde_json::from_value(
+            json!({"sessionId": "s2", "title": "Nightly standup", "cwd": "/srv/work"}),
+        )
+        .unwrap();
+        app.run(|ctx| open_session(ctx, info));
+        app.settle_until(Duration::from_secs(5), |ctx| !ctx.chat.peek().loading);
+        assert_eq!(
+            server.params("session/load", 0),
+            json!({"sessionId": "s2", "cwd": "/srv/work", "mcpServers": []}),
+            "the replay went out against the wrong directory"
+        );
+        assert_eq!(app.toast(), None, "a replay that worked reported itself");
+        app.run(|ctx| {
+            assert_eq!(
+                ctx.config_options.peek()[0].config_id,
+                "model",
+                "the picker is empty over a session whose load listed its models"
+            );
+        });
+
+        let missing: SessionInfo =
+            serde_json::from_value(json!({"sessionId": "gone", "cwd": "/srv/work"})).unwrap();
+        app.run(|ctx| open_session(ctx, missing));
+        app.settle_until(Duration::from_secs(5), |ctx| ctx.toast.peek().is_some());
+        assert_eq!(
+            app.toast().as_deref(),
+            Some("Failed to load session: no such session")
+        );
+        app.run(|ctx| {
+            assert!(
+                !ctx.chat.peek().loading,
+                "the chat is stuck on a replay that will never arrive"
+            );
+        });
+    }
+
+    /// `_meta` is how goose is told *why* a session exists — a recipe launch is
+    /// a session with `_meta.recipeId` on it — and it is the server that acts
+    /// on it, so the app cannot fake it afterwards by prompting the session
+    /// into character. Everything belonging to the last conversation goes with
+    /// the new one opening.
+    #[test]
+    fn a_new_chat_carries_its_reason_to_the_server_and_opens_what_comes_back() {
+        fn picky(method: &str, params: &Value) -> Reply {
+            if method == "session/new"
+                && params.pointer("/_meta/recipeId").and_then(Value::as_str) == Some("boom")
+            {
+                return rpc_error(-32000, "the working directory does not exist");
+            }
+            happy(method, params)
+        }
+        let mut app = App::mount();
+        let server = serve(picky);
+        let _events = app.attach(&server);
+        app.run(|ctx| {
+            ctx.settings.clone().set(Settings {
+                working_dir: "  /srv/work  ".to_owned(),
+                ..Settings::default()
+            });
+        });
+
+        // The refusal first, so that "the screen stayed put" means something.
+        app.run(|ctx| new_session_with(ctx, json!({"recipeId": "boom"})));
+        app.settle_until(Duration::from_secs(5), |ctx| ctx.toast.peek().is_some());
+        assert_eq!(
+            app.toast().as_deref(),
+            Some("Failed to create session: the working directory does not exist")
+        );
+        app.run(|ctx| {
+            assert!(
+                matches!(*ctx.screen.peek(), Screen::Settings),
+                "a chat that was never created was navigated into"
+            );
+            assert!(ctx.chat.peek().session_id.is_none());
+        });
+
+        app.run(|ctx| {
+            ctx.usage.clone().set(Some((10, 100)));
+            ctx.attachments.clone().set(vec![pending("roof.jpg")]);
+            new_session_with(ctx, json!({"recipeId": "standup"}));
+        });
+        app.settle_until(Duration::from_secs(5), |ctx| {
+            matches!(*ctx.screen.peek(), Screen::Chat)
+        });
+        assert_eq!(
+            server.params("session/new", 1),
+            json!({"cwd": "/srv/work", "mcpServers": [],
+                   "_meta": {"client": "goose-mobile", "recipeId": "standup"}}),
+            "the reason the session exists did not travel with the request that created it"
+        );
+        app.run(|ctx| {
+            let chat = ctx.chat.peek();
+            assert_eq!(chat.session_id.as_deref(), Some("s_new"));
+            assert_eq!(
+                chat.cwd, "/srv/work",
+                "the chat runs in the untrimmed directory the box held"
+            );
+            assert_eq!(chat.title, "New chat");
+            assert!(!chat.loading && !chat.running);
+            assert_eq!(
+                ctx.config_options.peek()[0].config_id,
+                "mode",
+                "the options `session/new` answered with were thrown away"
+            );
+            assert!(
+                ctx.attachments.peek().is_empty(),
+                "a photo picked for the last chat is sitting in the new one's tray"
+            );
+            assert_eq!(
+                *ctx.usage.peek(),
+                None,
+                "the last chat's context meter is still on screen"
+            );
+        });
+    }
+
+    // ---------------------------------------------------------- sending, and
+    // what a turn leaves behind
+
+    /// What the reader is told when a turn ends. An ordinary ending is silence
+    /// — the transcript is the answer — and every other ending is a sentence,
+    /// because a turn that stopped for a reason nobody named looks exactly like
+    /// one that finished.
+    #[test]
+    fn how_a_turn_ended_is_reported_only_when_it_was_not_ordinary() {
+        let mut app = App::mount();
+        let server = serve(happy);
+        let _events = app.attach(&server);
+        app.open_chat("s1", "Deploy");
+
+        // An empty composer sends nothing. goose answers `invalid_params` to a
+        // turn with no content in it, and the transport refuses it one step
+        // earlier, so a message drawn into the transcript here would sit there
+        // permanently over a turn that was never started.
+        app.run(|ctx| {
+            assert!(
+                !send_prompt(ctx, String::new(), &[]),
+                "an empty message was handed to the transport"
+            );
+            assert!(ctx.chat.peek().items.is_empty());
+        });
+
+        for (stop, said) in [
+            ("end_turn", None),
+            ("cancelled", None),
+            ("max_tokens", Some("Stopped: max tokens reached")),
+            ("refusal", Some("The agent declined to continue")),
+            ("recursion_limit", Some("Turn ended: recursion_limit")),
+        ] {
+            app.run(|ctx| {
+                ctx.toast.clone().set(None);
+                assert!(
+                    send_prompt(ctx, stop.to_owned(), &[]),
+                    "the send never reached the transport"
+                );
+                assert!(
+                    ctx.chat.peek().running,
+                    "the composer never showed the turn as running"
+                );
+                assert!(ctx.running_sessions.peek().contains("s1"));
+            });
+            app.settle_until(Duration::from_secs(5), |ctx| !ctx.chat.peek().running);
+            assert_eq!(
+                app.toast().as_deref(),
+                said,
+                "a turn that ended `{stop}` was reported wrongly"
+            );
+            app.run(|ctx| {
+                assert!(
+                    ctx.running_sessions.peek().is_empty(),
+                    "the chats list still shows a turn in flight for `{stop}`"
+                );
+            });
+        }
+        assert_eq!(server.count("session/prompt"), 5);
+    }
+
+    /// A send that died on the wire. The message did reach the transcript, so
+    /// it stays — it may well have arrived, and a bubble the reader can see and
+    /// re-send beats a photo that is simply gone — and the files go back into
+    /// the tray they were picked into, which is the only place they can come
+    /// back to.
+    #[test]
+    fn a_send_that_died_on_the_wire_puts_the_photos_back_in_the_composer() {
+        fn broken(method: &str, params: &Value) -> Reply {
+            if method == "session/prompt" {
+                return rpc_error(-32000, "provider is unreachable");
+            }
+            happy(method, params)
+        }
+        let mut app = App::mount();
+        let server = serve(broken);
+        let _events = app.attach(&server);
+        app.open_chat("s1", "Deploy");
+
+        app.run(|ctx| {
+            assert!(send_prompt(
+                ctx,
+                "look at this".to_owned(),
+                &[pending("roof.jpg")]
+            ));
+        });
+        app.settle_until(Duration::from_secs(5), |ctx| ctx.toast.peek().is_some());
+        assert_eq!(
+            app.toast().as_deref(),
+            Some(
+                "Prompt failed: provider is unreachable — its attachments are back in the composer"
+            ),
+            "the toast has to say what went wrong AND where the files went"
+        );
+        app.run(|ctx| {
+            let back: Vec<String> = ctx
+                .attachments
+                .peek()
+                .iter()
+                .map(|f| f.record.name.clone())
+                .collect();
+            assert_eq!(
+                back,
+                ["roof.jpg"],
+                "a send that never landed ate the photo it was carrying"
+            );
+            assert!(
+                !ctx.chat.peek().running,
+                "the turn that failed is still spinning"
+            );
+        });
+        assert_eq!(
+            app.items(),
+            ["user:look at this:[roof.jpg]"],
+            "the message was taken back out of the transcript"
+        );
+        assert_eq!(server.count("session/prompt"), 1);
+    }
+
+    /// The turn is over and the socket is still there, so every ask this
+    /// session left open is answered "cancelled" — on the wire, not merely off
+    /// the screen — and the journal stops reporting them, because they got a
+    /// reply. Another chat's ask is another turn's, and is left alone.
+    #[test]
+    fn a_turn_that_ended_cleanly_answers_the_asks_it_left_behind() {
+        let mut app = App::mount();
+        let server = serve(happy);
+        let _events = app.attach(&server);
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![
+                ask(1, "s1", json!({"toolCallId": "t1", "title": "shell"})),
+                ask(2, "s1", json!({"toolCallId": "t2", "title": "write"})),
+                ask(
+                    3,
+                    "s2",
+                    json!({"toolCallId": "t3", "title": "another chat"}),
+                ),
+            ],
+        );
+
+        app.run(|ctx| assert!(send_prompt(ctx, "end_turn".to_owned(), &[])));
+        app.settle_until(Duration::from_secs(5), |ctx| {
+            ctx.permission.peek().len() == 1
+        });
+        app.settle();
+        assert_eq!(
+            server.answers(),
+            vec![
+                json!({"outcome": {"outcome": "cancelled"}}),
+                json!({"outcome": {"outcome": "cancelled"}})
+            ],
+            "the asks the turn left open went off the screen without an answer \
+             reaching goose, so the agent is still parked on them"
+        );
+        app.run(|ctx| {
+            let queued: Vec<String> = ctx
+                .permission
+                .peek()
+                .iter()
+                .map(|p| p.tool_call.tool_call_id.clone())
+                .collect();
+            assert_eq!(
+                queued,
+                ["t3"],
+                "another chat's ask was answered with this turn's"
+            );
+        });
+        let open: Vec<String> = app
+            .journal()
+            .into_iter()
+            .filter(crate::ask_journal::AskRecord::is_open)
+            .map(|r| r.tool_call_id)
+            .collect();
+        assert_eq!(
+            open,
+            ["t3"],
+            "an ask that got a reply is still being reported as pending"
+        );
+    }
+
+    /// The other side of that fork. `respond_permission` over a dead transport
+    /// pushes a command into a channel whose receiver is gone: it looks like an
+    /// answer and is not one. So the queue is dropped instead — this session's
+    /// only — and the verdict is deliberately left to the pump, which is the
+    /// one place that can tell a dropped tailnet from a press of Disconnect.
+    #[test]
+    fn a_turn_that_lost_its_socket_drops_its_asks_without_pretending_to_answer() {
+        fn dies(method: &str, params: &Value) -> Reply {
+            if method == "session/prompt" {
+                return hang_up();
+            }
+            happy(method, params)
+        }
+        let mut app = App::mount();
+        let server = serve(dies);
+        let _events = app.attach(&server);
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![
+                ask(1, "s1", json!({"toolCallId": "t1", "title": "shell"})),
+                ask(2, "s2", json!({"toolCallId": "t2", "title": "write"})),
+            ],
+        );
+
+        app.run(|ctx| assert!(send_prompt(ctx, "go".to_owned(), &[])));
+        app.settle_until(Duration::from_secs(5), |ctx| ctx.toast.peek().is_some());
+        assert_eq!(
+            app.toast().as_deref(),
+            Some("Prompt failed: connection closed")
+        );
+        app.run(|ctx| {
+            let queued: Vec<String> = ctx
+                .permission
+                .peek()
+                .iter()
+                .map(|p| p.tool_call.tool_call_id.clone())
+                .collect();
+            assert_eq!(
+                queued,
+                ["t2"],
+                "another chat's ask was dropped along with this one's"
+            );
+        });
+        assert!(
+            app.journal()
+                .iter()
+                .all(crate::ask_journal::AskRecord::is_open),
+            "the abandon path called a round lost, which is the pump's decision \
+             and not its own"
+        );
+        assert_eq!(server.count("session/prompt"), 1);
+    }
+
+    /// Stop answers the open asks BEFORE it cancels. The frames travel in
+    /// order, so the parked run unparks and then observes the cancel; the other
+    /// way round the cancel lands on a run that is still waiting to be told
+    /// what to do, and the turn never ends at all.
+    #[test]
+    fn stopping_a_turn_answers_the_open_asks_before_it_cancels() {
+        let mut app = App::mount();
+        let server = serve(happy);
+        let _events = app.attach(&server);
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![
+                ask(1, "s1", json!({"toolCallId": "t1", "title": "shell"})),
+                ask(
+                    2,
+                    "s2",
+                    json!({"toolCallId": "t2", "title": "another chat"}),
+                ),
+            ],
+        );
+
+        app.run(stop_turn);
+        app.settle();
+        assert_eq!(
+            server.traffic(),
+            ["answer", "session/cancel"],
+            "the cancel went out first, so it reached a run still parked on an ask"
+        );
+        assert_eq!(
+            server.params("session/cancel", 0),
+            json!({"sessionId": "s1"})
+        );
+        app.run(|ctx| {
+            let queued: Vec<String> = ctx
+                .permission
+                .peek()
+                .iter()
+                .map(|p| p.tool_call.tool_call_id.clone())
+                .collect();
+            assert_eq!(queued, ["t2"], "Stop swallowed another chat's ask");
+        });
+    }
+
+    /// Allow and Deny have to reach goose, not just the screen. The modal
+    /// coming down is the whole of the feedback, so an answer that never left
+    /// the phone looks exactly like one that worked — and the agent stays
+    /// parked forever.
+    #[test]
+    fn answering_an_ask_reaches_goose_and_not_just_the_screen() {
+        let mut app = App::mount();
+        let server = serve(happy);
+        let _events = app.attach(&server);
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![
+                ask(1, "s1", json!({"toolCallId": "t1", "title": "shell"})),
+                ask(2, "s1", json!({"toolCallId": "t2", "title": "write"})),
+            ],
+        );
+
+        app.run(|ctx| answer_permission(ctx, &json!(1), Some("allow_once".to_owned())));
+        app.settle();
+        assert_eq!(
+            server.answers(),
+            vec![json!({"outcome": {"outcome": "selected", "optionId": "allow_once"}})],
+            "Allow took the modal off the screen without telling goose"
+        );
+    }
+
+    /// The mode and model chips. The agent applies the change and answers with
+    /// the full option set, so what comes back is what the picker shows — but
+    /// an answer with nothing in it is goose saying nothing, not goose saying
+    /// "no options", and emptying the sheet on it would leave a control with no
+    /// values mid-conversation.
+    #[test]
+    fn switching_a_session_option_takes_the_answer_the_agent_gives_back() {
+        fn picky(method: &str, params: &Value) -> Reply {
+            if method == "session/set_config_option" {
+                return match params.get("value").and_then(Value::as_str) {
+                    Some("boom") => rpc_error(-32602, "no such mode"),
+                    Some("quiet") => ok(json!({})),
+                    _ => happy(method, params),
+                };
+            }
+            happy(method, params)
+        }
+        let mut app = App::mount();
+        let server = serve(picky);
+        let _events = app.attach(&server);
+        app.open_chat("s1", "Deploy");
+        app.run(|ctx| {
+            ctx.config_options
+                .clone()
+                .set(serde_json::from_value(json!([wire_option("mode", "auto")])).unwrap());
+        });
+
+        app.run(|ctx| set_config_option(ctx, "mode", "chat"));
+        app.settle();
+        assert_eq!(
+            server.params("session/set_config_option", 0),
+            json!({"sessionId": "s1", "configId": "mode", "type": "id", "value": "chat"}),
+            "goose routes the option by id and takes the value flattened beside it"
+        );
+        app.run(|ctx| {
+            assert_eq!(
+                ctx.config_options.peek()[0].current_value.as_deref(),
+                Some("chat"),
+                "the picker still shows the value the tap replaced"
+            );
+        });
+
+        app.run(|ctx| set_config_option(ctx, "mode", "quiet"));
+        app.settle();
+        app.run(|ctx| {
+            assert_eq!(
+                ctx.config_options.peek().len(),
+                1,
+                "an answer with no options in it emptied the picker"
+            );
+        });
+
+        app.run(|ctx| set_config_option(ctx, "mode", "boom"));
+        app.settle_until(Duration::from_secs(5), |ctx| ctx.toast.peek().is_some());
+        assert_eq!(
+            app.toast().as_deref(),
+            Some("Could not switch: no such mode")
+        );
+        app.run(|ctx| {
+            assert_eq!(
+                ctx.config_options.peek()[0].current_value.as_deref(),
+                Some("chat"),
+                "a switch the agent refused was drawn as though it had taken"
+            );
+        });
+
+        // The sheet can be reached with no chat open — the option set outlives
+        // the conversation it arrived with — and there is then no session for
+        // the agent to apply anything to.
+        let before = server.count("session/set_config_option");
+        app.run(|ctx| {
+            ctx.chat.clone().set(ChatState::default());
+            set_config_option(ctx, "mode", "chat");
+        });
+        app.settle();
+        assert_eq!(
+            server.count("session/set_config_option"),
+            before,
+            "a config change went out naming no session at all"
+        );
+    }
+
+    // ------------------------------------------------------- the leftover bits
+
+    /// A toast takes itself off the screen, and the timer that does it belongs
+    /// to the toast that armed it. Without the sequence check, the older
+    /// toast's timer wipes whatever is on screen when it fires — so a failure
+    /// reported three seconds after another one is shown for one second and
+    /// then silently withdrawn.
+    ///
+    /// Real seconds, because `tokio`'s clock cannot be paused without the
+    /// `test-util` feature and this crate does not carry it.
+    #[test]
+    fn a_toast_clears_itself_and_the_older_ones_timer_does_not_clear_it() {
+        let mut app = App::mount();
+        app.run(|ctx| show_toast(ctx, "Failed to list sessions"));
+        app.settle_until(Duration::from_secs(3), |_| false);
+        assert_eq!(
+            app.toast().as_deref(),
+            Some("Failed to list sessions"),
+            "the toast went away well before its four seconds"
+        );
+
+        // Armed a second before the first one's timer fires, and still on
+        // screen a second after it.
+        app.run(|ctx| show_toast(ctx, "Rename failed: timed out"));
+        app.settle_until(Duration::from_secs(2), |_| false);
+        assert_eq!(
+            app.toast().as_deref(),
+            Some("Rename failed: timed out"),
+            "the previous toast's timer cleared the one that replaced it"
+        );
+
+        // And it does eventually go, which is the other half of the rule.
+        app.settle_until(Duration::from_secs(10), |ctx| ctx.toast.peek().is_none());
+        assert_eq!(app.toast(), None, "the toast never cleared itself");
+    }
+
+    /// A generated title has to reach the bar over the open chat even when the
+    /// list behind it holds no row for that session — walking into a chat from
+    /// a recipe or a scheduled run does exactly that, and a title that only
+    /// ever arrived through the list would leave the bar reading "New chat"
+    /// for the rest of the conversation.
+    #[test]
+    fn a_generated_title_reaches_the_bar_with_no_row_to_put_it_in() {
+        let app = App::mount();
+        app.open_chat("s1", "New chat");
+        pump_events(
+            &app,
+            vec![notify(
+                "s1",
+                json!({"sessionUpdate": "session_info_update", "title": "Tailscale cert rotation"}),
+            )],
+        );
+        app.run(|ctx| {
+            assert_eq!(ctx.chat.peek().title, "Tailscale cert rotation");
+            assert!(
+                ctx.sessions.peek().is_empty(),
+                "a row was invented in a list that has never been fetched"
+            );
+        });
+    }
+
+    /// goose's older shape sends a chunk with no message id at all, and it
+    /// belongs to whatever is being written. The reply arm already relies on
+    /// that; the reasoning arm has to agree, or a stream of untagged thought
+    /// chunks becomes one folded card per token.
+    #[test]
+    fn an_untagged_thought_chunk_continues_the_one_being_written() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "agent_thought_chunk", "messageId": "m1",
+                           "content": {"type": "text", "text": "check the logs"}}),
+                ),
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "agent_thought_chunk",
+                           "content": {"type": "text", "text": " first"}}),
+                ),
+            ],
+        );
+        assert_eq!(app.items(), ["thought:m1:check the logs first"]);
+    }
+
+    /// An update that carries no output must leave the row's output alone.
+    /// goose sends one of these the moment a call starts running, and again
+    /// when it finishes with a raw result beside output that is already there —
+    /// a row that took either as "here is the output" would blank what the call
+    /// had printed.
+    #[test]
+    fn a_tool_update_carrying_no_output_leaves_the_row_as_it_was() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call", "toolCallId": "a", "title": "read"}),
+                ),
+                // Nothing but a status, over a row with no output yet.
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": "a",
+                           "status": "in_progress"}),
+                ),
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": "a",
+                           "content": [{"type": "content",
+                                        "content": {"type": "text", "text": "Cargo.toml"}}]}),
+                ),
+                // And a raw result over a row that already has output.
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": "a",
+                           "status": "completed", "rawOutput": {"lines": 3}}),
+                ),
+            ],
+        );
+        assert_eq!(app.items(), ["tool:a:read:other:completed:Cargo.toml"]);
+    }
+
+    /// A timestamp with a negative year. Nothing sends one, but a four-digit
+    /// slice with a minus in it parses as one, and both halves of this file's
+    /// date arithmetic have a branch that only a negative era reaches —
+    /// Hinnant's `days_from_civil` and, in `relative_time`, its inverse. They
+    /// are copied whole for exactly that reason, and a badge is what has to
+    /// come out either way.
+    #[test]
+    fn a_timestamp_from_before_the_year_zero_still_produces_a_badge() {
+        let epoch = rfc3339_to_epoch("-100-05-20T00:00:00Z")
+            .expect("four characters, a minus among them, still parse as a year");
+        assert!(epoch < 0, "the fixture is not before the epoch at all");
+        assert_eq!(
+            relative_time(epoch),
+            "May 20",
+            "the two halves of the date arithmetic disagree on the far side of \
+             the era split"
+        );
+    }
+
+    /// And the shapes that are not timestamps at all. Every list row's badge
+    /// goes through this, so a `None` that turned into a `0` would date the row
+    /// to January 1970 instead of saying nothing.
+    #[test]
+    fn a_string_that_is_not_a_timestamp_is_not_a_date() {
+        assert_eq!(rfc3339_to_epoch(""), None);
+        assert_eq!(rfc3339_to_epoch("nonsense"), None);
+        assert_eq!(rfc3339_to_epoch("2026-08"), None, "a date with no day");
+        assert_eq!(rfc3339_to_epoch("2026-XX-29T00:00:00Z"), None);
+        // The time is the optional half: goose's schedule rows carry bare
+        // dates, and midnight is the honest reading of one.
+        assert_eq!(
+            rfc3339_to_epoch("2026-08-29"),
+            rfc3339_to_epoch("2026-08-29T00:00:00Z"),
+            "a bare date stopped being a date"
+        );
     }
 }

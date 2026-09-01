@@ -592,10 +592,17 @@ mod tests {
         SerializedMouseData,
     };
     use dioxus::prelude::*;
-    use goose_acp_client::{HttpHeader, HttpMcpServer, StdioMcpServer};
-    use serde_json::Map;
+    use futures_util::{SinkExt as _, StreamExt as _};
+    use goose_acp_client::{
+        AcpClient, AcpEvent, ConnectConfig, HttpHeader, HttpMcpServer, StdioMcpServer,
+    };
+    use serde_json::{json, Map, Value};
     use std::any::Any;
+    use std::cell::RefCell;
     use std::rc::Rc;
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::tungstenite::Message;
 
     // -----------------------------------------------------------------------
     // Fixtures. Seeds are `fn` pointers and cannot capture, so everything a
@@ -1993,6 +2000,222 @@ mod tests {
             "the sheet closed on a Connect that never reached the server, so \
              the credential that was typed is gone: {}",
             head(&reported)
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Against a real server.
+    //
+    // Everything above seeds the list by hand, which leaves the one thing this
+    // screen does on arrival — fetch — outside the suite entirely. `AcpClient`
+    // has no constructor but `connect`, so the only way to drive it is to put a
+    // server in front of it: a plain-`ws://` JSON-RPC listener on a loopback
+    // port. `ws_url` only reaches for TLS on an `https://` base, so `http://`
+    // here means no certificate and no fingerprint.
+
+    thread_local! {
+        /// The context [`Live`]'s mount built, so a test can reach it.
+        static PUBLISHED: RefCell<Option<AppCtx>> = const { RefCell::new(None) };
+        /// The client [`Live`] connected, for [`Live::connect`] to hand over.
+        static CLIENT: RefCell<Option<AcpClient>> = const { RefCell::new(None) };
+    }
+
+    /// The Extensions list over a real context, published so a test can
+    /// connect it after the fact — which is the case the effect exists for.
+    fn published_list() -> Element {
+        let ctx = crate::state::use_app_ctx_provider();
+        use_hook(move || PUBLISHED.with(|slot| *slot.borrow_mut() = Some(ctx)));
+        rsx! { super::ExtensionsView {} }
+    }
+
+    /// One configured extension and one config goose could not load, in the
+    /// shape `config/extensions/list` answers with.
+    fn wire(method: &str, _params: &Value) -> Value {
+        assert_eq!(method, "_goose/unstable/config/extensions/list");
+        json!({
+            "extensions": [entry(mail())],
+            "warnings": ["failed to load extension 'jira': invalid url"],
+        })
+    }
+
+    struct Live {
+        dom: VirtualDom,
+        rt: tokio::runtime::Runtime,
+        ctx: AppCtx,
+        /// The connection's event stream, parked here for its lifetime: the
+        /// client's actor gives up the socket when this end goes away.
+        _events: tokio::sync::mpsc::Receiver<AcpEvent>,
+    }
+
+    impl Live {
+        /// A mounted Extensions screen, disconnected, with a live client
+        /// waiting in [`CLIENT`] for [`Self::connect`] to hand it over.
+        fn new(script: fn(&str, &Value) -> Value) -> Self {
+            let _ = crate::testkit::storage_dir();
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .expect("a tokio runtime for the socket to live on");
+            let base_url = serve(&rt, script);
+            let cfg = ConnectConfig {
+                base_url,
+                secret: String::new(),
+                fingerprint: None,
+            };
+            let (client, events, _info) = rt
+                .block_on(AcpClient::connect(&cfg))
+                .expect("the mock server accepted the handshake");
+            CLIENT.with(|slot| *slot.borrow_mut() = Some(client));
+            let mut dom = VirtualDom::new(published_list);
+            rt.block_on(async { dom.rebuild_in_place() });
+            let ctx = PUBLISHED
+                .with(|slot| *slot.borrow())
+                .expect("the mount rendered, so it published its context");
+            Self {
+                dom,
+                rt,
+                ctx,
+                _events: events,
+            }
+        }
+
+        /// Read or write the context. Signals belong to the virtual DOM's
+        /// runtime and panic outside it, so every touch goes through here.
+        fn with<T>(&self, f: impl FnOnce(&AppCtx) -> T) -> T {
+            let ctx = self.ctx;
+            self.dom.in_runtime(|| f(&ctx))
+        }
+
+        /// The connection coming up under a screen that is already on.
+        fn connect(&mut self) {
+            self.with(|ctx| {
+                ctx.client
+                    .clone()
+                    .set(CLIENT.with(|slot| slot.borrow().clone()));
+                connect(ctx);
+            });
+            self.settle();
+        }
+
+        /// Let the queued Dioxus tasks — and the socket under them — run.
+        ///
+        /// Bounded on purpose: a screen whose tasks never settle must not hang
+        /// the suite, and 400ms of idle against a loopback round trip is room
+        /// to spare rather than a wall-clock wait.
+        fn settle(&mut self) {
+            let dom = &mut self.dom;
+            self.rt.block_on(async {
+                for _ in 0..40 {
+                    let _ =
+                        tokio::time::timeout(Duration::from_millis(10), dom.wait_for_work()).await;
+                    dom.render_immediate_to_vec();
+                }
+            });
+        }
+
+        fn markup(&self) -> String {
+            dioxus_ssr::render(&self.dom)
+        }
+    }
+
+    /// A JSON-RPC server on a loopback port, answering `script`.
+    fn serve(rt: &tokio::runtime::Runtime, script: fn(&str, &Value) -> Value) -> String {
+        let listener = rt.block_on(async {
+            TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("a loopback port")
+        });
+        let port = listener
+            .local_addr()
+            .expect("the listener's own address")
+            .port();
+        rt.spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                tokio::spawn(async move { session_loop(socket, script).await });
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    async fn session_loop(socket: tokio::net::TcpStream, script: fn(&str, &Value) -> Value) {
+        let Ok(ws) = tokio_tungstenite::accept_async(socket).await else {
+            return;
+        };
+        let (mut sink, mut stream) = ws.split();
+        while let Some(Ok(msg)) = stream.next().await {
+            let Message::Text(text) = msg else { continue };
+            let Ok(frame) = serde_json::from_str::<Value>(text.as_str()) else {
+                continue;
+            };
+            let Some(id) = frame.get("id").cloned() else {
+                continue;
+            };
+            let method = frame
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let params = frame.get("params").cloned().unwrap_or(Value::Null);
+            let result = if method == "initialize" {
+                json!({
+                    "protocolVersion": 1,
+                    "agentInfo": { "name": "mock", "version": "0" },
+                })
+            } else {
+                script(&method, &params)
+            };
+            let reply = json!({ "jsonrpc": "2.0", "id": id, "result": result });
+            if sink
+                .send(Message::Text(reply.to_string().into()))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    }
+
+    /// THE EFFECT IS THE ONLY FETCH THIS SCREEN HAS. There is no refresh
+    /// button and no timer — the phone pulls, the desktop re-fetches on
+    /// arrival — so a screen that is already up when the connection comes back
+    /// has to notice by itself. Break the effect and Extensions stays
+    /// permanently empty for anyone who opened it before typing a server URL,
+    /// and the FAB above it stays dead with no way to wake it.
+    #[test]
+    fn a_screen_opened_before_connecting_fills_itself_in_when_the_socket_comes_up() {
+        let mut live = Live::new(wire);
+        live.settle();
+        let before = live.markup();
+        assert!(
+            before.contains("Not connected. Extensions live on the goose server"),
+            "the screen did not start disconnected, so what follows proves \
+             nothing about the connection arriving"
+        );
+        assert!(
+            !before.contains("Mail imap"),
+            "the list was already full before anything was connected"
+        );
+
+        live.connect();
+        let after = live.markup();
+        assert!(
+            after.contains("<div class=\"session-title\">Mail imap</div>"),
+            "the connection came up under an open Extensions screen and \
+             nothing fetched, so the list stays empty and the add button above \
+             it is the only live control on a screen that knows nothing"
+        );
+        assert!(
+            after.contains("failed to load extension &#39;jira&#39;"),
+            "the warnings goose reported alongside the list never reached the \
+             screen, so an extension it could not parse is invisible — and \
+             they are set from inside the same fetch, so this is the fetch \
+             half-landing rather than the banner being wrong"
+        );
+        assert!(
+            !after.contains("No extensions configured yet."),
+            "the screen is claiming the server has nothing configured while \
+             showing a row it just fetched"
         );
     }
 }

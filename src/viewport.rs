@@ -463,8 +463,24 @@ pub(crate) fn refresh_named(ctx: &crate::state::AppCtx, which: &str) {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test scaffolding: a harness that cannot stand up its socket has \
+              nothing to assert, so failing loudly there IS the check"
+)]
 mod tests {
-    use super::{jump_script, pin_script, TRANSCRIPT_BOTTOM};
+    use std::sync::{Arc, Mutex};
+
+    use dioxus::prelude::*;
+    use futures_util::{SinkExt as _, StreamExt as _};
+    use goose_acp_client::{AcpClient, AcpEvent, ConnectConfig};
+    use serde_json::{json, Value};
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::tungstenite::Message;
+
+    use super::{jump_script, pin_script, refresh_named, TRANSCRIPT_BOTTOM};
+    use crate::views::press::{alone, Js, Pressable};
 
     /// Both scripts are `format!` over a wall of escaped braces, and getting
     /// one wrong fails silently on a device: the JS either does not parse or
@@ -551,5 +567,401 @@ mod tests {
         // screens — so a feature branch adding a fifth does not have to move
         // the floor to stay honest.
         assert!(found >= 4, "only found {found} data-refresh scrollers");
+    }
+
+    // ------------------------------------------------ what the hooks install
+    //
+    // Everything above this line reads a string. Everything below MOUNTS the
+    // hooks that ship those strings to the webview, over a document that
+    // records what it was handed — because the failure this file is most
+    // exposed to is not a malformed script, it is a hook that quietly stopped
+    // installing one. Dioxus falls back to `NoOpDocument` when no renderer has
+    // provided one, and a `NoOpDocument` throws every script away without
+    // complaint, so a test that only called these functions would pass over a
+    // `use_effect` with its body deleted.
+
+    thread_local! {
+        /// The document the probes below install, reachable from the test that
+        /// mounted them. A `fn() -> Element` cannot capture, so the two ends
+        /// meet here.
+        static RECORDER: Js = Js::default();
+    }
+
+    /// The app root's three standing pieces of JavaScript, mounted together
+    /// the way `src/app.rs` mounts them.
+    fn app_root_hooks() -> Element {
+        use_hook(|| RECORDER.with(Js::clone)).install();
+        super::use_visual_viewport();
+        super::use_transcript_bottom();
+        super::use_file_picker();
+        rsx! { div {} }
+    }
+
+    /// The keyboard opening is the whole reason this hook exists: iOS offsets
+    /// the visual viewport instead of shrinking the layout one, so every piece
+    /// of floating chrome rides 68px up and the header leaves the screen. The
+    /// two custom properties the shell follows are written by this script and
+    /// by nothing else — a hook that installed no listener would leave them
+    /// unset forever, and the symptom on a device is a header that vanishes
+    /// the moment you tap the composer.
+    #[test]
+    fn the_shell_is_wired_to_follow_the_visual_viewport() {
+        let _alone = alone();
+        let script = mount_the_root_hooks().script_with("--vv-top");
+        assert!(
+            script.contains("window.visualViewport"),
+            "the mirror reads something other than the visual viewport, which \
+             is the only object that reports the keyboard's offset: {script}"
+        );
+        assert!(
+            script.contains("--vv-height"),
+            "only the offset is mirrored, so the shell knows where the visible \
+             viewport starts but not how tall it is: {script}"
+        );
+        assert!(
+            script.contains("vv.addEventListener('resize'")
+                && script.contains("vv.addEventListener('scroll'"),
+            "the properties are written once at mount and never again, so they \
+             are right until the first time the keyboard moves: {script}"
+        );
+        assert!(
+            script.contains("--safe-bottom"),
+            "the bottom inset is never dropped, so the composer parks 42px \
+             above the keyboard on a strip of nothing: {script}"
+        );
+    }
+
+    /// The scroll-to-bottom button and the pin are the same fact, and this is
+    /// the listener that keeps it true. Uninstalled, `window.__atBottom` is
+    /// never written, the pin reads it as "still at the bottom" forever, and a
+    /// reader trying to look back through a streaming turn is dragged to the
+    /// end on every part.
+    #[test]
+    fn the_transcript_bottom_listener_is_installed_once_for_the_whole_app() {
+        let _alone = alone();
+        let script = mount_the_root_hooks().script_with("__tbWired");
+        assert!(
+            script.contains("window.__tbWired") && script.contains("if (window.__tbWired) return"),
+            "nothing guards the listener, so every chat screen adds another \
+             copy of it: {script}"
+        );
+        assert!(
+            script.contains("ResizeObserver"),
+            "the transcript is listened to for scrolling but not watched for \
+             height, so the keyboard shrinking the shell moves the bottom away \
+             from a reader who never scrolled: {script}"
+        );
+        assert!(
+            script.contains("away-from-bottom"),
+            "the answer never reaches the class the button's visibility is \
+             keyed off: {script}"
+        );
+    }
+
+    /// The composer's attach button is a JavaScript file sheet, and the only
+    /// way anything the reader picked gets back into Rust is the `recv` loop
+    /// in `use_file_picker`. A loop that stopped calling `attach::receive`
+    /// would look exactly like a working picker right up to the point where
+    /// the tray stays empty after choosing a photo.
+    ///
+    /// Provoked with a payload the app cannot parse, because that is the one
+    /// branch of `receive` that says so out loud — and saying so is itself the
+    /// contract: a picker that sent nonsense used to leave the reader watching
+    /// a tray that never filled.
+    #[test]
+    fn what_the_file_picker_sends_back_reaches_the_code_that_reads_it() {
+        let _alone = alone();
+        RECORDER.with(|js| {
+            js.clear();
+            js.will_send("{ not a payload this app knows }");
+        });
+        let mut screen = Pressable::mount(|_| {}, app_root_hooks);
+        screen.settle();
+
+        assert!(
+            RECORDER
+                .with(Js::scripts)
+                .contains(&crate::attach::picker_js()),
+            "the picker hook installed something other than `attach::picker_js`, \
+             so the limits it is compiled with are not the ones the sheet \
+             enforces"
+        );
+        assert_eq!(
+            screen.with(|ctx| ctx.toast.peek().clone()),
+            Some("The file picker sent something this app cannot read".to_owned()),
+            "the payload the picker sent up never reached `attach::receive`, \
+             so nothing the reader chooses can ever land in the tray"
+        );
+    }
+
+    /// Mount the root's hooks and hand back the recorder they wrote into.
+    fn mount_the_root_hooks() -> Js {
+        RECORDER.with(Js::clear);
+        let mut screen = Pressable::mount(|_| {}, app_root_hooks);
+        screen.settle();
+        RECORDER.with(Js::clone)
+    }
+
+    // ------------------------------------------------- where a pull ends up
+    //
+    // `refresh_named` is a `match` over strings that three routes arrive at —
+    // the phone's pull, the desktop's ⌘R and arriving at a destination — and
+    // `every_scroller_that_names_a_refresh_has_an_arm_that_answers_to_it`
+    // above proves only that each name HAS an arm. What it cannot see is
+    // whether the arm fetches the right thing: swap the bodies of two arms and
+    // that test still passes, while pulling on Recipes re-lists the Scheduler.
+    //
+    // So this half puts a goose on a loopback socket and asserts on the method
+    // that came out the other end. `AcpClient` has no constructor but
+    // `connect`, and `ws_url` only reaches for TLS on an `https://` base, so
+    // an `http://` server here means no certificate and no fingerprint.
+
+    /// A goose that answers every list with an empty one. The union of the
+    /// fields the five responses need, so one reply parses as all of them and
+    /// no arm is left asserting about a deserialisation failure instead of a
+    /// request.
+    fn empty_lists() -> Value {
+        json!({
+            "sessions": [],
+            "sources": [],
+            "recipes": [],
+            "jobs": [],
+            "extensions": [],
+            "warnings": [],
+        })
+    }
+
+    /// Every JSON-RPC method the server was asked for, in order.
+    #[derive(Clone, Default)]
+    struct Asked(Arc<Mutex<Vec<String>>>);
+
+    impl Asked {
+        /// The handshake is the harness's own and is left out; what is left is
+        /// what the app asked for.
+        fn methods(&self) -> Vec<String> {
+            self.0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|method| *method != "initialize")
+                .cloned()
+                .collect()
+        }
+    }
+
+    /// A mounted app with a live connection to a server that logs what it was
+    /// asked, on the one runtime `press::settle` drives.
+    struct Wire {
+        screen: Pressable,
+        asked: Asked,
+        /// The connection's event stream, parked here for its lifetime: the
+        /// client's actor gives up the socket when this end goes away.
+        _events: tokio::sync::mpsc::Receiver<AcpEvent>,
+    }
+
+    impl Wire {
+        fn connect() -> Self {
+            let rt = crate::views::press::runtime();
+            let listener = rt.block_on(async { TcpListener::bind("127.0.0.1:0").await.unwrap() });
+            let port = listener.local_addr().unwrap().port();
+            let asked = Asked::default();
+            let log = asked.clone();
+            rt.spawn(async move {
+                while let Ok((socket, _)) = listener.accept().await {
+                    let log = log.clone();
+                    tokio::spawn(async move { session_loop(socket, log).await });
+                }
+            });
+
+            let cfg = ConnectConfig {
+                base_url: format!("http://127.0.0.1:{port}"),
+                secret: String::new(),
+                fingerprint: None,
+            };
+            let (client, events, _info) = rt
+                .block_on(AcpClient::connect(&cfg))
+                .expect("the mock goose accepted the handshake");
+            let screen = Pressable::mount(|_| {}, || rsx! { div {} });
+            screen.with(|ctx| ctx.client.clone().set(Some(client)));
+            Self {
+                screen,
+                asked,
+                _events: events,
+            }
+        }
+
+        /// Pull the list `which` names, and let the fetch reach the socket.
+        fn pull(&mut self, which: &'static str) -> Vec<String> {
+            self.screen.with(|ctx| refresh_named(ctx, which));
+            self.screen.settle();
+            self.asked.methods()
+        }
+    }
+
+    async fn session_loop(socket: tokio::net::TcpStream, log: Asked) {
+        let Ok(ws) = tokio_tungstenite::accept_async(socket).await else {
+            return;
+        };
+        let (mut sink, mut stream) = ws.split();
+        while let Some(Ok(msg)) = stream.next().await {
+            let Message::Text(text) = msg else { continue };
+            let Ok(frame) = serde_json::from_str::<Value>(text.as_str()) else {
+                continue;
+            };
+            let Some(id) = frame.get("id").cloned() else {
+                continue;
+            };
+            let method = frame
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let result = if method == "initialize" {
+                json!({
+                    "protocolVersion": 1,
+                    "agentInfo": { "name": "mock", "version": "0" },
+                })
+            } else {
+                empty_lists()
+            };
+            log.0.lock().unwrap().push(method);
+            let reply = json!({ "jsonrpc": "2.0", "id": id, "result": result });
+            // A send that fails means the client hung up, and the `while` above
+            // is about to notice; there is nothing for this end to do about it.
+            let _ = sink.send(Message::Text(reply.to_string().into())).await;
+        }
+    }
+
+    /// Each name fetches ITS OWN list, and nothing else does.
+    ///
+    /// The names are a contract between a scroller's `data-refresh` and this
+    /// `match`, written on different branches, and the compiler has nothing to
+    /// say about either end of it. Two arms whose bodies were swapped compile,
+    /// pass the name-has-an-arm test above, and leave a reader pulling on
+    /// Recipes to re-list the Scheduler — with the spinner turning correctly
+    /// the whole time, because the fetch really did happen.
+    ///
+    /// Asserted on the method that reached the server rather than on a signal,
+    /// because a list that arrives empty is indistinguishable from one that
+    /// was never asked for.
+    #[test]
+    fn every_name_fetches_the_list_it_names_and_no_other() {
+        let _alone = alone();
+        let mut wire = Wire::connect();
+
+        for (which, method) in [
+            ("chats", "session/list"),
+            ("extensions", "_goose/unstable/config/extensions/list"),
+            ("skills", "_goose/unstable/sources/list"),
+            ("recipes", "_goose/unstable/recipes/list"),
+            ("scheduler", "_goose/unstable/schedules/list"),
+        ] {
+            let before = wire.asked.methods();
+            let after = wire.pull(which);
+            let fresh: Vec<&String> = after.iter().skip(before.len()).collect();
+            assert!(
+                fresh.iter().any(|m| *m == method),
+                "pulling {which:?} asked goose for {fresh:?}, and {method} is \
+                 not among them — that list is refreshed by no route at all, \
+                 or by the wrong one"
+            );
+            assert!(
+                !fresh.is_empty() && fresh.iter().all(|m| m.as_str() == method),
+                "pulling {which:?} also asked for {fresh:?}; one pull fetches \
+                 one list"
+            );
+        }
+    }
+
+    /// A name with no arm is silence, and it has to be: most `.scroll`
+    /// elements set no `data-refresh` at all, and Settings reaches this by
+    /// destination id with nothing to fetch. An arm that fell through to a
+    /// fetch would put a request on the wire every time anyone opened
+    /// Settings.
+    #[test]
+    fn a_name_this_match_does_not_know_asks_for_nothing() {
+        let _alone = alone();
+        let mut wire = Wire::connect();
+        assert!(
+            wire.pull("settings").is_empty(),
+            "a destination with nothing to fetch went to the server anyway"
+        );
+        assert!(
+            wire.pull("").is_empty(),
+            "a scroller that names no refresh went to the server anyway"
+        );
+    }
+
+    /// The two arms that belong to the OTHER server. They are in the same
+    /// `match` as the goose lists and reach a different plane entirely, so the
+    /// wire test above cannot see them — and with no code gateway configured
+    /// each has a sentence it owes the reader, which is what this holds in
+    /// place. A pull that reported nothing leaves someone staring at an empty
+    /// screen with no way to find out that Settings is where the answer is.
+    #[test]
+    fn the_code_planes_pulls_say_why_when_there_is_no_code_plane() {
+        let _alone = alone();
+        let screen = Pressable::mount(
+            |ctx| {
+                let mut chat = ctx.code_chat;
+                chat.write().chat_id = Some("chat-1".to_owned());
+            },
+            || rsx! { div {} },
+        );
+
+        screen.with(|ctx| refresh_named(ctx, "pulls"));
+        assert_eq!(
+            screen.with(|ctx| ctx.code_pulls.peek().error.clone()),
+            Some("Code plane not connected — check Settings".to_owned()),
+            "pulling on the pull-request list with no gateway configured left \
+             the screen empty and silent"
+        );
+
+        screen.with(|ctx| refresh_named(ctx, "diff"));
+        assert_eq!(
+            screen.with(|ctx| ctx.toast.peek().clone()),
+            Some("No changes yet — the chat has no session".to_owned()),
+            "pulling on the diff of a chat that has never run said nothing at \
+             all"
+        );
+    }
+
+    /// The Code list is the third arm on that plane and the only one that
+    /// fetches through a client rather than refusing before it has one. With a
+    /// gateway configured but unreachable — which is every pull made outside
+    /// the tailnet — the pull has to come back with the reason rather than
+    /// leaving the spinner to stop over an unchanged list.
+    #[test]
+    fn pulling_the_code_list_reports_a_gateway_it_cannot_reach() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(
+            |ctx| {
+                // Port 1 is privileged and unbound, so the connection is
+                // refused at once rather than waiting out a timeout.
+                let client = opencode_client::CodeClient::new(&opencode_client::CodeConfig {
+                    base_url: "http://127.0.0.1:1".to_owned(),
+                    password: String::new(),
+                })
+                .expect("a client for a base URL that is not blank");
+                let mut code = ctx.code_client;
+                code.set(Some(client));
+            },
+            || rsx! { div {} },
+        );
+
+        screen.with(|ctx| refresh_named(ctx, "code"));
+        screen.settle();
+        let toast = screen
+            .with(|ctx| ctx.toast.peek().clone())
+            .unwrap_or_default();
+        assert!(
+            toast.starts_with("Failed to list code chats:"),
+            "pulling the Code list against an unreachable gateway said {toast:?} \
+             — the arm either fetched nothing or swallowed the reason"
+        );
+        assert!(
+            !screen.with(|ctx| (ctx.code_chats_loading)()),
+            "the spinner is still turning after the fetch came back"
+        );
     }
 }

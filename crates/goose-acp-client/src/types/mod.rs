@@ -490,6 +490,160 @@ mod tests {
         }
     }
 
+    /// Every block a transcript can be handed has to render as *something* a
+    /// reader recognises. These strings are what stands in the message body
+    /// beside the attachment itself, so an empty or misleading one is a hole
+    /// in the conversation.
+    #[test]
+    fn every_block_kind_renders_something_a_reader_can_place() {
+        fn block(v: Value) -> ContentBlock {
+            serde_json::from_value(v).unwrap()
+        }
+
+        assert_eq!(
+            ContentBlock::image("QUJD", "image/png").text_repr(),
+            "[image: image/png]"
+        );
+        assert_eq!(
+            block(json!({"type": "audio", "data": "QUJD", "mimeType": "audio/wav"})).text_repr(),
+            "[audio: audio/wav]"
+        );
+        // A link renders as the name it was given...
+        assert_eq!(
+            block(json!({"type": "resource_link", "uri": "file:///src/a.rs", "name": "a.rs"}))
+                .text_repr(),
+            "[a.rs](file:///src/a.rs)"
+        );
+        // ...and falls back to the URI when the server sent no name, rather
+        // than an empty pair of brackets.
+        assert_eq!(
+            block(json!({"type": "resource_link", "uri": "file:///src/a.rs"})).text_repr(),
+            "[file:///src/a.rs](file:///src/a.rs)"
+        );
+        // An embedded resource with text shows the text.
+        assert_eq!(
+            ContentBlock::resource_text("file:///n.md", "text/markdown", "# hi").text_repr(),
+            "# hi"
+        );
+        // Neither text nor a uri leaves nothing to name it by.
+        assert_eq!(
+            block(json!({"type": "resource", "resource": {}})).text_repr(),
+            "[resource]"
+        );
+    }
+
+    /// What a tool call shows once it has run. Every entry `ToolCallContent`
+    /// can hold has to contribute, separated so two results never run
+    /// together into one line — and an entry this crate does not understand
+    /// must be skipped silently rather than emptying the whole block.
+    #[test]
+    fn tool_call_content_joins_every_kind_it_understands() {
+        let update: ToolCallUpdate = serde_json::from_value(json!({
+            "toolCallId": "call_9",
+            "content": [
+                {"type": "content", "content": {"type": "text", "text": "first"}},
+                {"type": "content", "content": {"type": "text", "text": "second"}},
+                {"type": "content", "content": {"type": "not_a_block"}},
+                {"type": "content"},
+                {"type": "diff", "path": "src/lib.rs", "newText": "fn main() {}"},
+                {"type": "diff"},
+                {"type": "terminal", "terminalId": "term_1"},
+                {"type": "something_new"},
+                {"notATypeAtAll": true},
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            update.content_text(),
+            "first\nsecond\n[diff: src/lib.rs]\nfn main() {}\n[diff: file]\n[terminal output]",
+            "each understood entry gets its own line and an unreadable one is skipped"
+        );
+        assert_eq!(
+            ToolCallUpdate::default().content_text(),
+            "",
+            "a tool call with no content yet must render as nothing, not as a placeholder"
+        );
+        assert_eq!(
+            update.tool_name(),
+            None,
+            "no goose _meta means no tool name to show"
+        );
+    }
+
+    /// The three chunk tags are three different things on screen — what the
+    /// user said, what the agent said, and what it was thinking — so mixing
+    /// them up puts the agent's reasoning in the user's own bubble.
+    #[test]
+    fn each_chunk_tag_lands_in_its_own_variant() {
+        let chunk = |tag: &str| {
+            SessionUpdate::from_value(json!({
+                "sessionUpdate": tag,
+                "content": {"type": "text", "text": tag},
+            }))
+        };
+        match chunk("user_message_chunk") {
+            SessionUpdate::UserMessageChunk(c) => {
+                assert_eq!(c.content.text_repr(), "user_message_chunk");
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+        match chunk("agent_thought_chunk") {
+            SessionUpdate::AgentThoughtChunk(c) => {
+                assert_eq!(c.content.text_repr(), "agent_thought_chunk");
+                assert!(c.message_id.is_none() && c.meta.is_none());
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+
+        let renamed = SessionUpdate::from_value(json!({
+            "sessionUpdate": "session_info_update",
+            "title": "Refactoring the parser",
+            "updatedAt": "2026-08-25T09:34:12Z",
+        }));
+        match renamed {
+            SessionUpdate::SessionInfoUpdate(info) => {
+                assert_eq!(info.title.as_deref(), Some("Refactoring the parser"));
+                assert_eq!(info.updated_at.as_deref(), Some("2026-08-25T09:34:12Z"));
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    /// A payload whose tag this crate knows but whose body it cannot read is
+    /// still kept whole. Dropping it would lose a message with no trace; the
+    /// app can log or display the raw JSON instead, and the tag says which
+    /// shape changed under us.
+    #[test]
+    fn a_typed_tag_with_an_unreadable_body_survives_as_unknown() {
+        for tag in [
+            "user_message_chunk",
+            "agent_message_chunk",
+            "agent_thought_chunk",
+            "tool_call",
+            "tool_call_update",
+            "session_info_update",
+        ] {
+            // Wrong types for the one field each of those three shapes needs.
+            let raw = json!({
+                "sessionUpdate": tag,
+                "content": 42,
+                "toolCallId": 7,
+                "title": 9,
+            });
+            match SessionUpdate::from_value(raw.clone()) {
+                SessionUpdate::Unknown {
+                    tag: seen,
+                    raw: kept,
+                } => {
+                    assert_eq!(seen, tag, "the tag must survive so the loss is traceable");
+                    assert_eq!(kept, raw, "the payload must be kept byte for byte");
+                }
+                other => panic!("a malformed {tag} must not parse: {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn unknown_update_is_preserved() {
         let raw = json!({"sessionUpdate": "brand_new_thing", "x": 1});

@@ -1101,19 +1101,22 @@ mod tests {
     // the journal, so the struct is assembled here out of plain signals and
     // touches no disk.
     //
-    // What this cannot reach, and what nothing short of a live goose could:
-    // every branch past an `await` on an `AcpClient`. Constructing one means
-    // completing a WebSocket handshake against a real server, so the server's
-    // *answers* — a scan verdict, a delete that succeeded, a schedule refused
-    // as unsupported — are untested here. What is covered is the half that
-    // runs before the socket, which is where this file's two header rules
-    // live: what a tap does immediately, and what an action must not do until
-    // the server has agreed.
+    // The server's *answers* — a scan verdict, a delete that succeeded, a
+    // schedule refused as unsupported — used to be out of reach here, because
+    // `AcpClient` has no constructor but `connect` and connecting means
+    // completing a WebSocket handshake against something. So there is
+    // something: `crate::scheduler::tests::serve` puts a scripted JSON-RPC
+    // server on a loopback port over plain `ws://`, and [`Harness::connected`]
+    // points a real client at it. Everything below the "over the wire" rule
+    // runs the code that only exists after an `await`.
 
     use std::cell::RefCell;
     use std::collections::HashSet;
     use std::time::Duration;
 
+    use goose_acp_client::{AcpClient, ConnectConfig};
+
+    use crate::scheduler::tests::{ok, rpc_error, serve, Reply, Script, Server};
     use crate::state::AppCtx;
 
     thread_local! {
@@ -1188,12 +1191,20 @@ mod tests {
         rt: tokio::runtime::Runtime,
         dom: VirtualDom,
         ctx: AppCtx,
+        /// The connection's event stream, parked for the harness's lifetime.
+        /// The client's actor gives up the socket when this end goes away, so
+        /// dropping it would leave a connection that died between the
+        /// handshake and the first request.
+        events: Option<tokio::sync::mpsc::Receiver<goose_acp_client::AcpEvent>>,
     }
 
     impl Harness {
         fn new() -> Self {
+            // `enable_all` rather than `enable_time`: the timer is what the
+            // spawned halves need, and the IO driver is what the socket in
+            // `connected` needs.
             let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_time()
+                .enable_all()
                 .build()
                 .expect("a current-thread tokio runtime for the spawned halves");
             PROBE_CTX.with(|slot| *slot.borrow_mut() = None);
@@ -1202,7 +1213,31 @@ mod tests {
             let ctx = PROBE_CTX
                 .with(|slot| *slot.borrow())
                 .expect("the probe rendered, so it published its context");
-            Self { rt, dom, ctx }
+            Self {
+                rt,
+                dom,
+                ctx,
+                events: None,
+            }
+        }
+
+        /// The same, with a real [`AcpClient`] on the context talking to a
+        /// goose that answers `script`.
+        fn connected(script: Script) -> (Self, Server) {
+            let mut harness = Self::new();
+            let server = serve(&harness.rt, script);
+            let cfg = ConnectConfig {
+                base_url: server.base_url.clone(),
+                secret: String::new(),
+                fingerprint: None,
+            };
+            let (client, events, _info) = harness
+                .rt
+                .block_on(AcpClient::connect(&cfg))
+                .expect("the mock server accepted the handshake");
+            harness.events = Some(events);
+            harness.with(|ctx| ctx.client.clone().set(Some(client)));
+            (harness, server)
         }
 
         /// Touch signals inside the Dioxus runtime without letting anything
@@ -1215,12 +1250,17 @@ mod tests {
 
         /// Let the spawned tasks run. Dioxus queues them and polls from an
         /// executor, so nothing spawned makes a step without this.
+        ///
+        /// The budget is 400 ms of *idle* — a slice with work in it returns at
+        /// once — against a longest scripted delay of 60 ms, which is what
+        /// gives a loaded machine room before a socket round trip becomes a
+        /// flake.
         fn settle(&mut self) {
             let Self { rt, dom, .. } = self;
             rt.block_on(async {
-                for _ in 0..6 {
+                for _ in 0..40 {
                     let _ =
-                        tokio::time::timeout(Duration::from_millis(20), dom.wait_for_work()).await;
+                        tokio::time::timeout(Duration::from_millis(10), dom.wait_for_work()).await;
                     dom.render_immediate_to_vec();
                 }
             });
@@ -1663,6 +1703,366 @@ mod tests {
                 "",
                 "a recipe with no prompt opened its session with someone \
                  else's half-written message in the composer"
+            );
+        });
+    }
+
+    // ------------------------------------------------------- over the wire
+    //
+    // Everything above stops at the first `let Some(client)`. What follows is
+    // the other side of every one of those: the request that went out, and
+    // what this file does with the answer.
+
+    /// The method name with goose's recipe namespace taken off.
+    fn short(method: &str) -> &str {
+        method.trim_start_matches("_goose/unstable/recipes/")
+    }
+
+    /// One `recipes/list` row as goose puts it on the wire.
+    fn wire_entry(id: &str, title: &str, cron: &Value) -> Value {
+        json!({
+            "id": id,
+            "recipe": { "title": title, "description": "What happened yesterday." },
+            "file_path": format!("/home/me/.config/goose/recipes/{id}.yaml"),
+            "last_modified": "2026-08-23T18:42:11.508233+00:00",
+            "schedule_cron": cron,
+            "slash_command": null,
+        })
+    }
+
+    /// The ids in the list, in order.
+    fn ids(ctx: &AppCtx) -> Vec<String> {
+        ctx.recipes
+            .list
+            .peek()
+            .items
+            .iter()
+            .map(|entry| entry.id.clone())
+            .collect()
+    }
+
+    /// Every method this server was asked for, in order, without the
+    /// namespace and without the handshake.
+    fn asked(server: &Server) -> Vec<String> {
+        server
+            .log()
+            .iter()
+            .map(|(method, _)| short(method).to_owned())
+            .filter(|method| method != "initialize")
+            .collect()
+    }
+
+    /// A fetch that reaches goose replaces the list with what goose holds,
+    /// stops the spinner, and brings each row's schedule with it.
+    ///
+    /// The offline half of this is already checked; this is the half where
+    /// something comes back. Losing the settle would leave the pull gesture
+    /// spinning over an empty screen forever — the same symptom as the offline
+    /// bug, from the opposite cause — and losing the mapping would put rows on
+    /// screen with no schedule line on the one that is on a timer, which is
+    /// the app failing to mention that something runs unattended.
+    #[test]
+    fn a_list_that_arrives_replaces_the_screen_and_stops_the_spinner() {
+        fn two_recipes(method: &str, _params: &Value) -> Reply {
+            if short(method) == "list" {
+                return ok(json!({
+                    "recipes": [
+                        wire_entry("r1", "Morning standup", &Value::Null),
+                        wire_entry("r2", "Release notes", &json!("30 8 * * 1-5")),
+                    ]
+                }));
+            }
+            ok(json!({}))
+        }
+        let (mut h, server) = Harness::connected(two_recipes);
+        h.act(refresh);
+        h.with(|ctx| {
+            assert_eq!(
+                ids(ctx),
+                ["r1", "r2"],
+                "the list goose answered with never reached the screen"
+            );
+            let list = ctx.recipes.list.peek();
+            assert!(
+                !list.loading,
+                "the fetch answered and the pull spinner is still going"
+            );
+            assert_eq!(list_state(&list, true), ListState::Rows);
+            assert_eq!(
+                row_meta(&list.items[1]).schedule.as_deref(),
+                Some("Runs every weekday at 8:30 AM"),
+                "a recipe goose says is on a timer arrived with no schedule \
+                 line, so nothing on screen says it runs unattended"
+            );
+            assert_eq!(row_meta(&list.items[0]).schedule, None);
+        });
+        assert_eq!(asked(&server), ["list"]);
+    }
+
+    /// The verdict goose gives is the verdict the Run button wears.
+    ///
+    /// Three answers, three states, and the mapping between them is silent
+    /// either way it breaks: read `true` as clean and a recipe goose flagged
+    /// runs on one tap; read an error as `Warned` and every server without the
+    /// method puts a confirm in front of every recipe it has.
+    #[test]
+    fn goose_s_own_verdict_is_what_decides_how_hard_run_is_to_press() {
+        fn scan_by_title(method: &str, params: &Value) -> Reply {
+            if short(method) == "scan" {
+                return match params["recipe"]["title"].as_str().unwrap_or_default() {
+                    "Flagged" => ok(json!({ "has_security_warnings": true })),
+                    "Clean" => ok(json!({ "has_security_warnings": false })),
+                    _ => rpc_error(-32602, "that recipe will not parse"),
+                };
+            }
+            ok(json!({}))
+        }
+        let (mut h, server) = Harness::connected(scan_by_title);
+        for (title, verdict, offer) in [
+            ("Flagged", ScanState::Warned, RunOffer::Confirm),
+            ("Clean", ScanState::Clean, RunOffer::Run),
+            ("Unreadable", ScanState::Unknown, RunOffer::Run),
+        ] {
+            let body = json!({ "title": title, "description": "D" });
+            h.act(|ctx| open(ctx, entry_id(title, &body, &Value::Null)));
+            h.with(|ctx| {
+                assert_eq!(
+                    *ctx.recipes.scan.peek(),
+                    verdict,
+                    "goose answered for {title} and the screen is showing a \
+                     different verdict"
+                );
+                assert_eq!(run_offer(false, *ctx.recipes.scan.peek()), offer);
+            });
+        }
+        assert_eq!(
+            asked(&server),
+            ["scan", "scan", "scan"],
+            "an open either asked twice or did not ask"
+        );
+    }
+
+    /// A verdict that arrives after the reader has opened something else must
+    /// be dropped, not shown.
+    ///
+    /// One RPC per open and no cancellation, so two opens in quick succession
+    /// leave two scans in flight for one slot. Without the identity check the
+    /// slower one wins simply by being slower — and the screen then puts a
+    /// confirm in front of a recipe goose called clean, or takes one away from
+    /// a recipe goose flagged. The reader has no way to tell either happened.
+    #[test]
+    fn a_verdict_for_a_recipe_the_reader_has_left_never_lands_on_the_open_one() {
+        fn slow_for_the_flagged_one(method: &str, params: &Value) -> Reply {
+            if short(method) == "scan" {
+                if params["recipe"]["title"] == json!("Flagged") {
+                    return (
+                        Duration::from_millis(60),
+                        Ok(json!({ "has_security_warnings": true })),
+                    );
+                }
+                return ok(json!({ "has_security_warnings": false }));
+            }
+            ok(json!({}))
+        }
+        let (mut h, _server) = Harness::connected(slow_for_the_flagged_one);
+        h.with(|ctx| {
+            let flagged = json!({ "title": "Flagged", "description": "D" });
+            let clean = json!({ "title": "Clean", "description": "D" });
+            open(ctx, entry_id("flagged", &flagged, &Value::Null));
+            open(ctx, entry_id("clean", &clean, &Value::Null));
+        });
+        h.settle();
+        h.with(|ctx| {
+            assert_eq!(
+                ctx.recipes.open.peek().as_ref().map(|e| e.id.clone()),
+                Some("clean".to_owned()),
+                "the screen is not on the recipe this test is about"
+            );
+            assert_eq!(
+                *ctx.recipes.scan.peek(),
+                ScanState::Clean,
+                "the late verdict for a recipe the reader has already left \
+                 landed on the one in front of them, so the screen is warning \
+                 about a recipe goose called clean"
+            );
+        });
+    }
+
+    /// The row goes when goose says the file is gone, and stays when it says
+    /// anything else.
+    ///
+    /// Dropping the row locally is only safe because it is on the `Ok` arm.
+    /// The list is refetched on every return to it, so a row removed over a
+    /// refusal comes straight back — which reads as the app having undone the
+    /// delete rather than as the delete never having happened.
+    #[test]
+    fn a_delete_goose_took_drops_the_row_and_one_it_refused_says_why() {
+        fn only_r2_exists(method: &str, params: &Value) -> Reply {
+            if short(method) == "delete" {
+                if params["id"] == json!("r2") {
+                    return ok(json!({}));
+                }
+                return rpc_error(-32602, "no recipe with that id");
+            }
+            ok(json!({}))
+        }
+        let (mut h, server) = Harness::connected(only_r2_exists);
+        h.with(|ctx| {
+            let mut list = ctx.recipes.list;
+            list.write().settle(vec![
+                entry_id("r1", &plain(), &Value::Null),
+                entry_id("r2", &plain(), &Value::Null),
+            ]);
+        });
+
+        h.act(|ctx| delete(ctx, "r2"));
+        h.with(|ctx| {
+            assert_eq!(
+                ids(ctx),
+                ["r1"],
+                "goose unlinked the file and the row is still on screen, so \
+                 the next tap on it deletes something that is already gone"
+            );
+            assert_eq!(
+                ctx.toast.peek().as_deref(),
+                None,
+                "a delete that worked toasted over the row it had just removed"
+            );
+        });
+
+        h.act(|ctx| delete(ctx, "r1"));
+        h.with(|ctx| {
+            assert_eq!(
+                ids(ctx),
+                ["r1"],
+                "a delete goose refused took the row off the screen anyway — \
+                 and the next list brings it back, which reads as an undo"
+            );
+            assert_eq!(
+                ctx.toast.peek().as_deref(),
+                Some("Delete failed: no recipe with that id")
+            );
+        });
+        assert_eq!(asked(&server), ["delete", "delete"]);
+        assert_eq!(server.log()[1].1, json!({ "id": "r2" }));
+    }
+
+    /// A schedule goose accepted is written into both copies of the recipe and
+    /// said out loud in words.
+    ///
+    /// The toast is the sheet's only answer — nothing else on screen changes
+    /// at the moment of saving — and it is the cron as a sentence rather than
+    /// the cron, because the reader picked "every weekday at 8:30" and never
+    /// typed `30 8 * * 1-5`.
+    #[test]
+    fn a_schedule_goose_accepted_is_shown_on_the_row_and_said_in_words() {
+        fn takes_anything(method: &str, _params: &Value) -> Reply {
+            let _ = short(method);
+            ok(json!({}))
+        }
+        let (mut h, server) = Harness::connected(takes_anything);
+        h.with(|ctx| {
+            let (mut list, mut open) = (ctx.recipes.list, ctx.recipes.open);
+            list.write()
+                .settle(vec![entry_id("r1", &plain(), &Value::Null)]);
+            open.set(Some(entry_id("r1", &plain(), &Value::Null)));
+        });
+
+        h.act(|ctx| set_schedule(ctx, "r1", Some("30 8 * * 1-5".to_owned())));
+        h.with(|ctx| {
+            assert_eq!(
+                row_meta(&ctx.recipes.list.peek().items[0])
+                    .schedule
+                    .as_deref(),
+                Some("Runs every weekday at 8:30 AM"),
+                "goose took the schedule and the row does not show it, so the \
+                 reader has no way to tell the save worked"
+            );
+            assert_eq!(
+                ctx.toast.peek().as_deref(),
+                Some("Runs every weekday at 8:30 AM"),
+                "the sheet closed without saying what it saved, or said it as \
+                 the cron nobody typed"
+            );
+            assert!(
+                !*ctx.recipes.scheduler_off.peek(),
+                "a schedule that was accepted concluded the server has no \
+                 scheduler, which deletes the Schedule row for good"
+            );
+        });
+
+        // Off is the same call with a null cron, and it gets its own sentence
+        // rather than a summary of nothing.
+        h.act(|ctx| set_schedule(ctx, "r1", None));
+        h.with(|ctx| {
+            assert_eq!(row_meta(&ctx.recipes.list.peek().items[0]).schedule, None);
+            assert_eq!(ctx.toast.peek().as_deref(), Some("Schedule removed"));
+        });
+        assert_eq!(asked(&server), ["schedule", "schedule"]);
+        assert_eq!(
+            server.log()[2].1,
+            json!({ "id": "r1", "cron_schedule": Value::Null }),
+            "removing a schedule has to say so on the wire, not by leaving the \
+             key out"
+        );
+    }
+
+    /// "Not enabled" is a fact about the server and is remembered; anything
+    /// else is one call that failed and is not.
+    ///
+    /// The difference is what the Schedule row does next time. Rule 11 does
+    /// not let the app go on offering a control it has been told does nothing,
+    /// and nothing in this file ever sets the flag back — so latching on an
+    /// ordinary refusal would delete the row for the rest of the session over
+    /// a cron that simply would not parse.
+    #[test]
+    fn only_a_server_without_a_scheduler_takes_the_schedule_row_away() {
+        fn refuses(method: &str, params: &Value) -> Reply {
+            if short(method) == "schedule" {
+                if params["id"] == json!("no-scheduler") {
+                    return (
+                        Duration::ZERO,
+                        // goose's own shape when `--enable-scheduler` is off:
+                        // method-not-found with the reason in `data`.
+                        Err(json!({
+                            "code": -32601,
+                            "message": "Method not found",
+                            "data": "Scheduled recipe execution is not enabled",
+                        })),
+                    );
+                }
+                return rpc_error(-32602, "that cron will not parse");
+            }
+            ok(json!({}))
+        }
+        let (mut h, _server) = Harness::connected(refuses);
+
+        h.act(|ctx| set_schedule(ctx, "bad-cron", Some("30 8 * * 1-5".to_owned())));
+        h.with(|ctx| {
+            assert_eq!(
+                ctx.toast.peek().as_deref(),
+                Some("Schedule not saved: that cron will not parse")
+            );
+            assert!(
+                !*ctx.recipes.scheduler_off.peek(),
+                "one call that failed convinced the app this server has no \
+                 scheduler, and nothing ever sets that back — so the Schedule \
+                 row is gone for the rest of the session"
+            );
+        });
+
+        h.act(|ctx| set_schedule(ctx, "no-scheduler", Some("30 8 * * 1-5".to_owned())));
+        h.with(|ctx| {
+            assert!(
+                *ctx.recipes.scheduler_off.peek(),
+                "the server said scheduling is not enabled and the app went on \
+                 offering the row that asks for it"
+            );
+            assert_eq!(
+                ctx.toast.peek().as_deref(),
+                Some("Schedule not saved: Scheduler: Scheduled recipe execution is not enabled"),
+                "the refusal did not carry goose's own reason, which is the \
+                 only thing that points at the flag on the server"
             );
         });
     }
