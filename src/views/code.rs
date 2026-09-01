@@ -2171,7 +2171,7 @@ mod tests {
         unescape(&mount_seeded(seed, view))
     }
 
-    fn unescape(html: &str) -> String {
+    pub(super) fn unescape(html: &str) -> String {
         html.replace("&#39;", "'").replace("&#34;", "\"")
     }
 
@@ -2253,7 +2253,7 @@ mod tests {
         );
     }
 
-    fn agent(name: &str, mode: AgentMode, description: Option<&str>) -> Agent {
+    pub(super) fn agent(name: &str, mode: AgentMode, description: Option<&str>) -> Agent {
         Agent {
             name: name.to_owned(),
             description: description.map(str::to_owned),
@@ -2337,7 +2337,7 @@ mod tests {
         assert!(chat_ask(&queue, "chat_c").is_none());
     }
 
-    fn model(provider: &str, id: &str, name: &str) -> ModelInfo {
+    pub(super) fn model(provider: &str, id: &str, name: &str) -> ModelInfo {
         ModelInfo {
             id: id.to_owned(),
             provider_id: provider.to_owned(),
@@ -2707,7 +2707,7 @@ mod tests {
 
     // ------------------------------------------------------- merging a pull
 
-    fn pull(
+    pub(super) fn pull(
         number: u64,
         title: &str,
         state: PullState,
@@ -2787,7 +2787,13 @@ mod tests {
 
     // -------------------------------------------------------- the chat list
 
-    fn chat_meta(id: &str, title: &str, repo: &str, branch: &str, status: &str) -> ChatMeta {
+    pub(super) fn chat_meta(
+        id: &str,
+        title: &str,
+        repo: &str,
+        branch: &str,
+        status: &str,
+    ) -> ChatMeta {
         ChatMeta {
             id: id.to_owned(),
             repo: repo.to_owned(),
@@ -2800,7 +2806,7 @@ mod tests {
         }
     }
 
-    fn permission(id: &str, title: &str) -> CodePermission {
+    pub(super) fn permission(id: &str, title: &str) -> CodePermission {
         CodePermission {
             id: id.to_owned(),
             title: title.to_owned(),
@@ -2808,7 +2814,7 @@ mod tests {
         }
     }
 
-    fn connect(ctx: &AppCtx) {
+    pub(super) fn connect(ctx: &AppCtx) {
         let mut conn = ctx.code_conn;
         conn.set(ConnState::Connected {
             agent: "opencode".to_owned(),
@@ -3160,7 +3166,7 @@ mod tests {
 
     // ------------------------------------------------ the new-session screen
 
-    fn seed_repos(ctx: &AppCtx) {
+    pub(super) fn seed_repos(ctx: &AppCtx) {
         let mut repos = ctx.code_repos;
         repos.set(vec![
             repo("PhillipChaffee/personal-ai-setup", false),
@@ -3634,7 +3640,7 @@ mod tests {
         }
     }
 
-    fn sonnet() -> ModelInfo {
+    pub(super) fn sonnet() -> ModelInfo {
         let mut variants = std::collections::BTreeMap::new();
         variants.insert("low".to_owned(), serde_json::Value::Null);
         variants.insert("high".to_owned(), serde_json::Value::Null);
@@ -4118,14 +4124,14 @@ mod tests {
 
     const MODIFIED_PATCH: &str = "@@ -1,4 +1,4 @@\n fn main() {\n-    old();\n+    new();\n }\n";
 
-    const DELETED_PATCH: &str = "@@ -1,2 +0,0 @@\n-gone one\n-gone two\n";
+    pub(super) const DELETED_PATCH: &str = "@@ -1,2 +0,0 @@\n-gone one\n-gone two\n";
 
     const METADATA_ONLY_PATCH: &str = "@@ -0,0 +0,0 @@\n";
 
     const TRUNCATED_LINE_PATCH: &str =
         "@@ -1,1 +1,1 @@\n-old\n+new\n\\ No newline at end of file\n";
 
-    fn diff_file(
+    pub(super) fn diff_file(
         file: &str,
         status: FileStatus,
         additions: u32,
@@ -4208,7 +4214,7 @@ mod tests {
         }
     }
 
-    fn seed_three_files(ctx: &AppCtx) {
+    pub(super) fn seed_three_files(ctx: &AppCtx) {
         let files = vec![
             diff_file("src/a.rs", FileStatus::Modified, 1, 1, MODIFIED_PATCH),
             diff_file("src/b.rs", FileStatus::Added, 2, 0, MODIFIED_PATCH),
@@ -4424,7 +4430,7 @@ mod tests {
         );
     }
 
-    fn gapped_patch() -> String {
+    pub(super) fn gapped_patch() -> String {
         let mut patch = String::from("@@ -1,22 +1,22 @@\n+added at the top\n");
         for i in 0..20 {
             patch.push_str(" context line ");
@@ -5149,4 +5155,1870 @@ mod tests {
         );
     }
     // APPEND-HERE
+}
+
+/// Pressing the code tab, because everything left unmeasured in this file is
+/// a handler.
+///
+/// The module above mounts a view and reads its markup back, which reaches
+/// every arm the context decides and none of the ones the READER decides. Two
+/// hundred lines of this file are closures a render never runs: the four pills
+/// and their sheets, the composer's send and its Enter key, the review's fold,
+/// tick, reveal and expand bands, both confirms, the overflow menu, the three
+/// answers on a permission modal and the two on a card. A suite that stopped
+/// at markup would report all of them as covered by nothing — which is what
+/// they were.
+///
+/// So this dispatches real events into a live `VirtualDom` and renders again.
+/// The two problems that has to solve are solved the way
+/// `crate::views::chat`'s `pressing` module solves them, and the long-form
+/// account of WHY each half is shaped this way is written there:
+/// `dioxus_ssr::pre_render` numbers the hydratable elements, [`hydration_ids`]
+/// is `dioxus-web`'s own rehydration walk over public `dioxus-core` API, and
+/// the k-th element that walk visits is the element the renderer numbered k.
+/// Taking `rebuild_to_vec`'s listener order instead is measurably wrong — it
+/// lands a press on a different button — so it is not done here either.
+///
+/// It is a second copy rather than a shared one because that module is a
+/// private `#[cfg(test)]` module of another file, and widening test
+/// scaffolding into `pub(crate)` to reach it would put a third file's markup
+/// in this file's blast radius. When a third screen wants it, that is when it
+/// earns a home in `crate::testkit`.
+///
+/// WHAT A PRESS IS ALLOWED TO REACH. Every handler here ends in
+/// `crate::code`, and every one of those functions goes through
+/// `ctx.code_client`. Left `None`, each has a documented refusal — a toast, an
+/// error written into the screen's own state — and that refusal is a thing a
+/// reader sees, so it is asserted rather than avoided. Where a press has to
+/// get PAST that guard, [`stub_client`] puts a real `CodeClient` in the slot
+/// pointed at a base that is not a URL: `CodeClient::new` only checks that the
+/// string is non-empty, so the request fails inside `reqwest`'s builder,
+/// immediately, with no socket and no name lookup. Nothing in this module
+/// talks to anything.
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test scaffolding: a press that cannot find its button has \
+              nothing to assert, so failing loudly there IS the check"
+)]
+mod pressing {
+    use std::any::Any;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use dioxus::dioxus_core::{
+        DynamicNode, ElementId, NoOpMutations, ScopeState, TemplateAttribute, TemplateNode, VNode,
+    };
+    use dioxus::html::{
+        Code, Key, Location, Modifiers, PlatformEventData, SerializedFormData,
+        SerializedHtmlEventConverter, SerializedKeyboardData, SerializedMouseData,
+    };
+    use dioxus::prelude::*;
+    use opencode_client::{AgentMode, Checks, CodeClient, CodeConfig, PullState};
+
+    use super::tests::{
+        agent, chat_meta, connect, diff_file, gapped_patch, model, permission, pull, seed_repos,
+        seed_three_files, sonnet, unescape, DELETED_PATCH,
+    };
+    use super::{
+        CodeChatView, CodeDiffView, CodeNewView, CodePermissionModal, CodePullsView,
+        CodeSessionsView, FileStatus,
+    };
+    use crate::code::{CodeChatState, CodeScreen, DiffState, PullsState};
+    use crate::state::{use_app_ctx, AppCtx, ChatItem, ConnState, Settings};
+
+    // ----------------------------------------------------------- the harness
+
+    /// The two process-wide things a press needs, set up exactly once.
+    ///
+    /// The converter because `dioxus-html` routes every listener through a
+    /// global one that a renderer installs at launch, and the `.unwrap()`
+    /// inside `ListenerCallback` panics without it. The runtime because a
+    /// refusal ends in `show_toast`, which arms a `tokio::time::sleep` to take
+    /// the toast away again — and polling that with no reactor panics.
+    ///
+    /// Both are `OnceLock`ed rather than built per mount for the reason
+    /// `views/chat.rs` records: `cargo test` runs on every core at once, and a
+    /// converter reinstalled under a reader wedged that whole binary while
+    /// every test in it still passed alone.
+    fn install_once() -> &'static tokio::runtime::Runtime {
+        static TIMERS: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+        TIMERS.get_or_init(|| {
+            dioxus::html::set_event_converter(Box::new(SerializedHtmlEventConverter));
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a current-thread tokio runtime for the toast timer")
+        })
+    }
+
+    /// These tests run one at a time.
+    ///
+    /// [`Pressable::settle`] runs the `VirtualDom`'s task queue, and the ask
+    /// journal's `use_synced_storage` puts two tasks on that queue talking to
+    /// a watch channel `dioxus-sdk-storage` keys in a `static` — process-wide,
+    /// so every mount in the binary shares it. Two of them draining at once
+    /// feed each other and never settle. See `views/chat.rs` for the
+    /// measurement.
+    fn alone() -> std::sync::MutexGuard<'static, ()> {
+        static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[derive(Clone, Copy)]
+    struct Mount {
+        seed: fn(&AppCtx),
+        view: fn() -> Element,
+    }
+
+    /// Never memoise: a harness renders once and is dropped, and comparing
+    /// `fn` pointers is meaningless (see `crate::testkit`).
+    impl PartialEq for Mount {
+        fn eq(&self, _other: &Self) -> bool {
+            false
+        }
+    }
+
+    #[expect(
+        non_snake_case,
+        reason = "a Dioxus component is named like a component, not like a fn"
+    )]
+    fn Harness(props: Mount) -> Element {
+        let ctx = crate::state::use_app_ctx_provider();
+        use_hook(|| (props.seed)(&ctx));
+        (props.view)()
+    }
+
+    /// The element behind each `data-node-hydration` number, in that order.
+    fn hydration_ids(dom: &VirtualDom) -> Vec<ElementId> {
+        let mut ids = Vec::new();
+        walk_scope(dom, dom.base_scope(), &mut ids);
+        ids
+    }
+
+    fn walk_scope(dom: &VirtualDom, scope: &ScopeState, ids: &mut Vec<ElementId>) {
+        walk_vnode(dom, scope.root_node(), ids);
+    }
+
+    fn walk_vnode(dom: &VirtualDom, vnode: &VNode, ids: &mut Vec<ElementId>) {
+        for (index, root) in vnode.template.roots.iter().enumerate() {
+            walk_template_node(dom, vnode, root, ids, vnode.mounted_root(index, dom));
+        }
+    }
+
+    fn walk_template_node(
+        dom: &VirtualDom,
+        vnode: &VNode,
+        node: &TemplateNode,
+        ids: &mut Vec<ElementId>,
+        root_id: Option<ElementId>,
+    ) {
+        match node {
+            TemplateNode::Element {
+                children, attrs, ..
+            } => {
+                let mut mounted = root_id;
+                for attr in *attrs {
+                    if let TemplateAttribute::Dynamic { id } = attr {
+                        if let Some(id) = vnode.mounted_dynamic_attribute(*id, dom) {
+                            mounted = Some(id);
+                        }
+                    }
+                }
+                if let Some(id) = mounted {
+                    ids.push(id);
+                }
+                for child in *children {
+                    walk_template_node(dom, vnode, child, ids, None);
+                }
+            }
+            TemplateNode::Dynamic { id } => {
+                walk_dynamic_node(dom, vnode, &vnode.dynamic_nodes[*id], *id, ids);
+            }
+            TemplateNode::Text { .. } => {
+                if let Some(id) = root_id {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+
+    fn walk_dynamic_node(
+        dom: &VirtualDom,
+        vnode: &VNode,
+        dynamic: &DynamicNode,
+        index: usize,
+        ids: &mut Vec<ElementId>,
+    ) {
+        match dynamic {
+            DynamicNode::Text(_) | DynamicNode::Placeholder(_) => {
+                if let Some(id) = vnode.mounted_dynamic_node(index, dom) {
+                    ids.push(id);
+                }
+            }
+            DynamicNode::Component(component) => {
+                if let Some(scope) = component.mounted_scope(index, vnode, dom) {
+                    walk_scope(dom, scope, ids);
+                }
+            }
+            DynamicNode::Fragment(fragment) => {
+                for node in fragment {
+                    walk_vnode(dom, node, ids);
+                }
+            }
+        }
+    }
+
+    /// A mounted view with a way in.
+    struct Pressable {
+        dom: VirtualDom,
+        /// The render with `data-node-hydration` left in, and the elements it
+        /// numbers, in the same order. Recomputed after every event, because
+        /// an event that opens a sheet creates elements.
+        hydrated: String,
+        ids: Vec<ElementId>,
+    }
+
+    impl Pressable {
+        fn mount(seed: fn(&AppCtx), view: fn() -> Element) -> Self {
+            // The same one owner as `crate::testkit`: `set_directory` writes a
+            // process-wide `OnceLock` and unwraps, so a second caller panics.
+            let _ = crate::testkit::storage_dir();
+            let _ = install_once();
+            let mut dom = VirtualDom::new_with_props(Harness, Mount { seed, view });
+            dom.rebuild_in_place();
+            let mut screen = Self {
+                dom,
+                hydrated: String::new(),
+                ids: Vec::new(),
+            };
+            screen.reread();
+            screen
+        }
+
+        fn reread(&mut self) {
+            self.hydrated = dioxus_ssr::pre_render(&self.dom);
+            self.ids = hydration_ids(&self.dom);
+        }
+
+        /// What the screen says right now, with the escapes `dioxus_ssr`
+        /// applies to text undone — so a negative assertion about a sentence
+        /// carrying an apostrophe is a claim about the screen rather than one
+        /// about the escaper.
+        fn markup(&self) -> String {
+            unescape(&dioxus_ssr::render(&self.dom))
+        }
+
+        /// Let the work a press STARTED finish before the markup is read.
+        ///
+        /// A handler that spawns is only half a press: `refresh_code_chats`,
+        /// `code_connect`, `client.abort` and the rest all answer after the
+        /// render that dispatched them has returned. The loop is bounded for
+        /// the reason `testkit::render_settled`'s is — a view whose tasks
+        /// never settle must not be able to hang the suite.
+        fn settle(&mut self) {
+            const PASSES: usize = 8;
+            const SLICE: Duration = Duration::from_millis(20);
+            install_once().block_on(async {
+                for _ in 0..PASSES {
+                    let _ = tokio::time::timeout(SLICE, self.dom.wait_for_work()).await;
+                    self.dom.render_immediate(&mut NoOpMutations);
+                }
+            });
+            self.reread();
+        }
+
+        /// The `ElementId` of the `nth` element whose opening tag contains
+        /// `needle` and which carries an `event` listener.
+        fn locate(&self, event: &str, needle: &str, nth: usize) -> ElementId {
+            const MARK: &str = " data-node-hydration=\"";
+            let mut at = 0;
+            let mut seen = 0;
+            while let Some(rel) = self.hydrated[at..].find(MARK) {
+                let start = at + rel;
+                let value = start + MARK.len();
+                let end = value
+                    + self.hydrated[value..]
+                        .find('"')
+                        .expect("an unterminated data-node-hydration attribute");
+                let tag_start = self.hydrated[..start].rfind('<').unwrap_or(0);
+                let tag = &self.hydrated[tag_start..start];
+                let mut parts = self.hydrated[value..end].split(',');
+                let number: usize = parts
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .expect("a data-node-hydration number that is not a number");
+                if parts.any(|l| l.split(':').next() == Some(event)) && tag.contains(needle) {
+                    if seen == nth {
+                        return *self.ids.get(number).expect(
+                            "the markup numbers an element the hydration walk never \
+                             reached, so the two are out of step and a press would \
+                             land somewhere else entirely",
+                        );
+                    }
+                    seen += 1;
+                }
+                at = end;
+            }
+            panic!(
+                "there is no #{nth} element matching {needle:?} with an {event} \
+                 listener:\n{}",
+                self.hydrated
+            )
+        }
+
+        fn dispatch(&mut self, event: &str, needle: &str, nth: usize, data: Box<dyn Any>) {
+            let id = self.locate(event, needle, nth);
+            let payload: Rc<dyn Any> = Rc::new(PlatformEventData::new(data));
+            {
+                let _timers = install_once().enter();
+                self.dom
+                    .runtime()
+                    .handle_event(event, Event::new(payload, true), id);
+                self.dom.render_immediate(&mut NoOpMutations);
+            }
+            self.reread();
+        }
+
+        /// Tap the first control whose opening tag contains `needle`.
+        fn press(&mut self, needle: &str) {
+            self.press_nth(needle, 0);
+        }
+
+        /// Tap the `nth`, for the lists whose rows are indistinguishable from
+        /// their markup — a picker's choices carry their label as a child, not
+        /// as an attribute, so "the second model offered" is the only way to
+        /// name one.
+        fn press_nth(&mut self, needle: &str, nth: usize) {
+            self.dispatch(
+                "click",
+                needle,
+                nth,
+                Box::new(SerializedMouseData::default()),
+            );
+        }
+
+        /// Type into the first field whose opening tag contains `needle`,
+        /// exactly as a `WebView` reports it: the field's whole new value.
+        fn type_into(&mut self, needle: &str, value: &str) {
+            self.dispatch(
+                "input",
+                needle,
+                0,
+                Box::new(SerializedFormData::new(value.to_owned(), Vec::new())),
+            );
+        }
+
+        /// Press Return in the first field whose opening tag contains
+        /// `needle`. The physical key is given as well as the logical one
+        /// because a browser sends both.
+        fn enter(&mut self, needle: &str, modifiers: Modifiers) {
+            self.dispatch(
+                "keydown",
+                needle,
+                0,
+                Box::new(SerializedKeyboardData::new(
+                    Key::Enter,
+                    Code::Enter,
+                    Location::Standard,
+                    false,
+                    modifiers,
+                    false,
+                )),
+            );
+        }
+    }
+
+    // ------------------------------------------------------------- the probe
+
+    /// The state a press changes that no screen in this file paints.
+    ///
+    /// Rendered above whichever view is under test, so one `markup()` answers
+    /// both "what does the reader see" and "where did that press leave the
+    /// app". Every field is here because some assertion below would otherwise
+    /// have nothing to stand on.
+    fn probe(ctx: &AppCtx) -> Element {
+        let screen = match (ctx.code_screen)() {
+            CodeScreen::List => "list",
+            CodeScreen::New => "new",
+            CodeScreen::Chat => "chat",
+            CodeScreen::Diff => "diff",
+            CodeScreen::Pulls => "pulls",
+        };
+        let toast = (ctx.toast)().unwrap_or_default();
+        let drawer = (ctx.drawer_open)();
+        let drafts = ctx.new_attachments.read().len();
+        let pulls_error = ctx.code_pulls.read().error.clone().unwrap_or_default();
+        let open = ctx.code_chat.read().title.clone();
+        rsx! {
+            p { class: "probe",
+                "{screen}|{toast}|{drawer}|new:{drafts}|open:{open}|pulls:{pulls_error}"
+            }
+        }
+    }
+
+    fn sessions_probe() -> Element {
+        let ctx = use_app_ctx();
+        rsx! {
+            {probe(&ctx)}
+            CodeSessionsView {}
+        }
+    }
+
+    fn new_probe() -> Element {
+        let ctx = use_app_ctx();
+        rsx! {
+            {probe(&ctx)}
+            CodeNewView {}
+        }
+    }
+
+    fn chat_probe() -> Element {
+        let ctx = use_app_ctx();
+        rsx! {
+            {probe(&ctx)}
+            CodeChatView {}
+        }
+    }
+
+    fn diff_probe() -> Element {
+        let ctx = use_app_ctx();
+        rsx! {
+            {probe(&ctx)}
+            CodeDiffView {}
+        }
+    }
+
+    fn pulls_probe() -> Element {
+        let ctx = use_app_ctx();
+        rsx! {
+            {probe(&ctx)}
+            CodePullsView {}
+        }
+    }
+
+    fn modal_probe() -> Element {
+        let ctx = use_app_ctx();
+        rsx! {
+            {probe(&ctx)}
+            CodePermissionModal {}
+        }
+    }
+
+    // --------------------------------------------------------------- seeds
+
+    /// A client that exists and can reach nothing.
+    ///
+    /// The half of `crate::code` behind `ctx.code_client` is unreachable
+    /// without one — `send_code_prompt` returns false, `merge_pull` toasts,
+    /// `answer_code_permission` returns before it has taken the ask off the
+    /// queue — so a press against an empty slot can only ever assert the
+    /// refusal. `CodeClient::new` checks that the base is non-empty and
+    /// nothing else, and `code-plane` prefixed to a path is not a URL, so
+    /// every request fails inside `reqwest`'s builder without opening a socket
+    /// or asking a resolver anything.
+    fn stub_client(ctx: &AppCtx) {
+        let client = CodeClient::new(&CodeConfig {
+            base_url: "code-plane".to_owned(),
+            password: "secret".to_owned(),
+        })
+        .expect("a client for a non-empty base");
+        ctx.code_client.clone().set(Some(client));
+    }
+
+    fn seed_list(ctx: &AppCtx) {
+        connect(ctx);
+        let mut chats = ctx.code_chats;
+        chats.set(vec![
+            chat_meta("c1", "Rotate the cert", "acme/infra", "agent/c1", "running"),
+            chat_meta("c2", "Tidy the audit", "acme/tools", "", "stopped"),
+        ]);
+    }
+
+    fn seed_list_with_ask(ctx: &AppCtx) {
+        seed_list(ctx);
+        stub_client(ctx);
+        let mut asks = ctx.code_permissions;
+        asks.set(vec![
+            ("c1".to_owned(), permission("p1", "Write to src/main.rs")),
+            ("c1".to_owned(), permission("p2", "Run cargo test")),
+        ]);
+    }
+
+    fn seed_modal(ctx: &AppCtx) {
+        stub_client(ctx);
+        let mut chat = ctx.code_chat;
+        chat.set(CodeChatState {
+            chat_id: Some("c1".to_owned()),
+            ..CodeChatState::default()
+        });
+        let mut asks = ctx.code_permissions;
+        asks.set(vec![
+            ("c1".to_owned(), permission("p1", "Write a file")),
+            ("c1".to_owned(), permission("p2", "Run cargo test")),
+        ]);
+    }
+
+    fn seed_new(ctx: &AppCtx) {
+        seed_repos(ctx);
+        let mut branches = ctx.code_branches;
+        branches.set(crate::code::BranchList {
+            repo: "PhillipChaffee/personal-ai-setup".to_owned(),
+            default: Some("main".to_owned()),
+            names: vec!["main".to_owned(), "release/2.x".to_owned()],
+            truncated: false,
+            loading: false,
+        });
+        let mut models = ctx.code_models;
+        models.set(vec![sonnet()]);
+        let mut agents = ctx.code_agents;
+        agents.set(vec![
+            agent("build", AgentMode::Primary, None),
+            agent("plan", AgentMode::Primary, None),
+        ]);
+    }
+
+    /// A chat screen the reader has arrived on, so "the press left the screen
+    /// where it was" is a claim with something behind it.
+    fn open_chat(ctx: &AppCtx) {
+        ctx.code_screen.clone().set(CodeScreen::Chat);
+        let mut chat = ctx.code_chat;
+        chat.set(CodeChatState {
+            chat_id: Some("c1".to_owned()),
+            session_id: Some("s-1".to_owned()),
+            title: "Rotate the cert".to_owned(),
+            repo: "acme/infra".to_owned(),
+            branch: "agent/c1".to_owned(),
+            items: vec![ChatItem::Assistant {
+                message_id: None,
+                text: "Rotated it.".to_owned(),
+            }],
+            ..CodeChatState::default()
+        });
+    }
+
+    /// A chat the app has finished opening: a client, a session, a catalogue
+    /// and the agent list this chat's own container answered.
+    ///
+    /// Two models rather than one because `SettingRow::select` demotes a
+    /// one-item list to a fact — with nothing to choose between, the row is
+    /// where the setting is stuck rather than a control. And
+    /// `code_agents_from` because that is what says the held list belongs to
+    /// THIS chat; without it `ensure_code_agents` throws the seeded list away
+    /// and asks the container again, which is a fair reading of an empty
+    /// `agents_from` and not the state under test.
+    fn seed_chat(ctx: &AppCtx) {
+        stub_client(ctx);
+        open_chat(ctx);
+        let mut models = ctx.code_models;
+        models.set(vec![
+            sonnet(),
+            model("anthropic", "claude-opus-4", "Claude Opus 4"),
+        ]);
+        let mut agents = ctx.code_agents;
+        agents.set(vec![
+            agent("build", AgentMode::Primary, None),
+            agent("plan", AgentMode::Primary, None),
+        ]);
+        ctx.code_agents_from.clone().set("c1".to_owned());
+    }
+    // ------------------------------------------------------- the chat list
+
+    /// Opening the Code tab with a server already saved connects to it,
+    /// without being asked and without a Retry first.
+    ///
+    /// That is a `use_hook` on first render, and it is the whole of what makes
+    /// the tab usable after a cold start: without it the list sits on the
+    /// offline arm — "set the code server URL in Settings" — over a URL that
+    /// is already set, and nothing on the screen would ever change.
+    ///
+    /// The saved base here cannot be turned into a request, so the round trip
+    /// ends where `code_connect` ends it: the badge and the error box, which
+    /// is the state a reader would see with a gateway that has moved.
+    #[test]
+    fn a_saved_server_is_dialled_the_first_time_the_tab_is_opened() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(
+            |ctx| {
+                let mut settings = ctx.settings;
+                settings.set(Settings {
+                    code_server_url: "code-plane".to_owned(),
+                    code_password: "secret".to_owned(),
+                    ..Settings::default()
+                });
+            },
+            sessions_probe,
+        );
+        assert!(
+            screen.markup().contains("conn-label\">offline<"),
+            "nothing has been dialled yet, so the badge cannot claim otherwise"
+        );
+
+        screen.settle();
+        let html = screen.markup();
+        assert!(
+            html.contains("conn-label\">error<"),
+            "the tab never dialled the server it already has saved, so a cold \
+             start leaves it offline for ever: {html:.400}"
+        );
+        assert!(
+            html.contains("error-box"),
+            "a failed connection has to say what failed: {html:.400}"
+        );
+        assert!(
+            !html.contains("Set the code server URL and password in Settings"),
+            "a configured server that could not be reached is not an \
+             unconfigured one"
+        );
+    }
+
+    /// The one way out of the Code tab on a phone. Nothing else in this view
+    /// opens the drawer, so a handler that stopped writing the signal would
+    /// strand the reader on a tab with no navigation at all.
+    #[test]
+    fn the_lists_menu_button_opens_the_drawer() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_list, sessions_probe);
+        assert!(
+            screen.markup().contains("|false|new:0"),
+            "the drawer is open before anything was pressed"
+        );
+
+        screen.press("class=\"icon-btn menu\"");
+        let said = screen.markup();
+        assert!(
+            said.contains("|true|new:0"),
+            "the menu button no longer opens the drawer, which is the only way \
+             off this tab: {said:.400}",
+        );
+    }
+
+    /// Retry has to ASK AGAIN, not merely repaint. A handler that cleared the
+    /// error without redialling would leave the tab looking recovered and
+    /// still holding no client, which is worse than the failure it replaced.
+    ///
+    /// The proof is that the message CHANGES: the seeded failure is one the
+    /// app could not have produced from the settings it has, and the one that
+    /// replaces it is `build_client`'s own verdict on an empty URL.
+    #[test]
+    fn retry_dials_again_rather_than_only_clearing_the_message() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(
+            |ctx| {
+                let mut conn = ctx.code_conn;
+                conn.set(ConnState::Failed("tls handshake failed".to_owned()));
+            },
+            sessions_probe,
+        );
+        assert!(
+            screen.markup().contains("tls handshake failed"),
+            "the seeded failure is what the retry is being offered for"
+        );
+
+        screen.press("class=\"btn primary grow\"");
+        screen.settle();
+        let html = screen.markup();
+        assert!(
+            html.contains("code server URL is empty"),
+            "Retry did not reach `code_connect` — the box still shows the old \
+             failure rather than this attempt's: {html:.400}"
+        );
+        assert!(
+            !html.contains("tls handshake failed"),
+            "the previous failure survived a fresh attempt: {html:.400}"
+        );
+    }
+
+    /// The only route to the draft screen from the list.
+    #[test]
+    fn the_fab_leaves_the_list_for_the_draft_screen() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_list, sessions_probe);
+        assert!(
+            screen.markup().contains("probe\">list|"),
+            "starts on the list"
+        );
+
+        screen.press("class=\"fab\"");
+        let said = screen.markup();
+        assert!(
+            said.contains("probe\">new|"),
+            "the FAB is the only way to start a session and it went nowhere: \
+             {said:.400}",
+        );
+    }
+
+    /// Tapping a row opens THAT row's chat — the whole tile is the target
+    /// (design rule 9), and what it opens is the session the row names rather
+    /// than whatever was last open.
+    #[test]
+    fn a_row_opens_the_session_it_names() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_list, sessions_probe);
+
+        screen.press_nth("class=\"session-item\"", 1);
+        let html = screen.markup();
+        assert!(
+            html.contains("probe\">chat|"),
+            "a tap on a row did not open its chat: {html:.400}"
+        );
+        assert!(
+            html.contains("open:Tidy the audit|"),
+            "the second row opened the first row's session: {html:.400}"
+        );
+    }
+
+    /// Deleting a session takes the container and the branch with it and there
+    /// is no undo, so the row action asks first — and Cancel has to mean
+    /// cancel.
+    #[test]
+    fn deleting_from_the_list_asks_first_and_cancel_backs_out() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_list, sessions_probe);
+        assert!(
+            !screen.markup().contains("Delete this session?"),
+            "the confirm is up before the row action was pressed"
+        );
+
+        screen.press("class=\"row-action danger\"");
+        let asked = screen.markup();
+        assert!(
+            asked.contains("Delete this session?"),
+            "a destructive row action with no confirmation behind it: {asked:.400}"
+        );
+        assert!(
+            asked.contains("any work on the branch that has not been pushed goes with them"),
+            "the confirm has to say what else goes: {asked:.400}"
+        );
+
+        screen.press("class=\"btn secondary\"");
+        let after = screen.markup();
+        assert!(
+            !after.contains("Delete this session?"),
+            "Cancel left the confirm on screen: {after:.400}"
+        );
+        assert!(
+            after.contains("Rotate the cert"),
+            "Cancel took the row away anyway: {after:.400}"
+        );
+    }
+
+    /// Confirming closes the sheet and asks the server. It must NOT take the
+    /// row off the list on its own — the manager purges the container and the
+    /// workspace, and a row that vanished before that answered would report a
+    /// deletion that had not happened.
+    #[test]
+    fn confirming_a_delete_hands_it_to_the_server_and_keeps_the_row() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(
+            |ctx| {
+                seed_list(ctx);
+                stub_client(ctx);
+            },
+            sessions_probe,
+        );
+
+        screen.press("class=\"row-action danger\"");
+        screen.press("class=\"btn danger\"");
+        let html = screen.markup();
+        assert!(
+            !html.contains("Delete this session?"),
+            "the confirm stayed up after it was answered: {html:.400}"
+        );
+        assert!(
+            html.contains("Rotate the cert"),
+            "the row was removed locally rather than by the server's answer: \
+             {html:.400}"
+        );
+    }
+
+    /// The two answers a card offers, and the reason the card can offer them
+    /// at all: they stop the click, so approving does not also open the chat.
+    ///
+    /// That `stop_propagation` is one line with nothing else holding it in
+    /// place, and losing it would send the reader into a conversation they did
+    /// not ask for every time they cleared an ask from the list.
+    #[test]
+    fn approving_from_a_card_answers_the_ask_without_opening_the_chat() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_list_with_ask, sessions_probe);
+        assert!(
+            screen
+                .markup()
+                .contains("Approve or deny Write to src/main.rs"),
+            "the card starts parked on the first ask"
+        );
+
+        screen.press("class=\"btn small primary\"");
+        let html = screen.markup();
+        assert!(
+            html.contains("Approve or deny Run cargo test"),
+            "answering the front of the queue did not move the card on to the \
+             next ask: {html:.400}"
+        );
+        assert!(
+            !html.contains("more waiting"),
+            "one ask left is not a backlog: {html:.400}"
+        );
+        assert!(
+            html.contains("probe\">list|"),
+            "the answer's click reached the row underneath it, so clearing an \
+             ask also navigated: {html:.400}"
+        );
+    }
+
+    /// Deny is the other half, and it is a different string on the wire — a
+    /// handler that sent `once` for both would read as working right up until
+    /// the agent did the thing you refused.
+    #[test]
+    fn denying_from_a_card_also_takes_the_ask_off_it() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_list_with_ask, sessions_probe);
+
+        screen.press("class=\"btn small danger-outline\"");
+        let html = screen.markup();
+        assert!(
+            html.contains("Approve or deny Run cargo test"),
+            "Deny left the answered ask on the card: {html:.400}"
+        );
+        assert!(
+            html.contains("probe\">list|"),
+            "Deny navigated into the chat as well as answering: {html:.400}"
+        );
+    }
+
+    // ------------------------------------------------ the permission modal
+
+    /// All three answers, each on its own mount, because each is a different
+    /// word on the wire and the buttons are otherwise identical markup.
+    /// Answering the front of a queue of two leaves the second one up, which
+    /// is what says the modal answered ONE ask rather than emptied the queue.
+    #[test]
+    fn the_modal_answers_one_ask_at_a_time_whichever_button_is_pressed() {
+        let _alone = alone();
+        for (nth, needle, answer) in [
+            (0, "class=\"btn primary\"", "Allow once"),
+            (1, "class=\"btn primary\"", "Always allow"),
+            (0, "class=\"btn danger-outline\"", "Reject"),
+        ] {
+            let mut screen = Pressable::mount(seed_modal, modal_probe);
+            assert!(
+                screen.markup().contains("modal-tool\">Write a file<"),
+                "{answer}: the modal starts on the front of the queue"
+            );
+
+            screen.press_nth(needle, nth);
+            let html = screen.markup();
+            assert!(
+                html.contains("modal-tool\">Run cargo test<"),
+                "{answer} did not answer the ask it was on: {html:.400}"
+            );
+            assert!(
+                !html.contains("more waiting"),
+                "{answer} left the count claiming a backlog that is now the \
+                 whole queue: {html:.400}"
+            );
+        }
+    }
+    // ---------------------------------------------- the new-session screen
+
+    /// Four pills, four sheets, and nothing else on the screen opens any of
+    /// them. The tap beside a sheet is the only way back out — this screen has
+    /// no Cancel row — so a lost `onclose` would trap the reader in a picker.
+    #[test]
+    fn each_pill_opens_its_own_sheet_and_a_tap_beside_it_closes_it() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_new, new_probe);
+        assert!(
+            !screen.markup().contains("modal sheet picker"),
+            "a sheet is up before any pill was pressed"
+        );
+
+        for (pill, heading, row) in [
+            (
+                "title=\"Repository\"",
+                "Repositories (2)",
+                "personal-ai-setup",
+            ),
+            ("title=\"Base branch\"", "Choose base branch", "release/2.x"),
+            ("title=\"Model", "Select model", "Claude Sonnet 4.5"),
+            ("title=\"Mode\"", "Select mode", "Plan"),
+        ] {
+            screen.press(pill);
+            let open = screen.markup();
+            assert!(
+                open.contains(heading) && open.contains(row),
+                "the {pill} pill did not open a sheet offering {row}: {open:.400}"
+            );
+
+            screen.press("class=\"modal-backdrop\"");
+            let closed = screen.markup();
+            assert!(
+                !closed.contains(heading),
+                "a tap beside the {pill} sheet left it on screen, which is the \
+                 only way out of it: {closed:.400}"
+            );
+        }
+    }
+
+    /// Choosing a repo moves the branch with it. The sentence in the
+    /// placeholder is the screen's own statement of what it is about to do, so
+    /// a base branch read from the old repo surviving the move would make it
+    /// name a branch the new repo may not even have.
+    #[test]
+    fn choosing_a_repo_rewrites_the_sentence_and_drops_the_branch_with_it() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_new, new_probe);
+        assert!(
+            screen.markup().contains(
+                "Start a task in PhillipChaffee/personal-ai-setup on branch main\u{2026}"
+            ),
+            "the screen starts settled on the first allowlisted repo"
+        );
+
+        screen.press("title=\"Repository\"");
+        screen.press_nth("class=\"choice", 1);
+        let html = screen.markup();
+        assert!(
+            html.contains("Start a task in PhillipChaffee/scratch\u{2026}"),
+            "picking a repo did not reach the sentence that names it: {html:.400}"
+        );
+        assert!(
+            !html.contains("on branch main"),
+            "the old repo's branch rode into the new one: {html:.400}"
+        );
+        assert!(
+            !html.contains("Repositories (2)"),
+            "the sheet stayed open over the choice it had just taken: {html:.400}"
+        );
+    }
+
+    /// The branch is the other half of that sentence, and picking one has to
+    /// reach it — otherwise the screen goes on promising the repo's default
+    /// while the session is cut from something else.
+    #[test]
+    fn choosing_a_branch_names_it_in_the_sentence() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_new, new_probe);
+
+        screen.press("title=\"Base branch\"");
+        screen.press_nth("class=\"choice", 1);
+        let html = screen.markup();
+        assert!(
+            html.contains("on branch release/2.x\u{2026}"),
+            "the chosen branch never reached the placeholder: {html:.400}"
+        );
+        assert!(
+            html.contains("chip-name\">release/2.x<"),
+            "and the pill has to agree with it: {html:.400}"
+        );
+    }
+
+    /// A model is chosen, never defaulted into: it decides what the work
+    /// costs, how good it is and — through privacy hard rule 1 — who gets to
+    /// see the code. The send button stays shut until one is picked, and the
+    /// task text alone does not open it.
+    #[test]
+    fn a_session_cannot_be_started_until_a_model_is_picked() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_new, new_probe);
+        let said = screen.markup();
+        assert!(
+            said.contains("title=\"Start the session\" disabled=true"),
+            "an empty draft cannot start a session: {said:.400}",
+        );
+
+        screen.type_into("class=\"compose-field\"", "rotate the certificate");
+        let typed = screen.markup();
+        assert!(
+            typed.contains("title=\"Start the session\" disabled=true"),
+            "a task with no model behind it started a session anyway: {typed:.400}"
+        );
+        assert!(
+            typed.contains("composer-chip action model needed"),
+            "rule 8: the pill that is why the button is shut wears the dot: \
+             {typed:.400}"
+        );
+
+        screen.press("title=\"Model");
+        screen.press_nth("class=\"choice", 0);
+        let picked = screen.markup();
+        assert!(
+            picked.contains("chip-model\">Claude Sonnet 4.5<"),
+            "the picked model never reached its pill: {picked:.400}"
+        );
+        assert!(
+            !picked.contains("title=\"Start the session\" disabled=true"),
+            "every pill is answered and the button is still shut: {picked:.400}"
+        );
+        assert!(
+            !picked.contains("composer-chip action model needed"),
+            "the pill kept its dot after it was answered: {picked:.400}"
+        );
+
+        screen.press("title=\"Start the session\"");
+        let sent = screen.markup();
+        assert!(
+            sent.contains("Code plane not connected"),
+            "a create with no client behind it went silently nowhere: {sent:.400}"
+        );
+    }
+
+    /// The mode pill is the agent the first turn runs as, and the picker is
+    /// the only thing that can change it.
+    #[test]
+    fn choosing_a_mode_renames_the_pill() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_new, new_probe);
+        assert!(
+            screen.markup().contains("chip-label\">Build<"),
+            "a turn naming no agent runs as build, and the pill says so"
+        );
+
+        screen.press("title=\"Mode\"");
+        screen.press_nth("class=\"choice", 1);
+        let html = screen.markup();
+        assert!(
+            html.contains("chip-label\">Plan<"),
+            "the picked agent never reached the pill, so the chip and the \
+             session would disagree about what the first turn runs as: \
+             {html:.400}"
+        );
+    }
+
+    /// Discard means discard, and the photos picked beside the draft go with
+    /// it. They live in a tray of their own — leaving them behind would put
+    /// them in the NEXT new session, on whatever repo that one is pointed at.
+    #[test]
+    fn discarding_a_draft_takes_the_photos_with_it() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(
+            |ctx| {
+                seed_new(ctx);
+                ctx.new_attachments
+                    .clone()
+                    .set(vec![crate::attach::PendingAttachment {
+                        record: crate::attach::Attachment {
+                            name: "screenshot.png".to_owned(),
+                            mime: "image/png".to_owned(),
+                            size: 128,
+                            thumb: String::new(),
+                        },
+                        data: "AAAA".to_owned(),
+                        text: None,
+                    }]);
+            },
+            new_probe,
+        );
+        assert!(
+            screen.markup().contains("new:1"),
+            "the draft starts with a photo beside it"
+        );
+
+        screen.press("title=\"Discard this session\"");
+        let html = screen.markup();
+        assert!(
+            html.contains("probe\">list|"),
+            "discarding the draft did not leave the screen: {html:.400}"
+        );
+        assert!(
+            html.contains("new:0"),
+            "the discarded draft's photo survived into the next session's \
+             tray: {html:.400}"
+        );
+    }
+    fn seed_chat_no_session(ctx: &AppCtx) {
+        stub_client(ctx);
+        open_chat(ctx);
+        let mut chat = ctx.code_chat;
+        chat.write().session_id = None;
+    }
+
+    fn seed_running_chat(ctx: &AppCtx) {
+        seed_chat(ctx);
+        let mut chat = ctx.code_chat;
+        chat.write().running = true;
+    }
+
+    /// The chat screen before a chat has been opened on it: the manager's
+    /// record has not landed, so there is no id to act on.
+    fn seed_unopened_chat(ctx: &AppCtx) {
+        stub_client(ctx);
+        ctx.code_screen.clone().set(CodeScreen::Chat);
+    }
+
+    // -------------------------------------------------------- the chat screen
+
+    /// The composer's round trip: what is typed reaches the draft, sending
+    /// puts it in the transcript, and the field is emptied so the next message
+    /// does not start with the last one.
+    #[test]
+    fn sending_moves_the_draft_into_the_transcript_and_empties_the_field() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_chat, chat_probe);
+
+        screen.type_into("class=\"input\"", "rotate the certificate");
+        let said = screen.markup();
+        assert!(
+            said.contains("value=\"rotate the certificate\""),
+            "what was typed never reached the draft: {said:.400}",
+        );
+
+        screen.press("title=\"Send\"");
+        let html = screen.markup();
+        assert!(
+            !html.contains("value=\"rotate the certificate\""),
+            "the field kept the message it had just sent, so the next one \
+             would start with it: {html:.400}"
+        );
+        assert!(
+            html.contains("rotate the certificate"),
+            "the sent message is not in the transcript: {html:.400}"
+        );
+    }
+
+    /// Return sends and Shift-Return writes a line, which is the difference
+    /// between a composer and a form field. Getting it backwards sends half a
+    /// paragraph to an agent.
+    #[test]
+    fn return_sends_and_shift_return_does_not() {
+        let _alone = alone();
+        let mut sent = Pressable::mount(seed_chat, chat_probe);
+        sent.type_into("class=\"input\"", "ship it");
+        sent.enter("class=\"input\"", Modifiers::empty());
+        let said = sent.markup();
+        assert!(
+            !said.contains("value=\"ship it\""),
+            "Return did not send: {said:.400}",
+        );
+
+        let mut kept = Pressable::mount(seed_chat, chat_probe);
+        kept.type_into("class=\"input\"", "ship it");
+        kept.enter("class=\"input\"", Modifiers::SHIFT);
+        let said = kept.markup();
+        assert!(
+            said.contains("value=\"ship it\""),
+            "Shift-Return sent the draft instead of writing a new line into \
+             it: {said:.400}",
+        );
+    }
+
+    /// Send with nothing to send does nothing at all — no empty bubble in the
+    /// transcript, no request, no toast.
+    #[test]
+    fn an_empty_composer_sends_nothing() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_chat, chat_probe);
+        let before = screen.markup();
+
+        screen.press("title=\"Send\"");
+        assert_eq!(
+            screen.markup(),
+            before,
+            "pressing Send on an empty composer changed the screen, so \
+             something was sent"
+        );
+    }
+
+    /// A send that never left keeps what you typed. The request is answered
+    /// long after the handler returns, so the draft is cleared on the way
+    /// out — and only when there was a way out.
+    #[test]
+    fn a_send_with_no_code_plane_says_so_and_keeps_the_draft() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(open_chat, chat_probe);
+
+        screen.type_into("class=\"input\"", "rotate the certificate");
+        screen.press("title=\"Send\"");
+        let html = screen.markup();
+        assert!(
+            html.contains("Code plane not connected"),
+            "a send that went nowhere said nothing: {html:.400}"
+        );
+        assert!(
+            html.contains("value=\"rotate the certificate\""),
+            "the draft was thrown away by a send that never happened: \
+             {html:.400}"
+        );
+    }
+
+    /// Going back re-reads the list. The rows and the asks are one statement
+    /// about it — refreshing half is how a chat that had gone quiet came back
+    /// showing a fresh timestamp and no sign that it was blocked.
+    #[test]
+    fn the_back_arrow_leaves_for_the_list_and_re_reads_it() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_chat, chat_probe);
+
+        screen.press("class=\"icon-btn back\"");
+        let said = screen.markup();
+        assert!(
+            said.contains("probe\">list|"),
+            "the back arrow did not leave the chat: {said:.400}",
+        );
+
+        screen.settle();
+        let said = screen.markup();
+        assert!(
+            said.contains("Failed to list code chats"),
+            "leaving the chat did not ask the manager for the list again, so \
+             the rows behind it stay as stale as they were: {said:.400}",
+        );
+    }
+
+    /// The chat's own way to start another one.
+    #[test]
+    fn the_chat_offers_the_draft_screen_too() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_chat, chat_probe);
+
+        screen.press("title=\"New session\"");
+        let said = screen.markup();
+        assert!(
+            said.contains("probe\">new|"),
+            "the chat's plus button went nowhere: {said:.400}",
+        );
+    }
+
+    /// The overflow is the only way to delete the chat you are in, and it
+    /// asks before it does. Answering yes leaves for the list, because the
+    /// screen you were on is about to stop existing.
+    #[test]
+    fn the_overflow_is_the_only_way_to_delete_the_open_chat() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_chat, chat_probe);
+        assert!(
+            !screen.markup().contains("Delete session"),
+            "the menu is open before it was asked for"
+        );
+
+        screen.press("title=\"More\"");
+        let said = screen.markup();
+        assert!(
+            said.contains("Delete session"),
+            "the overflow button did not open the menu: {said:.400}",
+        );
+
+        screen.press("class=\"setting-row danger\"");
+        let asked = screen.markup();
+        assert!(
+            asked.contains("Delete this session?"),
+            "the menu deleted the chat without asking: {asked:.400}"
+        );
+        assert!(
+            !asked.contains("Delete session"),
+            "the menu stayed up behind its own confirm: {asked:.400}"
+        );
+
+        screen.press("class=\"btn danger\"");
+        let said = screen.markup();
+        assert!(
+            said.contains("probe\">list|"),
+            "confirming the delete left the reader on a chat that is being \
+             purged: {said:.400}",
+        );
+    }
+
+    /// A tap beside the overflow menu closes it without picking anything.
+    #[test]
+    fn a_tap_beside_the_overflow_menu_closes_it() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_chat, chat_probe);
+
+        screen.press("title=\"More\"");
+        screen.press("class=\"modal-backdrop\"");
+        let html = screen.markup();
+        assert!(
+            !html.contains("Delete session"),
+            "the menu survived a tap beside it: {html:.400}"
+        );
+        assert!(
+            !html.contains("Delete this session?"),
+            "closing the menu also armed the confirm: {html:.400}"
+        );
+    }
+
+    /// A confirm the reader backs out of leaves the chat where it was.
+    #[test]
+    fn cancelling_the_chats_delete_leaves_the_chat_open() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_chat, chat_probe);
+
+        screen.press("title=\"More\"");
+        screen.press("class=\"setting-row danger\"");
+        screen.press("class=\"btn secondary\"");
+        let html = screen.markup();
+        assert!(
+            !html.contains("Delete this session?"),
+            "Cancel left the confirm up: {html:.400}"
+        );
+        assert!(
+            html.contains("probe\">chat|"),
+            "Cancel walked away from the chat anyway: {html:.400}"
+        );
+    }
+
+    /// A chat with no id yet cannot be deleted, and the screen must not walk
+    /// away as though it had been. The guard is a `let ... else` that runs
+    /// BEFORE the navigation, and swapping those two lines would leave the
+    /// reader on the list with the chat still there.
+    #[test]
+    fn deleting_a_chat_that_was_never_opened_deletes_nothing() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_unopened_chat, chat_probe);
+
+        screen.press("title=\"More\"");
+        screen.press("class=\"setting-row danger\"");
+        screen.press("class=\"btn danger\"");
+        let html = screen.markup();
+        assert!(
+            html.contains("probe\">chat|"),
+            "a delete that could not name a chat navigated anyway: {html:.400}"
+        );
+        assert!(
+            !html.contains("Delete this session?"),
+            "the confirm stayed up: {html:.400}"
+        );
+    }
+
+    /// The review chip navigates first and fetches after — waking a container
+    /// can take the better part of a minute, and a chip that does nothing
+    /// visible for that long reads as broken.
+    #[test]
+    fn the_review_chip_opens_the_review_screen() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_chat, chat_probe);
+
+        screen.press("title=\"Review the session");
+        let said = screen.markup();
+        assert!(
+            said.contains("probe\">diff|"),
+            "the Diff chip did not open the review: {said:.400}",
+        );
+    }
+
+    /// A chat whose container has never been prompted has no session, so
+    /// there is no working tree to read. That is said out loud rather than
+    /// opening an empty review.
+    #[test]
+    fn the_review_chip_says_when_there_is_nothing_to_review_yet() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_chat_no_session, chat_probe);
+
+        screen.press("title=\"Review the session");
+        let html = screen.markup();
+        assert!(
+            html.contains("No changes yet \u{2014} the chat has no session"),
+            "an unreviewable chat opened a blank review instead of saying \
+             why: {html:.400}"
+        );
+        assert!(
+            html.contains("probe\">chat|"),
+            "and it navigated there as well: {html:.400}"
+        );
+    }
+
+    /// The pull-request chip opens the screen AND asks GitHub. The manager
+    /// answers that from its own credential, so it works on a chat that is
+    /// fast asleep — which is exactly why the request is worth making on the
+    /// tap rather than waiting for a wake.
+    #[test]
+    fn the_pull_request_chip_opens_the_screen_and_asks_github() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_chat, chat_probe);
+        assert!(
+            screen.markup().contains("pulls:</p>"),
+            "nothing has been asked of GitHub yet"
+        );
+
+        screen.press("title=\"Pull requests from this branch\"");
+        let said = screen.markup();
+        assert!(
+            said.contains("probe\">pulls|"),
+            "the chip did not open the screen: {said:.400}",
+        );
+
+        screen.settle();
+        let said = screen.markup();
+        assert!(
+            !said.contains("pulls:</p>"),
+            "the screen was opened without asking GitHub anything, so it would \
+             sit on an empty branch for ever: {said:.400}",
+        );
+    }
+
+    /// The settings chip opens the sheet it summarises, and a pick in it
+    /// reaches the chip. The chip is the only place the model is visible from
+    /// the composer, so the two disagreeing is the whole failure.
+    #[test]
+    fn the_settings_chip_opens_the_sheet_and_a_pick_comes_back_to_it() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_chat, chat_probe);
+        assert!(
+            screen.markup().contains("chip-model\">Default<"),
+            "nothing names this chat's model yet"
+        );
+
+        screen.press("title=\"Session settings\"");
+        let sheet = screen.markup();
+        assert!(
+            sheet.contains("<h2>Session settings</h2>"),
+            "the chip did not open its sheet: {sheet:.400}"
+        );
+        assert!(
+            sheet.contains("code agent \u{b7} applies from your next message"),
+            "the sheet does not say which backend it is about: {sheet:.400}"
+        );
+
+        screen.press_nth("class=\"setting-row\"", 0);
+        let said = screen.markup();
+        assert!(
+            said.contains("Claude Sonnet 4.5"),
+            "the Model row does not drill into the catalogue: {said:.400}",
+        );
+
+        screen.press_nth("class=\"choice", 0);
+        let said = screen.markup();
+        assert!(
+            said.contains("chip-model\">Claude Sonnet 4.5<"),
+            "the picked model never reached the composer's chip: {said:.400}",
+        );
+
+        // Row 1 is Thinking effort — the model row above it is 0, and Context
+        // length below is a fact with nothing to press. Choice 1 is the
+        // model's first real tier; choice 0 is `Default`, which is already
+        // ticked and would prove nothing.
+        screen.press_nth("class=\"setting-row\"", 1);
+        screen.press_nth("class=\"choice", 1);
+        let said = screen.markup();
+        assert!(
+            said.contains("chip-effort\">Low<"),
+            "the picked thinking effort never reached the chip, which is the \
+             one place it is visible at a glance: {said:.400}",
+        );
+
+        screen.press("class=\"modal-backdrop\"");
+        let said = screen.markup();
+        assert!(
+            !said.contains("<h2>Session settings</h2>"),
+            "a tap beside the sheet left it up: {said:.400}",
+        );
+    }
+
+    /// The mode chip is the one setting you change mid-conversation, and the
+    /// picker is the only way to.
+    #[test]
+    fn the_mode_chip_opens_its_picker_and_a_pick_renames_it() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_chat, chat_probe);
+        assert!(
+            screen.markup().contains("chip-label\">Build<"),
+            "the chip resolves to the agent a turn naming none runs as"
+        );
+
+        screen.press("title=\"Mode\"");
+        let said = screen.markup();
+        assert!(
+            said.contains("Select mode"),
+            "the mode chip did not open its picker: {said:.400}",
+        );
+
+        screen.press_nth("class=\"choice", 1);
+        let html = screen.markup();
+        assert!(
+            html.contains("chip-label\">Plan<"),
+            "the picked agent never reached the chip: {html:.400}"
+        );
+        assert!(
+            !html.contains("Select mode"),
+            "the picker stayed open over the choice it took: {html:.400}"
+        );
+    }
+
+    /// A tap beside the mode picker closes it and changes nothing. This sheet
+    /// has no Cancel row either, so the backdrop is the only way to look at
+    /// the list and decide against it.
+    #[test]
+    fn a_tap_beside_the_mode_picker_leaves_the_agent_alone() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_chat, chat_probe);
+
+        screen.press("title=\"Mode\"");
+        screen.press("class=\"modal-backdrop\"");
+        let html = screen.markup();
+        assert!(
+            !html.contains("Select mode"),
+            "the picker survived a tap beside it: {html:.400}"
+        );
+        assert!(
+            html.contains("chip-label\">Build<"),
+            "closing the picker changed the agent anyway: {html:.400}"
+        );
+    }
+
+    /// Stop does not pretend. `running` is cleared by the server's answer, so
+    /// an abort that never left has to leave the turn where it was and say
+    /// why — otherwise the transcript stops streaming on screen while the
+    /// agent carries on.
+    #[test]
+    fn stop_reports_a_failure_rather_than_pretending_the_turn_ended() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_running_chat, chat_probe);
+        assert!(
+            screen.markup().contains("class=\"typing\""),
+            "a running turn shows the dots"
+        );
+
+        screen.press("title=\"Stop\"");
+        screen.settle();
+        let html = screen.markup();
+        assert!(
+            html.contains("Stop failed:"),
+            "an abort that never reached the server said nothing: {html:.400}"
+        );
+        assert!(
+            html.contains("class=\"typing\""),
+            "the turn was reported as stopped by a request that failed: \
+             {html:.400}"
+        );
+    }
+    fn seed_review(ctx: &AppCtx) {
+        open_chat(ctx);
+        ctx.code_screen.clone().set(CodeScreen::Diff);
+        seed_three_files(ctx);
+    }
+
+    fn seed_deleted_file(ctx: &AppCtx) {
+        ctx.code_screen.clone().set(CodeScreen::Diff);
+        let mut diff = ctx.code_diff;
+        diff.set(DiffState {
+            files: vec![diff_file(
+                "src/old.rs",
+                FileStatus::Deleted,
+                0,
+                2,
+                DELETED_PATCH,
+            )],
+            ..DiffState::default()
+        });
+    }
+
+    fn seed_gapped_file(ctx: &AppCtx) {
+        ctx.code_screen.clone().set(CodeScreen::Diff);
+        let mut diff = ctx.code_diff;
+        diff.set(DiffState {
+            files: vec![diff_file(
+                "src/wide.rs",
+                FileStatus::Modified,
+                2,
+                0,
+                &gapped_patch(),
+            )],
+            ..DiffState::default()
+        });
+    }
+
+    fn seed_pulls(ctx: &AppCtx) {
+        open_chat(ctx);
+        ctx.code_screen.clone().set(CodeScreen::Pulls);
+        let mut pulls = ctx.code_pulls;
+        pulls.set(PullsState {
+            pulls: vec![pull(
+                42,
+                "Rotate the cert",
+                PullState::Open,
+                Checks::Passing,
+                Some(true),
+            )],
+            loaded: true,
+            ..PullsState::default()
+        });
+    }
+
+    fn seed_pull_without_a_url(ctx: &AppCtx) {
+        seed_pulls(ctx);
+        let mut pulls = ctx.code_pulls;
+        pulls.write().pulls[0].url = String::new();
+    }
+
+    // ------------------------------------------------------ the review screen
+
+    /// The review is a screen, so it has a way back to the conversation it is
+    /// about.
+    #[test]
+    fn the_reviews_back_arrow_returns_to_the_chat() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_review, diff_probe);
+
+        screen.press("class=\"icon-btn back\"");
+        let said = screen.markup();
+        assert!(
+            said.contains("probe\">chat|"),
+            "the review has no way back to the chat: {said:.400}",
+        );
+    }
+
+    /// Soft wrap on and off. A no-wrap body is its own horizontal scrollport,
+    /// which is the only way to read a long line on a 402px screen — and the
+    /// control has to name the state it would move TO, not the one it is in.
+    #[test]
+    fn the_wrap_toggle_reaches_every_body_and_renames_itself() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_review, diff_probe);
+        let wrapped = screen.markup();
+        assert!(
+            wrapped.contains("aria-pressed=\"true\"") && !wrapped.contains("diff-body nowrap"),
+            "the review soft-wraps until somebody turns it off: {wrapped:.400}"
+        );
+
+        screen.press("title=\"Scroll long lines instead of wrapping\"");
+        let scrolled = screen.markup();
+        assert_eq!(
+            scrolled.matches("diff-body nowrap").count(),
+            2,
+            "the toggle reached one open body and not the other: {scrolled:.400}"
+        );
+        assert!(
+            scrolled.contains("title=\"Wrap long lines\""),
+            "the control still offers the state it is already in: {scrolled:.400}"
+        );
+    }
+
+    /// The bulk mark finishes the review and then stops being offered — a
+    /// control that can do nothing must not be on screen (rule 11).
+    #[test]
+    fn marking_every_file_reviewed_finishes_the_review() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_review, diff_probe);
+        assert!(
+            screen.markup().contains("1 of 3 files reviewed"),
+            "one of the three starts marked"
+        );
+
+        screen.press("class=\"btn small secondary\"");
+        let html = screen.markup();
+        assert!(
+            html.contains("3 of 3 files reviewed") && html.contains("style=\"width: 100%\""),
+            "Mark all did not mark them all: {html:.400}"
+        );
+        assert!(
+            !html.contains(">Mark all<"),
+            "there is nothing left to mark and the button is still there: \
+             {html:.400}"
+        );
+        assert!(
+            !html.contains("diff-body"),
+            "marking a file reviewed folds it, which is what stops a long diff \
+             making you scroll past work you have finished with: {html:.400}"
+        );
+    }
+
+    /// A band folds and unfolds on its head, independently of whether it is
+    /// marked reviewed. The native `<summary>` toggle is suppressed so `open`
+    /// stays the app's to decide — a DOM that had toggled itself would not
+    /// tell the app about it, and the next render would fold it back.
+    #[test]
+    fn a_bands_head_folds_it_and_unfolds_it_again() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_review, diff_probe);
+        assert_eq!(
+            screen.markup().matches("diff-body").count(),
+            2,
+            "the reviewed file starts folded and the other two open"
+        );
+
+        screen.press_nth("class=\"diff-file-head\"", 0);
+        let said = screen.markup();
+        assert_eq!(
+            said.matches("diff-body").count(),
+            3,
+            "the reviewed file's head did not unfold it: {said:.400}",
+        );
+
+        screen.press_nth("class=\"diff-file-head\"", 0);
+        let said = screen.markup();
+        assert_eq!(
+            said.matches("diff-body").count(),
+            2,
+            "the same head did not fold it again: {said:.400}",
+        );
+    }
+
+    /// Ticking one file's box marks it reviewed, moves the count, and folds
+    /// it. The tick is inside a row-sized target and has to stop the click
+    /// reaching the head, or marking would also unfold what it just folded.
+    #[test]
+    fn ticking_a_file_marks_it_reviewed_and_folds_it() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_review, diff_probe);
+
+        screen.press_nth("class=\"diff-seen\"", 1);
+        let html = screen.markup();
+        assert!(
+            html.contains("2 of 3 files reviewed"),
+            "ticking a file did not move the count: {html:.400}"
+        );
+        assert_eq!(
+            html.matches("aria-pressed=\"true\"").count(),
+            3,
+            "the wrap toggle plus two ticked boxes — a different number means \
+             the press landed on the wrong file: {html:.400}"
+        );
+        assert_eq!(
+            html.matches("diff-body").count(),
+            1,
+            "the file that was just marked reviewed stayed open: {html:.400}"
+        );
+    }
+
+    /// A deletion's lines are not shown by default — its patch is one `-` row
+    /// per line of the file that used to be there — but "not shown" is not
+    /// "not available", and the band is the way to ask for them.
+    #[test]
+    fn a_deletions_lines_come_back_when_the_band_is_pressed() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_deleted_file, diff_probe);
+        assert!(
+            !screen.markup().contains("gone one"),
+            "a deletion's lines are not rendered until they are asked for"
+        );
+
+        screen.press("class=\"diff-skip\"");
+        let html = screen.markup();
+        assert!(
+            html.contains("diff-code\">gone one<") && html.contains("diff-code\">gone two<"),
+            "the reveal handed nothing back: {html:.400}"
+        );
+        assert!(
+            !html.contains("Show removed lines"),
+            "the reveal is still being offered after it was taken: {html:.400}"
+        );
+    }
+
+    /// `Snapshot.diffFull` sends the whole file in one hunk, so the band
+    /// standing in for the untouched middle is what makes a three-line change
+    /// readable — and pressing it has to give those lines back.
+    #[test]
+    fn expanding_a_band_gives_back_the_lines_it_stood_for() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_gapped_file, diff_probe);
+        assert!(
+            screen.markup().contains("\u{22ef} 14 unchanged lines"),
+            "the middle starts collapsed"
+        );
+
+        screen.press("class=\"diff-skip\"");
+        let html = screen.markup();
+        assert!(
+            html.contains("diff-code\">context line 3<"),
+            "expanding the band gave nothing back: {html:.400}"
+        );
+        assert!(
+            !html.contains("\u{22ef} 14 unchanged lines"),
+            "the band still claims to be hiding what it just revealed: \
+             {html:.400}"
+        );
+    }
+
+    // ------------------------------------------------ the pull-request screen
+
+    /// The pull-request screen is a screen too.
+    #[test]
+    fn the_pull_screens_back_arrow_returns_to_the_chat() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_pulls, pulls_probe);
+
+        screen.press("class=\"icon-btn back\"");
+        let said = screen.markup();
+        assert!(
+            said.contains("probe\">chat|"),
+            "the pull-request screen has no way back: {said:.400}",
+        );
+    }
+
+    /// Merge is the last thing between a thumb and a commit on GitHub, so it
+    /// asks — and the question carries the two facts that decide whether
+    /// merging NOW is right, neither of which is on the button.
+    #[test]
+    fn merging_asks_first_and_names_where_it_lands() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_pulls, pulls_probe);
+        assert!(
+            !screen.markup().contains("Merge #42?"),
+            "nothing has been asked yet"
+        );
+
+        screen.press("class=\"btn small primary\"");
+        let asked = screen.markup();
+        assert!(
+            asked.contains("Merge #42?"),
+            "Merge went straight to GitHub with no confirmation: {asked:.400}"
+        );
+        assert!(
+            asked.contains("merges into main on GitHub, straight away")
+                && asked.contains("Its checks have passed."),
+            "the confirm has to say where it lands and what the checks said: \
+             {asked:.400}"
+        );
+
+        screen.press("class=\"btn secondary\"");
+        let after = screen.markup();
+        assert!(
+            !after.contains("Merge #42?"),
+            "Cancel left the question up: {after:.400}"
+        );
+        assert!(
+            after.contains(">Merge<"),
+            "Cancel took the button away with the question: {after:.400}"
+        );
+    }
+
+    /// Answering yes hands it to the manager. With nothing behind the manager
+    /// the merge cannot happen, and saying so is the difference between a
+    /// merge that failed and a tap that did nothing.
+    #[test]
+    fn confirming_a_merge_with_no_code_plane_says_so() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(seed_pulls, pulls_probe);
+
+        screen.press("class=\"btn small primary\"");
+        screen.press("class=\"btn primary\"");
+        let html = screen.markup();
+        assert!(
+            html.contains("Code plane not connected"),
+            "a merge that never left said nothing: {html:.400}"
+        );
+        assert!(
+            !html.contains("Merge #42?"),
+            "the confirm stayed up after it was answered: {html:.400}"
+        );
+    }
+
+    /// The row opens GitHub, the way a session row opens its session — and a
+    /// pull request the manager sent without a web address says so instead of
+    /// swallowing the tap. The URL is checked before it is opened because
+    /// `javascript:` through `window.open` runs rather than opens.
+    #[test]
+    fn a_pull_row_opens_github_and_says_when_it_cannot() {
+        let _alone = alone();
+        let mut good = Pressable::mount(seed_pulls, pulls_probe);
+        good.press("title=\"Open on GitHub\"");
+        let said = good.markup();
+        assert!(
+            said.contains("probe\">pulls||"),
+            "opening a real pull request should say nothing at all: {said:.400}",
+        );
+
+        let mut bare = Pressable::mount(seed_pull_without_a_url, pulls_probe);
+        bare.press("title=\"Open on GitHub\"");
+        let said = bare.markup();
+        assert!(
+            said.contains("This pull request came without a web address"),
+            "a row with nowhere to go swallowed the tap silently: {said:.400}",
+        );
+    }
+    // PRESS-APPEND-HERE
 }

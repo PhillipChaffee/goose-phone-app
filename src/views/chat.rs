@@ -2133,6 +2133,16 @@ mod tests {
 /// the `.unwrap()` inside `ListenerCallback` panics.
 /// `SerializedHtmlEventConverter` is the converter `dioxus-desktop` itself
 /// installs, so a press here is converted by the code the shipped app uses.
+///
+/// It is `pub(crate)` because it is the only thing in the suite that can press
+/// a button, and this is not the only file made of them: `views/scheduler.rs`
+/// hangs eleven handlers off rows, sheets and confirms, and
+/// `views/chrome.rs`'s `SearchField` is a debounce that only a keystroke
+/// starts. Duplicating the hydration walk per file would be duplicating the
+/// one piece of this harness that was measured WRONG the obvious way — so
+/// there is one of it, and [`alone`] is shared with it, because the storage
+/// hazard the lock exists for is process-wide and does not care which file a
+/// mount was written in.
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
@@ -2140,8 +2150,9 @@ mod tests {
     reason = "test scaffolding: a press that cannot find its button has \
               nothing to assert, so failing loudly there IS the check"
 )]
-mod pressing {
+pub(crate) mod pressing {
     use std::any::Any;
+    use std::cell::RefCell;
     use std::rc::Rc;
 
     use dioxus::dioxus_core::{
@@ -2152,8 +2163,11 @@ mod pressing {
         SerializedHtmlEventConverter, SerializedKeyboardData, SerializedMouseData,
     };
     use dioxus::prelude::*;
+    use goose_acp_client::{AcpClient, AcpEvent, ConnectConfig};
+    use serde_json::{json, Value};
 
     use super::tests::{lost, mode_option, model_option, permission_ask};
+    use crate::scheduler::tests::{ok, rpc_error, serve, Reply, Script, Server};
     use crate::state::{AppCtx, ChatItem, ChatState, Screen};
 
     /// The two process-wide things a press needs, set up exactly once, and
@@ -2175,15 +2189,17 @@ mod pressing {
         static TIMERS: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
         TIMERS.get_or_init(|| {
             dioxus::html::set_event_converter(Box::new(SerializedHtmlEventConverter));
+            // `enable_all` rather than `enable_time`: the timer is what a
+            // toast needs, and the IO driver is what [`wire`]'s socket needs.
             tokio::runtime::Builder::new_current_thread()
-                .enable_time()
+                .enable_all()
                 .build()
                 .expect("a current-thread tokio runtime for the toast timer")
         })
     }
 
     /// A mounted view with a way in.
-    struct Pressable {
+    pub(crate) struct Pressable {
         dom: VirtualDom,
         /// The render with `data-node-hydration` left in, and the elements it
         /// numbers, in the same order. Recomputed after every event, because
@@ -2306,7 +2322,7 @@ mod pressing {
     }
 
     impl Pressable {
-        fn mount(seed: fn(&AppCtx), view: fn() -> Element) -> Self {
+        pub(crate) fn mount(seed: fn(&AppCtx), view: fn() -> Element) -> Self {
             // The same one owner as `crate::testkit`: `set_directory` writes a
             // process-wide `OnceLock` and unwraps, so the second caller in a
             // test binary panics.
@@ -2329,8 +2345,38 @@ mod pressing {
         }
 
         /// What the screen says right now.
-        fn markup(&self) -> String {
+        pub(crate) fn markup(&self) -> String {
             dioxus_ssr::render(&self.dom)
+        }
+
+        /// Let the tasks a press started run, and re-read the screen.
+        ///
+        /// Most handlers in this app finish inside the dispatch: they write a
+        /// signal and return. The exception is anything that waits — the
+        /// debounce in `views::chrome::SearchField` sleeps 250 ms before it
+        /// calls anything at all — and for those the press alone proves
+        /// nothing, because the observable half has not happened yet.
+        ///
+        /// Wall-clock rather than `tokio::time::pause`, deliberately: the
+        /// timer lives on a task Dioxus owns and polls from its own executor,
+        /// so nothing here is in a position to hand tokio the idle it needs
+        /// before it will auto-advance. The budget is 20 slices of 25 ms
+        /// against a 250 ms debounce, and a slice with work in it returns at
+        /// once — so a settled screen costs nothing and an unsettled one
+        /// cannot hang the suite.
+        pub(crate) fn settle(&mut self) {
+            let dom = &mut self.dom;
+            install_once().block_on(async {
+                for _ in 0..20 {
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_millis(25),
+                        dom.wait_for_work(),
+                    )
+                    .await;
+                    dom.render_immediate_to_vec();
+                }
+            });
+            self.reread();
         }
 
         /// The `ElementId` of the first element whose opening tag contains
@@ -2381,13 +2427,13 @@ mod pressing {
         }
 
         /// Tap the first control whose opening tag contains `needle`.
-        fn press(&mut self, needle: &str) {
+        pub(crate) fn press(&mut self, needle: &str) {
             self.dispatch("click", needle, Box::new(SerializedMouseData::default()));
         }
 
         /// Type into the first field whose opening tag contains `needle`,
         /// exactly as a `WebView` reports it: the field's whole new value.
-        fn type_into(&mut self, needle: &str, value: &str) {
+        pub(crate) fn type_into(&mut self, needle: &str, value: &str) {
             self.dispatch(
                 "input",
                 needle,
@@ -2451,7 +2497,7 @@ mod pressing {
     /// `PoisonError::into_inner` because a test that fails while holding this
     /// has already reported the thing it exists to report, and taking the
     /// rest of the module down behind it would only hide which one broke.
-    fn alone() -> std::sync::MutexGuard<'static, ()> {
+    pub(crate) fn alone() -> std::sync::MutexGuard<'static, ()> {
         static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
         ONE_AT_A_TIME
             .lock()
@@ -2467,6 +2513,241 @@ mod pressing {
             title: "Rotate the certificate".to_owned(),
             ..ChatState::default()
         });
+    }
+
+    // ---------------------------------------------------- with a real socket
+    //
+    // Three of this screen's presses do nothing observable without one. Send
+    // returns before it clears the composer unless `send_prompt` got as far as
+    // a client, and Delete's whole outcome — the chat leaving, the row going
+    // from the list, the sentence when goose refuses — is on the far side of
+    // an `await` on one. `AcpClient` has no constructor but `connect`, so the
+    // answer is the same as `src/scheduler.rs`'s: a scripted JSON-RPC server
+    // on a loopback port over plain `ws://`.
+    //
+    // The client is parked in a `thread_local` rather than handed to the
+    // seed, because a seed is a plain `fn` pointer — `Mount` is `Copy` and has
+    // to be — and a `fn` cannot carry one.
+
+    thread_local! {
+        /// The live client a seed installs, and the event stream that keeps it
+        /// alive: the client's actor gives up the socket the moment the
+        /// receiver is dropped.
+        static WIRED: RefCell<Option<(AcpClient, tokio::sync::mpsc::Receiver<AcpEvent>)>> =
+            const { RefCell::new(None) };
+    }
+
+    /// Stand a goose up that answers `script`, and connect to it.
+    ///
+    /// The returned [`Server`] is the log of what the screen actually asked
+    /// for; holding it also keeps the listener's port claimed.
+    fn wire(script: Script) -> Server {
+        let runtime = install_once();
+        let server = serve(runtime, script);
+        let cfg = ConnectConfig {
+            base_url: server.base_url.clone(),
+            secret: String::new(),
+            fingerprint: None,
+        };
+        let (client, events, _info) = runtime
+            .block_on(AcpClient::connect(&cfg))
+            .expect("the mock server accepted the handshake");
+        WIRED.with(|slot| *slot.borrow_mut() = Some((client, events)));
+        server
+    }
+
+    fn install_wired_client(ctx: &AppCtx) {
+        WIRED.with(|slot| {
+            if let Some((client, _)) = slot.borrow().as_ref() {
+                ctx.client.clone().set(Some(client.clone()));
+            }
+        });
+    }
+
+    fn open_chat_on_a_live_socket(ctx: &AppCtx) {
+        open_chat(ctx);
+        install_wired_client(ctx);
+    }
+
+    /// The same, with the chat also present in the list it was opened from —
+    /// which is the copy a delete has to remove.
+    fn a_listed_chat_on_a_live_socket(ctx: &AppCtx) {
+        open_chat_on_a_live_socket(ctx);
+        let mut sessions = ctx.sessions;
+        sessions.set(vec![
+            goose_acp_client::SessionInfo {
+                session_id: "s-1".to_owned(),
+                cwd: None,
+                title: Some("Rotate the certificate".to_owned()),
+                updated_at: None,
+                meta: None,
+            },
+            goose_acp_client::SessionInfo {
+                session_id: "s-2".to_owned(),
+                cwd: None,
+                title: Some("Nightly deploy".to_owned()),
+                updated_at: None,
+                meta: None,
+            },
+        ]);
+    }
+
+    /// The chat, plus the two things a delete changes that it never draws.
+    fn chat_and_sessions() -> Element {
+        let ctx = crate::state::use_app_ctx();
+        let toast = (ctx.toast)().unwrap_or_default();
+        let left = (ctx.screen)() == Screen::Sessions;
+        let listed: Vec<String> = (ctx.sessions)()
+            .iter()
+            .map(|info| info.session_id.clone())
+            .collect();
+        rsx! {
+            p { class: "probe-toast", "{toast}" }
+            p { class: "probe-left", "{left}" }
+            p { class: "probe-list", "{listed.join(\",\")}" }
+            super::ChatView {}
+        }
+    }
+
+    /// A goose that takes whatever it is sent.
+    fn agreeable(_method: &str, _params: &Value) -> Reply {
+        ok(json!({}))
+    }
+
+    /// The composer is cleared only once the message is on its way — and this
+    /// is the "on its way" half, which nothing could reach before there was a
+    /// socket to be on the way over.
+    ///
+    /// Three things happen together or the screen lies about what it did: the
+    /// text leaves the box, the message joins the transcript, and the turn
+    /// starts. Drop the clear and the next Enter sends the message twice; drop
+    /// the push and the reader watches an agent answer something that is not
+    /// on screen anywhere.
+    #[test]
+    fn a_send_that_leaves_the_phone_clears_the_composer_and_posts_the_message() {
+        let _alone = alone();
+        let server = wire(agreeable);
+        let mut screen = Pressable::mount(open_chat_on_a_live_socket, chat_and_sessions);
+        screen.type_into(r#"class="input""#, "roll the certificate");
+
+        screen.press(r#"title="Send""#);
+        let html = screen.markup();
+        assert!(
+            html.contains(r#"value="""#),
+            "the composer kept the message it had just sent, so the next Enter \
+             sends it a second time: {html}"
+        );
+        assert!(
+            html.contains(r#"<div class="bubble-text">roll the certificate</div>"#),
+            "the sent message is not in the transcript, so the reader watches \
+             an agent answer something that is nowhere on screen: {html}"
+        );
+        assert!(
+            html.contains(r#"<button class="send stop" title="Stop">"#),
+            "the turn is not showing as running, so the composer will take a \
+             second prompt into a session already answering: {html}"
+        );
+        assert!(
+            html.contains(r#"<p class="probe-toast"></p>"#),
+            "a send that reached goose reported a failure: {html}"
+        );
+
+        screen.settle();
+        let sent: Vec<String> = server
+            .log()
+            .iter()
+            .map(|(method, _)| method.clone())
+            .filter(|method| method != "initialize")
+            .collect();
+        assert_eq!(
+            sent,
+            ["session/prompt"],
+            "the press cleared the composer without putting a prompt on the \
+             wire, which loses the message outright"
+        );
+    }
+
+    /// The delete goose agreed to: the chat leaves, and its row leaves with
+    /// it.
+    ///
+    /// The row is dropped locally rather than by re-listing, so it has to be
+    /// dropped on the `Ok` arm and nowhere else. Leave it and the list you
+    /// land on still offers the conversation that has just been unlinked —
+    /// one tap from a `session/load` that cannot answer.
+    #[test]
+    fn a_delete_goose_took_leaves_the_chat_and_takes_its_row_with_it() {
+        let _alone = alone();
+        let server = wire(agreeable);
+        let mut screen = Pressable::mount(a_listed_chat_on_a_live_socket, chat_and_sessions);
+        assert!(screen
+            .markup()
+            .contains(r#"<p class="probe-list">s-1,s-2</p>"#));
+
+        screen.press(r#"title="More""#);
+        screen.press(r#"class="setting-row danger""#);
+        screen.press(r#"class="btn danger""#);
+        screen.settle();
+
+        let html = screen.markup();
+        assert!(
+            html.contains(r#"<p class="probe-left">true</p>"#),
+            "the deleted chat is still on screen, showing a conversation that \
+             is no longer on the server: {html}"
+        );
+        assert!(
+            html.contains(r#"<p class="probe-list">s-2</p>"#),
+            "the chats list still offers the conversation that was just \
+             unlinked, which is one tap from a load that cannot answer: {html}"
+        );
+        assert_eq!(
+            server
+                .log()
+                .last()
+                .map(|(method, params)| (method.clone(), params.clone())),
+            Some(("session/delete".to_owned(), json!({ "sessionId": "s-1" }))),
+            "the confirmation deleted a different session than the one it was \
+             asked about"
+        );
+    }
+
+    /// The delete goose refused: nothing moves, and the reason is said.
+    ///
+    /// This is the arm that must not be optimistic. Walking back to the list
+    /// and dropping the row on a refusal reports a deletion that did not
+    /// happen — and the chat is still there, so the next list brings it
+    /// straight back.
+    #[test]
+    fn a_delete_goose_refused_keeps_the_chat_and_says_why() {
+        fn refuses(method: &str, params: &Value) -> Reply {
+            if method == "session/delete" {
+                return rpc_error(-32602, "no session with that id");
+            }
+            agreeable(method, params)
+        }
+        let _alone = alone();
+        let _server = wire(refuses);
+        let mut screen = Pressable::mount(a_listed_chat_on_a_live_socket, chat_and_sessions);
+        screen.press(r#"title="More""#);
+        screen.press(r#"class="setting-row danger""#);
+        screen.press(r#"class="btn danger""#);
+        screen.settle();
+
+        let html = screen.markup();
+        assert!(
+            html.contains(r#"<p class="probe-toast">Delete failed: no session with that id</p>"#),
+            "a delete goose refused said nothing, so the chat looks deleted \
+             and is not: {html}"
+        );
+        assert!(
+            html.contains(r#"<p class="probe-left">false</p>"#),
+            "a refused delete walked back to the chats list, which reports a \
+             deletion that never happened: {html}"
+        );
+        assert!(
+            html.contains(r#"<p class="probe-list">s-1,s-2</p>"#),
+            "a refused delete dropped the row anyway — and the next list \
+             brings it back, which reads as an undo: {html}"
+        );
     }
 
     /// The chip summarises the sheet, and the sheet is where the summary can

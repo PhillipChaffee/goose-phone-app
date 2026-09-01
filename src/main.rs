@@ -44,6 +44,12 @@ mod scheduler;
 #[cfg(test)]
 mod selfscan;
 
+// Stands a JSON-RPC server up on a loopback port and connects a real
+// `AcpClient` to it, so a feature module's with-a-client half can be driven at
+// all. `cfg(test)` like `selfscan` above, so none of it is in any binary.
+#[cfg(test)]
+mod serverkit;
+
 mod shell;
 
 mod skills;

@@ -134,7 +134,7 @@ fn key_diff(sent: &Value, back: &Value) -> String {
 )]
 mod tests {
     use super::*;
-    use serde::Deserialize;
+    use serde::{Deserialize, Serializer};
     use serde_json::{json, Map};
 
     /// A DTO in the shape this crate writes them, with one field spelled the
@@ -181,5 +181,123 @@ mod tests {
             Some("/home/me/.config/goose/recipes/review.yaml")
         );
         assert!(parsed.extra.is_empty());
+    }
+
+    /// Run a check that is expected to fail and hand back the sentence it
+    /// failed with. The message is the whole product of this helper — a
+    /// failure that named neither the type nor the field would send a reader
+    /// to diff two long JSON lines by eye — so every test below asserts on it.
+    fn failure_message(check: impl FnOnce() + std::panic::UnwindSafe) -> String {
+        match std::panic::catch_unwind(check) {
+            Ok(()) => "the round trip passed, and was supposed to fail".to_string(),
+            Err(payload) => payload
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_else(|| "the failure carried no message".to_string()),
+        }
+    }
+
+    /// A fixture that does not fit the DTO at all fails by naming the type and
+    /// the input. Without that, a test author who mistypes a fixture sees
+    /// serde's bare "missing field" with no clue which of a module's dozen
+    /// round-trip calls produced it.
+    #[test]
+    fn round_trip_names_the_type_when_the_fixture_does_not_parse() {
+        let message = failure_message(|| {
+            let _: Correct = assert_round_trip(&json!({"file_path": "/x.yaml"}));
+        });
+        assert!(
+            message.contains("Correct") && message.contains("does not parse"),
+            "the failure should name the type that would not parse, got: {message}"
+        );
+        assert!(
+            message.contains("missing field `id`"),
+            "and serde's reason, got: {message}"
+        );
+    }
+
+    /// A DTO that models a field but does not write it back. This is the
+    /// failure mode of a type with no `extra` catch-all: the key parses fine,
+    /// is silently dropped on the way out, and a value the app read and wrote
+    /// back loses whatever goose had put there.
+    #[derive(Debug, Serialize, Deserialize)]
+    struct Forgetful {
+        id: String,
+    }
+
+    #[test]
+    fn round_trip_names_a_field_that_is_dropped_on_the_way_out() {
+        let message = failure_message(|| {
+            let _: Forgetful = assert_round_trip(&entry());
+        });
+        assert!(
+            message.contains("dropped `file_path`"),
+            "the failure should name the field that would be lost, got: {message}"
+        );
+    }
+
+    /// goose's `completed` under an alias the wire never uses again. An alias
+    /// deserializes one spelling and serializes another, so the value that
+    /// comes back is not the value that went in — an update written back to
+    /// the server would change a field nobody edited.
+    #[derive(Debug, Serialize, Deserialize)]
+    enum Status {
+        #[serde(rename = "completed", alias = "complete")]
+        Completed,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct Run {
+        status: Status,
+    }
+
+    #[test]
+    fn round_trip_names_a_field_whose_value_came_back_different() {
+        let message = failure_message(|| {
+            let _: Run = assert_round_trip(&json!({"status": "complete"}));
+        });
+        assert!(
+            message.contains(r#"changed `status`: "complete" -> "completed""#),
+            "the failure should show both spellings, got: {message}"
+        );
+    }
+
+    /// A payload that is not an object — a bare array of entries, say — can
+    /// still fail the round trip, and the diff says so rather than claiming
+    /// nothing changed. Pinned because "" as a reason reads as "it round
+    /// tripped after all", which is the opposite of what happened.
+    #[test]
+    fn the_diff_admits_when_a_payload_is_not_an_object() {
+        let message = failure_message(|| {
+            let _: Vec<Forgetful> = assert_round_trip(&json!([{"id": "a", "extra_key": 1}]));
+        });
+        assert!(
+            message.contains("not both objects"),
+            "the failure should say why it cannot name a field, got: {message}"
+        );
+    }
+
+    /// A type that parses and then refuses to be written back. Contrived on
+    /// purpose: what it pins is that the second failure is as legible as the
+    /// first: a serializer error that named no type would land in a module
+    /// with a dozen identical-looking calls.
+    #[derive(Debug, Deserialize)]
+    struct Unwritable;
+
+    impl Serialize for Unwritable {
+        fn serialize<S: Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("no wire form"))
+        }
+    }
+
+    #[test]
+    fn round_trip_names_the_type_that_would_not_serialize() {
+        let message = failure_message(|| {
+            let _: Unwritable = assert_round_trip(&json!(null));
+        });
+        assert!(
+            message.contains("Unwritable") && message.contains("no wire form"),
+            "the failure should name the type and serde's reason, got: {message}"
+        );
     }
 }

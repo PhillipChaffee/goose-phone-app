@@ -618,9 +618,17 @@ fn handshake_cwd(ctx: &AppCtx) -> String {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test scaffolding: a fixture that will not serialize, or a call \
+              the assertion is about that was never made, is the failing check"
+)]
 mod tests {
     use super::*;
-    use serde_json::{Map, Value};
+    use serde_json::{json, Map, Value};
+
+    use crate::serverkit::{ok, rpc_error, short, Harness, Reply};
 
     fn entry(tools: Vec<&str>) -> GooseExtensionEntry {
         GooseExtensionEntry {
@@ -746,5 +754,654 @@ mod tests {
             );
             assert!(!entry.secrets.is_empty(), "{} asks for nothing", entry.id);
         }
+    }
+
+    // ------------------------------------------------------------ the server
+    //
+    // Everything past the catalogue needs a client. `set_enabled` and
+    // `add_from_catalog` are one `let Some(client) = ... else` away from
+    // returning, and — more to the point — the three rules this module exists
+    // to hold are properties of WHAT WENT OUT, not of any signal left behind:
+    // the credential is stored before the extension is added, the extension is
+    // added switched OFF, and it is only switched on after the allowlist has
+    // come back intact. None of those is visible in `Ctx` afterwards. So these
+    // run against `crate::serverkit`'s loopback JSON-RPC server and assert on
+    // its request log.
+
+    /// Todoist is the entry every add test below uses. Named as well as
+    /// indexed, because a reordering of `CATALOG` would otherwise move these
+    /// tests silently onto a different service with different secrets.
+    const TODOIST: usize = 0;
+
+    /// The token an add test types in. Never a real-looking one, and checked
+    /// for by string: it must reach exactly one frame.
+    const TOKEN: &str = "tok-secret-42";
+
+    /// The catalogue entry at `index` listed back exactly as it was sent —
+    /// what a goose that stored it correctly answers with.
+    fn faithful_entry(index: usize) -> Value {
+        json!({
+            "extension": serde_json::to_value((CATALOG[index].build)()).unwrap(),
+            "enabled": false,
+            "configKey": CATALOG[index].id,
+        })
+    }
+
+    /// The same entry with its allowlist tampered with. `Some(list)` rewrites
+    /// it; `None` removes the key entirely, which is what goose sends when the
+    /// stored allowlist is empty — the silent camelCase failure this whole
+    /// module is built around.
+    fn mangled_entry(index: usize, tools: Option<&[&str]>) -> Value {
+        let mut entry = faithful_entry(index);
+        let extension = entry["extension"]
+            .as_object_mut()
+            .expect("an extension serializes as an object");
+        match tools {
+            Some(tools) => {
+                extension.insert("available_tools".to_owned(), json!(tools));
+            }
+            None => {
+                extension.remove("available_tools");
+            }
+        }
+        entry
+    }
+
+    /// A goose that stores the secret, accepts the add, lists it back intact
+    /// and starts the MCP server.
+    fn happy(method: &str, _params: &Value) -> Reply {
+        match short(method) {
+            "config/extensions/list" => ok(json!({
+                "extensions": [faithful_entry(TODOIST)],
+                "warnings": [],
+            })),
+            "session/new" => ok(json!({ "sessionId": "throwaway-1", "configOptions": [] })),
+            _ => ok(json!({})),
+        }
+    }
+
+    /// A goose whose secret store will not take a write. It refuses
+    /// everything, which is the point: the assertion below is that nothing
+    /// after the `config/upsert` was even attempted.
+    fn refuses_every_write(_method: &str, _params: &Value) -> Reply {
+        rpc_error(-32603, "secrets.yaml is not writable")
+    }
+
+    /// A goose that stores the credential and then rejects the extension
+    /// itself — an `sse` server, a field combination it will not take.
+    fn refuses_the_extension(method: &str, params: &Value) -> Reply {
+        if short(method) == "config/extensions/add" {
+            return rpc_error(-32602, "unsupported extension shape");
+        }
+        happy(method, params)
+    }
+
+    fn drops_a_tool(method: &str, params: &Value) -> Reply {
+        if short(method) == "config/extensions/list" {
+            return ok(json!({
+                "extensions": [mangled_entry(TODOIST, Some(&["find-tasks"]))],
+                "warnings": [],
+            }));
+        }
+        happy(method, params)
+    }
+
+    fn drops_the_allowlist(method: &str, params: &Value) -> Reply {
+        if short(method) == "config/extensions/list" {
+            return ok(json!({
+                "extensions": [mangled_entry(TODOIST, None)],
+                "warnings": [],
+            }));
+        }
+        happy(method, params)
+    }
+
+    fn will_not_start(method: &str, params: &Value) -> Reply {
+        if short(method) == "session/extensions/add" {
+            return rpc_error(-32603, "401 Unauthorized from ai.todoist.net");
+        }
+        happy(method, params)
+    }
+
+    fn set_enabled_fails(method: &str, params: &Value) -> Reply {
+        if short(method) == "config/extensions/set-enabled" {
+            return rpc_error(-32602, "no extension has that config key");
+        }
+        happy(method, params)
+    }
+
+    /// A goose whose config plane is broken.
+    fn list_breaks(_method: &str, _params: &Value) -> Reply {
+        rpc_error(-32603, "config.yaml is unreadable")
+    }
+
+    /// A goose with no extensions plane at all. `-32601` is its own signal for
+    /// "this feature is absent", not merely "this server is old".
+    fn no_extensions_at_all(_method: &str, _params: &Value) -> Reply {
+        rpc_error(-32601, "Method not found")
+    }
+
+    /// The screen's whole state after an add, in one readable tuple: the
+    /// sticky failure, whether the add is still in flight, and whether the
+    /// sheet closed.
+    fn outcome(h: &Harness) -> (Option<String>, bool, Sheet) {
+        h.with(|ctx| {
+            (
+                ctx.extensions.list.peek().sticky.clone(),
+                *ctx.extensions.busy.peek(),
+                *ctx.extensions.sheet.peek(),
+            )
+        })
+    }
+
+    /// Open the catalogue on Todoist, the way tapping it does, so a test can
+    /// say whether a failure left the sheet where the user could retry.
+    fn open_the_sheet(h: &Harness) {
+        h.with(|ctx| ctx.extensions.sheet.clone().set(Sheet::Picked(TODOIST)));
+    }
+
+    #[test]
+    fn the_add_tests_are_pointed_at_todoist() {
+        assert_eq!(
+            CATALOG[TODOIST].id, "todoist",
+            "CATALOG was reordered, so every add test below is now typing a \
+             Todoist token into a different service"
+        );
+    }
+
+    // ---- the list ----
+
+    /// The warnings banner is the only place a phone user can ever learn that
+    /// an extension exists but failed to parse: goose simply leaves it out of
+    /// `extensions`, so without this the screen would show a shorter list and
+    /// say nothing at all.
+    #[test]
+    fn a_config_file_problem_reaches_the_screen_beside_the_list_it_shortened() {
+        fn warns(_method: &str, _params: &Value) -> Reply {
+            ok(json!({
+                "extensions": [faithful_entry(TODOIST)],
+                "warnings": ["mail-imap: unknown field `timeout_ms`"],
+            }))
+        }
+
+        let (mut h, _server) = Harness::connected(warns);
+        h.drive(|ctx| async move { refresh(&ctx).await });
+
+        h.with(|ctx| {
+            let list = ctx.extensions.list.peek();
+            assert_eq!(
+                list.items
+                    .iter()
+                    .map(|e| e.extension.name())
+                    .collect::<Vec<_>>(),
+                ["todoist"],
+                "the listed extension never reached the screen"
+            );
+            assert!(!list.loading, "the list is still spinning after it landed");
+            assert_eq!(
+                *ctx.extensions.warnings.peek(),
+                ["mail-imap: unknown field `timeout_ms`"],
+                "goose reported a config file it could not parse and the screen \
+                 dropped it, so an extension is missing with nothing to say why"
+            );
+        });
+    }
+
+    /// A refresh with no client must leave the list exactly as it was — and
+    /// above all must not start it loading, because nothing would ever stop
+    /// the spinner.
+    #[test]
+    fn a_refresh_without_a_connection_leaves_the_list_alone() {
+        let mut h = Harness::offline();
+        h.drive(|ctx| async move { refresh(&ctx).await });
+        h.with(|ctx| {
+            let list = ctx.extensions.list.peek();
+            assert!(!list.loading, "a disconnected refresh armed a spinner");
+            assert!(list.items.is_empty() && list.sticky.is_none());
+        });
+        assert_eq!(h.toast(), None, "being offline is not news worth a toast");
+    }
+
+    /// A server that cannot read its config is a failure to keep ON SCREEN:
+    /// there is nothing behind it to look at, so a toast would take the only
+    /// explanation away with it after four seconds.
+    #[test]
+    fn a_list_that_fails_with_nothing_behind_it_stays_on_screen() {
+        let (mut h, _server) = Harness::connected(list_breaks);
+        h.drive(|ctx| async move { refresh(&ctx).await });
+        h.with(|ctx| {
+            let list = ctx.extensions.list.peek();
+            let sticky = list.sticky.clone().expect("the failure was thrown away");
+            assert!(
+                sticky.contains("config.yaml is unreadable"),
+                "the sticky failure does not say what went wrong: {sticky}"
+            );
+            assert!(
+                !list.unsupported,
+                "a broken config was reported as a server without the feature, \
+                 which hides the Retry"
+            );
+        });
+    }
+
+    /// `-32601` is goose's own "this feature is absent", and it must read as
+    /// unsupported rather than as an error with a Retry that cannot work.
+    #[test]
+    fn a_server_without_the_extensions_plane_says_so_rather_than_failing() {
+        let (mut h, _server) = Harness::connected(no_extensions_at_all);
+        h.drive(|ctx| async move { refresh(&ctx).await });
+        h.with(|ctx| {
+            let list = ctx.extensions.list.peek();
+            assert!(
+                list.unsupported,
+                "the screen offers a Retry that cannot work"
+            );
+            assert_eq!(
+                list.sticky, None,
+                "an absent feature is not an error to keep on screen"
+            );
+        });
+    }
+
+    // ---- the toggle ----
+
+    /// Not an optimistic flip. Switching an extension on spawns a subprocess
+    /// or dials a remote MCP server and can fail after the call returns, so
+    /// the server is asked again — and the re-list must come AFTER the toggle,
+    /// or the screen settles on the state it had before the change.
+    #[test]
+    fn a_toggle_is_followed_by_a_re_list_rather_than_believed() {
+        let (mut h, server) = Harness::connected(happy);
+        h.act(|ctx| set_enabled(ctx, "todoist", false));
+
+        assert_eq!(
+            server.methods(),
+            ["config/extensions/set-enabled", "config/extensions/list"],
+            "the screen either skipped the re-list or ran it before the change"
+        );
+        assert_eq!(
+            server.params("config/extensions/set-enabled", 0),
+            json!({ "configKey": "todoist", "enabled": false })
+        );
+        assert!(
+            h.with(|ctx| ctx.extensions.toggle.peek().is_none()),
+            "the row is still showing \"Switching…\" after the toggle landed"
+        );
+    }
+
+    /// A failed toggle keeps a failed dot on the row as well as toasting,
+    /// because the toast fades and the news must not fade with it.
+    #[test]
+    fn a_failed_toggle_marks_the_row_and_not_only_the_toast() {
+        let (mut h, server) = Harness::connected(set_enabled_fails);
+        h.act(|ctx| set_enabled(ctx, "todoist", true));
+
+        let toggle = h
+            .with(|ctx| ctx.extensions.toggle.peek().clone())
+            .expect("the failed toggle was forgotten, so the row shows nothing");
+        assert_eq!(toggle.key, "todoist");
+        assert!(
+            toggle.failed,
+            "the row went back to a plain dot, so only the toast said anything"
+        );
+        let toast = h.toast().expect("a failed toggle said nothing at all");
+        assert!(
+            toast.contains("Could not change todoist"),
+            "the toast does not name the extension: {toast}"
+        );
+        assert_eq!(
+            server.count("config/extensions/list"),
+            1,
+            "a failed toggle still has to re-list: what the row shows now is \
+             whatever the server still holds"
+        );
+    }
+
+    // ---- adding from the catalogue ----
+
+    /// The whole add, in the order the rules require: the credential is stored
+    /// first, the extension is added SWITCHED OFF, the allowlist is read back,
+    /// only then is it switched on, and only then is it brought up in a
+    /// session to prove the credential works.
+    ///
+    /// Reordering any two of those is a real security regression and none of
+    /// them is visible in `Ctx` afterwards, which is why this asserts on the
+    /// request log rather than on the screen.
+    #[test]
+    fn an_add_stores_the_secret_first_and_never_goes_live_unverified() {
+        let (mut h, server) = Harness::connected(happy);
+        h.set_working_dir("/srv/goose");
+        open_the_sheet(&h);
+        h.act(|ctx| add_from_catalog(ctx, TODOIST, vec![TOKEN.to_owned()]));
+
+        assert_eq!(
+            server.methods(),
+            [
+                "config/upsert",
+                "config/extensions/add",
+                "config/extensions/list",
+                "config/extensions/set-enabled",
+                "session/new",
+                "session/extensions/add",
+                "session/delete",
+                "config/extensions/list",
+            ],
+            "the add did not happen in the order the failing-closed rules require"
+        );
+        assert_eq!(
+            server.params("config/extensions/add", 0)["enabled"],
+            json!(false),
+            "the extension was added ENABLED, so it was live and unrestricted \
+             for the length of the read-back"
+        );
+        assert_eq!(
+            server.params("config/extensions/set-enabled", 0),
+            json!({ "configKey": "todoist", "enabled": true })
+        );
+        assert_eq!(
+            server.params("session/new", 0)["cwd"],
+            json!("/srv/goose"),
+            "the throwaway handshake session was rooted somewhere else"
+        );
+
+        let (sticky, busy, sheet) = outcome(&h);
+        assert_eq!(sticky, None, "a clean add still reported a failure");
+        assert!(
+            !busy,
+            "the sheet is still showing a spinner after a clean add"
+        );
+        assert!(
+            matches!(sheet, Sheet::Closed),
+            "the add finished and the catalogue sheet stayed over the list"
+        );
+        let toast = h.toast().expect("a finished add said nothing");
+        assert!(
+            toast.contains("Todoist connected"),
+            "the toast does not name the service: {toast}"
+        );
+    }
+
+    /// A credential goes one way only. The value the user typed rides in
+    /// exactly one frame — `config/upsert` with `isSecret` — and is never
+    /// echoed back, never sent again, and never written into `Settings`, which
+    /// is persisted to disk.
+    #[test]
+    fn the_typed_credential_reaches_one_frame_and_no_persisted_state() {
+        let (mut h, server) = Harness::connected(happy);
+        h.set_working_dir("/srv/goose");
+        h.act(|ctx| add_from_catalog(ctx, TODOIST, vec![TOKEN.to_owned()]));
+
+        assert_eq!(
+            server.params("config/upsert", 0),
+            json!({ "key": "TODOIST_API_KEY", "value": TOKEN, "isSecret": true }),
+            "a secret written without `isSecret` lands in plaintext config.yaml"
+        );
+        let frames = server.frames().to_string();
+        assert_eq!(
+            frames.matches(TOKEN).count(),
+            1,
+            "the token crossed the wire more than once — everything after the \
+             upsert must travel as the NAME of a stored secret: {frames}"
+        );
+        assert!(
+            !frames.contains("Bearer tok-secret-42"),
+            "the token was substituted into the header instead of being left as \
+             ${{TODOIST_API_KEY}} for goose to expand: {frames}"
+        );
+
+        let settings = h.with(|ctx| serde_json::to_string(&*ctx.settings.peek()).unwrap());
+        assert!(
+            !settings.contains(TOKEN),
+            "the credential was written into persisted settings: {settings}"
+        );
+    }
+
+    /// The failure this module is built around: goose accepts a camelCase
+    /// `availableTools`, drops it in silence, and reads the absent allowlist as
+    /// "every tool this server publishes". It must never go live, and the
+    /// screen has to say so where the user is looking rather than in a toast
+    /// they are about to miss.
+    #[test]
+    fn an_allowlist_that_did_not_stick_never_switches_the_extension_on() {
+        let cases: [(crate::serverkit::Script, &str); 2] = [
+            (drops_the_allowlist, "NO tool allowlist"),
+            (drops_a_tool, "different tool allowlist"),
+        ];
+        for (script, expected) in cases {
+            let (mut h, server) = Harness::connected(script);
+            h.set_working_dir("/srv/goose");
+            open_the_sheet(&h);
+            h.act(|ctx| add_from_catalog(ctx, TODOIST, vec![TOKEN.to_owned()]));
+
+            assert_eq!(
+                server.count("config/extensions/set-enabled"),
+                0,
+                "an extension whose allowlist did not survive was switched ON"
+            );
+            assert_eq!(
+                server.count("session/extensions/add"),
+                0,
+                "an unverified extension was started in a session anyway"
+            );
+
+            let (sticky, busy, sheet) = outcome(&h);
+            let sticky = sticky.expect("the allowlist failure was never reported");
+            assert!(
+                sticky.contains(expected),
+                "the report does not say what came back: {sticky}"
+            );
+            assert!(
+                sticky.contains("switched off on the server and was never started"),
+                "the report leaves the user thinking the extension may be live: \
+                 {sticky}"
+            );
+            assert!(
+                !busy,
+                "the sheet is stuck showing a spinner after a failure"
+            );
+            assert!(
+                matches!(sheet, Sheet::Picked(TODOIST)),
+                "the sheet closed over a failure, so the report is on a screen \
+                 the user was just navigated away from"
+            );
+        }
+    }
+
+    /// A `Verification` failure survives the re-list that follows it. `Remote`
+    /// clears the sticky failure when a fetch BEGINS, so reporting before the
+    /// refresh would wipe the report — which is the ordering bug this asserts
+    /// against, and the reason `report` is called last.
+    #[test]
+    fn the_report_outlives_the_refresh_that_follows_it() {
+        let (mut h, server) = Harness::connected(drops_a_tool);
+        h.act(|ctx| add_from_catalog(ctx, TODOIST, vec![TOKEN.to_owned()]));
+        assert!(
+            server.count("config/extensions/list") >= 2,
+            "the failure path skipped the re-list, so the screen still shows \
+             the list from before the add"
+        );
+        assert!(
+            outcome(&h).0.is_some(),
+            "the re-list cleared the failure it was supposed to follow"
+        );
+    }
+
+    /// An add goose rejects outright is not a verification failure, and must
+    /// not borrow that sentence: nothing is on the server, so "it is switched
+    /// off there" would be a claim about something that does not exist.
+    #[test]
+    fn an_extension_goose_refuses_is_reported_as_itself() {
+        let (mut h, server) = Harness::connected(refuses_the_extension);
+        open_the_sheet(&h);
+        h.act(|ctx| add_from_catalog(ctx, TODOIST, vec![TOKEN.to_owned()]));
+
+        assert_eq!(
+            server.methods(),
+            ["config/upsert", "config/extensions/add"],
+            "the add was rejected and the screen carried on anyway"
+        );
+        let (sticky, busy, sheet) = outcome(&h);
+        let sticky = sticky.expect("goose refused the extension and nothing said so");
+        assert!(
+            sticky.contains("Could not add Todoist"),
+            "the report does not name the service in the words the catalogue              uses: {sticky}"
+        );
+        assert!(
+            !sticky.contains("never started"),
+            "a rejected add borrowed the verification failure's sentence, which              claims something is on the server: {sticky}"
+        );
+        assert!(!busy, "the sheet is stuck showing a spinner");
+        assert!(
+            matches!(sheet, Sheet::Picked(TODOIST)),
+            "the sheet closed over the failure it was supposed to show"
+        );
+    }
+
+    /// A credential that could not be stored means the extension must not be
+    /// added at all: a stdio server whose `envKeys` name a missing secret dies
+    /// at startup, and a header one just 401s later.
+    #[test]
+    fn a_credential_that_would_not_store_stops_the_add_before_it_starts() {
+        let (mut h, server) = Harness::connected(refuses_every_write);
+        h.act(|ctx| add_from_catalog(ctx, TODOIST, vec![TOKEN.to_owned()]));
+
+        assert_eq!(
+            server.methods(),
+            ["config/upsert"],
+            "the extension was configured anyway, with no credential behind it"
+        );
+        let (sticky, busy, _) = outcome(&h);
+        let sticky = sticky.expect("the store failure was never reported");
+        assert!(
+            sticky.contains("Could not store TODOIST_API_KEY"),
+            "the report does not name the credential that failed: {sticky}"
+        );
+        assert!(!busy, "the sheet is stuck showing a spinner");
+    }
+
+    /// The handshake is the only honest credential check there is, and its
+    /// failure has to read as "configured but not working" plus what to do
+    /// about it — not as a bare RPC error, and not as success.
+    #[test]
+    fn an_extension_that_will_not_start_is_reported_as_a_credential_problem() {
+        let (mut h, server) = Harness::connected(will_not_start);
+        h.set_working_dir("/srv/goose");
+        open_the_sheet(&h);
+        h.act(|ctx| add_from_catalog(ctx, TODOIST, vec![TOKEN.to_owned()]));
+
+        let (sticky, busy, sheet) = outcome(&h);
+        let sticky = sticky.expect("a mistyped credential reported nothing");
+        assert!(
+            sticky.contains("would not start"),
+            "the report does not say the handshake failed: {sticky}"
+        );
+        assert!(
+            sticky.contains("Re-enter it above"),
+            "the report says what broke but not what to do: {sticky}"
+        );
+        assert!(!busy);
+        assert!(
+            matches!(sheet, Sheet::Picked(TODOIST)),
+            "the sheet closed, so there is no field left to re-enter the \
+             credential into"
+        );
+        assert_eq!(
+            server.count("session/delete"),
+            1,
+            "the throwaway handshake session was left behind on the server"
+        );
+        assert_eq!(h.toast(), None, "a failed add still toasted \"connected\"");
+    }
+
+    /// With a chat already open the handshake borrows it. Creating a second
+    /// session would be a session the user did not ask for, and deleting it
+    /// afterwards is a delete this test proves is never aimed at theirs.
+    #[test]
+    fn an_open_chat_is_borrowed_for_the_handshake_rather_than_a_new_session() {
+        let (mut h, server) = Harness::connected(happy);
+        h.set_working_dir("/srv/goose");
+        h.with(|ctx| {
+            ctx.chat.clone().set(crate::state::ChatState {
+                session_id: Some("s-live".to_owned()),
+                ..crate::state::ChatState::default()
+            });
+        });
+        h.act(|ctx| add_from_catalog(ctx, TODOIST, vec![TOKEN.to_owned()]));
+
+        assert_eq!(
+            server.count("session/new"),
+            0,
+            "a throwaway session was created while a chat was already open"
+        );
+        assert_eq!(
+            server.count("session/delete"),
+            0,
+            "the handshake deleted the user's own open session"
+        );
+        assert_eq!(
+            server.params("session/extensions/add", 0)["sessionId"],
+            json!("s-live")
+        );
+    }
+
+    /// A half-filled-in Settings must not stop the credential being checked:
+    /// the throwaway session exists for as long as it takes one MCP server to
+    /// start, and nothing runs in it.
+    #[test]
+    fn a_working_directory_that_is_not_a_path_still_gets_a_handshake() {
+        let (mut h, server) = Harness::connected(happy);
+        h.set_working_dir("work/pilot");
+        h.act(|ctx| add_from_catalog(ctx, TODOIST, vec![TOKEN.to_owned()]));
+
+        assert_eq!(
+            server.params("session/new", 0)["cwd"],
+            json!("/"),
+            "a relative working directory was sent as the session's cwd, which \
+             goose refuses — so the credential would never be checked"
+        );
+        assert_eq!(
+            server.count("session/extensions/add"),
+            1,
+            "the handshake was skipped because Settings was half filled in"
+        );
+    }
+
+    /// The fallback rule on its own, including the trim: a directory with
+    /// spaces around it is still the directory it names.
+    #[test]
+    fn the_handshake_root_is_the_configured_directory_or_slash() {
+        let h = Harness::offline();
+        for (configured, expected) in [
+            ("/srv/goose", "/srv/goose"),
+            ("  /srv/goose  ", "/srv/goose"),
+            ("", "/"),
+            ("   ", "/"),
+            ("work/pilot", "/"),
+            ("~/work", "/"),
+        ] {
+            h.set_working_dir(configured);
+            assert_eq!(
+                h.with(handshake_cwd),
+                expected,
+                "a working directory of {configured:?} was rooted wrongly"
+            );
+        }
+    }
+
+    /// An index the catalogue does not have does nothing at all — no half-add,
+    /// no spinner, no request.
+    #[test]
+    fn an_index_off_the_end_of_the_catalogue_sends_nothing() {
+        let (mut h, server) = Harness::connected(happy);
+        h.act(|ctx| add_from_catalog(ctx, CATALOG.len(), vec![TOKEN.to_owned()]));
+        let attempted = server.methods();
+        assert!(
+            attempted.is_empty(),
+            "an out-of-range catalogue index still talked to the server:              {attempted:?}"
+        );
+        assert!(
+            !outcome(&h).1,
+            "an add that never started left the sheet showing a spinner"
+        );
     }
 }

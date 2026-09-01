@@ -699,12 +699,17 @@ fn empty_detail(dest: &'static Destination) -> Element {
 )]
 mod tests {
     use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+    use std::task::{Context, Poll};
     use std::time::Duration;
 
+    use dioxus::document::{Document, Eval, EvalError, Evaluator};
     use dioxus::prelude::*;
 
     use super::MIN_INNER;
-    use crate::nav::DESTINATIONS;
+    use crate::nav::{Destination, DESTINATIONS};
+    use crate::state::{AppCtx, ConnState};
 
     // The layout's numbers. None of them appears in the binary — the
     // columns are drawn by `assets/desktop.css` and nothing else, which is
@@ -1314,6 +1319,569 @@ mod tests {
              navigations — it is not re-running on arrival, so the desktop's \
              re-fetch-on-mount is dead and ⌘R is the only refresh there is",
             seen.len()
+        );
+    }
+
+    // ---- the third column with nothing in it ----------------------------
+
+    thread_local! {
+        /// Which destination [`EmptyColumn`] is standing in for.
+        ///
+        /// A thread-local rather than a prop because `empty_detail` takes a
+        /// `&'static Destination` and a Dioxus component's props must be
+        /// `PartialEq`; the table's rows have `fn` fields, which cannot be
+        /// compared.
+        static NOTHING_OPEN: RefCell<Option<&'static Destination>> = const {
+            RefCell::new(None)
+        };
+    }
+
+    /// The detail column, on its own, with nothing selected in it.
+    #[component]
+    fn EmptyColumn() -> Element {
+        let dest = NOTHING_OPEN
+            .with(|slot| *slot.borrow())
+            .expect("the test names the destination before it mounts this");
+        super::empty_detail(dest)
+    }
+
+    fn empty_column(dest: &'static Destination) -> String {
+        NOTHING_OPEN.with(|slot| *slot.borrow_mut() = Some(dest));
+        let mut dom = VirtualDom::new(EmptyColumn);
+        dom.rebuild_in_place();
+        dioxus_ssr::render(&dom)
+    }
+
+    /// The column a three-column window opens on says what to do about it, in
+    /// the words of the list beside it.
+    ///
+    /// This is the very first thing the desktop shell shows: launch lands on a
+    /// destination with nothing selected, so an empty third column is the
+    /// state, not an edge of it. Two ways it fails silently, both covered
+    /// here. The sentence is built from `dest.label`, so a destination whose
+    /// wording drifted would point at a list that is not the one on screen —
+    /// "Pick something from Chats" beside the recipes. And the glyph is
+    /// `dest.icon`, which `Icon` renders as *nothing at all* when it does not
+    /// know the name (`src/icons.rs`), so a typo is a blank column rather than
+    /// a compile error.
+    #[test]
+    fn the_empty_column_names_the_list_it_wants_you_to_pick_from() {
+        let mut checked = 0;
+        for dest in DESTINATIONS {
+            // Settings has no list, so its detail is unconditional and this
+            // column is never the one it draws.
+            if dest.root.is_none() {
+                continue;
+            }
+            let html = empty_column(dest);
+            assert!(
+                html.contains("Nothing open"),
+                "the empty detail column for {} says nothing at all: {html}",
+                dest.id
+            );
+            assert!(
+                html.contains(&format!(
+                    "Pick something from {} to see it here.",
+                    dest.label
+                )),
+                "the empty column beside the {} list does not name that list, \
+                 so it tells the reader to pick from somewhere they are not: \
+                 {html}",
+                dest.label
+            );
+            let glyph = crate::icons::path_for(dest.icon).unwrap_or_default();
+            assert!(
+                !glyph.is_empty() && html.contains(glyph),
+                "nothing drew {}'s `{}` glyph, so the empty column is a \
+                 sentence over a blank square: {html}",
+                dest.id,
+                dest.icon
+            );
+            checked += 1;
+        }
+        assert!(
+            checked >= 6,
+            "only {checked} destinations have a list to be empty beside — this \
+             walked the table and found almost nothing in it"
+        );
+    }
+
+    // ---- the keyboard chords, as strings and as wiring -------------------
+    //
+    // The three constants are JavaScript, so no compiler in this build reads a
+    // character of them and nothing else in the repo does either: they are
+    // installed by `document::eval` at run time, in a web view no test has.
+    // What CAN be held is the shape of each one, and each rule below is a line
+    // the doc comment above the constant calls load-bearing.
+
+    /// A chord installs its listener once per window, whatever Dioxus does
+    /// with the effect that installs it.
+    ///
+    /// `use_effect` re-runs whenever a signal read inside it changes and every
+    /// run re-evaluates the script, so a listener with no guard is added again
+    /// on each pass. The consequence is not a slow key: `REFRESH_KEY` sends
+    /// one message per listener, so the fifth ⌘R of a session would fire five
+    /// fetches of every list on screen, and Escape would click a dialog's
+    /// Cancel and then whatever took its place.
+    #[test]
+    fn each_chord_wires_its_listener_once_per_window() {
+        for (chord, script, flag) in [
+            ("⌘R", super::REFRESH_KEY, "__refreshKeyWired"),
+            ("Escape", super::DISMISS_KEY, "__dismissKeyWired"),
+            ("⌘/", super::NAV_KEY, "__navKeyWired"),
+        ] {
+            assert!(
+                script.contains(&format!("if (window.{flag}) return;")),
+                "the {chord} listener has no re-entry guard, so every re-render \
+                 of the shell adds another copy of it"
+            );
+            assert!(
+                script.contains(&format!("window.{flag} = true;")),
+                "the {chord} listener never claims its guard, so the guard \
+                 above is a flag nothing ever sets"
+            );
+        }
+    }
+
+    /// ⌘R swallows the whole modifier+`r` family and only then decides whether
+    /// it is the chord it wants.
+    ///
+    /// The order is the rule. ⌘R and ⌘⇧R are both the web view's own reload,
+    /// which throws the entire app away — connection, drafts and all — to
+    /// re-fetch a list. Narrowing first and preventing second means a stray
+    /// Shift reloads the app; that is a lost conversation, not a missed
+    /// refresh.
+    #[test]
+    fn the_refresh_chord_swallows_the_reload_before_it_narrows() {
+        let js = super::REFRESH_KEY;
+        let prevented = js
+            .find("e.preventDefault();")
+            .expect("⌘R no longer calls preventDefault, so the web view reloads the whole app");
+        let narrowed = js.find("if (e.altKey || e.shiftKey) return;").expect(
+            "the ⌘R listener no longer guards the other modifiers, so ⌥⌘R and \
+             ⇧⌘R now refresh as well",
+        );
+        assert!(
+            prevented < narrowed,
+            "⌘R narrows to the plain chord before it takes preventDefault, so \
+             ⇧⌘R reaches the web view's own reload and throws the app away"
+        );
+        assert!(
+            js.contains("e.key.toLowerCase() !== 'r'"),
+            "the key compare is case-sensitive again, so Caps Lock or a held \
+             Shift makes ⌘R do nothing at all"
+        );
+        assert!(
+            js.contains("const names = new Set();"),
+            "the names are no longer deduplicated: the Scheduler's list and \
+             its job detail both answer to `scheduler`, so one press would \
+             fetch it twice"
+        );
+    }
+
+    /// Escape presses the control that already means cancel — and only inside
+    /// a Confirm.
+    ///
+    /// `p.modal-body` is the discriminator and it has to be consulted BEFORE a
+    /// button is chosen. `views/chat.rs`'s `permission_button_class` paints
+    /// "Always allow" as `.btn.secondary`, so an Escape that reached for the
+    /// secondary button in any dialog would answer a permission request with
+    /// the broadest grant this app can give — from a key the reader pressed to
+    /// get out of the way.
+    #[test]
+    fn escape_reaches_for_a_cancel_only_inside_a_confirm() {
+        let js = super::DISMISS_KEY;
+        let discriminator = js
+            .find(".modal-body")
+            .expect("Escape no longer tells a Confirm from a permission prompt");
+        let cancel = js
+            .find(".modal-actions > .btn.secondary")
+            .expect("Escape no longer clicks the dialog's own Cancel");
+        assert!(
+            discriminator < cancel,
+            "Escape picks the secondary button before it checks that the \
+             dialog is a Confirm — in a permission prompt that button is \
+             `Always allow`"
+        );
+        assert!(
+            js.contains("if (cancel) cancel.click(); else back.click();"),
+            "the fallback is gone: a sheet that is not a Confirm has only its \
+             backdrop to dismiss it, and without this Escape does nothing to \
+             the rename sheet, the overflow menu or the pickers"
+        );
+        assert!(
+            !js.contains("dioxus.send"),
+            "Escape now reports back to Rust, which would mean a registry of \
+             open dialogs for the shell to close — state every sheet in this \
+             app deliberately keeps in its own view"
+        );
+    }
+
+    /// ⌘/ is matched on the CHARACTER, so it is the same chord on every
+    /// keyboard.
+    ///
+    /// On a US layout the slash is `Slash`, on AZERTY it is Shift+colon, on a
+    /// German layout Shift+7. Reading `e.code` would leave most of Europe with
+    /// a nav they cannot bring back, and a shift guard would do the same to
+    /// all of them at once.
+    #[test]
+    fn the_nav_chord_matches_the_character_and_not_the_key_position() {
+        let js = super::NAV_KEY;
+        assert!(
+            js.contains("if (e.key !== '/') return;"),
+            "⌘/ no longer matches on the character it is named for"
+        );
+        assert!(
+            !js.contains("e.code"),
+            "⌘/ reads the physical key, so on any layout that reaches `/` with \
+             a modifier the nav has no chord at all"
+        );
+        assert!(
+            !js.contains("shiftKey"),
+            "⌘/ now refuses a held Shift, which is how most of Europe types a \
+             slash in the first place"
+        );
+    }
+
+    // ---- the chords' Rust halves, driven through a fake web view ---------
+    //
+    // The strings above are half of each chord; the other half is what Rust
+    // does when the page sends one back, and until this existed nothing
+    // reached it. `document::eval` resolves an `Rc<dyn Document>` out of the
+    // context and falls back to a no-op that answers every `recv` with
+    // `Unsupported` (`dioxus-document-0.7.10/src/document.rs:120`), so under a
+    // bare `VirtualDom` these loops exit before their first turn.
+    //
+    // Providing a `Document` is NOT the faked `DesktopContext` that
+    // `src/selfscan.rs` rejects. That one would render a different component
+    // than the one that ships; this is the seam Dioxus itself defines for a
+    // renderer, so the code under test is exactly the code that runs on the
+    // desktop — only the web view on the far end of the channel is ours.
+
+    thread_local! {
+        /// Every script the shell asked the page to run.
+        static SCRIPTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        /// What the page has to say back, in order. Loaded before the mount,
+        /// so the first poll of the hook's `recv` already has it.
+        static INBOX: RefCell<VecDeque<serde_json::Value>> = const {
+            RefCell::new(VecDeque::new())
+        };
+    }
+
+    /// One `document::eval` handle: it delivers [`INBOX`] and then ends.
+    ///
+    /// Ending matters. `Finished` is what breaks the hook's `while ... .await`
+    /// loop, so the spawned task retires instead of parking forever and the
+    /// settle loop below has something to settle to.
+    ///
+    /// `send` and `poll_join` are the trait's, not this shell's: every chord
+    /// here is one-way, page to Rust, so nothing ever calls them and they show
+    /// up as the only uncovered lines in this module that are not behind a
+    /// window. Written as the honest answers rather than as a `todo!()`, which
+    /// would make a future two-way chord fail as a panic in the harness
+    /// instead of as a message the test can read.
+    struct Wire;
+
+    impl Evaluator for Wire {
+        fn send(&self, _data: serde_json::Value) -> Result<(), EvalError> {
+            Ok(())
+        }
+
+        fn poll_recv(&mut self, _: &mut Context<'_>) -> Poll<Result<serde_json::Value, EvalError>> {
+            Poll::Ready(
+                INBOX
+                    .with(|queue| queue.borrow_mut().pop_front())
+                    .ok_or(EvalError::Finished),
+            )
+        }
+
+        fn poll_join(&mut self, _: &mut Context<'_>) -> Poll<Result<serde_json::Value, EvalError>> {
+            Poll::Ready(Err(EvalError::Finished))
+        }
+    }
+
+    /// The web view, minus the web view.
+    struct FakeWebView {
+        /// The `Eval`s handed out are `GenerationalBox`es owned by this, so it
+        /// has to outlive them — a dropped owner turns every `recv` into
+        /// `Finished` before the first message is read.
+        owner: Owner,
+    }
+
+    impl Document for FakeWebView {
+        fn eval(&self, js: String) -> Eval {
+            SCRIPTS.with(|log| log.borrow_mut().push(js));
+            let wire: Box<dyn Evaluator> = Box::new(Wire);
+            Eval::new(self.owner.insert(wire))
+        }
+    }
+
+    /// Put a page under the component that is about to talk to one.
+    fn fake_web_view() {
+        let page: Rc<dyn Document> = Rc::new(FakeWebView {
+            owner: Owner::default(),
+        });
+        provide_context(page);
+    }
+
+    /// Load what the page will send, and forget what the last test heard.
+    fn page_sends(messages: &[&str]) {
+        SCRIPTS.with(|log| log.borrow_mut().clear());
+        INBOX.with(|queue| {
+            *queue.borrow_mut() = messages
+                .iter()
+                .map(|m| serde_json::Value::String((*m).to_owned()))
+                .collect();
+        });
+    }
+
+    fn installed(needle: &str) -> bool {
+        SCRIPTS.with(|log| log.borrow().iter().any(|js| js.contains(needle)))
+    }
+
+    /// One mounted app at a time.
+    ///
+    /// The tests below are the only ones in this module that mount an
+    /// `AppCtx` and run the virtual DOM's task queue, and the ask journal's
+    /// `use_synced_storage` keys its sender by storage key in a process-wide
+    /// `static` — so two mounts rendering at once feed each other through it
+    /// and never settle. `src/views/chat.rs` carries the measurement.
+    ///
+    /// A poisoned lock is taken anyway: a test that panicked while holding it
+    /// has already reported the thing it exists to report, and taking the rest
+    /// of the module down behind it would only hide which one broke.
+    fn alone() -> std::sync::MutexGuard<'static, ()> {
+        static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The nav's own signal, wired to ⌘/ exactly as `AppShell` wires it.
+    #[component]
+    fn NavKeyProbe() -> Element {
+        fake_web_view();
+        let open = use_signal(|| true);
+        super::use_nav_key(open);
+        rsx! { p { class: "probe-nav", "{open}" } }
+    }
+
+    fn press_nav_chord(times: usize) -> String {
+        page_sends(&vec!["toggle"; times]);
+        let mut dom = VirtualDom::new(NavKeyProbe);
+        dom.rebuild_in_place();
+        settle(&mut dom);
+        dioxus_ssr::render(&dom)
+    }
+
+    /// ⌘/ hides the nav, and pressing it again brings it back.
+    ///
+    /// The nav has no other keyboard route and — once it is shut — its only
+    /// pointer route is one unlabelled glyph in the corner of the window. A
+    /// chord that fired once and stuck, or that toggled a signal nobody reads,
+    /// looks identical from outside: the sidebar simply never moves.
+    ///
+    /// Both halves of the wiring are under this. The script has to reach the
+    /// page (a hook that stopped calling `document::eval` would install
+    /// nothing at all) and the message has to come back to a `set` on the
+    /// nav's own signal.
+    #[test]
+    fn the_nav_chord_shuts_the_sidebar_and_opens_it_again() {
+        let opened = press_nav_chord(0);
+        assert!(
+            opened.contains(">true<"),
+            "the nav does not start open, so the window launches with no \
+             navigation in it: {opened}"
+        );
+        assert!(
+            installed("__navKeyWired"),
+            "the shell never asked the page to listen for ⌘/, so the chord is \
+             a constant nothing installs"
+        );
+
+        let once = press_nav_chord(1);
+        assert!(
+            once.contains(">false<"),
+            "⌘/ arrived and the nav stayed open — the chord is wired to \
+             nothing: {once}"
+        );
+
+        let twice = press_nav_chord(2);
+        assert!(
+            twice.contains(">true<"),
+            "⌘/ shuts the nav and then cannot open it, which leaves one \
+             unlabelled glyph as the only way back to the navigation: {twice}"
+        );
+    }
+
+    /// ⌘R's dispatch, with the toast the shell would show for it.
+    #[component]
+    fn RefreshKeyProbe() -> Element {
+        fake_web_view();
+        let ctx = crate::state::use_app_ctx();
+        super::use_refresh_key();
+        let toast = (ctx.toast)().unwrap_or_default();
+        rsx! { p { class: "probe-toast", "{toast}" } }
+    }
+
+    /// ⌘R sends the name the page names, and Rust acts on that name.
+    ///
+    /// The name is the whole contract between the two halves: JS collects
+    /// every `data-refresh` on screen and sends the string, and
+    /// `viewport::refresh_named` is a `match` on it whose fallthrough arm is
+    /// legitimately silent. So a dispatch that dropped the string, or handed
+    /// on a different one, refreshes nothing and says nothing — the reader
+    /// presses ⌘R and the list simply stays as old as the window.
+    ///
+    /// `diff` is the name asserted on because its arm answers without a
+    /// server: `code::load_code_diff` on a chat with no session says so in a
+    /// toast, which is a sentence this test can read back out of the markup.
+    #[test]
+    fn the_refresh_chord_acts_on_the_name_the_page_sent() {
+        let _alone = alone();
+
+        page_sends(&["diff"]);
+        let html = crate::testkit::render_settled(|_| {}, || rsx! { RefreshKeyProbe {} });
+        assert!(
+            installed("__refreshKeyWired"),
+            "the shell never asked the page to listen for ⌘R"
+        );
+        assert!(
+            html.contains("No changes yet"),
+            "the page sent `diff` and nothing answered to it, so ⌘R reaches \
+             `refresh_named` with the wrong name or with none: {html}"
+        );
+
+        // And a name with no arm is silent rather than wrong: the scrollers
+        // that set no `data-refresh` are the majority.
+        page_sends(&["nothing-answers-to-this"]);
+        let quiet = crate::testkit::render_settled(|_| {}, || rsx! { RefreshKeyProbe {} });
+        assert!(
+            !quiet.contains("No changes yet"),
+            "an unrecognised refresh name reached the `diff` arm: {quiet}"
+        );
+    }
+
+    // ---- arriving somewhere, with a context under it ---------------------
+
+    /// The Scheduler's row, which is the destination this pair navigates to.
+    ///
+    /// Named by id off the real table rather than built here: a fabricated
+    /// destination would let this go green over a row `refresh_named` has no
+    /// arm for.
+    fn scheduler_row() -> &'static Destination {
+        DESTINATIONS
+            .iter()
+            .find(|dest| dest.id == "scheduler")
+            .expect("the destination table still has a Scheduler in it")
+    }
+
+    /// `AppShell`'s arrival effect, over the one destination whose refresh
+    /// claims something synchronously.
+    #[component]
+    fn ArrivalRefreshProbe() -> Element {
+        let ctx = crate::state::use_app_ctx();
+        super::use_arrival_refresh(scheduler_row());
+        let claimed = (ctx.scheduler.history_of)().unwrap_or_default();
+        rsx! { p { class: "probe-history", "{claimed}" } }
+    }
+
+    /// A job is open, so `scheduler::pull_refresh` has a history to claim —
+    /// which is the one thing a refresh does without a server to answer it.
+    fn a_job_open_and_connected(ctx: &AppCtx) {
+        let mut conn = ctx.conn;
+        conn.set(ConnState::Connected {
+            agent: "goose".to_owned(),
+        });
+        let mut open = ctx.scheduler.open;
+        open.set(Some("nightly".to_owned()));
+    }
+
+    /// The same window, still offline — which is where every launch starts.
+    fn a_job_open_and_offline(ctx: &AppCtx) {
+        let mut open = ctx.scheduler.open;
+        open.set(Some("nightly".to_owned()));
+    }
+
+    /// Arriving at a destination re-fetches its list, which is the desktop's
+    /// whole answer to refresh: there is no pull gesture here and no button in
+    /// the bar.
+    ///
+    /// The assertion is on the Scheduler's history slot because
+    /// `scheduler::pull_refresh` claims it in the same beat as the call, so it
+    /// is the one effect of a refresh that is visible without a server. Cut
+    /// the `refresh_named` out of the arrival hook and the slot stays empty:
+    /// the lists would then only ever load the first time a screen mounted,
+    /// and a window left open overnight would show yesterday's schedule with
+    /// nothing to say so.
+    #[test]
+    fn arriving_at_a_destination_refreshes_it() {
+        let _alone = alone();
+        let html = crate::testkit::render_settled(
+            a_job_open_and_connected,
+            || rsx! { ArrivalRefreshProbe {} },
+        );
+        assert!(
+            html.contains("nightly"),
+            "arriving at the Scheduler refreshed nothing, so the desktop's \
+             only automatic re-fetch is dead: {html}"
+        );
+    }
+
+    /// And it does NOT fetch while the app is disconnected.
+    ///
+    /// Every launch starts here — `state.rs` opens on Settings with no
+    /// connection — and the effect re-runs when the connection arrives under a
+    /// screen that is already up, which is the arrival that matters. Firing
+    /// regardless would throw a request at every destination change while the
+    /// tailnet is down, and each one would land in the failure path of a
+    /// screen that already says it is offline.
+    #[test]
+    fn arriving_while_disconnected_asks_for_nothing() {
+        let _alone = alone();
+        let html = crate::testkit::render_settled(
+            a_job_open_and_offline,
+            || rsx! { ArrivalRefreshProbe {} },
+        );
+        assert!(
+            !html.contains("nightly"),
+            "a disconnected window still fetched on arrival, so the gate on \
+             the connection is gone: {html}"
+        );
+    }
+
+    /// Escape's hook, which installs a script and listens for nothing back.
+    #[component]
+    fn DismissKeyProbe() -> Element {
+        fake_web_view();
+        super::use_dismiss_key();
+        rsx! { p { class: "probe-dismiss", "wired" } }
+    }
+
+    /// Escape is wired, and wired to the page alone.
+    ///
+    /// The hook is three lines and all three are load-bearing: no
+    /// `document::eval` at all and Escape does nothing anywhere in the app —
+    /// which is exactly the state this feature was added to fix, with "Delete
+    /// this chat?" up and no keyboard way out of it. `use_dismiss_key` is also
+    /// the one chord that never reports back, so this checks that the script
+    /// it installs is the one that answers in the page.
+    #[test]
+    fn the_shell_wires_escape_to_the_page_and_asks_for_nothing_back() {
+        page_sends(&[]);
+        let mut dom = VirtualDom::new(DismissKeyProbe);
+        dom.rebuild_in_place();
+        settle(&mut dom);
+
+        assert!(
+            installed("__dismissKeyWired"),
+            "the shell never asked the page to listen for Escape, so a dialog \
+             can only be dismissed with the pointer"
+        );
+        assert!(
+            installed(".modal-backdrop"),
+            "the script the shell installed for Escape is not the one that \
+             looks for an open dialog"
         );
     }
 }

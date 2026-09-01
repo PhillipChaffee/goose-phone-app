@@ -294,7 +294,108 @@ pub(crate) fn render_destination(ctx: &AppCtx, dest: &'static Destination) -> El
 
 #[cfg(test)]
 mod tests {
-    use super::{nav_is_active, nav_tooltip, Shell, DUMP_PREFIX_DESKTOP};
+    use dioxus::prelude::*;
+
+    use super::{nav_is_active, nav_tooltip, render_destination, Shell, DUMP_PREFIX_DESKTOP};
+    use crate::nav::{primary, Plane};
+    use crate::state::{AppCtx, Tab};
+    use crate::views::press::{alone, Pressable};
+
+    /// ONE destination row — Code's — with a real context under it.
+    ///
+    /// `primary` rather than a search of `DESTINATIONS`, because a search
+    /// answers with an `Option` and this crate cannot unwrap one.
+    fn code_row() -> Element {
+        let ctx: AppCtx = crate::state::use_app_ctx();
+        render_destination(&ctx, primary(Plane::Code))
+    }
+
+    /// The row is the piece both shells share, and the class on it is the one
+    /// rule they answer differently. This host runs the desktop arm, so what
+    /// it must show is the desktop reading: one push into Code — a chat open
+    /// in the column beside the list — is still "here". The phone's reading of
+    /// the same state is "back", and the arm above proves the two are told
+    /// apart; this proves the answer actually reaches the button's class,
+    /// which is the half a pure-function test cannot see.
+    ///
+    /// Without it the pill goes out exactly when you open something, which is
+    /// the bug `nav_is_active` was written for: no destination marked in the
+    /// nav while the list one column over marks the open row.
+    #[test]
+    fn a_destination_row_wears_the_shells_own_reading_of_here() {
+        let _alone = alone();
+        let elsewhere = Pressable::mount(|_| {}, code_row).markup();
+        assert!(
+            elsewhere.contains("class=\"drawer-item\""),
+            "a destination nobody is on is painted as where you are: {elsewhere}"
+        );
+
+        let pushed = Pressable::mount(
+            |ctx| {
+                let (mut tab, mut screen) = (ctx.tab, ctx.code_screen);
+                tab.set(Tab::Code);
+                screen.set(crate::code::CodeScreen::Chat);
+            },
+            code_row,
+        )
+        .markup();
+        assert!(
+            pushed.contains("class=\"drawer-item active\""),
+            "one push into Code and the nav says you are nowhere, while the \
+             list beside it is marking the row you opened: {pushed}"
+        );
+        assert!(
+            pushed.contains("title=\"Code\""),
+            "the row lost the tooltip that is the only way to read a collapsed \
+             56px icon rail: {pushed}"
+        );
+        assert!(
+            pushed.contains(">Code<"),
+            "the row has no label on it at all: {pushed}"
+        );
+    }
+
+    /// Pressing a destination does the two things a drawer press is for, and
+    /// the second one is easy to lose: the phone's drawer is an overlay over
+    /// the screen it navigates, so a press that moved the tab and left the
+    /// overlay up would leave the reader looking at the drawer they just used,
+    /// with the screen they asked for hidden behind it.
+    ///
+    /// The close lives in this shared row rather than at the phone's call
+    /// site, which is what makes it reachable from a test at all — and what
+    /// makes it worth one: on the desktop it writes false over false, so the
+    /// only shell it can break on is the one no test run on this host renders.
+    #[test]
+    fn pressing_a_destination_goes_there_and_takes_the_drawer_with_it() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(
+            |ctx| {
+                let mut open = ctx.drawer_open;
+                open.set(true);
+            },
+            code_row,
+        );
+        assert!(
+            screen.with(|ctx| (ctx.tab)()) != Tab::Code,
+            "the mount started on Code, so arriving there proves nothing"
+        );
+
+        screen.press("title=\"Code\"");
+        assert!(
+            screen.with(|ctx| (ctx.tab)()) == Tab::Code,
+            "pressing a destination did not go there, so the drawer is a list \
+             of labels that navigate nowhere"
+        );
+        assert!(
+            !screen.with(|ctx| (ctx.drawer_open)()),
+            "the drawer stayed open over the screen it was just used to reach"
+        );
+        let arrived = screen.markup();
+        assert!(
+            arrived.contains("class=\"drawer-item active\""),
+            "the row navigated but did not take the pill with it: {arrived}"
+        );
+    }
 
     /// The phone's rule is `at_root` and only `at_root` — a destination one
     /// push deep is somewhere to go back to, not where you are — and the

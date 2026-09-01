@@ -578,3 +578,121 @@ mod tests {
         }
     }
 }
+
+/// The one control in this file that is not a shape but a *rule about time*,
+/// and the only way to check a rule about time is to let some pass.
+///
+/// [`SearchField`] is the app's single exception to "a keystroke never writes
+/// to the server". Everything the exception is worth rests on the debounce
+/// underneath it: without the timer, typing "tailscale" is nine
+/// `sessions/list` calls over a tailnet, and without the generation check the
+/// nine answers race and the list settles on whichever one the server happened
+/// to finish last — which is a search box that shows results for `tails` while
+/// the field reads `tailscale`. Neither failure raises anything. Both are one
+/// deleted line away, and until this existed nothing in the suite ran the
+/// handler at all: `oninput` is a closure, and a render never calls one.
+#[cfg(test)]
+mod searching {
+    use std::cell::RefCell;
+
+    use dioxus::prelude::*;
+
+    use crate::views::chat::pressing::{alone, Pressable};
+
+    thread_local! {
+        /// Every query the field has actually asked for, in order. Per-thread,
+        /// and the harness gives each `#[test]` a thread of its own — so two
+        /// tests never read each other's calls.
+        static ASKED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn asked() -> Vec<String> {
+        ASKED.with(|calls| calls.borrow().clone())
+    }
+
+    /// The field with nothing configured, which is also how the sessions list
+    /// mounts it: no `placeholder`, so the prop default is what renders.
+    #[expect(
+        non_snake_case,
+        reason = "a Dioxus component is named like a component"
+    )]
+    fn SearchProbe() -> Element {
+        rsx! {
+            super::SearchField {
+                on_search: move |query: String| {
+                    ASKED.with(|calls| calls.borrow_mut().push(query));
+                },
+            }
+        }
+    }
+
+    /// A keystroke is not a request yet — and after the timer, it is exactly
+    /// one.
+    ///
+    /// The gap between those two sentences is the whole component. Fire on the
+    /// keystroke and every letter of a word is a round trip; never fire and
+    /// the box is decoration. Both halves are asserted here because a debounce
+    /// that has quietly become a no-op passes any test that only looks at the
+    /// end state.
+    #[test]
+    fn a_keystroke_becomes_a_search_only_after_the_typing_stops() {
+        let _alone = alone();
+        ASKED.with(|calls| calls.borrow_mut().clear());
+
+        let mut screen = Pressable::mount(|_| {}, SearchProbe);
+        assert!(
+            screen.markup().contains(r#"placeholder="Search""#),
+            "the field mounted without the prompt that says what it is for: {}",
+            screen.markup()
+        );
+
+        screen.type_into(r#"class="field""#, "tailscale");
+        assert!(
+            screen.markup().contains(r#"value="tailscale""#),
+            "the field does not show what was typed into it, so the box reads \
+             as one that is not accepting input: {}",
+            screen.markup()
+        );
+        assert_eq!(
+            asked(),
+            Vec::<String>::new(),
+            "the keystroke went straight out as a request — type a nine-letter \
+             word and that is nine list calls over a tailnet"
+        );
+
+        screen.settle();
+        assert_eq!(
+            asked(),
+            ["tailscale"],
+            "the timer never fired, so the field takes input and searches for \
+             nothing: the list stays whatever it was and the box looks broken"
+        );
+    }
+
+    /// The generation check, which is the half that has no visible symptom
+    /// until it is wrong.
+    ///
+    /// Every keystroke arms a timer; only the last one standing may call.
+    /// Drop `latest` and both timers fire — two calls for one word, answering
+    /// in whatever order the server chooses, so the list can settle on the
+    /// results for `tail` while the field on screen reads `tailscale`. Nothing
+    /// errors, and the reader's only clue is that the results are wrong.
+    #[test]
+    fn only_the_last_keystroke_of_a_word_becomes_a_request() {
+        let _alone = alone();
+        ASKED.with(|calls| calls.borrow_mut().clear());
+
+        let mut screen = Pressable::mount(|_| {}, SearchProbe);
+        screen.type_into(r#"class="field""#, "tail");
+        screen.type_into(r#"class="field""#, "tails");
+        screen.type_into(r#"class="field""#, "tailscale");
+        screen.settle();
+
+        assert_eq!(
+            asked(),
+            ["tailscale"],
+            "typing one word made more than one request, and the earlier ones \
+             are answers for a prefix nobody is looking at any more"
+        );
+    }
+}

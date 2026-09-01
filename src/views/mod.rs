@@ -2,6 +2,12 @@ pub(crate) mod attach;
 
 pub(crate) mod chat;
 
+/// Mounting a view and pressing something in it. Test-only, and shared —
+/// `viewport.rs` and `shell/mod.rs` reach for it too, because the handlers
+/// they own are only reachable through an event.
+#[cfg(test)]
+pub(crate) mod press;
+
 pub(crate) mod chrome;
 
 pub(crate) mod code;
@@ -326,5 +332,221 @@ pub fn OverflowSheet(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dioxus::prelude::*;
+
+    use super::press::{alone, Js, Pressable};
+    use crate::state::AppCtx;
+
+    thread_local! {
+        /// The document a probe installs, reachable from the test that mounted
+        /// it. A `fn() -> Element` cannot capture, so the two ends meet here.
+        static RECORDER: Js = Js::default();
+    }
+
+    /// A session row with a swipe tray behind it, arranged the way a list
+    /// arranges one: the card underneath opens the session, the tray on top
+    /// deletes it. The two outcomes are written into two signals so a test can
+    /// say which of them a tap produced.
+    fn swipe_row() -> Element {
+        let ctx: AppCtx = crate::state::use_app_ctx();
+        rsx! {
+            div {
+                class: "session-item",
+                // One line on purpose: the whole point of the test below is
+                // that this never runs, so a body spread over four lines is
+                // four lines the coverage report will never account for.
+                onclick: move |_| ctx.chat_draft.clone().set("the row opened it".to_owned()),
+                super::SwipeDelete {
+                    on_delete: move |()| {
+                        let mut asked = ctx.sessions_query;
+                        asked.set("delete was asked for".to_owned());
+                    },
+                }
+            }
+        }
+    }
+
+    /// Delete is the one control in the row that is not the row.
+    ///
+    /// The card behind it is the tap target for the whole row (design rule 9),
+    /// so a Delete that let its click bubble would ask to delete the session
+    /// AND walk into it — on the phone a transcript sliding in over a row that
+    /// is about to vanish, on the desktop a detail column showing a session
+    /// the list has already dropped. `stop_propagation` is the whole of that
+    /// rule and nothing in the type system holds it in place.
+    #[test]
+    fn deleting_a_row_does_not_also_open_it() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(|_| {}, swipe_row);
+        screen.press("title=\"Delete\"");
+
+        assert_eq!(
+            screen.with(|ctx| ctx.sessions_query.peek().clone()),
+            "delete was asked for",
+            "pressing the tray's button never reached `on_delete`, so the only \
+             delete a Code session has does nothing at all"
+        );
+        assert!(
+            screen.with(|ctx| ctx.chat_draft.peek().is_empty()),
+            "the tap went through the tray and opened the row behind it as \
+             well, so deleting a session also navigates into it"
+        );
+    }
+
+    /// The jump-to-the-bottom button, over a document that records what the
+    /// app evaluates in it.
+    fn scroll_button() -> Element {
+        use_hook(|| RECORDER.with(Js::clone)).install();
+        rsx! { super::ScrollToBottom { scroller: "chat-scroll" } }
+    }
+
+    /// The button's whole job is the scroll, and the scroll is a
+    /// `document::eval` against the scroller it was handed. A press that
+    /// evaluated nothing — or evaluated against some other element's id —
+    /// looks identical on screen: the transcript stays where the reader left
+    /// it and the button stays up, which is exactly the state it exists to get
+    /// them out of.
+    #[test]
+    fn the_jump_button_scrolls_the_transcript_it_was_named() {
+        let _alone = alone();
+        RECORDER.with(Js::clear);
+        let mut screen = Pressable::mount(|_| {}, scroll_button);
+        assert!(
+            RECORDER.with(Js::scripts).is_empty(),
+            "the button scrolled the transcript before anyone pressed it"
+        );
+
+        screen.press("class=\"scroll-bottom\"");
+        let script = RECORDER.with(|js| js.script_with("getElementById"));
+        assert!(
+            script.contains("getElementById('chat-scroll')"),
+            "the jump went to some element other than the transcript the \
+             button was given: {script}"
+        );
+        assert!(
+            script.contains("el.scrollTop = el.scrollHeight"),
+            "the script the button ran does not take the transcript to its \
+             bottom: {script}"
+        );
+        assert!(
+            script.contains("window.__atBottom = true"),
+            "the jump left `__atBottom` alone, so the pin will not follow new \
+             content and the button that was just pressed stays on screen: \
+             {script}"
+        );
+    }
+
+    /// The rename sheet, with the two outcomes it can produce written where a
+    /// test can read them: the saved name, and the fact that it was cancelled.
+    fn rename_sheet() -> Element {
+        let ctx: AppCtx = crate::state::use_app_ctx();
+        rsx! {
+            super::RenameSheet {
+                heading: "Rename chat",
+                value: "Rotate the certificate",
+                on_save: move |name: String| {
+                    let mut saved = ctx.chat_draft;
+                    saved.set(name);
+                },
+                on_cancel: move |()| {
+                    let mut toast = ctx.toast;
+                    toast.set(Some("cancelled".to_owned()));
+                },
+            }
+        }
+    }
+
+    /// The return key is the button under the thumb: on a short phone the
+    /// keyboard is over the sheet's own Save, so a sheet that only saved from
+    /// the button would be a rename you cannot commit without dismissing the
+    /// keyboard first.
+    ///
+    /// And it saves what was typed, trimmed. A title that kept the leading
+    /// space a phone keyboard leaves behind an autocorrect sorts and searches
+    /// wrong for as long as the session exists.
+    #[test]
+    fn the_return_key_saves_the_name_that_was_typed() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(|_| {}, rename_sheet);
+        let opened = screen.markup();
+        assert!(
+            opened.contains("Rotate the certificate"),
+            "the sheet opened on something other than the name it was given, \
+             so every rename starts by retyping the title: {opened}"
+        );
+
+        screen.type_into("class=\"field\"", "  Rotate the wildcard certificate  ");
+        screen.enter("class=\"field\"");
+        assert_eq!(
+            screen.with(|ctx| ctx.chat_draft.peek().clone()),
+            "Rotate the wildcard certificate",
+            "Enter in the field did not save the name that was typed, trimmed"
+        );
+    }
+
+    /// A blank title is not a rename, it is a session with no name — and goose
+    /// would take it. The button says so by going disabled; the return key has
+    /// to say the same thing, or the one path that skips the button is the one
+    /// path that can wipe a title.
+    #[test]
+    fn a_blank_title_is_not_a_rename_from_the_keyboard_either() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(|_| {}, rename_sheet);
+        screen.type_into("class=\"field\"", "   ");
+        let blank = screen.markup();
+        assert!(
+            blank.contains("disabled"),
+            "Save is still pressable over a blank title: {blank}"
+        );
+
+        screen.enter("class=\"field\"");
+        assert!(
+            screen.with(|ctx| ctx.chat_draft.peek().is_empty()),
+            "Enter saved a blank title, so the session is left with no name at \
+             all and the button's disabled state was decoration"
+        );
+    }
+
+    /// Every sheet in this app dismisses by tapping the dark outside it, and
+    /// this one is a modal over a list: without that tap a reader who opened
+    /// it by accident has Cancel and nothing else — and on the desktop, where
+    /// rename is an always-visible icon on the row, opening it by accident is
+    /// the easy mistake.
+    #[test]
+    fn a_tap_outside_the_rename_sheet_cancels_it() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(|_| {}, rename_sheet);
+        screen.press("class=\"modal-backdrop\"");
+        assert_eq!(
+            screen.with(|ctx| ctx.toast.peek().clone()),
+            Some("cancelled".to_owned()),
+            "tapping outside the sheet did not dismiss it"
+        );
+        assert!(
+            screen.with(|ctx| ctx.chat_draft.peek().is_empty()),
+            "the dismissal saved the name on its way out as well"
+        );
+    }
+
+    /// The sheet itself is not the backdrop. A tap inside it — reaching for
+    /// the field, or missing the Save button — must not close it, which is
+    /// what the inner `stop_propagation` is for and what nothing else holds in
+    /// place.
+    #[test]
+    fn a_tap_inside_the_rename_sheet_keeps_it_open() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(|_| {}, rename_sheet);
+        screen.press("class=\"modal sheet rename\"");
+        assert_eq!(
+            screen.with(|ctx| ctx.toast.peek().clone()),
+            None,
+            "a tap on the sheet bubbled out to the backdrop and dismissed the \
+             rename the reader was in the middle of typing"
+        );
     }
 }

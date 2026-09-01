@@ -1842,4 +1842,376 @@ mod tests {
             p { "history-of={claimed}" }
         }
     }
+
+    // ------------------------------------------------------------- pressing
+    //
+    // Everything above renders. Eleven things on these two screens do not: a
+    // tray button, a confirm's Delete, a sheet's Save, the back chevron, the
+    // detail's own button row, the Cadence row, a run in the history, and the
+    // empty state's one way out. Every one of them is a closure, and a render
+    // never calls a closure — so all of them were markup that had been looked
+    // at and behaviour that had not.
+    //
+    // `views::chat::pressing` is the harness that can call one (its module
+    // comment is the whole argument for how). It takes the same process-wide
+    // lock, for the same reason: `use_app_ctx_provider` opens the ask
+    // journal's storage, whose subscription map is a `static`, and two
+    // `VirtualDom`s draining task queues at once feed each other and spin.
+
+    use crate::views::chat::pressing::{alone, Pressable};
+
+    fn tab_word(tab: Tab) -> &'static str {
+        match tab {
+            Tab::Home => "home",
+            Tab::Code => "code",
+            Tab::Recipes => "recipes",
+            Tab::Skills => "skills",
+            Tab::Scheduler => "scheduler",
+            Tab::Extensions => "extensions",
+        }
+    }
+
+    /// Everything a press on these screens can change that the screens
+    /// themselves do not put on display, as lines a test can look for.
+    ///
+    /// Read reactively rather than peeked, so the probe re-renders when a
+    /// handler writes — a peek here would print the state as it was before the
+    /// press and every assertion below would be about the seed.
+    fn state_lines(ctx: &AppCtx) -> Vec<String> {
+        let screen = match (ctx.scheduler.screen)() {
+            Screen::List => "list",
+            Screen::Detail => "detail",
+        };
+        vec![
+            format!("sheet={}", sheet_word(&(ctx.scheduler.sheet)())),
+            format!("screen={screen}"),
+            format!(
+                "open={}",
+                (ctx.scheduler.open)().unwrap_or_else(|| "nothing".to_owned())
+            ),
+            format!("tab={}", tab_word((ctx.tab)())),
+            format!("toast={}", (ctx.toast)().unwrap_or_default()),
+            format!(
+                "chat={}",
+                (ctx.chat)()
+                    .session_id
+                    .unwrap_or_else(|| "nothing".to_owned())
+            ),
+        ]
+    }
+
+    #[expect(
+        non_snake_case,
+        reason = "a Dioxus component is named like a component"
+    )]
+    fn ListProbe() -> Element {
+        let ctx = crate::state::use_app_ctx();
+        let lines = state_lines(&ctx);
+        rsx! {
+            for line in lines.iter() {
+                p { class: "probe", "{line}" }
+            }
+            super::SchedulerView {}
+        }
+    }
+
+    #[expect(
+        non_snake_case,
+        reason = "a Dioxus component is named like a component"
+    )]
+    fn DetailProbe() -> Element {
+        let ctx = crate::state::use_app_ctx();
+        let lines = state_lines(&ctx);
+        rsx! {
+            for line in lines.iter() {
+                p { class: "probe", "{line}" }
+            }
+            super::ScheduledJobView {}
+        }
+    }
+
+    fn says(html: &str, line: &str) -> bool {
+        html.contains(&format!("<p class=\"probe\">{line}</p>"))
+    }
+
+    fn online_with_one_job(ctx: &AppCtx) {
+        go_online(ctx);
+        hold(ctx, vec![a_job(JOB, DAILY_3AM)]);
+    }
+
+    fn one_job_open(ctx: &AppCtx) {
+        online_with_one_job(ctx);
+        opened(ctx, JOB);
+    }
+
+    fn one_job_running(ctx: &AppCtx) {
+        go_online(ctx);
+        let mut job = a_job(JOB, DAILY_3AM);
+        job.currently_running = true;
+        hold(ctx, vec![job]);
+        opened(ctx, JOB);
+    }
+
+    /// A detail open on a job the list no longer holds — the arm a job
+    /// deleted from another client lands on.
+    fn a_job_that_vanished(ctx: &AppCtx) {
+        go_online(ctx);
+        opened(ctx, JOB);
+    }
+
+    fn one_job_with_a_run(ctx: &AppCtx) {
+        one_job_open(ctx);
+        let mut history = ctx.scheduler.history;
+        history.set(settled(vec![a_run("sess-42", Some("/repo"))]));
+    }
+
+    fn confirming_a_delete(ctx: &AppCtx) {
+        online_with_one_job(ctx);
+        let mut sheet = ctx.scheduler.sheet;
+        sheet.set(Sheet::ConfirmDelete(JOB.to_owned()));
+    }
+
+    fn confirming_a_kill(ctx: &AppCtx) {
+        online_with_one_job(ctx);
+        let mut sheet = ctx.scheduler.sheet;
+        sheet.set(Sheet::ConfirmKill(JOB.to_owned()));
+    }
+
+    fn editing_the_cadence(ctx: &AppCtx) {
+        one_job_open(ctx);
+        let mut sheet = ctx.scheduler.sheet;
+        sheet.set(Sheet::Cadence);
+    }
+
+    /// The empty Scheduler's one way out has to actually go there.
+    ///
+    /// Nothing on this screen can create a schedule, so the button is the
+    /// whole of the empty state's usefulness. Wired to nothing it is a dead
+    /// control on a dead-end screen, and it looks identical either way.
+    #[test]
+    fn the_empty_states_button_really_moves_to_recipes() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(go_online, ListProbe);
+        assert!(
+            says(&screen.markup(), "tab=scheduler"),
+            "the probe is not on the Scheduler tab to begin with: {}",
+            screen.markup()
+        );
+
+        screen.press(r#"class="btn secondary""#);
+        assert!(
+            says(&screen.markup(), "tab=recipes"),
+            "\"Open Recipes\" did not move the drawer, so the empty Scheduler \
+             is a dead end with a button on it: {}",
+            screen.markup()
+        );
+    }
+
+    /// The tray's two buttons, pressed.
+    ///
+    /// Delete carries the id it is about — that is the whole reason `Sheet`
+    /// holds one, so a confirm survives a re-list that moved the row — and
+    /// Pause reaches a call that says something even with no socket. A handler
+    /// wired to nothing produces neither, and produces no error either.
+    #[test]
+    fn the_rows_tray_reaches_the_pause_and_the_delete_it_is_labelled_with() {
+        let _alone = alone();
+        let mut deleting = Pressable::mount(online_with_one_job, ListProbe);
+        assert!(says(&deleting.markup(), "sheet=closed"));
+
+        deleting.press(r#"title="Delete""#);
+        assert!(
+            says(&deleting.markup(), &format!("sheet=delete {JOB}")),
+            "the row's Delete opened no confirmation, so either nothing \
+             happens or a schedule goes without being asked about: {}",
+            deleting.markup()
+        );
+
+        let mut pausing = Pressable::mount(online_with_one_job, ListProbe);
+        pausing.press(r#"title="Pause""#);
+        pausing.settle();
+        assert!(
+            says(
+                &pausing.markup(),
+                "toast=Not connected — reconnect in Settings"
+            ),
+            "the row's Pause never reached the call behind it: the button \
+             highlights and the row goes on saying exactly what it said: {}",
+            pausing.markup()
+        );
+    }
+
+    /// A confirmation has to be able to say yes, and the yes has to be about
+    /// the row the swipe came from.
+    ///
+    /// Both confirms on this screen are the same component with different
+    /// words, and each carries an id. Answering one must close it and act; a
+    /// confirm that closed without acting is the worst of the two, because the
+    /// reader has already been told what it was going to do.
+    #[test]
+    fn answering_a_confirm_closes_it_and_acts_on_the_job_it_named() {
+        let _alone = alone();
+
+        let mut delete = Pressable::mount(confirming_a_delete, ListProbe);
+        delete.press(r#"class="btn danger""#);
+        delete.settle();
+        let html = delete.markup();
+        assert!(
+            says(&html, "sheet=closed"),
+            "the delete confirmation stayed up after it was answered: {html}"
+        );
+        assert!(
+            says(&html, "toast=Not connected — reconnect in Settings"),
+            "confirming a delete reached nothing, so the schedule is still on \
+             the server and the sheet closed as though it were not: {html}"
+        );
+
+        let mut kill = Pressable::mount(confirming_a_kill, ListProbe);
+        kill.press(r#"class="btn danger""#);
+        kill.settle();
+        let html = kill.markup();
+        assert!(
+            says(&html, "sheet=closed")
+                && says(&html, "toast=Not connected — reconnect in Settings"),
+            "confirming a kill left the run going and the dialog gone: {html}"
+        );
+    }
+
+    /// Save writes and Cancel does not, which is the only difference between
+    /// the two buttons a cadence sheet has.
+    ///
+    /// Rendered over the LIST rather than the detail on purpose: the detail's
+    /// own button row carries a `btn primary` and a `btn secondary` of its
+    /// own, so a press aimed at the sheet would land on Run now.
+    #[test]
+    fn the_cadence_sheet_saves_on_save_and_writes_nothing_on_cancel() {
+        let _alone = alone();
+
+        let mut saved = Pressable::mount(editing_the_cadence, ListProbe);
+        assert!(says(&saved.markup(), "sheet=cadence"));
+        saved.press(r#"class="btn primary""#);
+        saved.settle();
+        let html = saved.markup();
+        assert!(
+            says(&html, "sheet=closed"),
+            "Save left the sheet open, which reads as a save that did not \
+             take: {html}"
+        );
+        assert!(
+            says(&html, "toast=Not connected — reconnect in Settings"),
+            "Save closed the sheet without sending the cadence anywhere, so \
+             the job keeps its old one and nothing says so: {html}"
+        );
+
+        let mut cancelled = Pressable::mount(editing_the_cadence, ListProbe);
+        cancelled.press(r#"class="btn secondary""#);
+        cancelled.settle();
+        let html = cancelled.markup();
+        assert!(
+            says(&html, "sheet=closed"),
+            "Cancel left the cadence sheet on screen: {html}"
+        );
+        assert!(
+            says(&html, "toast="),
+            "Cancel sent the cadence anyway, so backing out of the sheet moves \
+             the job to whatever it happened to be showing: {html}"
+        );
+    }
+
+    /// The back chevron, from both of the detail's arms.
+    ///
+    /// The second is the one that has already been shipped wrong once: a job
+    /// deleted from another client vanishes under the open screen, and the arm
+    /// that draws "no longer on the server" has to keep the way out. A chevron
+    /// that renders and does nothing is the same dead end with a button on it.
+    #[test]
+    fn the_detail_chevron_goes_back_from_a_job_and_from_the_absence_of_one() {
+        let _alone = alone();
+
+        let mut present = Pressable::mount(one_job_open, DetailProbe);
+        assert!(says(&present.markup(), "screen=detail"));
+        present.press(r#"class="icon-btn back""#);
+        let html = present.markup();
+        assert!(
+            says(&html, "screen=list") && says(&html, "open=nothing"),
+            "Back did not leave the detail, or left it still holding the job \
+             it was showing: {html}"
+        );
+
+        let mut gone = Pressable::mount(a_job_that_vanished, DetailProbe);
+        gone.press(r#"class="icon-btn back""#);
+        assert!(
+            says(&gone.markup(), "screen=list"),
+            "the detail of a job that is no longer on the server is a screen \
+             with nothing on it and no way off: {}",
+            gone.markup()
+        );
+    }
+
+    /// The detail's own buttons reach [`act`], which is the table `ActProbe`
+    /// checks the arms of. This is the wiring between the two: a button whose
+    /// `onclick` stopped calling `act` renders, highlights, and does nothing.
+    ///
+    /// Kill is the one pressed here because its answer is a state and not a
+    /// toast — the confirm it opens carries the job's id, so the assertion is
+    /// about which job as well as about whether.
+    #[test]
+    fn the_detail_button_row_reaches_the_calls_behind_it() {
+        let _alone = alone();
+
+        let mut screen = Pressable::mount(one_job_running, DetailProbe);
+        assert!(says(&screen.markup(), "sheet=closed"));
+
+        screen.press(r#"class="btn danger-outline""#);
+        assert!(
+            says(&screen.markup(), &format!("sheet=kill {JOB}")),
+            "Kill opened no confirmation, so a run in flight either cannot be \
+             stopped at all or is stopped without being asked about: {}",
+            screen.markup()
+        );
+    }
+
+    /// The Cadence row is the only control in the facts card, and the sheet is
+    /// the only way to change when a job runs. A row that stopped opening it
+    /// would leave the cadence readable and unchangeable, looking exactly like
+    /// the `Fixed` arm that is deliberately both.
+    #[test]
+    fn the_cadence_row_is_the_way_into_the_sheet() {
+        let _alone = alone();
+        let mut screen = Pressable::mount(one_job_open, DetailProbe);
+        screen.press(r#"class="setting-row""#);
+        assert!(
+            says(&screen.markup(), "sheet=cadence"),
+            "the Cadence row did not open the sheet, so an editable cadence \
+             is as unchangeable as one this app cannot express: {}",
+            screen.markup()
+        );
+    }
+
+    /// A run in the history is a chat, and tapping one has to land in the
+    /// stack that draws chats.
+    ///
+    /// `open_session` sets the Home *screen* and never the tab, so the row's
+    /// handler goes through `scheduler::watch` for the one line that moves the
+    /// drawer. Wire it to `open_session` directly and the transcript loads
+    /// into a stack nothing is rendering — the tap looks like a dead row.
+    #[test]
+    fn tapping_a_run_opens_it_as_the_chat_it_is() {
+        let _alone = alone();
+
+        let mut screen = Pressable::mount(one_job_with_a_run, DetailProbe);
+        assert!(says(&screen.markup(), "chat=nothing"));
+
+        screen.press(r#"class="session-item""#);
+        let html = screen.markup();
+        assert!(
+            says(&html, "chat=sess-42"),
+            "tapping a run opened no transcript: {html}"
+        );
+        assert!(
+            says(&html, "tab=home"),
+            "the run's transcript was opened on the Scheduler tab, which does \
+             not draw it — so the tap reads as a row that does nothing: {html}"
+        );
+    }
 }
