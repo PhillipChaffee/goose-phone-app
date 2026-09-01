@@ -136,8 +136,40 @@ async fn main() {
          die-on-close: {die_on_close})"
     );
 
+    // STOP WHEN STDIN CLOSES, and this is about coverage rather than about
+    // tidiness.
+    //
+    // The seven integration test binaries drive this server hard — every
+    // method in `features/`, every arm of `turn.rs` — and then drop a `Server`
+    // whose `Drop` calls `Child::kill`. That is SIGKILL, which a process
+    // cannot catch, so this one never reaches an atexit handler and never
+    // writes its `.profraw`. The consequence is that `cargo llvm-cov` reported
+    // `main.rs` and `turn.rs` at **0.00%** while both were being exercised on
+    // every run — an attribution artifact, not untested code, and one that
+    // would have made a 95% workspace bar a lie in either direction.
+    //
+    // A closed stdin rather than a signal: catching SIGTERM needs tokio's
+    // `signal` feature, which this crate does not carry, and stdin costs
+    // nothing. The harness pipes it and drops the handle; the read returns 0,
+    // the loop breaks, `main` returns, and LLVM writes the profile on the way
+    // out. A server run by hand from a terminal keeps stdin open and so runs
+    // forever, exactly as before.
+    //
+    // A blocking thread and not `tokio::io::stdin`, because that spawns a
+    // blocking task per read and this only ever needs one.
+    let (stop, mut stopped) = tokio::sync::oneshot::channel::<()>();
+    std::thread::spawn(move || {
+        let mut sink = Vec::new();
+        let _ = io::Read::read_to_end(&mut io::stdin(), &mut sink);
+        let _ = stop.send(());
+    });
+
     loop {
-        let Ok((socket, _)) = listener.accept().await else {
+        let accepted = tokio::select! {
+            () = async { (&mut stopped).await.unwrap_or(()) } => break,
+            accepted = listener.accept() => accepted,
+        };
+        let Ok((socket, _)) = accepted else {
             continue;
         };
         let state = state.clone();
