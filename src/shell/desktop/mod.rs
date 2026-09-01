@@ -864,14 +864,64 @@ mod tests {
     /// the layout (`.drawer-nav` is the only one of the three that scrolls, so
     /// a switch that drifted inside it would scroll away), and a file-wide
     /// `contains` cannot tell any of them apart.
+    ///
+    /// It ends at `section { class: "pane`, and the choice of terminator is
+    /// the whole care here. It used to end at `if let Some(root) = dest.root`
+    /// — the line that guards the list column — which is a line the coming
+    /// restructure DELETES: the list moves into the sidebar and the content
+    /// area stops being conditional. Deleting it would have taken three tests
+    /// red at once with a message about a slice that ran to the end of the
+    /// file, naming no feature and pointing at nothing.
+    ///
+    /// `section { class: "pane` survives that, because it is a prefix of both
+    /// what follows the sidebar today (`pane pane-list`) and what follows it
+    /// afterwards (`pane pane-main`). It is also not `chrome_band`'s
+    /// terminator, which `div { class: "shell-body",` already is — two slices
+    /// sharing an end anchor is two slices that cannot both be right once
+    /// anything moves between them.
     fn nav_card() -> String {
         let code = shell_code();
         block(
             &code,
             "div { class: \"navcard\",",
-            "if let Some(root) = dest.root",
+            "section { class: \"pane",
         )
         .to_owned()
+    }
+
+    /// The sidebar slice is BOUNDED, which is the half `block`'s own asserts
+    /// cannot check.
+    ///
+    /// `block` proves both anchors were found, so it catches a slice that is
+    /// empty and a slice that runs to the end of the file. It cannot catch a
+    /// slice that merely grew — and a `nav_card()` that quietly swallowed the
+    /// panes would make every assertion above it vacuously true, which is the
+    /// same failure `crate::selfscan` exists to prevent, one level along. The
+    /// three sidebar tests would then go on passing with the sidebar deleted,
+    /// as long as the strings appeared anywhere in the render.
+    ///
+    /// So this names things that live AFTER the sidebar and requires them to
+    /// be outside it. It is the check that lets the terminator be changed
+    /// again — as the restructure will change it — without anyone having to
+    /// re-derive by hand what the slice now covers.
+    #[test]
+    fn the_sidebar_slice_stops_at_the_sidebar() {
+        let card = nav_card();
+        for inside in ["plane-switch", "plane-seg", "nav-footer"] {
+            assert!(
+                card.contains(inside),
+                "the sidebar slice no longer covers `{inside}`, so the tests \
+                 that assert on it are asking about the wrong region"
+            );
+        }
+        for outside in ["pane-detail", "pane-empty", "shell-chrome", "conn-badge"] {
+            assert!(
+                !card.contains(outside),
+                "the sidebar slice has widened far enough to include \
+                 `{outside}`, which is not in the sidebar — every assertion \
+                 made against this slice is now weaker than it reads"
+            );
+        }
     }
 
     /// The sidebar writes the three class names `assets/desktop.css` styles,
