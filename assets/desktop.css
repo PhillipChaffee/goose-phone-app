@@ -495,9 +495,27 @@
  * they are behind the disclosure — so that rule is overridden below and the
  * scrolling moves here. Two `flex: 1` scrollers in one card is two boxes
  * fighting over the same height, and the loser collapses to nothing. */
+/* `0 1 auto`, not `0 0 auto`: it takes only the height it needs, and gives
+ * height back when there is not enough.
+ *
+ * It shipped as `0 0 auto` and the audit caught what that costs — with the
+ * library expanded at 480x560 the card's content ran 22px past its box
+ * (`SPILL div.navcard content leaves the box by 22px`, and `CLIPPED-Y
+ * aside.navpane scroll=522 client=508`) across all nine states that had it
+ * open. Four 48px rows that refuse to shrink is 192px the short window does
+ * not have.
+ *
+ * The session list below is `1 1 auto`, so it still absorbs surplus first and
+ * this only starts scrolling once the list is already at nothing — which is
+ * the order the reader wants. Two scrollers in one card is not ideal and is
+ * the price of the library and the list being separate components; the
+ * alternative, one scroller over both, is a change in `mod.rs`'s structure
+ * rather than in this sheet. */
 .navcard .drawer-nav {
-  flex: 0 0 auto;
-  overflow: visible;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .nav-sessions {
@@ -534,17 +552,36 @@
 /* A row. Two lines of text, a mark, and an age — no tile, no action gutter,
  * no fab. See `src/shell/desktop/sidebar.rs` for why this is not the list view
  * that already exists, and for the measurement that settled it. */
+/* The row is a DIV and the openable part inside it is the button — see the
+ * note in `sidebar.rs`. A button cannot legally hold the two action buttons,
+ * and an HTML parser meeting that hoists them out and unravels the tree. */
 .nav-row {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: 4px;
   width: 100%;
   min-height: 44px;
-  padding: 8px;
-  border: 0;
+  /* 6 rather than 8 vertically, so a 32px action and 12px of padding come to
+   * exactly the 44px `min-height` above and the row does not grow when the
+   * pointer reveals them. */
+  padding: 6px 8px;
   border-radius: var(--radius-md);
-  background: transparent;
   color: var(--text-primary);
+}
+
+/* What opens the row: everything except the actions, and the whole of it is
+ * the target. `flex: 1 1 auto` with `min-width: 0` so the title ellipsises
+ * rather than pushing the actions off the card. */
+.nav-row-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -552,6 +589,133 @@
 
 .nav-row:hover {
   background: color-mix(in srgb, var(--bg-tertiary) 50%, var(--nav-fill));
+}
+
+/* WHICH ROW THE PANE IS SHOWING.
+ *
+ * The three-column layout had this as `.session-item.on` and the restructure
+ * dropped it; that rule's own comment is the argument for putting it back —
+ * "an unmarked list is a list that does not say where the pane beside it came
+ * from". It matters more here than it did there, because the sidebar is on
+ * screen at every width and in every state now, so an unmarked list is
+ * permanently silent about what you are looking at.
+ *
+ * The same `--bg-tertiary` that `.drawer-item.active` and `.plane-seg.active`
+ * spend, for the reason main.css established: it is the one token that reads
+ * as selected in both themes. The inset outline is theirs too — the fill is
+ * 1.13:1 on the light card and a non-text indicator owes 3:1.
+ *
+ * It has to out-rank hover, and it does: hover is a 50% mix of the same token
+ * and this is 100% of it, so the row you are pointing at never looks more
+ * selected than the row that is open. */
+.nav-row.on {
+  background: var(--bg-tertiary);
+  box-shadow: inset 0 0 0 1px var(--border-secondary);
+}
+
+/* AND THE ROW'S SECONDARY TEXT STEPS UP WITH IT.
+ *
+ * `.session-item.on` already carries this rule and states the reason — "the
+ * fill that says 'this one' costs the text on it half a point of contrast" —
+ * and this row was written without it and measured wrong for exactly that.
+ * `--text-secondary` is 4.64:1 on the card, which is what I checked, and only
+ * **4.01:1** on the selected fill in light and **4.24:1** in dark. The audit
+ * reported both against the 4.5 a 12px label owes.
+ *
+ * Hover is the same problem one step smaller (4.32:1 light) and takes the same
+ * answer, so the two are one rule. `--text-primary` measures 7.93:1 on the
+ * selected fill and 8.53:1 on hover, which is clear in every combination. */
+.nav-row.on .nav-row-sub,
+.nav-row.on .nav-row-age,
+.nav-row:hover .nav-row-sub,
+.nav-row:hover .nav-row-age {
+  color: var(--text-primary);
+}
+
+/* ── the row's own actions ──────────────────────────────────────────────
+ *
+ * Rename and delete, on the row, revealed by the pointer. That is this shell's
+ * stated pattern — CLAUDE.md describes the desktop as "a list and a detail
+ * pane with row actions always on the row" — and it is also the only place
+ * they can go: the pane is about to become the plane's home screen, and the
+ * full list view that used to carry them is not on the desktop any more.
+ *
+ * THEY COST NO WIDTH. The row is 268px less its chrome, and an always-present
+ * action gutter is exactly what made the old list view unusable here (see
+ * `sidebar.rs`). So they take the AGE's place on hover rather than sitting
+ * beside it: same box, one at a time, and the title never moves.
+ *
+ * `:focus-within` as well as `:hover`, or the actions would be reachable by
+ * pointer only — a row tabbed to would swap nothing in and the buttons behind
+ * it would be invisible but focusable, which is worse than absent. */
+.nav-row-actions {
+  display: none;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.nav-row:hover .nav-row-actions,
+.nav-row:focus-within .nav-row-actions {
+  display: inline-flex;
+}
+
+.nav-row:hover .nav-row-age,
+.nav-row:focus-within .nav-row-age {
+  display: none;
+}
+
+/* 32x32, which is `.row-action`'s size and is not negotiable.
+ *
+ * This was written as 24 on the reasoning that the row is 44px tall and a
+ * 32px control in it "leaves 6px above and below" — and `docs/audit.js`
+ * rejected it: `SMALL-TAP button.nav-row-act 24x24`, its rule being that any
+ * `button` under 32 in either axis is too small to hit. The reasoning was
+ * also just wrong about the arithmetic, because the row's padding came down
+ * to 6 to make room rather than the control coming down to 24.
+ *
+ * `flex: 0 0 auto` because the same run reported `15x24` as well: inside a
+ * flex row these shrink, and a 15px-wide delete is worse than a small one.
+ *
+ * The row does not jump when they appear. A two-line row's content box is
+ * already 42px (two 20px lines and the 2px gap), and a one-line row is held
+ * at 32 by the control itself plus 12 of padding — which is the 44px
+ * `min-height` it had anyway. */
+.nav-row-act {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.nav-row-act:hover {
+  border-color: var(--text-tertiary);
+  color: var(--text-primary);
+}
+
+/* Destructive keeps its own colour under the pointer rather than resolving to
+ * the ordinary one — `.row-action.danger:hover`'s rule, in the tokens that
+ * already hold exactly those values. */
+.nav-row-act.danger:hover {
+  color: var(--text-danger);
+  border-color: var(--border-danger);
+  background: color-mix(in srgb, var(--bg-danger) 10%, var(--bg-primary));
+}
+
+/* The search field sits above the list and below the disclosure — it filters
+ * the list and nothing else, so it belongs to the list. Margin rather than
+ * padding on `.nav-sessions`, so the scroller's first row still meets its top
+ * edge when the field is scrolled past. */
+.nav-search {
+  flex: 0 0 auto;
+  margin: 8px 0 0;
 }
 
 /* The text column takes what is left and is allowed to shrink, which is what

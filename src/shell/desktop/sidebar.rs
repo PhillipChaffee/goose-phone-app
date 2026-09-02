@@ -27,6 +27,9 @@
 
 use dioxus::prelude::*;
 
+use dioxus::dioxus_core::spawn_forever;
+
+use crate::icons::Icon;
 use crate::nav::{self, Plane};
 use crate::state::{relative_time, rfc3339_to_epoch, AppCtx};
 
@@ -120,6 +123,15 @@ pub(crate) struct Row {
     /// What the mark says. See [`Mark`].
     pub mark: Mark,
     pub band: Band,
+    /// True when the content pane is showing THIS row.
+    ///
+    /// The three-column layout had this and the restructure dropped it, which
+    /// `assets/desktop.css`'s own note on `.session-item.on` had already
+    /// argued against: "an unmarked list is a list that does not say where the
+    /// pane beside it came from". With the list in the sidebar it is worse —
+    /// the sidebar is on screen at ALL times now, so an unmarked list is
+    /// permanently silent about what you are looking at.
+    pub selected: bool,
 }
 
 /// The dot at the head of a row.
@@ -162,6 +174,10 @@ impl Mark {
 ///
 /// `now` is threaded through from the caller for [`band_of`]'s reason.
 pub(crate) fn chat_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
+    // What the pane is showing, so a row can say it is the one. Read once
+    // rather than per row: `ctx.chat` is a signal and a list of fifty rows
+    // would otherwise take fifty subscriptions to the same value.
+    let open_chat = (ctx.chat)().session_id;
     let running = (ctx.running_sessions)();
     let waiting: std::collections::HashSet<String> = (ctx.permission)()
         .iter()
@@ -195,6 +211,7 @@ pub(crate) fn chat_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
                     Mark::Idle
                 },
                 band: band_of_stamp(info.updated_at.as_deref(), now),
+                selected: open_chat.as_deref() == Some(info.session_id.as_str()),
             }
         })
         .collect();
@@ -221,6 +238,7 @@ pub(crate) fn chat_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
 /// per tree would spend more of it on headings than on trees; the repo goes on
 /// the row's own second line instead, where it is still on screen.
 pub(crate) fn code_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
+    let open_chat = (ctx.code_chat)().chat_id;
     let waiting: std::collections::HashSet<String> = (ctx.code_permissions)()
         .iter()
         .map(|(chat, _)| chat.clone())
@@ -262,6 +280,7 @@ pub(crate) fn code_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
                     Band::Undated
                 }
             },
+            selected: open_chat.as_deref() == Some(chat.id.as_str()),
         })
         .collect();
     rows.sort_by(|a, b| {
@@ -317,7 +336,36 @@ pub(crate) fn SidebarList(plane: Plane) -> Element {
     let ctx = crate::state::use_app_ctx();
     let rows = rows_for(&ctx, plane, now_secs());
 
+    // The two sheets a row can raise. Held here rather than on `AppCtx`,
+    // following the rule `views/chat.rs` and the rest already follow: a sheet
+    // belongs to the screen that raises it, and one on the context outlives
+    // the unmount — which is the defect the extensions credential sheet
+    // shipped with (an index into drafts that no longer existed).
+    let mut renaming: Signal<Option<(String, String)>> = use_signal(|| None);
+    let mut deleting: Signal<Option<(String, String)>> = use_signal(|| None);
+
     rsx! {
+        // SEARCH, and it is here rather than in the pane because it filters
+        // THIS list. It was in `views::sessions::SessionsView`, which the
+        // desktop no longer mounts once the pane becomes a home screen; losing
+        // it would be the same class of regression as losing rename.
+        //
+        // Chat only, like the actions: `ctx.sessions_query` is the chat
+        // plane's filter and the code plane has no equivalent to drive.
+        if plane == Plane::Chat {
+            div { class: "nav-search",
+                crate::views::chrome::SearchField {
+                    placeholder: "Search messages",
+                    value: (ctx.sessions_query)(),
+                    on_search: move |text: String| {
+                        spawn_forever(async move {
+                            crate::state::search_sessions(&ctx, text).await;
+                        });
+                    },
+                }
+            }
+        }
+
         div { class: "nav-sessions",
             if rows.is_empty() {
                 p { class: "nav-sessions-empty", "{empty_line(plane)}" }
@@ -331,9 +379,29 @@ pub(crate) fn SidebarList(plane: Plane) -> Element {
                         div { class: "nav-band", "{header}" }
                     }
                     for row in rows.iter().filter(|row| row.band == band) {
-                        button {
+                        // A DIV WRAPPING A BUTTON, not a button holding
+                        // buttons.
+                        //
+                        // This shipped as `button.nav-row` with the actions
+                        // nested inside it, and that is invalid HTML: a
+                        // `<button>` takes phrasing content, so an HTML parser
+                        // meeting a `<div>` — let alone two more `<button>`s —
+                        // closes the button and HOISTS them out. Dioxus builds
+                        // the real DOM through API calls and never parses, so
+                        // the running app looked correct; anything that
+                        // round-trips the markup does not. `docs/audit.js`
+                        // does, and reported 1600 CHROME-SLOT findings because
+                        // the re-parsed tree put `.pane-main` directly under
+                        // `<body>`, on top of the traffic lights.
+                        //
+                        // `views::chrome::ListRow` had this right already: its
+                        // row is a div and `.session-actions` is a sibling.
+                        div {
                             key: "{row.id}",
-                            class: "nav-row",
+                            class: if row.selected { "nav-row on" } else { "nav-row" },
+                            button {
+                            class: "nav-row-open",
+                            "aria-current": if row.selected { "true" } else { "false" },
                             title: "{row.title}",
                             // OPENING IS THE POINT, and this is dispatched by
                             // plane rather than held on the row.
@@ -404,9 +472,109 @@ pub(crate) fn SidebarList(plane: Plane) -> Element {
                             if let Some(age) = row.age.clone() {
                                 span { class: "nav-row-age", "{age}" }
                             }
+
+                            }
+
+                            // RENAME AND DELETE, in the age's place under the
+                            // pointer. `assets/desktop.css` swaps them; this
+                            // renders both and lets the sheet decide, so there
+                            // is no hover state in Rust and no `onmouseover`
+                            // paying a synchronous XHR per frame.
+                            //
+                            // Chat only for now. The code plane's equivalents
+                            // are a container stop and a tree delete, which is
+                            // a different and more destructive pair than
+                            // "rename this thread" — it wants its own pass
+                            // rather than a shared one that assumes they match.
+                            if plane == Plane::Chat {
+                                div { class: "nav-row-actions",
+                                    button {
+                                        class: "nav-row-act",
+                                        title: "Rename",
+                                        "aria-label": "Rename {row.title}",
+                                        onclick: {
+                                            let id = row.id.clone();
+                                            let title = row.title.clone();
+                                            move |e: Event<MouseData>| {
+                                                // Or the press opens the row it
+                                                // is sitting on as well.
+                                                e.stop_propagation();
+                                                renaming.set(Some((id.clone(), title.clone())));
+                                            }
+                                        },
+                                        Icon { name: "pencil" }
+                                    }
+                                    button {
+                                        class: "nav-row-act danger",
+                                        title: "Delete",
+                                        "aria-label": "Delete {row.title}",
+                                        onclick: {
+                                            let id = row.id.clone();
+                                            let title = row.title.clone();
+                                            move |e: Event<MouseData>| {
+                                                e.stop_propagation();
+                                                deleting.set(Some((id.clone(), title.clone())));
+                                            }
+                                        },
+                                        Icon { name: "trash" }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
+            }
+        }
+
+        // THE SHEETS THE ROWS RAISE.
+        //
+        // Deliberately the SAME components `views::sessions` uses, with the
+        // same words and the same wire calls — `RenameSheet` and
+        // `ConfirmDelete` out of `crate::views`. Two dialogs asking the same
+        // question in two wordings is how a reader learns to distrust both,
+        // and `Confirm`'s markup is also what `DISMISS_KEY` keys Escape off
+        // (`p.modal-body` is the discriminator), so a hand-rolled sheet here
+        // would be one Escape does not close.
+        if let Some((session_id, title)) = renaming() {
+            crate::views::RenameSheet {
+                key: "{session_id}",
+                heading: "Rename chat",
+                value: title,
+                on_cancel: move |()| renaming.set(None),
+                on_save: move |title: String| {
+                    let session_id = session_id.clone();
+                    renaming.set(None);
+                    spawn_forever(async move {
+                        crate::state::rename_session(&ctx, &session_id, &title).await;
+                    });
+                },
+            }
+        }
+
+        if let Some((session_id, _)) = deleting() {
+            crate::views::ConfirmDelete {
+                title: "Delete this chat?",
+                body: "The whole conversation goes from the goose server. \
+                       This cannot be undone.",
+                on_cancel: move |()| deleting.set(None),
+                on_confirm: move |()| {
+                    let session_id = session_id.clone();
+                    deleting.set(None);
+                    spawn_forever(async move {
+                        let Some(client) = ctx.client.peek().clone() else {
+                            return;
+                        };
+                        match client.session_delete(&session_id).await {
+                            Ok(()) => {
+                                let mut sessions = ctx.sessions;
+                                sessions.write().retain(|s| s.session_id != session_id);
+                            }
+                            Err(e) => {
+                                crate::state::show_toast(&ctx, format!("Delete failed: {e}"));
+                            }
+                        }
+                    });
+                },
             }
         }
     }
@@ -726,6 +894,235 @@ mod tests {
             Some("s2".to_owned()),
             "pressing the second row opened a different session than the one \
              under the pointer"
+        );
+    }
+
+    /// The row the pane is showing says so, on both planes.
+    ///
+    /// The three-column layout marked its list and the restructure dropped it.
+    /// It matters more in the sidebar than it did in a pane, because the
+    /// sidebar is on screen at every width and in every state — an unmarked
+    /// list is permanently silent about what you are looking at.
+    #[test]
+    fn the_open_row_is_the_marked_one() {
+        let rows = crate::testkit::with_ctx(
+            |ctx| {
+                let mut sessions = ctx.sessions;
+                sessions.set(vec![
+                    session("s1", "First", Some("2026-08-31T09:00:00Z")),
+                    session("s2", "Second", Some("2026-08-30T09:00:00Z")),
+                ]);
+                let mut chat = ctx.chat;
+                chat.write().session_id = Some("s2".to_owned());
+            },
+            |ctx| chat_rows(ctx, NOW),
+        );
+        let marked: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.selected)
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(
+            marked,
+            ["s2"],
+            "exactly the open session should be marked; the sidebar is on \
+             screen always and an unmarked list never says what is open"
+        );
+    }
+
+    /// And it reaches the markup, not just the struct.
+    #[test]
+    fn the_marked_row_carries_the_class_the_sheet_paints() {
+        let html = crate::testkit::render_seeded(
+            |ctx| {
+                let mut sessions = ctx.sessions;
+                sessions.set(vec![session(
+                    "s1",
+                    "The open one",
+                    Some("2026-08-31T09:00:00Z"),
+                )]);
+                let mut chat = ctx.chat;
+                chat.write().session_id = Some("s1".to_owned());
+            },
+            || rsx! { SidebarList { plane: Plane::Chat } },
+        );
+        assert!(
+            html.contains(r#"class="nav-row on""#),
+            "the open row does not carry `nav-row on`, so assets/desktop.css \
+             has nothing to paint the selection with: {}",
+            &html[..html.len().min(500)]
+        );
+        assert!(
+            html.contains(r#"aria-current="true""#),
+            "the selection is colour only — a reader who cannot see the fill \
+             is told nothing about which row is open"
+        );
+    }
+
+    /// Rename and delete are on the row, and search is above the list.
+    ///
+    /// Both used to live in `views::sessions::SessionsView`, which the desktop
+    /// stops mounting once the pane becomes a home screen. Losing them would
+    /// be the same class of regression the "Nothing open" placeholder already
+    /// caused once — a restructure may move a control, not drop it.
+    #[test]
+    fn the_chat_rows_carry_the_controls_the_pane_used_to() {
+        let html = crate::testkit::render_seeded(
+            |ctx| {
+                let mut sessions = ctx.sessions;
+                sessions.set(vec![session(
+                    "s1",
+                    "Renamable",
+                    Some("2026-08-31T09:00:00Z"),
+                )]);
+            },
+            || rsx! { SidebarList { plane: Plane::Chat } },
+        );
+        assert!(
+            html.contains("nav-row-actions"),
+            "the row has no actions, so there is nowhere on the desktop left \
+             to rename or delete a chat"
+        );
+        assert!(
+            html.contains("Rename Renamable"),
+            "rename has no accessible name"
+        );
+        assert!(
+            html.contains("Delete Renamable"),
+            "delete has no accessible name"
+        );
+        assert!(
+            html.contains("Search messages"),
+            "the list has no search field, and the pane that used to carry one \
+             is about to become a home screen"
+        );
+    }
+
+    /// The code plane gets neither, and that is a decision rather than an
+    /// oversight.
+    ///
+    /// Its equivalents are a container stop and a working-tree delete — a
+    /// different and more destructive pair than "rename this thread" — and
+    /// `ctx.sessions_query` is the chat plane's filter with no code-side
+    /// counterpart to drive. Sharing the markup would mean shipping buttons
+    /// that either do nothing or do something the label does not say.
+    #[test]
+    fn the_code_plane_does_not_borrow_the_chat_planes_controls() {
+        let html = crate::testkit::render_seeded(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![opencode_client::ChatMeta {
+                    id: "c1".to_owned(),
+                    repo: "repo".to_owned(),
+                    title: "a tree".to_owned(),
+                    branch: "agent/x".to_owned(),
+                    base: String::new(),
+                    status: "stopped".to_owned(),
+                    model: None,
+                    last_active: 1_788_177_600.0,
+                }]);
+            },
+            || rsx! { SidebarList { plane: Plane::Code } },
+        );
+        assert!(html.contains("a tree"), "the code row never rendered");
+        assert!(
+            !html.contains("nav-row-actions"),
+            "the code plane borrowed the chat plane's row actions, which are \
+             worded for a thread and would be wired to a working tree"
+        );
+        assert!(
+            !html.contains("Search messages"),
+            "the code plane rendered the chat plane's search field, which \
+             drives `ctx.sessions_query` and would filter nothing here"
+        );
+    }
+
+    /// NO INTERACTIVE ELEMENT INSIDE ANOTHER ONE, which is not a style rule.
+    ///
+    /// A `<button>` takes phrasing content. Put a `<div>` or a second
+    /// `<button>` in one and an HTML parser closes the first and HOISTS the
+    /// rest out — the tree it yields is not the tree that was written. Dioxus
+    /// builds the real DOM through API calls and never parses, so the running
+    /// app looked perfect while every consumer of the captured markup saw
+    /// something else.
+    ///
+    /// This row shipped exactly that: `button.nav-row` wrapping
+    /// `div.nav-row-actions` and two more buttons. `docs/audit.js` re-parses,
+    /// and reported **1600 CHROME-SLOT findings** — `.pane-main` re-parented
+    /// to sit directly under `<body>`, on top of the traffic lights. A pile of
+    /// findings about the wrong element is what an invalid tree looks like
+    /// from the outside, and it cost far more to read than this test costs to
+    /// run.
+    ///
+    /// Shown to fail: nest the actions back inside the open button.
+    #[test]
+    fn no_control_is_nested_inside_another_control() {
+        let html = crate::testkit::render_seeded(
+            |ctx| {
+                let mut sessions = ctx.sessions;
+                sessions.set(vec![session("s1", "A row", Some("2026-08-31T09:00:00Z"))]);
+            },
+            || rsx! { SidebarList { plane: Plane::Chat } },
+        );
+        // Walk the tags and keep a depth count of open buttons. Crude on
+        // purpose: this markup is machine-written, never hand-edited, and has
+        // no `<button/>` self-closing form to confuse the count.
+        let mut depth = 0_i32;
+        let mut rest = html.as_str();
+        while let Some(at) = rest.find('<') {
+            rest = &rest[at..];
+            if rest.starts_with("</button>") {
+                depth -= 1;
+                rest = &rest[9..];
+            } else if rest.starts_with("<button") {
+                assert!(
+                    depth == 0,
+                    "a <button> is nested inside another <button>; an HTML \
+                     parser will hoist it out and the tree that reaches the \
+                     gallery, the audit and any snapshot is not the one this \
+                     renders"
+                );
+                depth += 1;
+                rest = &rest[7..];
+            } else {
+                rest = &rest[1..];
+            }
+        }
+        assert_eq!(depth, 0, "the markup opens a <button> it never closes");
+    }
+
+    /// Pressing an action must not ALSO open the row it sits on.
+    ///
+    /// The buttons are children of the row's own button, so without
+    /// `stop_propagation` a press bubbles: you would ask to rename a chat and
+    /// be moved into it, with the sheet opening over a screen you did not
+    /// choose. Cheap to get wrong, invisible in a render test.
+    #[test]
+    fn pressing_an_action_does_not_open_the_row_under_it() {
+        let _guard = crate::views::press::alone();
+        let mut screen = Pressable::mount(
+            |ctx| {
+                let mut sessions = ctx.sessions;
+                sessions.set(vec![session(
+                    "s1",
+                    "Leave me shut",
+                    Some("2026-08-31T09:00:00Z"),
+                )]);
+            },
+            ChatSidebar,
+        );
+
+        screen.press("Rename Leave me shut");
+        screen.settle();
+
+        assert!(
+            screen.with(|ctx| (ctx.chat)().session_id.is_none()),
+            "pressing Rename opened the chat as well — the press bubbled from \
+             the action to the row it sits on"
+        );
+        assert!(
+            screen.markup().contains("Rename chat"),
+            "pressing Rename did not raise the rename sheet"
         );
     }
 
