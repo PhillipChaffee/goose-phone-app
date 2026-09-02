@@ -797,6 +797,218 @@
   box-shadow: inset 0 0 0 1px var(--text-secondary);
 }
 
+/* ── the home screen ────────────────────────────────────────────────────
+ *
+ * What the content column shows when nothing is open: a greeting, one true
+ * sentence, and the thing you type into. It is deliberately sparser than the
+ * mockups, which are full of numbers no server sends — see the header of
+ * `src/shell/desktop/home.rs`.
+ *
+ * It takes the pane's own measure rather than the full width. `--measure` and
+ * `--gutter` are defined on `.pane-main` (section 6) and every screen in the
+ * column already reads them; a home screen that ran edge to edge would be the
+ * one place text was set at 1500px on a wide window. */
+.home {
+  display: flex;
+  justify-content: center;
+  /* `flex-start`, not the default `stretch`. As a flex item `.home-inner`
+   * would otherwise be sized to the CONTAINER's height, and content taller
+   * than that overflows the item instead of scrolling the pane — measured at
+   * 480x560 on the code half, whose tiles push it 45px past
+   * (`SPILL div.home-inner content leaves the box by 45px`, twelve cells).
+   * With `flex-start` the item takes its own height and `.scroll`'s
+   * `overflow-y` does what it is there for. */
+  align-items: flex-start;
+}
+
+.home-inner {
+  width: 100%;
+  max-width: var(--measure);
+  display: flex;
+  flex-direction: column;
+  /* Down from the top rather than centred in the column. Centred looks right
+   * at one window height and wrong at every other, and the composer is what
+   * the eye should land on — putting it in the middle of a 1000px window puts
+   * it below the fold of an 800px one. */
+  padding: 12vh 0 48px;
+}
+
+.home-greeting {
+  margin: 0 0 8px;
+  font-family: var(--font-serif);
+  /* The top of the scale, not a new rung. assets/main.css stops at
+   * --text-2xl / --lh-xl and says why there is no --lh-lg; adding a --text-3xl
+   * for one heading would mean editing the PHONE's design system for a screen
+   * the phone does not have. `.drawer-brand` pairs --text-xl with --lh-xl for
+   * the same reason. */
+  font-size: var(--text-2xl);
+  line-height: var(--lh-xl);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.home-standing {
+  margin: 0 0 24px;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  line-height: var(--lh-md);
+}
+
+/* THE COMPOSER, and it is the reason the sidebar's New button hides while
+ * this is on screen — the owner's rule, in his words: "I don't think we need
+ * a new chat button when the big chat box is visible in the middle."
+ *
+ * A bordered card rather than a bare field, matching `.composer` in
+ * assets/main.css: the thing you type into is the primary object on this
+ * screen and an underline would read as one more form row. */
+.home-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-xl);
+  background: var(--bg-secondary);
+}
+
+.home-compose .input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-md);
+  line-height: var(--lh-md);
+  resize: none;
+}
+
+.home-compose .input:focus {
+  outline: none;
+}
+
+.home-compose-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ── ways to start ──────────────────────────────────────────────────────
+ *
+ * The recipes and skills the server actually has, capped at four. The sidebar
+ * keeps both behind the Library disclosure, so this is the one place they are
+ * visible without a click — which is the whole reason the section exists.
+ *
+ * There is no "pick up where you left off" beside it, though the mockup has
+ * one: the sidebar is showing exactly that list, permanently, three inches to
+ * the left. The mockup's sidebar was drawn before the list moved into it. */
+.home-section {
+  margin: 32px 0 8px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.home-starter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.home-starter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 8px 12px;
+  border: 1px solid var(--shell-line);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.home-starter:hover {
+  border-color: var(--text-tertiary);
+}
+
+.home-starter-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.home-starter-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+/* What the thing IS, in the server's own word — "recipe" or "skill" — rather
+ * than a category this screen invented. */
+.home-starter-kind {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+/* ── the code half's counts ─────────────────────────────────────────────
+ *
+ * Four tiles, and every one of them is read off a signal. The mockup has
+ * nine; five of those (spend, containers warm, queue depth, cold-start
+ * seconds, runners busy) have no source on this side of the wire, so they are
+ * absent rather than zeroed — a tile reading `$0.00 / $4.00` is not honest
+ * emptiness, it is a wrong number.
+ *
+ * `auto-fit` rather than a fixed four, so the row reflows at the narrow tier
+ * instead of overflowing: at 480 the column is 464 and four 150px tiles are
+ * 600. */
+.home-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin-top: 32px;
+}
+
+.home-tile {
+  padding: 12px;
+  border: 1px solid var(--shell-line);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+/* The one tile that means "do something", in the colour this app already
+ * spends on a question an agent is blocked on — `.mark.waiting`'s token, so
+ * the count on the home screen and the dot on the sidebar row say the same
+ * thing in the same colour. */
+.home-tile.urgent {
+  border-color: var(--text-warning);
+}
+
+.home-tile-value {
+  font-family: var(--font-serif);
+  font-size: var(--text-xl);
+  line-height: var(--lh-xl);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.home-tile.urgent .home-tile-value {
+  color: var(--text-warning);
+}
+
+.home-tile-label {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
 /* ── the plane badge, in the window's bar ───────────────────────────────
  *
  * Which half the window is in, said in the one strip that is present at every
