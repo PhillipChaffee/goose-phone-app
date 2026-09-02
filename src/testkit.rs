@@ -276,9 +276,47 @@ pub(crate) fn storage_dir() -> std::path::PathBuf {
         // What `set_dir!()` expands to on a non-wasm target, minus the macro,
         // which only takes a literal.
         dioxus_sdk_storage::set_directory(dir.clone());
+        anchor_subscriptions();
         dir
     })
     .clone()
+}
+
+/// Hold one receiver open, for the life of the test binary, on every storage
+/// key the app subscribes to.
+///
+/// `dioxus-sdk-storage` keeps its subscription map in a process-global
+/// `static` and `LocalStorage::set` does `subscription.tx.send(...).unwrap()`
+/// (`client_storage/fs.rs:64-72`). A `broadcast::Sender` with no live
+/// receivers answers `Err`, so the moment the last mounted `VirtualDom` is
+/// dropped, the NEXT write to that key panics — in whatever test happens to be
+/// running, not in the one that dropped the dom.
+///
+/// That is order- and load-dependent, which is why it survived local runs and
+/// surfaced on CI: `cargo test --workspace` on the Linux runner failed
+/// `nav::tests::a_pushed_screen_is_not_where_the_drawer_says_you_are` with 794
+/// others passing, inside `fs.rs` rather than anywhere in this repository.
+///
+/// Two modules already worked around it by taking a mutex around their own
+/// mounts. That is a per-module fix for a process-global hazard, and it only
+/// protects the modules that remember — `nav.rs` gained mounting tests later
+/// and did not. Subscribing here instead makes the sender's receiver count
+/// permanently non-zero, so `send` cannot fail whoever writes and whenever.
+///
+/// `lost_asks` is the whole list: it is the one key reached through
+/// `use_synced_storage` (`src/state.rs`), which is the only API that
+/// subscribes. `settings` and `code_cache` go through `use_persistent`, which
+/// is an in-memory map with no channel at all.
+fn anchor_subscriptions() {
+    use dioxus_sdk_storage::StorageSubscriber;
+    // Leaked on purpose: the receiver has to outlive every test in the binary,
+    // and a `static` holding it would need a type this crate does not name.
+    // One allocation, once, for the length of the process.
+    let held =
+        <crate::ask_journal::Backing as StorageSubscriber<crate::ask_journal::Backing>>::subscribe::<
+            Vec<crate::ask_journal::AskRecord>,
+        >(&"lost_asks".to_owned());
+    std::mem::forget(held);
 }
 
 #[cfg(test)]
@@ -347,6 +385,39 @@ mod tests {
         assert!(
             !seeded.contains("No sessions yet"),
             "the view rendered rows AND the empty state at once"
+        );
+    }
+
+    /// A WRITE AFTER THE LAST MOUNT IS DROPPED MUST NOT PANIC.
+    ///
+    /// This is the CI failure, reduced to its mechanism.
+    /// `dioxus-sdk-storage` keeps its subscription map in a process-global
+    /// `static` and `LocalStorage::set` does `subscription.tx.send(..).unwrap()`
+    /// (`client_storage/fs.rs:64-72`). A `broadcast::Sender` with no live
+    /// receivers answers `Err`, so once every mounted `VirtualDom` has been
+    /// dropped the next write to that key panics — inside the dependency, in
+    /// whatever test is running, not in the one that dropped the dom.
+    ///
+    /// It failed exactly once on the Linux runner, in
+    /// `nav::tests::a_pushed_screen_is_not_where_the_drawer_says_you_are`,
+    /// with 794 other tests passing and nothing in this repository on the
+    /// stack. Load- and order-dependent, so a stress run is a poor way to
+    /// prove it fixed; this reproduces the shape directly.
+    ///
+    /// Shown to fail: comment out the `anchor_subscriptions()` call in
+    /// `storage_dir` and this panics at `fs.rs:71`.
+    #[test]
+    fn a_write_after_the_last_mount_is_dropped_does_not_panic() {
+        use dioxus_sdk_storage::StorageBacking;
+
+        // Mount and drop, so nothing this test holds is keeping a receiver
+        // alive — which is the state every later test runs in.
+        drop(render(|| rsx! { crate::views::settings::SettingsView {} }));
+
+        // The write the app makes whenever a permission ask is journalled.
+        <crate::ask_journal::Backing as StorageBacking>::set(
+            "lost_asks".to_owned(),
+            &Vec::<crate::ask_journal::AskRecord>::new(),
         );
     }
 
