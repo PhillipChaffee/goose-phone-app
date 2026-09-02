@@ -172,6 +172,86 @@ pub(crate) fn starters_for(ctx: &AppCtx) -> Vec<Starter> {
     out
 }
 
+/// One fact under the composer, said in as few characters as it takes.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct Chip {
+    pub text: String,
+    /// Set where the value is an address or an identifier rather than a word —
+    /// a host, a path, a model reference. Those are things you COMPARE
+    /// character by character, and a proportional face makes that harder for
+    /// no gain. It is the one place this shell reaches for `--font-mono`.
+    pub mono: bool,
+}
+
+/// What the composer knows about the session it is about to start.
+///
+/// The mockup's row is `Opus 5 · goose server · tail-mini:3285 · 7 extensions
+/// · 1M context · $0.41 today`. Three of those six have a source here and
+/// three do not: there is no context-window figure on the wire (`Usage` is
+/// `(u64, u64)`, tokens in and out) and no spend at all. They are absent
+/// rather than zeroed — the whole reason this screen is sparser than the
+/// picture.
+pub(crate) fn compose_chips(ctx: &AppCtx, plane: Plane) -> Vec<Chip> {
+    let mut out = Vec::new();
+    match plane {
+        Plane::Chat => {
+            if let Some(model) = (ctx.config_options)()
+                .iter()
+                .find(|o| o.config_id == "model")
+                .and_then(goose_acp_client::ConfigOption::current_label)
+            {
+                out.push(Chip {
+                    text: model.to_owned(),
+                    mono: false,
+                });
+            }
+            if let Some(host) = host_of(&ctx.settings.peek().server_url) {
+                out.push(Chip {
+                    text: host,
+                    mono: true,
+                });
+            }
+            let loaded = (ctx.extensions.list)().items.len();
+            if loaded > 0 {
+                out.push(Chip {
+                    text: format!("{loaded} extensions"),
+                    mono: false,
+                });
+            }
+        }
+        Plane::Code => {
+            if let Some(host) = host_of(&ctx.settings.peek().code_server_url) {
+                out.push(Chip {
+                    text: host,
+                    mono: true,
+                });
+            }
+            let repos = (ctx.code_repos)().len();
+            if repos > 0 {
+                out.push(Chip {
+                    text: format!("{repos} repos"),
+                    mono: false,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// The host and port out of a configured URL, or `None` if there is not one.
+///
+/// The scheme and any path are dropped: what identifies the server on a
+/// tailnet is the name and the port, and `https://` in front of it is six
+/// characters of a chip that has about thirty.
+pub(crate) fn host_of(url: &str) -> Option<String> {
+    let rest = url
+        .trim()
+        .split_once("://")
+        .map_or_else(|| url.trim(), |(_, rest)| rest);
+    let host = rest.split(['/', '?']).next().unwrap_or("");
+    (!host.is_empty()).then(|| host.to_owned())
+}
+
 /// Now's hour, local. Split out so the component has one clock and everything
 /// above it has none.
 fn hour_now() -> u32 {
@@ -272,6 +352,20 @@ pub(crate) fn Home(plane: Plane) -> Element {
                         },
                     }
                     div { class: "home-compose-row",
+                        // WHAT THE SESSION WILL BE, before it exists.
+                        //
+                        // The mockup puts six facts here; three of them have
+                        // no source on the wire and are absent rather than
+                        // guessed. See `compose_chips`.
+                        div { class: "home-chips",
+                            for chip in compose_chips(&ctx, plane) {
+                                span {
+                                    key: "{chip.text}",
+                                    class: if chip.mono { "home-chip mono" } else { "home-chip" },
+                                    "{chip.text}"
+                                }
+                            }
+                        }
                         button {
                             class: "btn primary",
                             // A name of its own, so the control is findable by
@@ -364,7 +458,7 @@ pub(crate) fn Home(plane: Plane) -> Element {
               is a broken test rather than a runtime condition"
 )]
 mod tests {
-    use super::{code_tiles, compose_placeholder, part_of_day, standing, Home};
+    use super::{code_tiles, compose_chips, compose_placeholder, part_of_day, standing, Home};
     use crate::nav::Plane;
     use crate::views::press::Pressable;
     use dioxus::prelude::*;
@@ -594,6 +688,105 @@ mod tests {
             "global": true,
         }))
         .expect("a skill row this test wrote")
+    }
+
+    /// The chips say what the session WILL be, from sources that exist.
+    ///
+    /// Three of the mockup's six facts have no source — context window, spend,
+    /// and the "goose server" label that is really the host again — so this
+    /// asserts on what IS derivable and, just as importantly, that nothing
+    /// invents the rest.
+    #[test]
+    fn the_composer_chips_come_from_real_sources_only() {
+        let chips = crate::testkit::with_ctx(
+            |ctx| {
+                let mut settings = ctx.settings;
+                settings.write().server_url = "https://tail-mini.ts.net:3285/acp".to_owned();
+                let mut ext = ctx.extensions.list;
+                ext.write().items = vec![extension("developer"), extension("memory")];
+            },
+            |ctx| compose_chips(ctx, Plane::Chat),
+        );
+        let text: Vec<&str> = chips.iter().map(|c| c.text.as_str()).collect();
+        assert!(
+            text.contains(&"tail-mini.ts.net:3285"),
+            "the host chip is missing or still carries its scheme and path: {text:?}"
+        );
+        assert!(
+            text.contains(&"2 extensions"),
+            "extensions not counted: {text:?}"
+        );
+        for chip in &chips {
+            assert!(
+                !chip.text.contains('$'),
+                "a chip is quoting money, which no endpoint reports: {}",
+                chip.text
+            );
+            assert!(
+                !chip.text.contains("context"),
+                "a chip is quoting a context window, which is not on the wire: {}",
+                chip.text
+            );
+        }
+    }
+
+    /// An address gets the monospace face; a word does not.
+    #[test]
+    fn only_the_address_is_set_in_mono() {
+        let chips = crate::testkit::with_ctx(
+            |ctx| {
+                let mut settings = ctx.settings;
+                settings.write().server_url = "http://127.0.0.1:3285".to_owned();
+                let mut ext = ctx.extensions.list;
+                ext.write().items = vec![extension("developer")];
+            },
+            |ctx| compose_chips(ctx, Plane::Chat),
+        );
+        for chip in &chips {
+            assert_eq!(
+                chip.mono,
+                chip.text.contains(':'),
+                "{:?} is set in the wrong face — mono is for addresses",
+                chip.text
+            );
+        }
+    }
+
+    /// A blank or unset server contributes no chip rather than an empty one.
+    #[test]
+    fn an_unset_server_adds_no_chip() {
+        assert_eq!(super::host_of(""), None);
+        assert_eq!(super::host_of("   "), None);
+        assert_eq!(super::host_of("https://"), None);
+        assert_eq!(
+            super::host_of("https://brain.ts.net:4300/x?y=1").as_deref(),
+            Some("brain.ts.net:4300")
+        );
+        // No scheme at all is what a half-typed field holds.
+        assert_eq!(
+            super::host_of("localhost:3285").as_deref(),
+            Some("localhost:3285")
+        );
+    }
+
+    /// Built the way `extensions::tests::entry` builds one — the chips only
+    /// count the list, so nothing here needs to be more than a real row.
+    fn extension(name: &str) -> goose_acp_client::GooseExtensionEntry {
+        goose_acp_client::GooseExtensionEntry {
+            extension: goose_acp_client::GooseExtension::mcp(
+                goose_acp_client::McpServer::Stdio(goose_acp_client::StdioMcpServer::new(
+                    name,
+                    "uvx",
+                    Vec::new(),
+                )),
+                Vec::new(),
+                "test",
+                Vec::new(),
+            ),
+            enabled: true,
+            config_key: Some(name.to_owned()),
+            extra: serde_json::Map::new(),
+        }
     }
 
     #[component]

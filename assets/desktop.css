@@ -122,6 +122,50 @@
    * and taking it away would leave the card resting on nothing. Light
    * separates with fills, dark separates with lines. */
   --nav-fill: var(--bg-secondary);
+
+  /* ── THE ACCENT, and it is desktop-only on purpose ────────────────────
+   *
+   * `assets/main.css` has no accent token and should not gain one: it is the
+   * PHONE's design system, and this is a colour the phone's surfaces were
+   * never composed against. Declared here, where the desktop already declares
+   * `--nav-w`, `--shell-gap` and `--nav-fill`, so the phone is untouched by
+   * construction rather than by care.
+   *
+   * The value comes from the mockups' own sheet (`--accent:#13bbaf`) and NOT
+   * verbatim, because those mockups are dark-only and this app is not.
+   * Measured against the surfaces an accent word ever sits on:
+   *
+   *   #13bbaf  6.41:1 on #22252a   4.14:1 on #3f434b   2.40:1 on white
+   *
+   * so the mockups' teal fails as text on the dark composer and fails
+   * completely in light. The values below are the nearest that clear 4.5:1 on
+   * every surface each is used on:
+   *
+   *   dark  #2ecbbf   7.62:1 on the card, 4.92:1 on the composer
+   *   light #0b6b64   6.36:1 on the pane, 5.87:1 on the card
+   *
+   * A FILL is a separate token, because a filled control inverts the problem:
+   * the ink has to clear the fill rather than the fill clearing the page.
+   * Dark keeps the mockups' vivid teal with their own ink (#0c1a19 on #13bbaf
+   * is 7.44:1); light needs a deeper fill for white to sit on (#ffffff on
+   * #0e7a73 is 5.19:1). */
+  --accent: #0b6b64;
+  --accent-fill: #0e7a73;
+  --accent-ink: #ffffff;
+
+  /* A denser label than the phone's floor.
+   *
+   * `--text-xs` is 12px and is the smallest thing assets/main.css offers,
+   * because it was chosen for a thumb at arm's length. The desktop reads at
+   * half that distance with a pointer, and the mockups set their chrome
+   * labels at 10-11px — which is what makes them dense rather than merely
+   * small. 0.6875rem is 11px at the default root and still scales with it,
+   * so nothing here opts out of Dynamic Type.
+   *
+   * It is for LABELS only — chip text, tile captions, band headings — never
+   * for prose, and every use still owes 4.5:1. */
+  --text-2xs: 0.6875rem;
+
   /* Every structural line in the shell: the nav card's edge and the divider
    * between the two content columns. One token, two theme values, chosen so
    * the line lands at the SAME strength in both — light #cbd1d6 on white is
@@ -176,12 +220,20 @@
   :root:not([data-theme="light"]) .app > .shell {
     --nav-fill: var(--bg-primary);
     --shell-line: var(--border-primary);
+    /* Both measurements are on `--accent` above. */
+    --accent: #2ecbbf;
+    --accent-fill: #13bbaf;
+    --accent-ink: #0c1a19;
   }
 }
 
 :root[data-theme="dark"] .app > .shell {
   --nav-fill: var(--bg-primary);
   --shell-line: var(--border-primary);
+  /* Both measurements are on `--accent` above. */
+  --accent: #2ecbbf;
+  --accent-fill: #13bbaf;
+  --accent-ink: #0c1a19;
 }
 
 /* The nav is a COLUMN and a CARD, and they are two elements because they have
@@ -542,7 +594,7 @@
 .nav-band {
   padding: 12px 8px 4px;
   color: var(--text-secondary);
-  font-size: var(--text-xs);
+  font-size: var(--text-2xs);
   line-height: var(--lh-sm);
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -779,8 +831,12 @@
   background: var(--text-warning);
 }
 
+/* The same teal the start button spends, so "something is happening here" is
+ * one colour across the window rather than blue in the sidebar and teal in
+ * the pane. `--accent` and not `--accent-fill`: this is an 8px dot on the
+ * card, which is the surface the text accent was measured against. */
 .mark.running {
-  background: var(--text-info);
+  background: var(--accent);
 }
 
 /* Idle is an outline rather than a fill: an idle tree is the DEFAULT state and
@@ -888,7 +944,58 @@
 
 .home-compose-row {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+/* THE ACCENT'S ONE JOB on this screen: the control that starts the work.
+ *
+ * Spending it here and nowhere else is deliberate. An accent used on four
+ * things is a colour; used on one it is an instruction. `--accent-fill` and
+ * `--accent-ink` are a pair for exactly this — see the token note at the top
+ * of the file for why the fill is not the same value as the text accent. */
+.home-compose-row .btn.primary {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--accent-ink);
+}
+
+.home-compose-row .btn.primary:disabled {
+  background: var(--bg-tertiary);
+  border-color: var(--shell-line);
+  color: var(--text-secondary);
+}
+
+/* WHAT THE SESSION WILL BE, before it exists — model, host, extensions.
+ *
+ * One line and never more, which is `.chip-row`'s rule in assets/main.css and
+ * its reason: a composer that grows a row under the pointer is worse than a
+ * value you can read in full by widening the window. It shrinks and scrolls
+ * rather than wrapping, and the button beside it never moves. */
+.home-chips {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.home-chip {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-sm);
+  white-space: nowrap;
+}
+
+/* An address is compared character by character, so it gets the face built
+ * for that. The one place this shell reaches for `--font-mono`. */
+.home-chip.mono {
+  font-family: var(--font-mono);
 }
 
 /* ── ways to start ──────────────────────────────────────────────────────
@@ -903,7 +1010,7 @@
 .home-section {
   margin: 32px 0 8px;
   color: var(--text-secondary);
-  font-size: var(--text-xs);
+  font-size: var(--text-2xs);
   line-height: var(--lh-sm);
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -1005,7 +1112,7 @@
 .home-tile-label {
   margin-top: 2px;
   color: var(--text-secondary);
-  font-size: var(--text-xs);
+  font-size: var(--text-2xs);
   line-height: var(--lh-sm);
 }
 
@@ -1025,7 +1132,7 @@
   border: 1px solid var(--shell-line);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  font-size: var(--text-xs);
+  font-size: var(--text-2xs);
   line-height: var(--lh-sm);
   font-weight: 600;
   letter-spacing: 0.06em;
