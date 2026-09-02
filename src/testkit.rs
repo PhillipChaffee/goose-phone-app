@@ -141,6 +141,95 @@ pub(crate) fn render_settled(seed: fn(&AppCtx), view: fn() -> Element) -> String
     dioxus_ssr::render(&dom)
 }
 
+/// Run a closure against a live [`AppCtx`] and hand back what it returns.
+///
+/// The primitive for code that takes a context and produces a VALUE rather
+/// than markup — the row builders in `src/shell/desktop/sidebar.rs` are the
+/// first, and every feature module has some. Rendering those through
+/// [`render_seeded`] and asserting on HTML would be asking the wrong question:
+/// the answer is a `Vec<Row>`, and a test that could only see the markup could
+/// not tell a row ordered wrongly from a row styled wrongly.
+///
+/// One mount, so the signals are real, `use_hook` fires, and the storage
+/// backing is the one [`storage_dir`] owns. The closure runs inside the
+/// runtime, which is what makes `Signal::set` and `peek` legal in it.
+///
+/// `seed` is a `fn` pointer for [`Mount`]'s reason; `f` is a closure because it
+/// returns a value and nothing needs to compare it.
+#[expect(
+    clippy::expect_used,
+    reason = "a probe that rendered without publishing its context is a broken \
+              harness, and every test built on it would assert against nothing \
+              — failing loudly here is the whole point"
+)]
+pub(crate) fn with_ctx<T>(seed: fn(&AppCtx), f: impl FnOnce(&AppCtx) -> T) -> T {
+    let _ = storage_dir();
+    let captured: std::rc::Rc<std::cell::RefCell<Option<AppCtx>>> = std::rc::Rc::default();
+    let sink = std::rc::Rc::clone(&captured);
+    let mut dom = VirtualDom::new_with_props(
+        Probe,
+        ProbeProps {
+            seed,
+            sink: SinkCell(sink),
+        },
+    );
+    dom.rebuild_in_place();
+    let ctx = captured
+        .borrow_mut()
+        .take()
+        .expect("the probe rendered, so it published its context");
+    dom.in_runtime(|| f(&ctx))
+}
+
+/// Somewhere for [`with_ctx`]'s probe to publish the context it built.
+///
+/// A newtype only so the props can be `PartialEq` without comparing an `Rc`'s
+/// contents — which would need `AppCtx: PartialEq`, which it is not and should
+/// not be: it is fifty signals, and equality on it would mean reading all of
+/// them.
+#[derive(Clone)]
+struct SinkCell(std::rc::Rc<std::cell::RefCell<Option<AppCtx>>>);
+
+impl PartialEq for SinkCell {
+    fn eq(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// `PartialEq` by hand for [`Mount`]'s reason: a derive would compare the `fn`
+/// pointer, which clippy rejects because the same function can hold different
+/// addresses in different codegen units. A probe mounts once and is dropped,
+/// so there is no second render for memoisation to skip.
+#[derive(Clone)]
+struct ProbeProps {
+    seed: fn(&AppCtx),
+    sink: SinkCell,
+}
+
+impl PartialEq for ProbeProps {
+    fn eq(&self, _other: &Self) -> bool {
+        false
+    }
+}
+
+#[expect(
+    non_snake_case,
+    reason = "a Dioxus component is named like a component, not like a fn"
+)]
+fn Probe(props: ProbeProps) -> Element {
+    // Destructured rather than read through `props`, so the value is genuinely
+    // consumed: `ProbeProps` holds an `Rc` and so is not `Copy` like `Mount`,
+    // and clippy's `needless_pass_by_value` is right that taking it by value
+    // and only borrowing would be a pointless move.
+    let ProbeProps { seed, sink } = props;
+    let ctx = crate::state::use_app_ctx_provider();
+    use_hook(move || {
+        seed(&ctx);
+        *sink.0.borrow_mut() = Some(ctx);
+    });
+    rsx! {}
+}
+
 /// WHERE THE TEST BINARY'S PERSISTENT STORAGE GOES, and the single place
 /// allowed to decide it.
 ///

@@ -20,6 +20,8 @@
 
 use dioxus::prelude::*;
 
+mod sidebar;
+
 use crate::icons::Icon;
 use crate::nav::{self, Destination, Plane};
 use crate::shell::render_destination;
@@ -261,6 +263,20 @@ fn use_fullscreen() -> Signal<bool> {
 ///
 /// [`nav_tooltip`]: crate::shell::nav_tooltip
 /// [`nav_is_active`]: crate::shell::nav_is_active
+/// What the New button says, per half.
+///
+/// The two halves keep their own vocabulary all the way down — a goose thread
+/// is a chat, an `OpenCode` job is a working tree with a branch under it — and
+/// the button that makes one is the last place to blur that. Data rather than
+/// a branch inside the component, following [`nav_toggle_label`] below and
+/// `Plane::label`: a rule taken as a value is a rule a test can hold.
+const fn new_label(plane: Plane) -> &'static str {
+    match plane {
+        Plane::Chat => "New chat",
+        Plane::Code => "New code session",
+    }
+}
+
 const fn nav_toggle_label(open: bool) -> &'static str {
     if open {
         "Hide sidebar"
@@ -397,7 +413,6 @@ pub(crate) fn AppShell() -> Element {
     // anywhere. So the title is carried as data and painted in the bar below,
     // and `assets/desktop.css` takes the pane's own copy of it back out.
     let detail = (dest.detail)(&ctx);
-    let detail_open = detail.is_some();
     let crumb = detail.as_ref().map(|detail| detail.crumb.clone());
 
     // WHICH HALF THE SIDEBAR IS SHOWING, derived rather than held.
@@ -425,6 +440,28 @@ pub(crate) fn AppShell() -> Element {
         None => remembered(),
     };
 
+    // WHAT THE CONTENT COLUMN IS SHOWING, as one fact rather than two.
+    //
+    // The pane and the New button both turn on it, and they used to be able to
+    // disagree: a button conditioned on `detail.is_none()` alone would come
+    // back on the Recipes grid, where there is no composer to be a second door
+    // onto. Computed once, read twice.
+    //
+    // "Home" is the plane's own opening destination with nothing pushed on it.
+    // Settings is deliberately not home for either half — it belongs to
+    // neither plane, its detail is unconditional, and it takes the first arm.
+    let on_home = detail.is_none() && dest.id == nav::primary(plane).id;
+
+    // The half's library, computed once: the disclosure needs to know whether
+    // it has anything before it decides to exist, and then needs the rows.
+    let library = nav::library(plane);
+
+    // Shut every launch, and nothing persists the choice — the nav toggle's
+    // rule (see the module comment) for the same reason one level down. The
+    // sidebar's body is the session list; a library that remembered being open
+    // would push it below the fold in a window that never asked.
+    let mut library_open = use_signal(|| false);
+
     rsx! {
         // `data-detail` is the one thing the CSS cannot work out for itself,
         // and it is a fact about the app rather than about the window: below
@@ -436,7 +473,6 @@ pub(crate) fn AppShell() -> Element {
         // degraded one.
         div {
             class: "shell",
-            "data-detail": if detail_open { "open" } else { "empty" },
             // The whole of the collapse, as far as Rust is concerned. Width
             // still decides nothing here and neither does this: the sheet
             // slides the column shut and slides the button across, and the
@@ -512,6 +548,16 @@ pub(crate) fn AppShell() -> Element {
                 // empty flex item still takes its gap, and the bar with
                 // nothing open should be exactly what it was before this —
                 // the lights, the toggle, and a drag strip.
+                // WHICH HALF THE WINDOW IS IN, in the window's own bar.
+                //
+                // The switch says it too, and that is not a duplication: the
+                // switch can be off screen. It is inside the sidebar, and the
+                // sidebar collapses — by the toggle, by the chord, and on its
+                // own below the two-column width. The band is the one strip
+                // that is present at every width and in every state, which is
+                // the same argument that put the connection badge here.
+                span { class: "plane-badge", "{plane.label()}" }
+
                 if let Some(crumb) = crumb {
                     div { class: "chrome-title",
                         h1 { class: "chrome-heading", "{crumb.title}" }
@@ -631,17 +677,74 @@ pub(crate) fn AppShell() -> Element {
                         }
                     }
 
-                    // The half's own destinations, and only its own. Its list
-                    // first, then what it has saved — which for the Code plane
-                    // is nothing today, because the code gateway has no
-                    // commands, skills or MCP endpoints to list. That is an
-                    // empty `for` rather than a special case.
-                    nav { class: "drawer-nav",
-                        {render_destination(&ctx, nav::primary(plane))}
-                        for dest in nav::library(plane) {
-                            {render_destination(&ctx, dest)}
+                    // NEW, and only while something is open.
+                    //
+                    // The owner's rule, and the composer is the reason: "I
+                    // don't think we need a new chat button when the big chat
+                    // box is visible in the middle." On the plane's own home
+                    // screen the composer IS the new-session affordance, so a
+                    // button here would be a second door onto the same room.
+                    // It comes back the moment the main column is showing
+                    // something else, because then there is no composer to
+                    // press.
+                    //
+                    // It falls out of `on_home` rather than being its own
+                    // condition, so the button and the pane cannot disagree
+                    // about which screen is up.
+                    if !on_home {
+                        button {
+                            class: "nav-new",
+                            title: new_label(plane),
+                            onclick: move |_| (nav::primary(plane).go)(&ctx),
+                            Icon { name: "plus" }
+                            "{new_label(plane)}"
                         }
                     }
+
+                    // THE LIBRARY, behind one row.
+                    //
+                    // What the half has SAVED, as against what it is doing —
+                    // recipes, skills, schedules, extensions on the chat side;
+                    // nothing yet on the code side, because the gateway has no
+                    // commands, skills or MCP endpoints to list. An empty
+                    // library renders no row at all rather than a row that
+                    // expands onto nothing.
+                    //
+                    // A disclosure and not the flat list this shell had until
+                    // now, because the sidebar's body is the session list
+                    // beneath it: setup you visit weekly must not push aside
+                    // the thing you scan every minute. Shut by default for the
+                    // same reason.
+                    if !library.is_empty() {
+                        button {
+                            class: if library_open() { "nav-library open" } else { "nav-library" },
+                            "aria-expanded": if library_open() { "true" } else { "false" },
+                            onclick: move |_| {
+                                let now = *library_open.peek();
+                                library_open.set(!now);
+                            },
+                            Icon { name: "chevron-right" }
+                            span { class: "nav-library-label", "Library" }
+                            span { class: "nav-library-count", "{library.len()}" }
+                        }
+                        if library_open() {
+                            nav { class: "drawer-nav",
+                                for dest in library.iter().copied() {
+                                    {render_destination(&ctx, dest)}
+                                }
+                            }
+                        }
+                    }
+
+                    // THE PLANE'S OWN LIST, and the sidebar's body.
+                    //
+                    // Its own component rather than more rsx here, because
+                    // `AppShell` cannot be mounted in a test — it calls
+                    // `dioxus::desktop::window()`, which panics without an
+                    // event loop — and `SidebarList` reads `AppCtx` and
+                    // nothing else. See `sidebar.rs` for why it is not the
+                    // list VIEW that already exists.
+                    sidebar::SidebarList { plane }
 
                     // Below the fold, and outside the scroller: what belongs to
                     // neither half. Settings configures BOTH servers, so filing
@@ -655,13 +758,41 @@ pub(crate) fn AppShell() -> Element {
                 }
             }
 
-            if let Some(root) = dest.root {
-                section { class: "pane pane-list", {root(&ctx)} }
-            }
-
-            section { class: "pane pane-detail",
+            // ONE CONTENT COLUMN, where there were two.
+            //
+            // The list moved into the sidebar, so the pane that used to hold
+            // it is gone and with it `data-detail` — the attribute existed
+            // only so the sheet could tell which of two columns had something
+            // in it, and one column does not need telling.
+            //
+            // Two arms: whatever the destination has pushed, or the
+            // destination's own root — which on the plane's primary is the
+            // full list and everywhere else is that screen's grid.
+            //
+            // THE HOME SCREEN IS NOT HERE YET, and this is what stands in for
+            // it rather than the `Nothing open` card that was written first.
+            // That card cost real function: the sidebar's compact row has no
+            // actions by design (see `sidebar.rs`), so with the primary's root
+            // unmounted there was nowhere left on the desktop to rename a
+            // chat, delete one, or search — measured on the captured markup,
+            // `desktop-chats` held three `nav-row`s, zero `session-item`s and
+            // zero `row-action`s. A restructure is allowed to move a control;
+            // it is not allowed to take one away in passing.
+            //
+            // So the list keeps rendering here until the home screens arrive,
+            // and the redundancy is deliberate and temporary: the sidebar
+            // scans, the pane acts. The New button is hidden on home for the
+            // same reason it always was — the pane's own affordance is on
+            // screen, which is the fab rather than a composer for now.
+            //
+            // `empty_detail` stays for the one destination that has no root:
+            // Settings' detail is unconditional, so it never reaches the arm,
+            // and a `root: None` row rendering nothing would be a blank pane.
+            section { class: "pane pane-main",
                 if let Some(detail) = detail {
                     {detail.view}
+                } else if let Some(root) = dest.root {
+                    {root(&ctx)}
                 } else {
                     {empty_detail(dest)}
                 }
@@ -715,21 +846,18 @@ mod tests {
     // columns are drawn by `assets/desktop.css` and nothing else, which is
     // exactly what keeps every resize listener out of this app. They live
     // here because being checkable is the only job they have.
-    /// The pinned nav's width, and the mockups' number.
+    /// The sidebar's width, and the mockups' number — read out of their CSS
+    /// (`grid-template-columns: 268px minmax(0,1fr) 344px`) rather than off
+    /// the picture.
     ///
-    /// Inside goose's own desktop app's band for the same panel — it defaults to
-    /// 240 and clamps to 160..400 (`ui/desktop/src/components/Layout/constants.ts`,
-    /// `NavigationContext.tsx`) — so 212 is a measured width rather than a taste.
-    const NAV: u32 = 212;
-
-    /// The list column's FLOOR, from the mockups.
-    ///
-    /// The column is `clamp(330px, 30%, 460px)` in `assets/desktop.css` — at a
-    /// flat 330 the widest window was the one a list read worst in, with every
-    /// title ellipsised beside a detail pane that was mostly empty. 330 is
-    /// still the number the breakpoint is built from, because the clamp is at
-    /// its floor everywhere near it.
-    const LIST: u32 = 330;
+    /// It grew from 212 when the plane's list moved into it. That was not a
+    /// preference: measured in Chromium against the real sheets, the old list
+    /// view's title box renders 0px wide at 212 and 25px at 270, and reaches
+    /// its former parity only near 390. 268 is the design's answer, and it is
+    /// wide enough for the compact row `sidebar.rs` renders instead. Still
+    /// inside goose's own 160..400 band for the same panel
+    /// (`ui/desktop/src/components/Layout/constants.ts`).
+    const NAV: u32 = 268;
 
     /// The narrowest a content column is allowed to get.
     ///
@@ -739,60 +867,197 @@ mod tests {
     /// composer's chip row is documented to fail.
     const CONTENT_MIN: u32 = 360;
 
-    /// The nav COLUMN's width once it drops its labels.
+    /// Where the sidebar stops reserving a column and starts floating over
+    /// one.
     ///
-    /// 72 and not 56, and the extra 16 is not slack: the nav is a card inside
-    /// its column with `--shell-gap` of breathing room on each side, so the
-    /// rail the icons actually sit in is 72 - 8 - 8 = 56. That is the number
-    /// `assets/desktop.css` reaches by overriding `--nav-w`, and it is the
-    /// same 56 the labels were dropped for.
-    const RAIL: u32 = 72;
-
-    /// Three columns need all three of them, so the breakpoint is their sum.
+    /// The sum of the two above, and the only breakpoint this shell has left.
+    /// There used to be two — a three-column sum and a two-column one — because
+    /// there used to be three columns; the list moved into the sidebar and took
+    /// the middle one with it.
     ///
-    /// The mockups say "900". This is that number with the arithmetic done, which
-    /// is the difference between a breakpoint and a round number: raise `LIST` and
-    /// this follows.
-    pub(crate) const THREE_PANE: u32 = NAV + LIST + CONTENT_MIN;
+    /// Below this the sidebar becomes an overlay rather than a 72px rail. The
+    /// rail is gone with the same restructure: it worked while the sidebar
+    /// held seven destination icons and cannot survive it holding a list,
+    /// because 14px of content box is not a session title. `MIN_INNER` is
+    /// unchanged at 480 — a content column with an overlay available is a
+    /// usable window, so nothing forces the floor up.
+    pub(crate) const OVERLAY: u32 = NAV + CONTENT_MIN;
 
-    /// Two columns need the nav and one content column.
-    pub(crate) const TWO_PANE: u32 = NAV + CONTENT_MIN;
-
-    /// The window minimum and the stylesheet's breakpoints are one decision
+    /// The window minimum and the stylesheet's breakpoint are one decision
     /// held in two languages, and only one of them can be compiled. Raise the
-    /// floor above the two-column breakpoint and the narrowest layout becomes
-    /// unreachable — designed, styled, and impossible to see; lower it and the
-    /// window opens onto a width no tier covers.
+    /// floor above the breakpoint and the overlay tier becomes unreachable —
+    /// designed, styled, and impossible to see; lower it past the measure and
+    /// the window opens onto a content column narrower than anything this app
+    /// is gated at.
     #[test]
     fn the_window_floor_lands_inside_the_narrowest_tier() {
         let (width, height) = MIN_INNER;
         assert!(
-            width < f64::from(TWO_PANE),
-            "a {width}pt floor is at or above the {TWO_PANE}pt two-column \
-             breakpoint, so the one-column tier can never be reached"
+            width < f64::from(OVERLAY),
+            "a {width}pt floor is at or above the {OVERLAY}pt breakpoint, so \
+             the overlay tier can never be reached"
         );
+        // The whole window is the content column below the breakpoint — the
+        // sidebar floats over it rather than taking a share — so the floor has
+        // only to clear the measure itself. That is the change the overlay
+        // bought: under the old rail the sidebar kept 72pt at every width, and
+        // this assertion had to add them.
         assert!(
-            width >= f64::from(RAIL + CONTENT_MIN),
+            width >= f64::from(CONTENT_MIN),
             "a {width}pt floor leaves the one content column narrower than \
              the {CONTENT_MIN}pt this app is measured at"
         );
         assert!(height > 0.0);
     }
 
-    /// Pane count is decided entirely inside `assets/desktop.css`, which is
-    /// exactly what keeps every resize listener out of this app — and it is
-    /// also what puts the two numbers out of the compiler's reach. This is the
-    /// only thing that notices when the arithmetic above and the sheet stop
-    /// agreeing.
+    /// EVERY DESTINATION'S ROOT STILL REACHES THE PANE, including the
+    /// plane's own primary.
+    ///
+    /// The restructure moved the plane's list into the sidebar, and the first
+    /// draft of the pane rule concluded that the primary's root was therefore
+    /// redundant and rendered a "Nothing open" card in its place. That was a
+    /// functional regression, not a simplification: `sidebar.rs`'s compact row
+    /// carries no actions by design, so with the primary's root unmounted
+    /// there was nowhere left on the desktop to rename a chat, delete one, or
+    /// search. Measured on the captured markup at the time — `desktop-chats`
+    /// held three `nav-row`s, zero `session-item`s and zero `row-action`s.
+    ///
+    /// This is the guard. The pane must fall back to `dest.root` for ANY
+    /// destination with one, with no `on_home` in the condition — that flag
+    /// governs the New button and nothing else now.
+    ///
+    /// Shown to fail: reinstate `else if let (false, Some(root)) = (on_home,
+    /// dest.root)` and this goes red on the `on_home` needle.
+    #[test]
+    fn the_content_pane_falls_back_to_the_destinations_own_root() {
+        let code = shell_code();
+        let pane = block(
+            &code,
+            "section { class: \"pane pane-main\",",
+            "fn empty_detail",
+        );
+        assert!(
+            pane.contains("else if let Some(root) = dest.root"),
+            "the content pane no longer falls back to the destination's own \
+             root unconditionally — if that arm is gated on anything, the \
+             plane's primary loses its list and with it rename, delete and \
+             search, which the sidebar's rows do not carry"
+        );
+        assert!(
+            !pane.contains("on_home"),
+            "the pane rule reads `on_home`, which is how the primary's root \
+             stopped rendering the first time. That flag is the New button's \
+             alone"
+        );
+    }
+
+    /// THE SHEET IS BALANCED, which nothing else in this toolchain checks.
+    ///
+    /// A stray `}` in CSS is not a parse error a browser reports — it silently
+    /// ends the enclosing block and everything after it is reinterpreted. That
+    /// happened here: deleting the three-column media block left one closing
+    /// brace behind, and the rules below it stopped applying. The visible
+    /// symptom was the pane's own heading painted ON TOP of the screen's first
+    /// element, because `.topbar { position: static }` was one of the rules
+    /// that stopped winning and the phone's floating `position: absolute` took
+    /// over.
+    ///
+    /// Nothing caught it. `cargo` does not read CSS; `docs/audit.js` renders
+    /// the sheet and measures boxes, and a shell whose header floats is a
+    /// layout it will happily measure. It was found by eye, in a screenshot,
+    /// which is the slowest possible route to a one-character defect.
+    ///
+    /// Comments are stripped first because they contain braces — this file's
+    /// own prose quotes rules — and a counter that read them would answer
+    /// about the wrong thing.
+    #[test]
+    fn the_stylesheet_closes_every_block_it_opens() {
+        for (name, raw) in [
+            (
+                "assets/desktop.css",
+                include_str!("../../../assets/desktop.css"),
+            ),
+            (
+                "assets/platform/macos.css",
+                include_str!("../../../assets/platform/macos.css"),
+            ),
+        ] {
+            let mut code = String::with_capacity(raw.len());
+            let mut rest = raw;
+            while let Some((before, after)) = rest.split_once("/*") {
+                code.push_str(before);
+                rest = after.split_once("*/").map_or("", |(_, tail)| tail);
+            }
+            code.push_str(rest);
+
+            let mut depth: i32 = 0;
+            let mut line = 1;
+            for ch in code.chars() {
+                match ch {
+                    '\n' => line += 1,
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        assert!(
+                            depth >= 0,
+                            "{name} closes a block it never opened, at about line \
+                             {line} of the comment-stripped sheet — every rule \
+                             after it is being read at the wrong nesting level"
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(
+                depth, 0,
+                "{name} leaves {depth} block(s) open at the end of the file, so \
+                 the rules inside them apply under a selector or a media query \
+                 nobody wrote"
+            );
+        }
+    }
+
+    /// Where the sidebar stops taking a column is decided entirely inside
+    /// `assets/desktop.css`, which is exactly what keeps every resize listener
+    /// out of this app — and it is also what puts the number out of the
+    /// compiler's reach. This is the only thing that notices when the
+    /// arithmetic above and the sheet stop agreeing.
+    ///
+    /// One breakpoint where there were two. The three-column sum went with the
+    /// list column; the sheet is asserted to hold neither of the old ones, so
+    /// a media query left behind by a half-finished revert is a failure rather
+    /// than dead CSS nobody reads.
     #[test]
     fn the_stylesheet_breaks_where_the_arithmetic_says() {
-        let sheet = include_str!("../../../assets/desktop.css");
-        for edge in [THREE_PANE, TWO_PANE] {
-            let rule = format!("@media (max-width: {}px)", edge - 1);
+        // Comments stripped first. This file's own prose explains which tiers
+        // were deleted and why, so it names them — and a `contains` over the
+        // whole sheet would read that explanation as the thing it forbids.
+        // `crate::selfscan::code_of` drops comment lines from Rust for exactly
+        // this reason; CSS has one comment form and it is easier.
+        let raw = include_str!("../../../assets/desktop.css");
+        let mut sheet = String::with_capacity(raw.len());
+        let mut rest = raw;
+        while let Some((before, after)) = rest.split_once("/*") {
+            sheet.push_str(before);
+            rest = after.split_once("*/").map_or("", |(_, tail)| tail);
+        }
+        sheet.push_str(rest);
+        assert!(
+            sheet.contains(".navpane"),
+            "the comment stripper ate the rules as well as the prose"
+        );
+        let rule = format!("@media (max-width: {}px)", OVERLAY - 1);
+        assert!(
+            sheet.contains(&rule),
+            "assets/desktop.css has no `{rule}`, so the sidebar does not start \
+             floating where src/shell/desktop/mod.rs says it does"
+        );
+        for stale in ["max-width: 901px", "max-width: 571px"] {
             assert!(
-                sheet.contains(&rule),
-                "assets/desktop.css has no `{rule}`, so the columns do not \
-                 reflow where src/shell/desktop/mod.rs says they do"
+                !sheet.contains(stale),
+                "assets/desktop.css still has a `{stale}` query — that is a \
+                 tier from the three-column layout, and the columns it reflowed \
+                 no longer exist"
             );
         }
     }
@@ -943,7 +1208,13 @@ mod tests {
     fn the_sidebar_writes_the_classes_the_sheet_styles() {
         let card = nav_card();
         let sheet = include_str!("../../../assets/desktop.css");
-        for class in ["plane-switch", "plane-seg", "nav-footer"] {
+        for class in [
+            "plane-switch",
+            "plane-seg",
+            "nav-footer",
+            "nav-new",
+            "nav-library",
+        ] {
             assert!(
                 card.contains(&format!("\"{class}")),
                 "the sidebar no longer renders `{class}`, which assets/desktop.css \
@@ -1135,8 +1406,8 @@ mod tests {
              `.pane .topbar > .conn-badge` below now hides the only one there is"
         );
         for rule in [
-            r#"[data-detail="open"] .pane-detail .topbar > .title"#,
-            r#"[data-detail="open"] .pane-detail .topbar > .titlegroup"#,
+            ":has(.chrome-title) .pane-main .topbar > .title",
+            ":has(.chrome-title) .pane-main .topbar > .titlegroup",
             ".pane .topbar > .conn-badge",
         ] {
             assert!(
@@ -1145,12 +1416,26 @@ mod tests {
                  a second copy of what `.shell-chrome` is already showing"
             );
         }
+
+        // The other half of the same decision, and the reason this can be
+        // asked of the markup at all now. The sheet suppresses the pane's
+        // heading when `.chrome-title` is present, so the band has to be the
+        // thing that renders `.chrome-title` — and it has to render it exactly
+        // when there is a crumb to put in it. An `if let` that stopped being
+        // conditional would hide every pane heading behind an empty bar.
+        //
+        // This replaces an assertion on `data-detail`. The attribute is gone:
+        // it existed to tell the sheet which of two columns held content, and
+        // there is one column now. `:has()` asks the markup directly, so the
+        // bar's title and the pane's suppression can no longer drift apart —
+        // which is the failure the attribute made possible and this test was
+        // written for.
         assert!(
-            shell_attributes().contains(r#""data-detail": if detail_open"#),
-            "the `.shell` div no longer sets data-detail, and the sheet keys \
-             every rule above on it — so the pane paints a second copy of the \
-             title, and below the three-column breakpoint the list and the \
-             detail are both in the one column at once"
+            chrome_band().contains("if let Some(crumb) = crumb {"),
+            "the window's bar no longer renders `.chrome-title` conditionally, \
+             so `:has(.chrome-title)` either never matches — and every screen \
+             paints two titles — or always does, and the screens the bar does \
+             not name paint none"
         );
     }
 

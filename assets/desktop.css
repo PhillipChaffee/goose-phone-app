@@ -20,8 +20,8 @@
  *
  *    The nav's own collapse is not a width response and is not decided here:
  *    it is a button, `data-nav` on `.shell` is what it sets, and the sheet
- *    reads that attribute the way it reads `data-detail`. Width still tells
- *    Rust nothing.
+ *    reads that attribute. It is now the ONLY such attribute: `data-detail`
+ *    went with the list column. Width still tells Rust nothing.
  *
  * It is additive: assets/main.css is not edited by this branch, and every
  * colour here is a token that exists in light and in dark.
@@ -53,10 +53,21 @@
  * in src/shell/desktop.rs, and a test there checks this file against them. */
 
 .app > .shell {
-  /* The nav COLUMN, gap included. The card inside it is this minus two gaps,
-   * which is 196 — inside goose's own 160..400 band for the same panel, so the
-   * breakpoint arithmetic in src/shell/desktop.rs is unchanged by the inset. */
-  --nav-w: 212px;
+  /* The SIDEBAR column, gap included, and it is wider than it was because it
+   * now holds the plane's own list rather than seven destination labels.
+   *
+   * 268 is the mockups' number, read out of their CSS rather than off the
+   * picture: `.body { grid-template-columns: 268px minmax(0,1fr) 344px }`.
+   * The card inside it is this minus two gaps, so 252, and the row's text
+   * column is 252 less 8+8 of card padding and 14+8 for the mark — about 214,
+   * which is what the mockup insets its own rows to.
+   *
+   * It also has to be this wide. Measured in Chromium against these sheets,
+   * the OLD list view's title box renders 0px at 212 and 25px at 270; the
+   * compact row in `src/shell/desktop/sidebar.rs` exists because no width
+   * short of about 390 makes that row fit, and 390 is a third of the window.
+   * Still inside goose's own 160..400 band for the same panel. */
+  --nav-w: 268px;
   /* The breathing room around anything that floats. goose's own desktop app
    * spends exactly this on the same panel (`p-2` in AppLayout.tsx). */
   --shell-gap: 8px;
@@ -388,6 +399,264 @@
  * long enough to scroll. A settings row that scrolls off the bottom of a
  * sidebar is the one row you cannot afford to lose: it is where the connection
  * is configured, and an unconfigured app has nothing else on screen. */
+/* ── the sidebar's own controls and list ────────────────────────────────
+ *
+ * Everything from here to `.nav-footer` is new with the restructure: the
+ * sidebar stopped being a list of seven destinations and became the plane's
+ * own workspace — make one, reach what you saved, scan what you have.
+ *
+ * The vertical order is the information architecture and the CSS does not
+ * decide it (`src/shell/desktop/mod.rs` does): switch, New, Library, list,
+ * footer. What the sheet decides is which of them scrolls, and only one does. */
+
+/* NEW, and it is a button rather than a row: it makes something, it does not
+ * go somewhere. Full width because it is the sidebar's primary action, and
+ * `--accent` because it is the only one. */
+.nav-new {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  margin: 0 0 8px;
+  padding: 0 12px;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.nav-new:hover {
+  border-color: var(--text-tertiary);
+}
+
+/* THE LIBRARY DISCLOSURE. One row, shut by default, and it holds what the half
+ * has SAVED rather than what it is doing.
+ *
+ * It is quieter than a destination row on purpose — smaller type, secondary
+ * ink — because the thing below it is what the sidebar is for. A disclosure
+ * that competed with the list would be the flat destination list again with an
+ * extra click. */
+.nav-library {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  cursor: pointer;
+}
+
+.nav-library:hover {
+  background: color-mix(in srgb, var(--bg-tertiary) 50%, var(--nav-fill));
+  color: var(--text-primary);
+}
+
+/* The chevron turns rather than swapping glyph: one icon, one state, and no
+ * second SVG to keep in step. 90deg and not 180 — it points at the row when
+ * shut and down at what it opened when not. */
+.nav-library .icon {
+  transition: transform 150ms ease;
+}
+
+.nav-library.open .icon {
+  transform: rotate(90deg);
+}
+
+.nav-library-label {
+  flex: 1 1 auto;
+  text-align: left;
+}
+
+/* The count is the whole reason the row can stay shut: it says how much is
+ * behind it without opening it. */
+.nav-library-count {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* THE LIST, and the one thing in the card that scrolls.
+ *
+ * `.drawer-nav` in assets/main.css is `flex: 1; overflow-y: auto`, which was
+ * right when the destinations were the card's body. They are not any more —
+ * they are behind the disclosure — so that rule is overridden below and the
+ * scrolling moves here. Two `flex: 1` scrollers in one card is two boxes
+ * fighting over the same height, and the loser collapses to nothing. */
+.navcard .drawer-nav {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.nav-sessions {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* The card floats over a page that scrolls; without this a flick past the
+   * end of the list carries the window behind it. `.drawer-nav` states the
+   * same rule for the same reason. */
+  overscroll-behavior: contain;
+  margin-top: 8px;
+}
+
+.nav-sessions-empty {
+  margin: 12px 8px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+/* A band heading — Today, Yesterday, Earlier. Deliberately NOT `.drawer-item`,
+ * for the reason `.drawer-group` states in assets/main.css: docs/audit.js keys
+ * its tap-target check off that class, and a heading is not a target. */
+.nav-band {
+  padding: 12px 8px 4px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* A row. Two lines of text, a mark, and an age — no tile, no action gutter,
+ * no fab. See `src/shell/desktop/sidebar.rs` for why this is not the list view
+ * that already exists, and for the measurement that settled it. */
+.nav-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-row:hover {
+  background: color-mix(in srgb, var(--bg-tertiary) 50%, var(--nav-fill));
+}
+
+/* The text column takes what is left and is allowed to shrink, which is what
+ * lets the title ellipsise instead of pushing the age off the card. */
+.nav-row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+/* Secondary, not tertiary, and for the reason written on `.mark.idle`: on the
+ * card tertiary is 2.03:1 in light, and this is text, which owes 4.5. The
+ * hierarchy survives — the title is --text-primary at 8.77:1 and this is
+ * 4.64:1, which is a clear step down without being unreadable. */
+.nav-row-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+.nav-row-age {
+  flex: 0 0 auto;
+  padding-top: 1px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* THE MARK, and colour is the whole signal — there is no room for a word.
+ *
+ * 8px on a 44px row, centred against the title's own line box by the 6px of
+ * top padding rather than by `align-items: center`, which would drift down as
+ * soon as a row grew its second line.
+ *
+ * `--text-danger` is deliberately not used for `waiting`: nothing is wrong,
+ * something is ASKING, and amber is what this app already spends on that (see
+ * the `Needs input` rows in the mockups). Red would say the agent failed. */
+.mark {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: var(--radius-full);
+}
+
+.mark.waiting {
+  background: var(--text-warning);
+}
+
+.mark.running {
+  background: var(--text-info);
+}
+
+/* Idle is an outline rather than a fill: an idle tree is the DEFAULT state and
+ * a list of filled dots says everything is happening at once.
+ *
+ * --text-secondary and NOT --text-tertiary, which is what this was written as
+ * and what the arithmetic rejected. A non-text indicator owes 3:1, and against
+ * the card tertiary measures **2.03:1 in light** and 2.87:1 in dark — under it
+ * in both themes, which is the one direction a "subtle" choice is not allowed
+ * to go. Secondary is 4.64:1 and 7.75:1. The other two marks were never in
+ * doubt: warning is 5.11:1 / 11.25:1 and info 5.23:1 / 6.74:1. */
+.mark.idle {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--text-secondary);
+}
+
+/* ── the plane badge, in the window's bar ───────────────────────────────
+ *
+ * Which half the window is in, said in the one strip that is present at every
+ * width and in every state. The switch says it too and can be off screen; this
+ * cannot.
+ *
+ * Uppercase and small, which is the mockups' treatment and is doing a job: it
+ * has to read as a LABEL for the window rather than as another control beside
+ * the toggle, or it invites a click that does nothing. */
+.plane-badge {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border: 1px solid var(--shell-line);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .nav-footer {
   flex: 0 0 auto;
   display: flex;
@@ -597,158 +866,96 @@
   background: var(--bg-primary);
 }
 
-/* The list takes a SHARE of the surplus, it is not pinned to its floor.
+/* Two columns become one, at every width.
  *
- * At a flat 330 the widest window was the worst one to read a list in. Measured
- * at 1500: the card is 296pt, the timestamp and the two 32pt action icons take
- * the right-hand 80 of the title line, and what is left for the title is about
- * 119pt — so "Nightly dependency…", "Weekly changelog…", "Quarterly
- * dependency…" and "Staging smoke tests during…" were all cut, and the first
- * and third differ only after the cut. The same four rows render whole at 900,
- * where the list has the pane to itself. Making the window bigger was making
- * the list show less, and the 958pt it was handed to instead was 55–90% empty.
+ * The list column is gone: it moved into the sidebar (`.nav-sessions`), which
+ * is what the whole restructure is. With it went `clamp(330px, 30%, 460px)`,
+ * the `@media (max-width: 901px)` block that collapsed two panes into one, and
+ * `data-detail` — the attribute existed only so the sheet could say WHICH of
+ * two columns held something, and one column does not need telling.
  *
- * clamp() rather than a percentage, because both ends are real. 330 is the
- * floor the breakpoint arithmetic in src/shell/desktop.rs is built on and the
- * width the mockups drew; 460 is where a list of titles stops earning more —
- * past it the column is a page, not an index. 30% is what walks between them:
- * 330 until about 1100, 450 at 1500, and the detail never drops below the
- * measure it reads at (see section 6). */
-.pane-list {
-  flex: 0 0 clamp(330px, 30%, 460px);
-  width: clamp(330px, 30%, 460px);
-  border-right: 1px solid var(--shell-line);
-}
+ * What replaced the attribute is `:has(.chrome-title)` further down, and it is
+ * strictly better: the pane hides its own heading when the BAND is actually
+ * showing one, rather than when a hand-maintained attribute says the band
+ * ought to be. The two can no longer drift. */
 
-/* Two columns. Below the three-column sum the list and the detail share one,
- * and `data-detail` — set in src/shell/desktop.rs from the same `at_root` the
- * nav highlights with — says which of them has something in it. This is the
- * layout goose's own desktop app is in at EVERY width: SchedulesView returns
- * the detail INSTEAD of the list. It is the reference arrangement, not a
- * degraded one. */
-@media (max-width: 901px) {
-  .pane-list {
-    flex: 1 1 auto;
-    width: auto;
-    border-right: 0;
-  }
-
-  .shell[data-detail="open"] .pane-list {
-    display: none;
-  }
-
-  .shell[data-detail="empty"] .pane-detail {
-    display: none;
-  }
-}
-
-/* One column. The nav keeps every destination and loses its words.
+/* ONE COLUMN, AND THE SIDEBAR FLOATS OVER IT.
  *
- * It does not become an overlay and it does not gain a hamburger: that is the
- * phone's answer, and a narrow desktop window is not a phone. A rail is the
- * desktop answer — the destinations stay on screen, reachable in one click,
- * and `title` (src/shell/mod.rs, nav_tooltip) gives the pointer their names
- * back. */
-@media (max-width: 571px) {
-  /* The VARIABLE, not the column, so the card inside it follows: 72 - 8 - 8 is
-   * the 56px rail the icons sit in, and the collapse rules above keep working
-   * unchanged because they never mention a number. */
-  .app > .shell {
-    --nav-w: 72px;
+ * 628 is derived, not chosen: 268 of sidebar plus the 360 of content the
+ * measure system needs (section 6) is the narrowest window that can show both
+ * at once. Below it something has to give, and until this restructure the
+ * answer was a 72px rail — the destinations stayed on screen as icons and the
+ * labels collapsed.
+ *
+ * A rail cannot survive the sidebar holding the plane's LIST. Fourteen pixels
+ * of content box is not a session title, and an icon rail with no list is a
+ * sidebar with its body cut out. So the sidebar becomes an overlay at this
+ * width: full 268px, floating over the content with the content still behind
+ * it, exactly as `data-nav="closed"` already animates it away.
+ *
+ * The DEFAULT does not change and cannot: nothing in Rust observes a resize,
+ * `nav_open` starts true, and `src/main.rs` opens the window at 1180x820. So a
+ * narrow window is only ever reached by dragging one, and dragging it narrow
+ * with the sidebar open leaves the sidebar open — over the content, where the
+ * toggle and ⌘/ both still shut it. That is the whole behaviour, and it is
+ * `position: absolute` plus a shadow rather than any new state.
+ *
+ * MIN_INNER stays (480, 560): the floor is now a content column with an
+ * overlay available, which is a usable window, so nothing forces it up. */
+@media (max-width: 627px) {
+  .navpane {
+    position: absolute;
+    z-index: 3;
+    top: var(--chrome-h);
+    bottom: 0;
+    left: 0;
+    /* The column stops reserving width — that is what makes the content take
+     * the whole window — while the CARD keeps its own, which is what makes it
+     * an overlay rather than a squeeze. The collapse rules above still work
+     * unchanged because they animate `flex-basis` and `width`, and both are
+     * still the properties being set here. */
+    width: calc(var(--nav-w) + var(--shell-gap));
   }
 
-  /* Room at the top for the toggle, which at this width has no wordmark to sit
-   * beside — the rail drops both the brand and the group headers. Without it
-   * the button lands on the first destination's icon, and 54 rather than the
-   * 46 that would merely clear it because at the rail every label is gone and
-   * the toggle is one more 32px glyph in a column of them: the gap is the only
-   * thing left saying it is not a destination.
+  /* A shadow, and it is the one place in this sheet that uses one instead of a
+   * border. docs/design.md's rule is that depth is for things that are ABOVE
+   * the page rather than on it, and this is the only element in the desktop
+   * shell that ever is. */
+  .shell[data-nav="open"] .navcard {
+    box-shadow: 0 8px 32px rgb(0 0 0 / 24%);
+  }
+
+  /* THE CONNECTION LOSES ITS WORDS HERE, and this rule is restored rather than
+   * new: it shipped with the old rail tier and went out with it when that
+   * block was deleted, which put the defect it was written for straight back.
    *
-   * `max()` against the chrome strip, because on macOS the traffic lights are
-   * in that same corner and are taller than the toggle alone needs. */
-  .navcard {
-    padding: 12px 4px;
-  }
-
-
-  /* A destination's label is a bare text node — `render_group` emits it with
-   * no element around it, because that is the phone's markup and the phone's
-   * markup does not change on this branch. So it is COLLAPSED rather than
-   * hidden: an anonymous inline box at zero font-size has no metrics, and the
-   * icon takes its own size back below. The text stays in the accessibility
-   * tree, which is what keeps each button's name. */
-  .navpane .drawer-item {
-    justify-content: center;
-    gap: 0;
-    padding: 0;
-    font-size: 0;
-  }
-
-  .navpane .drawer-item .icon {
-    font-size: var(--icon-md);
-  }
-
-  /* A wordmark and two section headers do not fit in 56px, and neither is a
-   * control: nothing is lost but the labelling of a list that is now four
-   * icons long. */
-  .navpane .drawer-brand,
-  .navpane .drawer-group {
-    display: none;
-  }
-
-  /* THE SWITCH STACKS, and does not disappear.
+   * Measured by `docs/audit.js` at the 480pt floor immediately afterwards:
+   * `TITLE-OUTBID span.conn-badge holds 135px it could give back while the
+   * band's title is cut to 52px`. Fifteen characters of a title beside a fully
+   * spelled-out agent version is the wrong way round, and it is the exact
+   * finding #26 fixed once already.
    *
-   * Two segments side by side cannot fit: the rail's card is 56px wide less
-   * 4px of padding each side, so each half would be 24px — narrower than the
-   * 20px icon plus the 2px inset on both sides, before any label. Stacked they
-   * are two full-width rows in the same track, which is the same control read
-   * top-to-bottom.
-   *
-   * Hiding it instead was the alternative and it is not available: this is the
-   * only route between the two halves of the app, and unlike a destination —
-   * which the rail keeps, as an icon with a `title` — there is nothing else on
-   * screen that reaches the other half. A rail that dropped it would strand a
-   * narrow window in whichever half it was in.
-   *
-   * The label collapses exactly as `.drawer-item`'s does, and for the reason
-   * written there: `font-size: 0` leaves an anonymous inline box with no
-   * metrics, so the text stays in the accessibility tree and each segment
-   * keeps its name. `aria-checked` (src/shell/desktop.rs) carries which one is
-   * on, so the pair is still announced as a two-option choice with no glyph to
-   * read it by. */
-  .navpane .plane-switch {
-    flex-direction: column;
-  }
-
-  .navpane .plane-seg {
-    gap: 0;
-    padding: 0;
-    font-size: 0;
-  }
-
-  .navpane .plane-seg .icon {
-    font-size: var(--icon-md);
-  }
-
-  /* THE CONNECTION LOSES ITS WORDS HERE, by the same argument that gave it
-   * them. The rule above keeps `.conn-label` — against `assets/main.css`'s
-   * `.topbar .conn-label { display: none }` — because the strip it sits in
-   * "was 1278px of nothing at a 1400pt window". That premise is about width,
-   * and it inverts: measured at the 480pt floor, `.window-drag` is down to its
-   * 96px minimum and the badge holds 135px, which is MORE than the 119px left
-   * for the name of the thing the window has open. Fifteen characters of a
-   * title beside a fully spelled-out agent version is the wrong way round.
-   *
-   * The dot stays, and it still carries the whole state in colour — the label
-   * was always the identification of a control, never the reading of one. So
-   * at the rail this is the phone's argument reaching the phone's answer, and
-   * it takes the phone's rule rather than inventing a second one. */
+   * The dot stays and still carries the whole state in colour; the label was
+   * always the identification of a control, never the reading of one. */
   .shell-chrome > .conn-badge .conn-label {
     display: none;
   }
 
   .shell-chrome > .conn-badge {
     padding-right: 8px;
+  }
+
+  /* AND THE PLANE BADGE GOES, which the old tier had no equivalent of because
+   * there was no badge.
+   *
+   * It is the second thing bidding for the band's width, at 54px, and it is
+   * the one that can be spared: below this breakpoint the sidebar is an
+   * overlay, so opening it puts the switch itself on screen over the content —
+   * the badge's whole justification is that the switch can be off screen, and
+   * here it is one keystroke away instead. The title cannot be replaced that
+   * cheaply. */
+  .plane-badge {
+    display: none;
   }
 }
 
@@ -1230,18 +1437,18 @@
  * whole of the two-column and one-column tiers. Nothing here is inside a
  * breakpoint for exactly that reason. */
 
-.pane-detail {
+.pane-main {
   --measure: 40rem;
   /* Percentages in a custom property are substituted, not resolved, so this is
    * one expression evaluated against each user's own containing block. Every
-   * user below is a child of `.pane-detail` (or absolutely positioned against
+   * user below is a child of `.pane-main` (or absolutely positioned against
    * it), so `100%` is the pane's content width in all of them. */
   --gutter: max(var(--edge), (100% - var(--measure)) / 2);
 }
 
-.pane-detail .topbar,
-.pane-detail .scroll:not(.diff),
-.pane-detail .compose {
+.pane-main .topbar,
+.pane-main .scroll:not(.diff),
+.pane-main .compose {
   padding-left: var(--gutter);
   padding-right: var(--gutter);
 }
@@ -1249,7 +1456,7 @@
 /* `.composer` is a bordered, shadowed card rather than a padded region, so it
  * takes the gutter as margin — the card itself has to be the measure wide, or
  * the send arrow stays 580pt from the chips it shares a bar with. */
-.pane-detail .composer {
+.pane-main .composer {
   margin-left: var(--gutter);
   margin-right: var(--gutter);
 }
@@ -1262,7 +1469,7 @@
  * `.scroll.diff`'s own zero gutter from assets/main.css (the file cards
  * inside it are full-bleed by design), and its header keeps the pane's edge
  * rather than the measure's, so the two still start at the same place. */
-.pane-detail:has(.scroll.diff) .topbar {
+.pane-main:has(.scroll.diff) .topbar {
   padding-left: var(--edge);
   padding-right: var(--edge);
 }
@@ -1275,7 +1482,7 @@
  * the recipe it runs was the corner of a window; on the column's edge it is
  * the corner of the thing. `.pane` is `position: relative`, so this measures
  * against the pane exactly as `right: var(--edge)` did. */
-.pane-detail .fab {
+.pane-main .fab {
   right: var(--gutter);
 }
 
@@ -1289,7 +1496,7 @@
  * about the transcript changes: the anchor only ever did anything while the
  * content was SHORTER than the box, so a full transcript is untouched and
  * still scrolled to its end by src/viewport.rs. */
-.pane-detail .scroll.chat::before {
+.pane-main .scroll.chat::before {
   margin-top: 0;
 }
 
@@ -1305,7 +1512,7 @@
  * reflowed. `.shell-chrome` now carries it (`src/shell/desktop.rs`), so both
  * panes give theirs up at every width and there is nothing left to reflow.
  *
- * `.pane .topbar >` and not `.pane-detail .topbar >`: `views/code.rs` hand-
+ * `.pane .topbar >` and not `.pane-main .topbar >`: `views/code.rs` hand-
  * rolls a badge of its own in the Code LIST's header, so a rule naming only
  * the component's call sites would leave that one painting a second dot. */
 .pane .topbar > .conn-badge {
@@ -1318,14 +1525,22 @@
  * below it must not name it again — three columns would otherwise show the
  * chat's title twice, 500pt apart and at two different sizes. What is left in
  * the pane's header is the back chevron and the screen's own controls, which
- * are pane-scoped and stay: at three columns the chevron closes the DETAIL
- * while the list stays on screen, and in the window's bar that would read as a
+ * are pane-scoped and stay: the chevron closes what is OPEN while the sidebar's
+ * list stays on screen, and in the window's bar that would read as a
  * window-level Back.
  *
- * Keyed on `[data-detail="open"]` rather than on `.pane-detail` alone even
- * though the empty column has no header to hide: the attribute is the same
- * fact the shell decides the bar's title from, so the two halves of "the
- * window names it, the pane does not" are visibly one condition.
+ * Keyed on `:has(.chrome-title)` rather than on `.pane-main` alone, because
+ * the pane's heading must go only when the BAND is carrying one — and it is
+ * not always. A non-primary destination's own root (the Recipes grid, the
+ * Skills grid) renders with nothing pushed on it, so `nav::Detail` is `None`,
+ * so there is no `Crumb` and no `.chrome-title`; the pane's own heading is
+ * then the only name the window has and hiding it would leave the window
+ * unnamed.
+ *
+ * This used to be `[data-detail="open"]`, an attribute the shell set from the
+ * same fact. `:has()` asks the markup the question directly instead, so the
+ * bar's title and the pane's suppression cannot drift apart — the failure the
+ * attribute made possible was exactly one of them changing without the other.
  *
  * `.topbar >`, so this reaches the six headers `views/code.rs` and
  * `views/chat.rs` hand-roll exactly as it reaches `views::chrome::TopBar`'s.
@@ -1334,8 +1549,8 @@
  * second title. The bar's height does not change: it is 4rem so that the two
  * panes' headers do not stair-step across the divider between them, and that
  * is still true of a header holding only a chevron. */
-.shell[data-detail="open"] .pane-detail .topbar > .title,
-.shell[data-detail="open"] .pane-detail .topbar > .titlegroup {
+.shell:has(.chrome-title) .pane-main .topbar > .title,
+.shell:has(.chrome-title) .pane-main .topbar > .titlegroup {
   display: none;
 }
 
@@ -1415,7 +1630,7 @@
  * `views/skills.rs`, `views/recipes.rs`, `views/scheduler.rs`,
  * `views/code.rs`), so the question is askable from the markup and needs no
  * new signal, no prop and no plumbing through six views. */
-.shell:has(.pane-list .empty) .pane-detail .pane-empty-hint {
+.shell:has(.nav-sessions-empty) .pane-main .pane-empty-hint {
   display: none;
 }
 
@@ -1426,7 +1641,3 @@
  * "No chats match" was stranded about 500pt below the search field it was
  * answering. Only in the LIST column — in the detail, "That recipe is no
  * longer open." is the whole screen and centred is where it belongs. */
-.pane-list .empty {
-  min-height: 0;
-  padding-top: 48px;
-}

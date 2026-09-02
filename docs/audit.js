@@ -173,6 +173,17 @@ const NAV_RS = path.join(__dirname, '..', 'src', 'nav.rs');
 // because the leading `pub ` is not whitespace and neither is followed by a
 // quote.
 const DESTINATION = /\n\s*id:\s*"([^"]+)",\n\s*label:\s*"([^"]+)",/g;
+
+// The destinations a plane OPENS on, which the desktop sidebar reaches by its
+// segmented control rather than by a destination row, and the WORD that
+// control paints. Both read out of `nav.rs` rather than listed here, so a
+// third plane does not silently reintroduce the gap this replaced.
+//
+// They have to be paired through the plane VARIANT and not through the label,
+// because the two words differ on purpose: the destination is "Chats" and the
+// segment is "Chat" — the half, not the list.
+const PLANE_PRIMARY = /Plane::(\w+)\s*=>\s*&([A-Z_]+),/g;
+const PLANE_LABEL = /Self::(\w+)\s*=>\s*"([^"]+)",/g;
 const DESTINATION_FIELD = /\n\s*(?:id|label):\s*"/g;
 const coverage = (states) => {
   const gaps = [];
@@ -191,6 +202,30 @@ const coverage = (states) => {
   }
   const nav = fs.readFileSync(NAV_RS, 'utf8');
   const dests = [...nav.matchAll(DESTINATION)];
+  // variant -> the segment's word. `Plane::label`'s arms are the first
+  // `Self::X => "…"` run in the file after the enum, and `Group::header`'s
+  // return `Some(…)` so they do not match this shape.
+  // FIRST arm per variant, not last. `Plane::label` and `Plane::icon` have the
+  // identical `Self::X => "…"` shape and `icon` comes second, so building this
+  // with `new Map(...)` over every match silently kept the ICON name — the
+  // gate then looked for a segment reading "message" and reported both
+  // primaries as never captured.
+  const planeWord = new Map();
+  for (const [, variant, word] of nav.matchAll(PLANE_LABEL)) {
+    if (!planeWord.has(variant)) planeWord.set(variant, word);
+  }
+  // primary destination id -> the word its segment paints.
+  const PLANE_PRIMARIES = new Map(
+    [...nav.matchAll(PLANE_PRIMARY)].map(([, variant, konst]) => {
+      const m = nav.match(new RegExp(`const ${konst}: Destination = Destination \\{\\n\\s*id: "([^"]+)"`));
+      return m && planeWord.has(variant) ? [m[1], planeWord.get(variant)] : null;
+    }).filter(Boolean),
+  );
+  if (!PLANE_PRIMARIES.size) {
+    gaps.push(`${NAV_RS} names no plane primaries this file can read, so the`
+      + ' segmented control cannot stand in for a destination row and every'
+      + ' primary would report as uncovered');
+  }
   const fields = (nav.match(DESTINATION_FIELD) || []).length;
   if (dests.length * 2 !== fields) {
     gaps.push(`${NAV_RS} holds ${fields} destination \`id\`/\`label\` fields but only`
@@ -198,12 +233,42 @@ const coverage = (states) => {
       + ' checking a coverage claim over the wrong set, or over none');
   }
   for (const [, id, label] of dests) {
-    // The exact bytes `src/shell/mod.rs` emits for the marked row. A substring
-    // and not a parse: this runs before a browser is launched, the markup is
-    // machine-written and never hand-edited, and `src/shell/mod.rs`'s own
-    // `the_phone_drawer_gains_no_attribute` test reads the same file the same
-    // way for the same reason.
-    if (!desktop.some((state) => state.body.includes(`class="drawer-item active" title="${label}"`))) {
+    // TWO SHAPES, because the sidebar stopped being one flat list.
+    //
+    // A library destination is still a `.drawer-item` and is still marked when
+    // it is the one on screen — those bytes are `src/shell/mod.rs`'s, unchanged.
+    // A plane's PRIMARY is not: `chats` and `code` are reached by the segmented
+    // control and their list IS the sidebar's body, so nothing paints a marked
+    // destination row for them. Asking for one is asking for markup the shell
+    // deliberately does not emit, and before this was widened the gate blocked
+    // every run with two gaps that no capture could ever close.
+    //
+    // What stands in for it is the segment's own selected state, which is the
+    // fact this gate is actually about: was this half of the app ever rendered
+    // in a window. Substrings and not a parse, for the reason below.
+    const asRow = `class="drawer-item active" title="${label}"`;
+    const word = PLANE_PRIMARIES.get(id);
+    // THE ACTIVE SEGMENT'S OWN WORD, not the word anywhere in the state.
+    //
+    // The first version of this asked whether the body held
+    // `class="plane-seg active"` AND the word — and every state holds both,
+    // because the switch always paints both halves and only one of them is
+    // active. It could not fail: dropping `desktop-code-list` from the store
+    // entirely left the run Clean, which is the shape of check this whole
+    // repository keeps getting caught by. Measured, then fixed.
+    //
+    // So: slice from the active segment to the end of that button, and ask
+    // whether the word is inside THAT.
+    const activeSegmentSays = (body) => {
+      const at = body.indexOf('class="plane-seg active"');
+      if (at < 0) return null;
+      const end = body.indexOf('</button>', at);
+      return end < 0 ? null : body.slice(at, end);
+    };
+    const seen = desktop.some((state) => state.body.includes(asRow))
+      || (word !== undefined
+        && desktop.some((state) => (activeSegmentSays(state.body) || '').includes(word)));
+    if (!seen) {
       gaps.push(`no desktop state was captured with ${id} open — the nav offers it and`
         + ' this grid has never rendered it in a window');
     }
