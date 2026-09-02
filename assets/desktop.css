@@ -1099,6 +1099,26 @@
   gap: 8px;
 }
 
+/* THE HOME COMPOSER'S SEND, and it is `assets/main.css`'s `.send` with two
+ * numbers changed rather than a control of its own. The transcript's composer
+ * already has this circle; making the home screen's a different shape would
+ * teach the reader two answers to "how do I send this" in one app.
+ *
+ * 32px rather than 40, and the accent rather than `--bg-inverse`. The size is
+ * the mockups' (`.send{width:28px;height:28px}`) rounded up to this shell's
+ * pointer floor — 28 is below the 32 `docs/audit.js` holds desktop targets to,
+ * and the floor wins over the picture. The colour is the whole point of the
+ * control: it is the one saturated object on a resting home screen, and
+ * `--bg-inverse` in dark is white, which made it the brightest thing in the
+ * window while saying nothing. */
+.home-compose-row .send {
+  width: 32px;
+  height: 32px;
+  background: var(--accent-fill);
+  color: var(--accent-ink);
+  font-size: var(--text-md);
+}
+
 /* THE ACCENT'S ONE JOB on this screen: the control that starts the work.
  *
  * Spending it here and nowhere else is deliberate. An accent used on four
@@ -1132,21 +1152,190 @@
   overflow: hidden;
 }
 
+/* A FACT, not a control. The mockups draw two visual classes in this row and
+ * the difference is the whole grammar of it: a thing you can CHANGE is a
+ * bordered box with a chevron (`.picker`), and a thing you can only READ is
+ * bare mono text between middots (`.mini .mono`). Every chip this app puts
+ * here is the second kind — the model, the host, the extension count, the
+ * context size are all read-only on this screen — so they are bare, and the
+ * filled pill they used to be was claiming to be pressable.
+ *
+ * The middot is a separator drawn by the row rather than a character in the
+ * text, so a chip does not have to know whether it is last. */
 .home-chip {
   flex: 0 0 auto;
-  padding: 2px 8px;
-  border-radius: var(--radius-full);
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
+  color: var(--text-secondary);
   font-size: var(--text-2xs);
   line-height: var(--lh-sm);
   white-space: nowrap;
+}
+
+.home-chip + .home-chip::before {
+  content: "·";
+  margin: 0 6px;
+  color: var(--text-tertiary);
 }
 
 /* An address is compared character by character, so it gets the face built
  * for that. The one place this shell reaches for `--font-mono`. */
 .home-chip.mono {
   font-family: var(--font-mono);
+}
+
+/* ── pick up where you left off ─────────────────────────────────────────
+ *
+ * The mockups' `.crow`, and the densest block on the home screen: a status
+ * dot, a title over a QUOTED last message, and a trailing column of facts.
+ *
+ * Solid and faintly filled, against `.home-starter`'s dashed and unfilled one
+ * section below — the two-tier language named there. A thing that exists gets
+ * a card; a thing you could start gets an outline.
+ *
+ * A `button` with three spans in it and no nested control, which is the shape
+ * `.nav-row` had to be rebuilt into: a button containing buttons is invalid,
+ * and the parser hoists the inner ones out, which re-parents everything after
+ * them and produced 1600 findings the last time it happened here. The whole
+ * row is one target and the facts on it are text.
+ */
+.home-recent {
+  display: flex;
+  flex-direction: column;
+}
+
+.recent {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0 10px;
+  width: 100%;
+  margin-bottom: 7px;
+  padding: 11px 14px;
+  border: 1px solid var(--shell-line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.recent:hover {
+  border-color: var(--text-tertiary);
+  background: var(--surface-raise);
+}
+
+/* The dot is `sidebar::Mark`'s three states said in the same three colours, so
+ * a conversation that is streaming looks the same in both columns of the
+ * window. Idle is a filled fleck rather than a ring: the ring means "an agent
+ * is doing something", and a finished conversation is not. */
+.recent-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: var(--radius-full);
+  background: var(--text-tertiary);
+}
+
+.recent.running .recent-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.recent.waiting .recent-dot {
+  background: var(--text-warning);
+}
+
+.recent-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.recent-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  font-weight: 550;
+}
+
+/* SERIF, and it is the only place in this shell that sets a serif on
+ * something other than a heading. The mockups set their own serif token on
+ * the same element, and the reason is what the line IS:
+ * every other string on this screen is a label the app wrote, and this one is
+ * a sentence out of the conversation. The face is what says so — the same
+ * distinction `.md` already draws in the transcript.
+ *
+ * Two lines, then clipped. One line loses too much of a sentence to be worth
+ * reading; three makes the row taller than the two beneath it are worth. */
+.recent-quote {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--font-serif);
+  font-size: var(--text-xs);
+  line-height: var(--lh-md);
+}
+
+.recent-facts {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+/* Mono, by `.nav-row-age`'s rule: a turn count and an age are values you
+ * compare between rows.
+ *
+ * `--text-secondary` and not `--text-tertiary`, which is what this shipped as
+ * and what `docs/audit.js` caught: tertiary is #606c7a, which is 2.91:1 on the
+ * card — under the 4.5 an 11px string owes, and 11px is exactly the size at
+ * which a reader is least able to make up the difference. Secondary is 7.85:1
+ * on the same surface. The mockups set their own faint grey here and do not
+ * clear it either; the floor wins over the picture, as it did for the send
+ * button's diameter. */
+.recent-fact {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-sm);
+  white-space: nowrap;
+}
+
+/* The one word on this row that is not a fact but a state, so it is the one
+ * that takes a colour. `streaming` is the accent; `needs you` is the amber
+ * this app already spends on a question an agent is blocked on, which is
+ * `.mark.waiting`'s token and `.home-tile.urgent`'s. */
+.recent-state {
+  color: var(--accent);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.recent.waiting .recent-state {
+  color: var(--text-warning);
+}
+
+/* The count beside a section heading. Not uppercase and not tracked — the
+ * heading is the label and this is its value, so it takes the same treatment
+ * every other number in this sheet takes. */
+.home-section-meta {
+  flex: 0 0 auto;
+  /* `.recent-fact`'s colour and its reason. */
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 /* ── ways to start ──────────────────────────────────────────────────────
@@ -1158,7 +1347,16 @@
  * There is no "pick up where you left off" beside it, though the mockup has
  * one: the sidebar is showing exactly that list, permanently, three inches to
  * the left. The mockup's sidebar was drawn before the list moved into it. */
+/* A section heading, and the count that belongs to it. `display: flex` with
+ * the meta pushed to the trailing edge, because the mockups' `.lsec-h` is a
+ * two-item row — the name of the section on one side, how many of the thing
+ * there are on the other — and a heading that says "12 threads" beside itself
+ * is the cheapest place in this column to put a number the reader wants. */
 .home-section {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
   margin: 32px 0 8px;
   color: var(--text-secondary);
   font-size: var(--text-2xs);
@@ -1221,10 +1419,36 @@
 
 /* What the thing IS, in the server's own word — "recipe" or "skill" — rather
  * than a category this screen invented. */
+/* A ROW, so the part that has to be clipped can clip ITSELF.
+ *
+ * This was one nowrap span with `text-overflow: ellipsis` and a second span
+ * inside it carrying the description, and the audit found the bug that shape
+ * has: an ancestor's `overflow: hidden` clips what is PAINTED, but the inner
+ * inline box still measures its full width, so a long description reported
+ * `right=1775` in a 1180px window. Clipped is not the same as fitting, and it
+ * is the second measurement that decides whether a layout is sound.
+ *
+ * Two flex items now — the label at its natural width, the sentence taking
+ * what is left with a `min-width: 0` that lets it shrink below its content
+ * and an ellipsis of its own. */
 .home-starter-kind {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
   color: var(--text-secondary);
-  font-size: var(--text-xs);
+  font-size: var(--text-2xs);
   line-height: var(--lh-sm);
+}
+
+/* The author's own sentence. Same colour as the label in front of it: a third
+ * tier would be `--text-tertiary`, which does not clear 4.5:1 at this size —
+ * see `.recent-fact`. The middot in the markup is what separates them. */
+.home-starter-what {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── the code half's counts ─────────────────────────────────────────────
