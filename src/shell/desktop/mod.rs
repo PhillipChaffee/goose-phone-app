@@ -20,6 +20,7 @@
 
 use dioxus::prelude::*;
 
+mod home;
 mod sidebar;
 
 use crate::icons::Icon;
@@ -765,32 +766,29 @@ pub(crate) fn AppShell() -> Element {
             // only so the sheet could tell which of two columns had something
             // in it, and one column does not need telling.
             //
-            // Two arms: whatever the destination has pushed, or the
-            // destination's own root — which on the plane's primary is the
-            // full list and everywhere else is that screen's grid.
+            // Three arms, and the order is the rule: whatever the destination
+            // has pushed, else the plane's HOME when nothing is pushed and you
+            // are on its primary, else the destination's own root — the
+            // Recipes grid, the Skills grid, screens the sidebar does not
+            // carry.
             //
-            // THE HOME SCREEN IS NOT HERE YET, and this is what stands in for
-            // it rather than the `Nothing open` card that was written first.
-            // That card cost real function: the sidebar's compact row has no
-            // actions by design (see `sidebar.rs`), so with the primary's root
-            // unmounted there was nowhere left on the desktop to rename a
-            // chat, delete one, or search — measured on the captured markup,
-            // `desktop-chats` held three `nav-row`s, zero `session-item`s and
-            // zero `row-action`s. A restructure is allowed to move a control;
-            // it is not allowed to take one away in passing.
-            //
-            // So the list keeps rendering here until the home screens arrive,
-            // and the redundancy is deliberate and temporary: the sidebar
-            // scans, the pane acts. The New button is hidden on home for the
-            // same reason it always was — the pane's own affordance is on
-            // screen, which is the fab rather than a composer for now.
+            // The home arm was held back until the sidebar could take the
+            // controls the primary's root was carrying. It is not a cosmetic
+            // ordering: an earlier draft put a "Nothing open" card here while
+            // rename, delete and search still lived only in that root, and
+            // took all three off the desktop without a word. `sidebar.rs` now
+            // has them, which is what makes this switch safe —
+            // `the_home_screen_does_not_cost_the_controls_it_replaced` is the
+            // check that keeps it that way.
             //
             // `empty_detail` stays for the one destination that has no root:
-            // Settings' detail is unconditional, so it never reaches the arm,
+            // Settings' detail is unconditional so it never reaches that arm,
             // and a `root: None` row rendering nothing would be a blank pane.
             section { class: "pane pane-main",
                 if let Some(detail) = detail {
                     {detail.view}
+                } else if on_home {
+                    home::Home { plane }
                 } else if let Some(root) = dest.root {
                     {root(&ctx)}
                 } else {
@@ -910,26 +908,33 @@ mod tests {
         assert!(height > 0.0);
     }
 
-    /// EVERY DESTINATION'S ROOT STILL REACHES THE PANE, including the
-    /// plane's own primary.
+    /// THE HOME SCREEN MUST NOT COST THE CONTROLS IT REPLACED.
     ///
-    /// The restructure moved the plane's list into the sidebar, and the first
-    /// draft of the pane rule concluded that the primary's root was therefore
-    /// redundant and rendered a "Nothing open" card in its place. That was a
-    /// functional regression, not a simplification: `sidebar.rs`'s compact row
-    /// carries no actions by design, so with the primary's root unmounted
-    /// there was nowhere left on the desktop to rename a chat, delete one, or
-    /// search. Measured on the captured markup at the time — `desktop-chats`
-    /// held three `nav-row`s, zero `session-item`s and zero `row-action`s.
+    /// The pane used to render the plane's primary root — the full list view,
+    /// which carried rename, delete and search. Now it renders `home::Home`
+    /// instead, and those three exist on the desktop only because
+    /// `sidebar.rs` took them first.
     ///
-    /// This is the guard. The pane must fall back to `dest.root` for ANY
-    /// destination with one, with no `on_home` in the condition — that flag
-    /// governs the New button and nothing else now.
+    /// That ordering was not free. An earlier draft put a "Nothing open" card
+    /// in this arm while the controls still lived only in the root, and took
+    /// all three off the desktop silently — measured on the captured markup at
+    /// the time, `desktop-chats` held three `nav-row`s, zero `session-item`s
+    /// and zero `row-action`s. A restructure may move a control; it may not
+    /// drop one in passing.
     ///
-    /// Shown to fail: reinstate `else if let (false, Some(root)) = (on_home,
-    /// dest.root)` and this goes red on the `on_home` needle.
+    /// So this is a COUPLING check across two files, which is the only shape
+    /// that can state the rule: the moment the pane grows a home arm, the
+    /// sidebar owes the controls. Reading both sources rather than rendering,
+    /// because `AppShell` cannot be mounted (it calls
+    /// `dioxus::desktop::window()`) and the two halves are in different
+    /// components — `sidebar.rs`'s own tests assert the controls RENDER; this
+    /// asserts they are required to.
+    ///
+    /// Shown to fail: delete the search field from `sidebar.rs` and this goes
+    /// red naming it, while every test in that file still passes except its
+    /// own.
     #[test]
-    fn the_content_pane_falls_back_to_the_destinations_own_root() {
+    fn the_home_screen_does_not_cost_the_controls_it_replaced() {
         let code = shell_code();
         let pane = block(
             &code,
@@ -937,17 +942,95 @@ mod tests {
             "fn empty_detail",
         );
         assert!(
-            pane.contains("else if let Some(root) = dest.root"),
-            "the content pane no longer falls back to the destination's own \
-             root unconditionally — if that arm is gated on anything, the \
-             plane's primary loses its list and with it rename, delete and \
-             search, which the sidebar's rows do not carry"
+            pane.contains("home::Home"),
+            "the content pane no longer renders a home screen, so this check \
+             is asserting a coupling that has stopped existing"
         );
+
+        let sidebar =
+            crate::selfscan::code_of("src/shell/desktop/sidebar.rs", include_str!("sidebar.rs"));
+        for (needle, what) in [
+            ("nav-row-actions", "rename and delete"),
+            ("SearchField", "the search field"),
+        ] {
+            assert!(
+                sidebar.contains(needle),
+                "the pane renders a home screen instead of the plane's list, \
+                 and the sidebar does not carry {what} — so it is reachable \
+                 nowhere on the desktop. That is the regression the home arm \
+                 was held back for."
+            );
+        }
+    }
+
+    /// EVERY TOKEN THE DESKTOP SHEET SPENDS IS ONE THAT EXISTS.
+    ///
+    /// `var(--nope)` is not an error. It resolves to nothing, the declaration
+    /// is dropped, and the element inherits — so a mistyped token is a rule
+    /// that silently does not apply, which is the same failure mode as the
+    /// stray brace above and just as invisible.
+    ///
+    /// Found by writing four of them at once. The home screen was drafted
+    /// against `--text-3xl`, `--lh-3xl` and `--lh-2xl`, none of which exist:
+    /// `assets/main.css`'s scale stops at `--text-2xl` and its own comment
+    /// explains why there is no `--lh-lg`. The greeting would have rendered at
+    /// whatever it inherited, on every window, and nothing would have said so.
+    ///
+    /// Definitions are collected from BOTH sheets because the desktop declares
+    /// its own (`--nav-w`, `--shell-gap`, `--chrome-h`, `--nav-fill`) and
+    /// inherits the rest. A `var()` with a fallback is skipped: that is the
+    /// one form where an undefined name is deliberate.
+    #[test]
+    fn the_desktop_sheet_spends_no_token_that_does_not_exist() {
+        let main = include_str!("../../../assets/main.css");
+        let desktop = include_str!("../../../assets/desktop.css");
+        let macos = include_str!("../../../assets/platform/macos.css");
+
+        let defined: std::collections::HashSet<&str> = [main, desktop, macos]
+            .iter()
+            .flat_map(|sheet| {
+                sheet.match_indices("--").filter_map(|(at, _)| {
+                    let rest = &sheet[at..];
+                    let end = rest.find(':')?;
+                    let name = &rest[..end];
+                    // A definition is `--x:`; a use is `var(--x)`. Only the
+                    // former has a colon before any bracket or space.
+                    if name.contains([' ', ')', '(', ',', ';', '\n']) {
+                        return None;
+                    }
+                    Some(name)
+                })
+            })
+            .collect();
         assert!(
-            !pane.contains("on_home"),
-            "the pane rule reads `on_home`, which is how the primary's root \
-             stopped rendering the first time. That flag is the New button's \
-             alone"
+            defined.contains("--text-2xl"),
+            "the definition scan found nothing recognisable, so the check \
+             below would pass over any name at all"
+        );
+
+        let mut missing: Vec<&str> = Vec::new();
+        for (at, _) in desktop.match_indices("var(--") {
+            let rest = &desktop[at + 4..];
+            let Some(end) = rest.find([')', ',']) else {
+                continue;
+            };
+            // A comma means a fallback was given, which is the one form where
+            // an undefined name is a deliberate choice.
+            if rest.as_bytes().get(end) == Some(&b',') {
+                continue;
+            }
+            let name = rest[..end].trim();
+            if !defined.contains(name) && !missing.contains(&name) {
+                missing.push(name);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "assets/desktop.css spends {} token(s) nothing defines: {}. \
+             `var()` on an undefined name resolves to nothing and the whole \
+             declaration is dropped, so those rules are silently not applying",
+            missing.len(),
+            missing.join(", ")
         );
     }
 
