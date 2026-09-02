@@ -642,8 +642,19 @@ pub(crate) fn AppShell() -> Element {
             // app uses for this panel, down to the 8px of padding.
             aside { class: "navpane",
                 div { class: "navcard",
-                    h2 { class: "drawer-brand", "goose" }
-
+                    // NO WORDMARK. `h2.drawer-brand` was the first child here
+                    // and it was the largest type in the column — 22px on a
+                    // 32px line with 24 below it, 56px of a 252px-wide panel
+                    // spent saying the name of the app the reader just
+                    // launched. It is the phone's, where the drawer is a
+                    // panel that slides over the page and has to announce
+                    // whose panel it is; a window's title is the window's.
+                    //
+                    // It also appears in none of the eight E-option mockups:
+                    // every one of them starts `.side` with the plane switch.
+                    // The first thing in this column is now the choice the
+                    // whole shell is organised around.
+                    //
                     // THE PLANE SWITCH, and the top-level shape of this shell.
                     //
                     // Chat is goose's own things, where nothing touches a repo;
@@ -1519,6 +1530,135 @@ mod tests {
              so `:has(.chrome-title)` either never matches — and every screen \
              paints two titles — or always does, and the screens the bar does \
              not name paint none"
+        );
+    }
+
+    /// THE WINDOW HAS MORE THAN ONE SURFACE IN IT.
+    ///
+    /// This is the defect the surface ramp was written for, and it is worth
+    /// stating plainly because it is invisible to every other check in this
+    /// file: the sheet parsed, balanced its braces, spent no token that did
+    /// not exist and cleared every contrast floor `docs/audit.js` measures —
+    /// while painting the window's bar, the sidebar and the content column
+    /// the SAME colour. Nothing in a stylesheet is wrong about that. It is
+    /// only wrong about the design, and the design's whole first move is four
+    /// rungs (`--win / --panel / --canvas / --surface`, `10-home-chat.html`).
+    ///
+    /// So the check is on the VALUES and on their being different from each
+    /// other, not on any rule spending them. Light is exempt by construction
+    /// and says so on `--surface-panel`: it separates its columns with fills
+    /// that main.css already provides, and the 1.3% wash that makes a card in
+    /// dark makes an invisible one on white.
+    ///
+    /// REPRODUCED four ways, one per rung: set any one of the four dark
+    /// values equal to any other — the state this shipped in, where panel and
+    /// canvas were both `--bg-primary` — and this fails naming the pair. Put
+    /// it back and it is green. It does NOT fail for a merely small step: two
+    /// rungs one hex apart are two rungs, and telling "too close" from
+    /// "deliberately subtle" is what the audit's contrast sweep is for.
+    #[test]
+    fn the_shell_paints_more_than_one_surface() {
+        let sheet = include_str!("../../../assets/desktop.css");
+        let dark = block(sheet, ":root[data-theme=\"dark\"] .app > .shell {", "\n}");
+
+        let rungs = [
+            "--surface-panel",
+            "--surface-canvas",
+            "--surface-card",
+            "--surface-raise",
+        ];
+        let mut painted: Vec<(&str, &str)> = Vec::new();
+        for rung in rungs {
+            let decl = dark.split(&format!("{rung}:")).nth(1).unwrap_or_default();
+            assert!(
+                !decl.is_empty(),
+                "the dark shell block gives no value for `{rung}`, so it falls back to \
+                 the light declaration — which is main.css's own two backgrounds, and \
+                 the window goes back to one fill from edge to edge"
+            );
+            painted.push((rung, decl.split(';').next().unwrap_or_default().trim()));
+        }
+
+        for (i, (rung, value)) in painted.iter().enumerate() {
+            for (other, other_value) in &painted[i + 1..] {
+                assert_ne!(
+                    value, other_value,
+                    "`{rung}` and `{other}` are both {value} in dark, so two of the four \
+                     planes this shell is built out of are one plane. That is the state \
+                     the desktop shipped in — the band, the sidebar and the content \
+                     column were all #22252a — and it is why the columns did not read \
+                     as columns"
+                );
+            }
+        }
+    }
+
+    /// AND THE TWO THAT FRAME CONTENT DO NOT PAINT THE RUNG CONTENT PAINTS.
+    ///
+    /// The rung values being distinct is half of it; the other half is that
+    /// the chrome and the canvas actually spend different ones. Both of these
+    /// lines were missing rather than wrong — `.shell-chrome` declared no
+    /// background at all and inherited the page, and `.pane` named
+    /// `--bg-primary`, which the dark block now remaps to the canvas anyway.
+    /// The second is the subtler failure of the two: it would keep working
+    /// until someone remapped `--bg-primary` for a nested view and silently
+    /// took the content column with it.
+    ///
+    /// REPRODUCED: delete either `background` declaration, or point `.pane`
+    /// back at `--bg-primary`, and this fails naming the element.
+    #[test]
+    fn the_chrome_and_the_canvas_are_told_apart_by_name() {
+        let sheet = include_str!("../../../assets/desktop.css");
+        for (rule, rung) in [
+            (".shell-chrome {", "--surface-panel"),
+            (".pane {", "--surface-canvas"),
+        ] {
+            let body = block(sheet, rule, "\n}");
+            assert!(
+                body.contains(&format!("background: var({rung})")),
+                "`{rule}` does not paint `{rung}`. The rung it should be naming is the \
+                 one thing that tells this element apart from the column beside it, and \
+                 an inherited or aliased background puts them back on the same plane"
+            );
+        }
+    }
+
+    /// THE SIDEBAR DOES NOT SPEND ITS WIDTH ON THE NAME OF THE APP.
+    ///
+    /// `h2.drawer-brand` was the first child of `.navcard`: 22px on a 32px
+    /// line with 24 below it, which is 56px of a 252px-wide panel and the
+    /// largest type in the column. It belongs to the phone, where the drawer
+    /// slides over the page and has to say whose panel it is. A window's name
+    /// is the window's, and none of the eight E-option mockups draws one —
+    /// every `.side` in them opens with the plane switch.
+    ///
+    /// Asserted on `nav_card()` rather than on the file, because the question
+    /// is which ELEMENT is first in that column and a file-wide `contains`
+    /// cannot see order. `assets/main.css` keeps the rule; the phone still
+    /// renders it.
+    ///
+    /// REPRODUCED: put the `h2` back and this fails; take it out and it is
+    /// green. The `starts_with` half fails on its own if the switch is merely
+    /// displaced — inserting any element above it is the failure this guards,
+    /// and a wordmark is only the one it shipped with.
+    #[test]
+    fn the_sidebar_opens_with_the_choice_and_not_with_the_wordmark() {
+        let card = nav_card();
+        assert!(
+            !card.contains("drawer-brand"),
+            "the sidebar renders `.drawer-brand` again — 56px of a 252px column \
+             spent saying the name of the app the reader has already launched"
+        );
+        let first = card
+            .split("class: \"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap_or_default();
+        assert_eq!(
+            first, "plane-switch",
+            "the first thing in the sidebar is `.{first}`, not the plane switch. \
+             This column is organised around one choice and that choice is what \
+             should be at the top of it"
         );
     }
 

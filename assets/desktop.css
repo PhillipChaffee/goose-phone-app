@@ -119,9 +119,56 @@
    *
    * Light keeps its fill, because light has the opposite problem: #f4f6f7 on
    * #ffffff is 1.09:1 — a step you have to look for, not one that shouts —
-   * and taking it away would leave the card resting on nothing. Light
-   * separates with fills, dark separates with lines. */
-  --nav-fill: var(--bg-secondary);
+   * and taking it away would leave the card resting on nothing.
+   *
+   * THAT REASONING WAS RIGHT ABOUT THE PILL AND WRONG ABOUT THE WINDOW, and
+   * the ramp below is the correction. Painting the nav the same colour as the
+   * page did fix the contrast pair, but it also left this shell with exactly
+   * TWO dark surfaces — #22252a for the band, the sidebar AND the content
+   * column, and #3f434b for every card on them. So the columns did not read
+   * as columns, and a card was a +29-luminance slab rather than a raised
+   * plane. The mockups have four rungs and use all of them. */
+  --nav-fill: var(--surface-panel);
+
+  /* ── THE SURFACE RAMP ─────────────────────────────────────────────────
+   *
+   * `assets/main.css` gives three background tokens, and they were composed
+   * for a phone: one page, one card, one pressed state, on a screen with no
+   * columns to tell apart. A window has columns, and the difference between
+   * this shell and its mockups was mostly here — one fill doing three jobs.
+   *
+   * The mockups declare five (`10-home-chat.html:8-12`):
+   *
+   *   --win #101215   --panel #181a1e   --canvas #1e2126
+   *   --surface #24282e   --surface-2 #2a2f36
+   *
+   * Four are load-bearing and are taken verbatim in dark, because dark is the
+   * only mode those mockups draw. `--win` is not: nothing in this app paints
+   * behind the window, since `.shell` fills it.
+   *
+   *   PANEL   the band and the sidebar — the chrome that frames content
+   *   CANVAS  the content column, one step lighter so the columns separate
+   *   CARD    a thing ON the canvas: `rgba(255,255,255,.013)` composited,
+   *           which is #212429 — a wash, not a slab
+   *   RAISE   that card hovered or selected
+   *
+   * Every ink still clears its floor on all four; measured, worst case first:
+   *
+   *              panel   canvas  card    raise
+   *   primary     17.42   16.14   15.57   14.81
+   *   secondary    8.78    8.14    7.85    7.47
+   *   accent       7.26    6.73    6.49    6.17
+   *
+   * LIGHT DOES NOT TAKE THIS RAMP, and that is the same rule as before rather
+   * than an exception to it: light already separates its columns, because
+   * `--nav-fill` was `--bg-secondary` and the pane is white. What light must
+   * NOT do is take the wash — #fafbfc on #ffffff is a card you cannot see,
+   * and main.css's buttons paint `--bg-secondary` too, so they would vanish
+   * with it. Light separates with fills, dark separates with a ramp. */
+  --surface-panel: var(--bg-secondary);
+  --surface-canvas: var(--bg-primary);
+  --surface-card: var(--bg-secondary);
+  --surface-raise: var(--bg-tertiary);
 
   /* ── THE ACCENT, and it is desktop-only on purpose ────────────────────
    *
@@ -131,17 +178,17 @@
    * `--nav-w`, `--shell-gap` and `--nav-fill`, so the phone is untouched by
    * construction rather than by care.
    *
-   * The value comes from the mockups' own sheet (`--accent:#13bbaf`) and NOT
-   * verbatim, because those mockups are dark-only and this app is not.
-   * Measured against the surfaces an accent word ever sits on:
+   * The value comes from the mockups' own sheet (`--accent:#13bbaf`), and in
+   * dark it is now taken VERBATIM. It could not be before, and the ramp above
+   * is the whole reason it can be now: the surface it failed on was the old
+   * `--bg-secondary` card, #3f434b, where it measured 4.14:1. That card is
+   * gone — a card in dark is the 1.3% wash, #212429 — and against the four
+   * rungs the teal actually meets, the mockups' own value clears with room:
    *
-   *   #13bbaf  6.41:1 on #22252a   4.14:1 on #3f434b   2.40:1 on white
+   *   #13bbaf  7.26:1 panel   6.73:1 canvas   6.49:1 card   6.17:1 raise
    *
-   * so the mockups' teal fails as text on the dark composer and fails
-   * completely in light. The values below are the nearest that clear 4.5:1 on
-   * every surface each is used on:
+   * Light still cannot have it (2.40:1 on white) and keeps the derived value:
    *
-   *   dark  #2ecbbf   7.62:1 on the card, 4.92:1 on the composer
    *   light #0b6b64   6.36:1 on the pane, 5.87:1 on the card
    *
    * A FILL is a separate token, because a filled control inverts the problem:
@@ -178,6 +225,14 @@
    * the marked row, and a custom property may not name itself — see the note
    * there. Nothing else reads this. */
   --row-quiet: var(--text-secondary);
+  /* The shell paints the PANEL, and the content column paints over it. So the
+   * gutter the nav card floats in is chrome rather than canvas, and the
+   * sidebar reads as one continuous band from the window's bar to the bottom
+   * edge — which is what the mockups draw, where `.side` is full-bleed panel
+   * with no gutter at all. The card's radius and hairline survive inside it,
+   * because the floating panel is this app's own language and design.md's
+   * first rule; what changes is only what it floats ON. */
+  background: var(--surface-panel);
   flex: 1;
   min-height: 0;
   /* A COLUMN: the window's own bar, then the columns of content. It was a row
@@ -199,6 +254,12 @@
   align-items: flex-start;
   gap: 4px;
   padding-left: 6px;
+  /* The band is CHROME, so it paints the panel rung and the sidebar beneath it
+   * paints the same one — which is what makes the content column read as the
+   * one place content is. It declared no background at all until now, so it
+   * inherited the page and the window had a single fill from edge to edge. */
+  background: var(--surface-panel);
+  border-bottom: 1px solid var(--shell-line);
 }
 
 /* Where AppKit paints the traffic lights. Nothing renders them and nothing may
@@ -216,24 +277,72 @@
   align-items: stretch;
 }
 
+/* DARK TAKES THE RAMP. Written twice because the two selectors mean different
+ * things — the media query is "the system says dark and the app has not
+ * overridden it", the attribute is "the app says dark" — and a test holds the
+ * two bodies identical. Every value here is measured on `--surface-panel` and
+ * `--accent` above.
+ *
+ * The three `--bg-*` lines are the leverage, and they are the reason this is a
+ * pass over the whole app rather than over this sheet. `src/views/` is shared
+ * with the phone and has never carried a `cfg(target_os)`; it paints
+ * `--bg-primary` for a page and `--bg-secondary` for a card. Remapping those
+ * HERE, on the shell, puts every nested view — settings, the transcript, the
+ * lists — on the ramp without one desktop-only view or one branch in Rust.
+ *
+ * `--bg-secondary` gets `--surface` (#24282e) and NOT the card wash, because
+ * main.css spends that token on CONTROLS as well as cards (`.btn.secondary`,
+ * `.icon-btn.action`, `.chip`), and the wash is 1.04:1 against the canvas —
+ * a card you can see the edge of, but a button that is gone. The mockups draw
+ * the same distinction: their card is `rgba(255,255,255,.013)` and their
+ * controls are `--surface` with a hairline. The shell's own cards therefore
+ * name `--surface-card` directly rather than going through `--bg-secondary`.
+ *
+ * The two border tokens soften but do not go to the mockups' `--line-soft`
+ * (1.09:1), because main.css has controls whose only edge is a border and
+ * they would have vanished. #2f343b is 1.29:1 on the canvas against the
+ * mockups' 1.23:1 and the old 1.63:1 — most of the way, with nothing lost. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .app > .shell {
-    --nav-fill: var(--bg-primary);
-    --shell-line: var(--border-primary);
-    /* Both measurements are on `--accent` above. */
-    --accent: #2ecbbf;
+    --surface-panel: #181a1e;
+    --surface-canvas: #1e2126;
+    --surface-card: #212429;
+    --surface-raise: #24282e;
+    --bg-primary: var(--surface-canvas);
+    --bg-secondary: var(--surface-raise);
+    --bg-tertiary: #2a2f36;
+    --border-primary: #2f343b;
+    --border-secondary: #3b414a;
+    --shell-line: #2c3138;
+    --accent: #13bbaf;
     --accent-fill: #13bbaf;
     --accent-ink: #0c1a19;
   }
 }
 
 :root[data-theme="dark"] .app > .shell {
-  --nav-fill: var(--bg-primary);
-  --shell-line: var(--border-primary);
-  /* Both measurements are on `--accent` above. */
-  --accent: #2ecbbf;
+  --surface-panel: #181a1e;
+  --surface-canvas: #1e2126;
+  --surface-card: #212429;
+  --surface-raise: #24282e;
+  --bg-primary: var(--surface-canvas);
+  --bg-secondary: var(--surface-raise);
+  --bg-tertiary: #2a2f36;
+  --border-primary: #2f343b;
+  --border-secondary: #3b414a;
+  --shell-line: #2c3138;
+  --accent: #13bbaf;
   --accent-fill: #13bbaf;
   --accent-ink: #0c1a19;
+}
+
+/* The one control whose only separation was the fill that just softened.
+ * `.icon-btn.action` (main.css:830-839) is `--bg-secondary` with no border at
+ * all — 1.63:1 against the old page, 1.09:1 against the canvas. It gets the
+ * hairline every other control in the mockups already has, rather than the
+ * ramp getting a louder rung for its sake. */
+.app > .shell .icon-btn.action {
+  border: 1px solid var(--border-primary);
 }
 
 /* The nav is a COLUMN and a CARD, and they are two elements because they have
@@ -474,13 +583,21 @@
   padding: 0 12px;
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-md);
-  background: var(--bg-tertiary);
+  background: var(--surface-card);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--text-sm);
   line-height: var(--lh-sm);
   font-weight: 500;
   cursor: pointer;
+}
+
+/* The plus is accent and the word is not. `.new .p{color:var(--accent)}` — the
+ * mockups spend the accent on the GLYPH that means "make one", so the control
+ * reads as an action at a glance without a filled button competing with the
+ * plane badge two inches above it. */
+.nav-new .icon {
+  color: var(--accent);
 }
 
 .nav-new:hover {
@@ -570,6 +687,28 @@
   overscroll-behavior: contain;
 }
 
+/* A DESTINATION ROW AT POINTER SIZE. `.drawer-item` in assets/main.css is
+ * 48px tall with a 14px gap at `--text-md`, and every number in it was chosen
+ * for a thumb — its own comment measures a two-line "Scheduler" label at AX5
+ * on a 375x667 phone. Five of those rows is 240px, and this column is 252px
+ * wide: the library alone filled a third of the sidebar's height before a
+ * single session appeared under it.
+ *
+ * 32px is not a taste either — it is the floor `docs/audit.js` holds this
+ * shell's pointer targets to, stated once further down where the row actions
+ * take it. The mockups spend less again (`.libnav` is one 11.5px line for the
+ * whole library), but 32 is where this app's own gate sits and a gate is a
+ * better place to stop than a picture.
+ *
+ * main.css is untouched: the phone's 48px row is still the phone's. */
+.navcard .drawer-item {
+  min-height: 32px;
+  gap: 8px;
+  padding: 0 8px;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
 .nav-sessions {
   flex: 1 1 auto;
   min-height: 0;
@@ -597,7 +736,8 @@
   font-size: var(--text-2xs);
   line-height: var(--lh-sm);
   font-weight: 600;
-  letter-spacing: 0.04em;
+  /* The plane badge's tracking, and its reason. */
+  letter-spacing: 0.09em;
   text-transform: uppercase;
 }
 
@@ -805,7 +945,16 @@
   flex: 0 0 auto;
   padding-top: 1px;
   color: var(--text-secondary);
-  font-size: var(--text-xs);
+  /* MONO, and this is the first of about a dozen. The mockups set every
+   * number, identifier and timestamp in `--mono` and everything else in the
+   * sans — which is most of why their chrome reads as an instrument panel
+   * rather than as prose. This sheet had exactly one mono rule in it.
+   *
+   * The rule being applied, so the next one does not have to re-decide: a
+   * value the reader COMPARES or COPIES is mono — an age, a count, a host, a
+   * branch, a token figure. A value they read as language is not. */
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
   line-height: var(--lh-sm);
   font-variant-numeric: tabular-nums;
 }
@@ -924,7 +1073,9 @@
   padding: 12px;
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-xl);
-  background: var(--bg-secondary);
+  /* The CARD rung, named directly. Going through `--bg-secondary` would take
+   * the controls' fill instead — see the note on the dark block. */
+  background: var(--surface-card);
 }
 
 .home-compose .input {
@@ -1013,7 +1164,8 @@
   font-size: var(--text-2xs);
   line-height: var(--lh-sm);
   font-weight: 600;
-  letter-spacing: 0.04em;
+  /* The plane badge's tracking, and its reason. */
+  letter-spacing: 0.09em;
   text-transform: uppercase;
 }
 
@@ -1029,17 +1181,28 @@
   gap: 10px;
   min-height: 56px;
   padding: 8px 12px;
-  border: 1px solid var(--shell-line);
+  /* DASHED, and it is the one place in this sheet that is. The mockups draw a
+   * two-tier language on the home screen and the tiers are one border-style
+   * apart: a solid faintly-filled card is a thing that EXISTS (a conversation
+   * you can return to), a dashed unfilled one is a thing you could START.
+   * the mockups' `.start` is `1px dashed` their line colour, with no
+   * background at all. (Written out rather than quoted, because the token
+   * check further down reads this file as text and a mockup token named in a
+   * comment would look like a token this sheet spends.) */
+  border: 1px dashed var(--shell-line);
   border-radius: var(--radius-lg);
-  background: var(--bg-secondary);
+  background: transparent;
   color: var(--text-primary);
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
+/* Hover fills it in: the dashed edge says "not yet a thing", and pointing at
+ * it is the moment it could become one. */
 .home-starter:hover {
-  border-color: var(--text-tertiary);
+  border-color: var(--accent);
+  background: var(--surface-card);
 }
 
 .home-starter-text {
@@ -1086,7 +1249,7 @@
   padding: 12px;
   border: 1px solid var(--shell-line);
   border-radius: var(--radius-lg);
-  background: var(--bg-secondary);
+  background: var(--surface-card);
 }
 
 /* The one tile that means "do something", in the colour this app already
@@ -1098,7 +1261,9 @@
 }
 
 .home-tile-value {
-  font-family: var(--font-serif);
+  /* Mono, not serif. It is a figure to compare against the tile beside it,
+   * and the serif was borrowed from the greeting, which is a sentence. */
+  font-family: var(--font-mono);
   font-size: var(--text-xl);
   line-height: var(--lh-xl);
   color: var(--text-primary);
@@ -1114,6 +1279,12 @@
   color: var(--text-secondary);
   font-size: var(--text-2xs);
   line-height: var(--lh-sm);
+  /* `.st-t .l{font-size:9.5px;font-weight:700;letter-spacing:.08em;
+   * text-transform:uppercase}` — a caption under a numeral is a label, and a
+   * label is set in caps here the way band headings are. */
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
 }
 
 /* ── the plane badge, in the window's bar ───────────────────────────────
@@ -1129,13 +1300,24 @@
   flex: 0 0 auto;
   margin-left: 8px;
   padding: 2px 8px;
-  border: 1px solid var(--shell-line);
   border-radius: var(--radius-sm);
-  color: var(--text-secondary);
+  /* FILLED, not outlined. In the mockups this is the accent's home — the one
+   * saturated object in the window's bar, and the thing that tells you which
+   * half of the app you are in before you read a word of it
+   * (`.plane-badge{color:#0c1a19;background:var(--accent)}`). It was a grey
+   * outline carrying grey text, which is what a disabled control looks like.
+   * `--accent-ink` on `--accent-fill` measures 7.44:1 in dark and 5.19:1 in
+   * light; both are on the token's own note. */
+  background: var(--accent-fill);
+  color: var(--accent-ink);
   font-size: var(--text-2xs);
   line-height: var(--lh-sm);
-  font-weight: 600;
-  letter-spacing: 0.06em;
+  font-weight: 650;
+  /* .09em, the mockups' own. A 10-11px uppercase label needs more tracking
+   * than a lowercase one at any size — the caps are all the same height, so
+   * the word has no shape left to read except its letter rhythm. Both other
+   * uppercase labels in this sheet take it too. */
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   white-space: nowrap;
 }
@@ -1285,6 +1467,9 @@
   flex: 1 1 0;
   min-width: 0;
   color: var(--text-secondary);
+  /* An address, so mono — the mockups put their host in a `<code>`
+   * (`.conn code`). See `.nav-row-age` for the rule. */
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: var(--lh-xs);
   overflow: hidden;
@@ -1346,7 +1531,10 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg-primary);
+  /* The CANVAS rung, and it names the rung rather than `--bg-primary` so the
+   * one line that says "this column is not the chrome" cannot be re-pointed
+   * by a remap meant for the views nested inside it. */
+  background: var(--surface-canvas);
 }
 
 /* Two columns become one, at every width.
@@ -2035,6 +2223,33 @@
 .shell:has(.chrome-title) .pane-main .topbar > .title,
 .shell:has(.chrome-title) .pane-main .topbar > .titlegroup {
   display: none;
+}
+
+/* …AND WHEN THAT LEAVES NOTHING, THE BAR GOES TOO.
+ *
+ * The rule above hides the heading, `.topbar > .icon-btn.menu` further up
+ * hides the drawer button the desktop has no drawer for, and `.topbar-actions`
+ * is often a screen with no controls. On Settings all three are true at once:
+ * the captured `desktop-settings` header is a hidden menu button, a hidden
+ * `h1`, and an empty actions box — 4rem of blank canvas between the window's
+ * bar and the first setting, on eight of thirteen states.
+ *
+ * The two `:not(:has())` clauses are the whole condition, and each names a
+ * thing that WOULD still be visible: a back chevron, or a control in the
+ * actions box. `> .topbar-actions > *` and not `:empty`, because an actions
+ * box that rendered nothing still contains Dioxus's placeholder comment and
+ * `:empty` would not match it — `> *` counts elements, which is the question.
+ *
+ * The mockups have no pane header on any screen; this does not go that far,
+ * because the chevron is real navigation and a window that keeps its list on
+ * screen still needs a way to close what is open. It removes the bar only
+ * where the bar is empty. */
+.shell:has(.chrome-title)
+  .pane-main
+  .topbar:not(:has(> .icon-btn.back)):not(:has(> .topbar-actions > *)) {
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
 }
 
 /* ── 7. the fourth line of a preview ────────────────────────────────────
