@@ -752,8 +752,11 @@ const DESKTOP_SIZES = [
 // instead, which sets no font at all, so nothing moves the root off the web
 // view's own default. Read off the running window with one `document::eval`
 // during the capture that produced these states: `16px root; viewport
-// 1180x820; devicePixelRatio 2`. If a desktop build ever opts into a system
-// text size, this list grows and that sentence stops being true.
+// 1180x820; devicePixelRatio 2` — that viewport being the window the app
+// opened at THEN, before src/main.rs:108 raised it to 1440x860, and what keeps
+// the read good across the move is exactly the sentence above: the root is the
+// web view's default and does not travel with the window. If a desktop build
+// ever opts into a system text size, this list grows and that stops being true.
 const DESKTOP_SCALES = [16];
 
 // The shell's own state, walked rather than captured: the nav's collapse, and
@@ -818,7 +821,7 @@ const AT_REST_CSS = '*, *::before, *::after { transition: none !important;'
 // ONE PER SHELL, and the desktop's is not optional either: assets/desktop.css
 // splits `--nav-fill` and `--shell-line` by theme on purpose, and
 // docs/design.md records that the split came out of a measured 1.53:1 slab and
-// a 1.13:1 selected pill. A colour walk that does not run at 1180x820 in both
+// a 1.13:1 selected pill. A colour walk that does not run at 1440x860 in both
 // themes would not have caught the thing the split exists to fix.
 const REFERENCE = { false: SIZES.filter((z) => z.reference), true: DESKTOP_SIZES.filter((z) => z.reference) };
 for (const [desktop, found] of Object.entries(REFERENCE)) {

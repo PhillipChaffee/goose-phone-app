@@ -1601,35 +1601,38 @@ convention `src/nav.rs` explicitly does not promise (`Screen::Chat` dumps as
 `chat`, singular, and says why). Drop `desktop-code-list` and the run stops
 with *no desktop state was captured with code open*.
 
-**Seven window sizes, and the claim is deliberately weaker.** `SIZES` is a
+**Nine window sizes, and the claim is deliberately weaker.** `SIZES` is a
 coverage claim about *devices*: those are the phones this app is gated on and
 there are no others. A window can be any size at all, so no equivalent claim is
 available. What `DESKTOP_SIZES` is instead: **every breakpoint straddled on
-both sides, plus the floor, plus the size the app opens at, plus the width
-where the list column stops growing** — 480×560 (`MIN_INNER`), 571 and 572
-(the icon rail's edge, and also where `.conn-badge` gives up its label),
-901 and 902 (the two/three-column edge), 1180×820 (`with_inner_size` in
-`src/main.rs`, and the reference size), and 1600×1000 (past 1533, where
-`clamp(330px, 30%, 460px)` saturates). Straddling is the point: a breakpoint is
-precisely the number where one width renders one layout and the next renders
-another, and only both sides can say the two agree.
+both sides, plus the floor, plus the size the app opens at, plus a width past
+every breakpoint** — 480×560 (`MIN_INNER`), 627 and 628 (the last pixel before
+the sidebar floats, and `NAV + CONTENT_MIN`), 703 and 704 (the last pixel with
+no inspector in any shell state, and the first at which a shut sidebar leaves
+room for one), 971 and 972 (the two/three-column edge), **1440×860**
+(`with_inner_size` at `src/main.rs:108`, and the reference size), and 1600×1000,
+where the content column is the only thing still growing. Straddling is the
+point: a breakpoint is precisely the number where one width renders one layout
+and the next renders another, and only both sides can say the two agree.
 
-The 901/902 pair used to be described here as the width "where the detail
-pane's `.conn-badge` goes", and that stopped being true in the commit that
-wrote it: `@media (min-width: 902px)` hiding only the detail's copy was
-replaced, in that same change, by an unconditional
-`.pane .topbar > .conn-badge { display: none }`. Nothing about the connection
-turns at 902 any more — the badge's one remaining breakpoint is 571 — so 902 is
-now a column-count straddle and nothing else. `docs/audit.js`'s own comment
-beside `DESKTOP_SIZES` still carries the old sentence and is wrong in the same
-way; that file is not this one's to edit.
+**The 571/572 and 901/902 pairs are gone, and their absence is the point.**
+They straddled the sums of a shell that still had a list column between the nav
+and the detail, and both went out with it — as did `.conn-badge`'s own turn at
+571 and the `clamp(330px, 30%, 460px)` that used to saturate at 1533. A pair
+that straddles nothing measures one layout twice and reports the result as
+agreement, which is the failure this list is shaped to avoid. The straddles
+above are the sums the three-column grid actually has; `docs/audit.js`'s comment
+beside `DESKTOP_SIZES` derives each one.
 
 **One text size, and it was read off a window rather than derived.** The
 four-scale walk is the Dynamic Type opt-in, and that opt-in is
 `font: -apple-system-body` in `assets/platform/ios.css` — a line no other build
 has. A macOS binary gets `assets/platform/macos.css`, which sets no font, so
 nothing moves the root off the web view's default. Measured during the capture
-with one `document::eval`: **16px root, viewport 1180×820, devicePixelRatio 2**.
+with one `document::eval`: **16px root, devicePixelRatio 2**. That read was
+taken in the 1180×820 the window opened at before the re-scale, which changes
+nothing it was taken for: the root is the web view's own default and does not
+move with the window.
 
 **The shell's own state walks in place of the text axis.** `data-nav` and
 `data-fullscreen` are plain attributes on `.shell` that only
@@ -1696,6 +1699,17 @@ calibration that quietly stops describing the gate. The rescaling is not a
 factor you can apply in your head: `TITLE-TALLER` went 196 → **588**, three
 times rather than one and a half, because the two extra cells reach frames the
 first one did not.
+
+**And the width grid has moved under both tables since.** Every "where" below
+names the seven widths `DESKTOP_SIZES` walked when the row was taken — including
+571, 572, 901, 902 and the 1180×820 that was then the reference cell — and the
+list is nine now, straddling 627/628, 703/704 and 971/972 with the reference at
+1440×860. The counts are left as measured rather than rescaled, because a number
+nobody re-ran is not a number: read each row as *this sabotage was caught, and
+here is roughly how loudly*, and re-derive it on today's grid before quoting it
+at anything. The one claim that does survive the move unchanged is the shape of
+each row — which check fired, and whether it fired everywhere or only at the
+floor.
 
 | put back | reported | where |
 |---|---|---|
