@@ -6,6 +6,17 @@ on:
   pull_request:
   workflow_dispatch:
 
+# One run per ref. A push that supersedes an in-flight run cancels it rather than
+# racing it, which matters because the four jobs below are independent and a
+# stale run's Coverage job can report after the run that replaced it.
+#
+# `main` is deliberately excluded from cancellation: every commit on main is a
+# merge someone will look up later, and a cancelled run leaves that commit with
+# no verdict at all. Only branch and PR runs are disposable.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
