@@ -49,8 +49,10 @@
  * it, exactly as `data-nav="closed"` already animates it away.
  *
  * The DEFAULT does not change and cannot: nothing in Rust observes a resize,
- * `nav_open` starts true, and `src/main.rs` opens the window at 1180x820. So a
- * narrow window is only ever reached by dragging one, and dragging it narrow
+ * `nav_open` starts true, and `src/main.rs:108` opens the window at 1440x860 —
+ * 812 clear of the 628 below, where this said 1180x820 until the re-scale and
+ * was the last copy of that number still asserting it in the present tense. So
+ * a narrow window is only ever reached by dragging one, and dragging it narrow
  * with the sidebar open leaves the sidebar open — over the content, where the
  * toggle and ⌘/ both still shut it. That is the whole behaviour, and it is
  * `position: absolute` plus a shadow rather than any new state.

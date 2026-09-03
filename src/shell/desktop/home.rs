@@ -522,8 +522,11 @@ impl RecentState {
 /// the clock could only be checked by a test that also read it.
 pub(crate) fn recent_for(ctx: &AppCtx, now: i64) -> Vec<Recent> {
     /// Three is the mockups' own count, and it is also what fits above the
-    /// fold of the 820pt window `src/main.rs` opens once the composer and a
-    /// section heading are above it.
+    /// fold of the 860pt window `src/main.rs:108` opens once the composer and
+    /// a section heading are above it. It said 820 until this line was
+    /// re-derived against the window the app actually opens; the count does
+    /// not move, because the mockups' three is the binding half and a taller
+    /// window can only fit more.
     const MOST: usize = 3;
 
     let running = (ctx.running_sessions)();
