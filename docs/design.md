@@ -1152,6 +1152,34 @@ nobody reads. It is there if you really do want to build the set up over
 several runs, and it names every key it carries over. Do not hand-edit the
 gallery; re-capture it.
 
+**`--only <prefix>` is the third mode, and it is not `--merge` under another
+name.** `scripts/capture-gallery.py --only desktop- /tmp/desktop.log` declares a
+scope: inside the prefix the run is authoritative exactly as a full run is — a
+state matching it that the app no longer emits is dropped and named — and
+outside it every key is carried over untouched, counted rather than listed. So
+the carried set is by construction the half of the store this capture said
+nothing about, which is why it does not have to shout about it the way `--merge`
+does. It exists because a desktop-only change otherwise needs a booted simulator
+and a phone driven through 49 screens to say anything at all. The script rejects
+a log holding states outside the prefix, so a mistyped one (`--only destkop-`)
+fails rather than silently carrying the whole store over and calling it a
+capture.
+
+**What says the store has gone stale.** Nothing in a capture can: `docs/audit.js`
+renders the states it is given and cannot know the app stopped emitting them,
+which has already produced a Clean audit over a sidebar that no longer existed.
+`every_class_the_desktop_shell_renders_is_in_the_captured_store`
+(`src/shell/desktop/mod.rs`) is the thing that can — it reads the class names
+out of the shell's own source and fails on one that no captured desktop state
+contains. The direction matters and only one of the two is decidable: the source
+is authoritative for what the app emits, so "the app renders `.tree-branch` and
+the store has never seen it" is answerable, while "the store holds a class the
+app has dropped" is exactly the question `src/selfscan.rs` records as
+unanswerable from a photograph. Its `UNCAPTURED` list is the gap as it stood
+when the check landed — 53 class names, nearly all of them the Code plane and
+the inspector with a live subject, because `desktop-code-list` was captured
+against a gateway that was not connected — and that list **may only shrink**.
+
 What the gallery still cannot tell you: safe-area insets are zero in a
 browser, so the floating chrome sits higher than it does on a device.
 Positions and material are what the simulator is for. Two more, both of them

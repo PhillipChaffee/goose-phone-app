@@ -765,13 +765,13 @@ const DESKTOP_SCALES = [16];
 // `data-nav` is a plain attribute on `.shell` that only assets/desktop.css
 // reads (src/shell/desktop.rs sets it; a test there checks the sheet acts on
 // it), so flipping it here is a real reflow of a real rule and not a fiction —
-// which is what separates it from `data-detail`, a fact about what the app has
-// open that has to be captured and must never be flipped. It is worth the
-// second pass because the rail tier and the collapsed tier are where the
-// window chrome gets crowded: the toggle, the traffic-light reservation and
-// the nav card are all in the same corner, and the one regression this shell
-// has already shipped — a toggle painted on top of the macOS close button —
-// lived in exactly that cell.
+// which is what separates it from `data-insp`, a fact about what the reader
+// last asked for that has to be captured and must never be flipped. It is
+// worth the second pass because the rail tier and the collapsed tier are where
+// the window chrome gets crowded: the toggle, the traffic-light reservation
+// and the nav card are all in the same corner, and the one regression this
+// shell has already shipped — a toggle painted on top of the macOS close
+// button — lived in exactly that cell.
 //
 // AND THE WINDOW'S OWN TWO STATES, in the same list rather than as a second
 // product.
@@ -792,10 +792,38 @@ const DESKTOP_SCALES = [16];
 // else. Stated as a product this would be a 100% cost on the desktop half for
 // one new arrangement; stated as a list it is 50%.
 const DESKTOP_SHELL = [
-  { nav: 'open', fullscreen: 'false' },
-  { nav: 'closed', fullscreen: 'false' },
-  { nav: 'open', fullscreen: 'true' },
+  { label: 'nav open', attrs: { 'data-nav': 'open', 'data-fullscreen': 'false' } },
+  { label: 'nav closed', attrs: { 'data-nav': 'closed', 'data-fullscreen': 'false' } },
+  { label: 'nav open, fullscreen', attrs: { 'data-nav': 'open', 'data-fullscreen': 'true' } },
 ];
+
+// EVERY attribute the shell writes onto `.shell`, which is more than the two
+// this file flips. `src/shell/desktop/mod.rs:783-790` is the whole list and the
+// only source for it: `data-nav`, `data-fullscreen`, `data-insp`.
+//
+// The first two arrive from DESKTOP_SHELL above and the third arrives in the
+// CAPTURE, and the difference is why the check below reads all three rather
+// than trusting the two it sets. `setAttribute` on an element that exists
+// cannot fail, so "did my write land" is close to a tautology; the question
+// that is not a tautology is whether the captured markup carries these
+// attributes ON THIS ELEMENT in the first place. It answers two failures at
+// once: an attribute the app renamed or dropped (the store re-captured, the
+// sheet's `[data-insp="closed"]` rules now matching nothing ever), and an
+// attribute the app MOVED to another element — which `data-fullscreen` has
+// already done once in this feature's life, from `.app` to `.shell` in ece4857.
+// A move is invisible to a walk that just writes its own copy onto `.shell`:
+// the sheet reads the element the app writes, the audit measures the element it
+// wrote itself, and the two stop being the same question without a word.
+// Measured, on this tree: move `data-fullscreen` off `.shell` and onto `.app`
+// in one captured state — the half-finished refactor, exactly — and
+// `node docs/audit.js dark` reported **Clean** before this list existed.
+//
+// `data-detail` is deliberately NOT here. It was a fourth until the sidebar
+// took the list column (`src/shell/desktop/mod.rs:1106-1111`): it existed only
+// to tell the sheet which of two columns held content, there is one column now,
+// and `:has(.chrome-title)` asks the markup directly instead. Naming it here
+// would fail every desktop cell on an attribute the app is right not to write.
+const SHELL_ATTRS = ['data-nav', 'data-fullscreen', 'data-insp'];
 
 // Flipping `data-nav` starts a 200ms transition on `.navpane`'s flex-basis,
 // width and padding, so a walk that read geometry straight afterwards would be
@@ -2081,18 +2109,24 @@ const compareFonts = async (states) => {
             // Nothing to restore between states, since every page here is
             // navigated fresh from the captured markup.
             if (nav) {
-              const applied = await page.evaluate((cell) => {
+              const problems = await page.evaluate(({ attrs, all }) => {
                 const shell = document.querySelector('.shell');
-                if (!shell) return false;
-                shell.setAttribute('data-nav', cell.nav);
+                if (!shell) return ['it has no `.shell` element at all'];
+                // READ FIRST, then write. The captured values are the app's own
+                // and they are the evidence; overwriting them and reading back
+                // would only ever confirm this walk's own assignment.
+                const before = Object.fromEntries(all.map((a) => [a, shell.getAttribute(a)]));
                 // Set here for the same reason `data-nav` is: the captured
-                // markup can only ever say "false", because a window being
-                // driven for a capture is not a window in fullscreen.
-                shell.setAttribute('data-fullscreen', cell.fullscreen);
-                return true;
-              }, nav);
+                // markup can only ever say "false" for `data-fullscreen`,
+                // because a window being driven for a capture is not a window
+                // in fullscreen.
+                for (const [name, value] of Object.entries(attrs)) shell.setAttribute(name, value);
+                return all
+                  .filter((a) => before[a] === null)
+                  .map((a) => `its \`.shell\` carries no \`${a}\``);
+              }, { attrs: nav.attrs, all: SHELL_ATTRS });
               // AND IT SAYS SO WHEN IT COULD NOT, which `if (!shell) return;`
-              // did not. Everything the shell axis buys is bought by these two
+              // did not. Everything the shell axis buys is bought by these
               // attributes: with no `.shell` to put them on, the three cells
               // are three walks of one identical frame and the summary line
               // goes on advertising "3 shell states". Measured: rename the
@@ -2101,11 +2135,23 @@ const compareFonts = async (states) => {
               // and the layout is untouched, the axis quietly stops existing
               // and `node docs/audit.js both` reports **Clean**. It is the
               // exact failure DESKTOP_SHELL was added to end, one level down.
-              if (!applied) {
-                console.error(`${state.label} is keyed as a desktop state but has no \`.shell\` for`
-                  + ' `data-nav` and `data-fullscreen` to go on, so the nav and fullscreen axis'
-                  + ' would walk the same frame three times — has the class been renamed in'
-                  + ' src/shell/desktop.rs without being renamed here?');
+              //
+              // WIDENED FROM `.shell` ALONE to every attribute in SHELL_ATTRS,
+              // because "the element is there" was only the first of the ways
+              // this axis can quietly stop existing. The other is per
+              // attribute, and it is silent in the same way: the sheet keys a
+              // block off a name the app no longer writes on that element,
+              // every cell renders the frame the capture already had, and the
+              // grid reports Clean over an axis that walked one frame three
+              // times. Reported and not measured — an axis that is not there
+              // is a fact about the instrument, and a broken instrument does
+              // not get to return a number.
+              if (problems.length) {
+                console.error(`${state.label} is keyed as a desktop state but ${problems.join('; ')}`
+                  + `, so the shell axis (${DESKTOP_SHELL.map((c) => c.label).join(' / ')}) would`
+                  + ' walk the same frame three times — have they been renamed or moved in'
+                  + ' src/shell/desktop/mod.rs without being renamed here, or is'
+                  + ' docs/gallery-states.json older than that change?');
                 process.exit(1);
               }
             }
@@ -2129,7 +2175,7 @@ const compareFonts = async (states) => {
             if (issues.length) {
               findings += issues.length;
               console.log(`\n${state.label}  [${theme}, ${size.width}x${size.height}, root ${scale}px`
-                + `${nav ? `, nav ${nav.nav}${nav.fullscreen === 'true' ? ', fullscreen' : ''}` : ''}]`);
+                + `${nav ? `, ${nav.label}` : ''}]`);
               issues.forEach((str) => console.log(`  ${str}`));
             }
           }
@@ -2163,7 +2209,7 @@ const compareFonts = async (states) => {
       + ` x ${scales.length} text size${scales.length > 1 ? 's' : ''} (${scales.join('/')}px)`
       + (desktop
         ? ` x ${DESKTOP_SHELL.length} shell states (`
-          + `${DESKTOP_SHELL.map((c) => `nav ${c.nav}${c.fullscreen === 'true' ? ' fullscreen' : ''}`).join('/')})`
+          + `${DESKTOP_SHELL.map((c) => c.label).join('/')})`
         : '');
   };
   const shells = [false, ...(count(true) ? [true] : [])];
