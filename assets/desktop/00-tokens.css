@@ -282,16 +282,29 @@
    * is rejected. So is the #7d8794 the issue that asked for this proposed:
    * 4.78:1 dark but 3.36:1 once light resolves the same declaration.
    *
-   * What is left above the floor IS `--text-secondary`'s own value, so
-   * `--ink-faint` ships as the dim rung under a second name. That is
-   * deliberate and it is not decoration: the eight strings the campaign hands
-   * this rung (`.chrome-sep`, `.conn-host`, `.nav-band-count`,
-   * `.nav-library-count`, `.nav-row-age`, `.insp-sec-meta`, `.insp-sec-title`,
-   * `.home-section-meta`) then say WHY they are quiet in the one place that
-   * can be changed, and a future decision to overrule the floor moves one
-   * declaration instead of eight. Never spend it on `.nav-row.on` or
-   * `.nav-row:hover` — those rows are another issue's, and the selected row is
-   * where the faint rung measured worst. */
+   * IN DARK the rung is #828b96, and it is a REAL third tier rather than a
+   * second name for the dim one. Measured on the three surfaces it is spent
+   * on: 5.05:1 on the panel, 4.68:1 on the canvas, 4.51:1 on the card — all
+   * clear the floor. It measures 3.90:1 on a selected row, and that is not a
+   * failure of the value: the rung is FORBIDDEN there. Never spend it on
+   * `.nav-row.on` or `.nav-row:hover`; those rows are another issue's, and the
+   * selected row is where every candidate for this rung measured worst. The
+   * eight strings the campaign hands it are `.chrome-sep`, `.conn-host`,
+   * `.nav-band-count`, `.nav-library-count`, `.nav-row-age`, `.insp-sec-meta`,
+   * `.insp-sec-title` and `.home-section-meta`.
+   *
+   * IN LIGHT it stays the dim rung, and that is not laziness. #828b96 inverts
+   * badly: 3.45:1 on white, 3.25 on #f7f8f9, 2.91 on #e9ecef — it fails
+   * everywhere a light window would put it. A light theme needs a DARKER
+   * faint rung, not the same one, and nothing in the mockups says what it
+   * should be because the mockups have no light mode. So light keeps three
+   * rungs where dark has four, deliberately, until someone designs it.
+   *
+   * The dark value is declared rather than aliased for a reason worth keeping:
+   * the first cut of this rung WAS `var(--text-secondary)`, and it made the
+   * whole tier invisible — `--text-secondary` had independently landed on
+   * #98a1ac in the same PR, so the dim and faint rungs were one colour and
+   * every rule spending the faint rung was a no-op no gate could see. */
   color: var(--text-primary);
   --ink-faint: var(--text-secondary);
 
@@ -718,7 +731,7 @@
     --accent-dim: #0e7a73;
     --text-primary: #e9ecef;
     --text-secondary: #98a1ac;
-    --ink-faint: #98a1ac;
+    --ink-faint: #828b96;
     --text-warning: #f0b429;
     --bg-warning: #f0b429;
     --text-success: #68d391;
@@ -755,7 +768,7 @@
   --accent-dim: #0e7a73;
   --text-primary: #e9ecef;
   --text-secondary: #98a1ac;
-  --ink-faint: #98a1ac;
+  --ink-faint: #828b96;
   --text-warning: #f0b429;
   --bg-warning: #f0b429;
   --text-success: #68d391;
