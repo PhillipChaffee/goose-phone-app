@@ -254,6 +254,41 @@
   --insp-add: #2f6b3d;
   --insp-del: #b3261e;
 
+
+  /* ── THE TRANSCRIPT'S SURFACES ────────────────────────────────────────
+   * The open conversation had NO desktop rule of any kind: it was the phone's
+   * design verbatim, so in dark the user's turn was a pure-white pill floated
+   * right — the brightest object in the window — and the tool card painted
+   * #33373e, a slab brighter than every rung of the ramp around it.
+   *
+   * `--tool-live-line` is #2a8a84 and not the mockups' darker teal: measured,
+   * theirs is 1.95:1 against its own fill and 2.22:1 against the canvas, so
+   * the one line distinguishing a running tool from a finished one was
+   * invisible on both sides of itself. Nothing in the audit measures a border,
+   * which is why this had to be worked out rather than caught. */
+  --tool-surface: var(--surface-card);
+  --slab-sunken: var(--code-bg);
+  --tool-live-fill: var(--surface-card);
+  --tool-live-line: var(--accent);
+
+
+  /* ── THE TWO TINTS THE BOARD WASHES ITS ROWS WITH ────────────────────
+   *
+   * A tree blocked on the reader, and a tree whose container is awake. The
+   * mockups draw both as translucent — `rgba(240,180,41,.05)` and
+   * `rgba(19,187,175,.04)` — and these are those two composited ONCE, at the
+   * canvas, because `docs/audit.js` resolves a computed background and a
+   * translucent fill gives two different answers depending on what it lands
+   * on: the canvas behind the board, and the card wash inside a group.
+   *
+   * One value per tier rather than the mockups' two-shades-of-each: a fifth of
+   * a percent apart is not a distinction a reader can use.
+   *
+   * Measured on `--tint-live`: `--text-primary` 14.92:1 dark / 9.16:1 light,
+   * `--text-secondary` 7.52 / 4.64, `--accent` 6.22 / 5.87. */
+  --tint-warn: #f8f6f0;
+  --tint-live: #f1f7f7;
+
   --text-3xs: 0.625rem;
 
   /* 10.5px, the mockups' single most-used size (246 declarations): mono ages,
@@ -437,6 +472,11 @@
     --insp-del: #ff9b98;
     --insp-add: #7ee0a4;
   --insp-del: #ff9b98;
+  --slab-sunken: #1a1d22;
+  --tool-live-fill: #202d31;
+  --tool-live-line: #2a8a84;
+  --tint-warn: #282826;
+  --tint-live: #1d292d;
   --surface-panel: #181a1e;
     --surface-canvas: #1e2126;
     --surface-card: #212429;
@@ -1769,10 +1809,12 @@
 }
 
 .home-tile {
-  padding: 12px;
-  border: 1px solid var(--shell-line);
-  border-radius: var(--radius-lg);
-  background: var(--surface-card);
+  display: flex;
+    flex-direction: column;
+    padding: 12px;
+    border: 1px solid var(--shell-line);
+    border-radius: var(--radius-lg);
+    background: var(--surface-card);
 }
 
 /* The one tile that means "do something", in the colour this app already
@@ -1781,6 +1823,7 @@
  * thing in the same colour. */
 .home-tile.urgent {
   border-color: var(--text-warning);
+    background: var(--tint-warn);
 }
 
 .home-tile-value {
@@ -3565,4 +3608,581 @@
   .shell-chrome > .insp-toggle {
     display: none;
   }
+}
+
+.pane-main .scroll.chat > .bubble.user {
+  align-self: stretch;
+  width: auto;
+  max-width: 100%;
+  margin-top: 0;
+  padding: 0;
+  background: none;
+  border-radius: 0;
+  color: var(--text-primary);
+}
+
+.pane-main .scroll.chat > .bubble.user > .bubble-text {
+  padding: 0.6875rem 0.875rem;
+  background: var(--surface-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+.pane-main .scroll.chat > .bubble.user .attach-file {
+  border-color: var(--border-secondary);
+}
+
+.pane-main .scroll.chat > .bubble.user .attach-file .attach-size {
+  color: var(--text-secondary);
+}
+
+.pane-main .scroll.chat > .who-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 1.25rem 0 0.4375rem;
+}
+
+.pane-main .scroll.chat > .who-line:first-child {
+  margin-top: 0;
+}
+
+.pane-main .scroll.chat > .who-line + * {
+  margin-top: 0;
+}
+
+.pane-main .scroll.chat > .timemark + .who-line {
+  margin-top: 0.75rem;
+}
+
+.pane-main .scroll.chat > .bubble.assistant {
+  margin-top: 0;
+  max-width: 100%;
+}
+
+.pane-main .scroll.chat > .bubble.assistant > .md {
+  line-height: 1.6;
+}
+
+.pane-main .scroll.chat > .thought {
+  margin-top: 0;
+  margin-bottom: 0.625rem;
+}
+
+.pane-main .scroll.chat > .thought > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4375rem;
+  min-height: 2rem;
+  padding: 0 0.625rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-style: normal;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.pane-main .scroll.chat > .thought > summary::before {
+  width: auto;
+  font-size: var(--text-sm);
+}
+
+.pane-main .scroll.chat > .thought > .md {
+  margin-top: 0.5rem;
+  padding-left: 0.625rem;
+  border-left: 1px solid var(--border-primary);
+}
+
+.pane-main .scroll.chat .tool {
+  margin-top: 0;
+  border-radius: var(--radius-lg);
+}
+
+.pane-main .scroll.chat .tool + .tool {
+  margin-top: 0.375rem;
+}
+
+.pane-main .scroll.chat .tool-head {
+  gap: 0.5625rem;
+  padding: 0.4375rem 0.6875rem;
+}
+
+.pane-main .scroll.chat .tool-head > .tool-icon {
+  display: none;
+}
+
+.pane-main .scroll.chat .tool[data-kind] > .tool-head::before {
+  content: attr(data-kind);
+  flex: 0 0 auto;
+  min-width: 2.375rem;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.pane-main .scroll.chat .tool-title {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.pane-main .scroll.chat .tool-status {
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+}
+
+.pane-main .scroll.chat .tool.status-in_progress,
+.pane-main .scroll.chat .tool.status-running {
+  background: var(--tool-live-fill);
+  border-color: var(--tool-live-line);
+}
+
+.pane-main .scroll.chat .tool > .tool-output > summary {
+  min-height: 2rem;
+  padding: 0 0.75rem;
+}
+
+.pane-main .scroll.chat .tool > .tool-output pre {
+  background: var(--slab-sunken);
+}
+
+.pane-main .scroll.chat > .tool-run {
+  margin-top: 0;
+}
+
+.pane-main .scroll.chat > .tool-run > summary {
+  min-height: 2rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.pane-main .scroll.chat > .tool-run[open] > .tool:first-of-type {
+  margin-top: 0.375rem;
+}
+
+.pane-main .scroll.chat > .timemark {
+  margin-top: 1.5rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+}
+
+.pane-main .scroll.chat > .timemark::before,
+.pane-main .scroll.chat > .timemark::after {
+  background: var(--shell-line);
+}
+
+.pane-main .scroll.chat > .typing {
+  margin-top: 0.75rem;
+  padding-left: 0;
+}
+
+.pane-main .scroll.chat > .empty {
+  min-height: 0;
+  padding: 3rem 0;
+  text-align: left;
+}
+
+/* THE SPEAKER, on a real element. `src/views/chat.rs` emits an actual span at
+ * every change of speaker (and only on the desktop — see `attributed()`), so
+ * these two colours are strings `docs/audit.js` can measure. The first draft
+ * of this painted them with `content: attr(data-who)`, which the gate is
+ * structurally blind to: its walk keys on child text nodes. */
+.pane-main .scroll.chat > .who-line .who-name {
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  line-height: var(--lh-xs);
+  color: var(--text-secondary);
+}
+
+/* The agent's name is the accent's one use in the transcript, which is what
+ * makes the two sides scannable now that neither is aligned to an edge.
+ * 6.73:1 dark and 6.36:1 light on the canvas. */
+.pane-main .scroll.chat > .who-line .who-name.goose {
+  color: var(--accent);
+}
+
+.home.home-code {
+  --measure: 64rem;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    overflow: hidden;
+    padding-top: 16px;
+    padding-bottom: 16px;
+}
+
+.home-code .home-inner {
+  flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    max-width: var(--measure);
+    margin: 0 auto;
+    padding: 0;
+}
+
+.home-code .home-board {
+  flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: 12px;
+}
+
+.home-code .home-dock {
+  flex: 0 0 auto;
+    padding-top: 12px;
+}
+
+.home-code .home-standing {
+  display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0 0 16px;
+    padding: 10px 12px;
+    border: 1px solid var(--text-warning);
+    border-radius: var(--radius-lg);
+    background: var(--tint-warn);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    line-height: var(--lh-sm);
+}
+
+.home-code .home-standing .btn {
+  flex: 0 0 auto;
+    margin-left: auto;
+    min-height: 2rem;
+}
+
+.home-code .home-tiles {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    margin-top: 0;
+}
+
+.home-tile-sub {
+  margin-top: auto;
+    padding-top: 6px;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.home-tile.live {
+  border-color: var(--accent);
+    background: var(--tint-live);
+}
+
+.home-tile.live .home-tile-value {
+  color: var(--accent);
+}
+
+.repo-head {
+  display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 20px 0 8px;
+    padding: 0 4px;
+    color: var(--text-secondary);
+}
+
+.repo-head > .icon {
+  flex: 0 0 auto;
+    align-self: center;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.repo-head-name {
+  flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    line-height: var(--lh-sm);
+}
+
+.repo-head-base {
+  flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+}
+
+.repo-head-facts {
+  flex: 0 0 auto;
+    margin-left: auto;
+    display: flex;
+    align-items: baseline;
+    gap: 13px;
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.repo-head-facts .live {
+  color: var(--accent);
+}
+
+.repo-head-facts .warn {
+  color: var(--text-warning);
+}
+
+.tree {
+  display: grid;
+    grid-template-columns: 0.75rem minmax(0, 1.35fr) minmax(0, 1.05fr) 8.5rem 4.625rem;
+    gap: 12px;
+    align-items: center;
+    width: 100%;
+    margin-bottom: 8px;
+    padding: 10px 13px;
+    border: 1px solid var(--shell-line);
+    border-radius: var(--radius-lg);
+    background: var(--surface-card);
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.tree:hover {
+  border-color: var(--text-tertiary);
+    background: var(--surface-raise);
+}
+
+.tree.waiting {
+  border-color: var(--text-warning);
+    background: var(--tint-warn);
+}
+
+.tree.awake {
+  border-color: var(--accent);
+    background: var(--tint-live);
+}
+
+.tree-mark {
+  width: 8px;
+    height: 8px;
+    border-radius: var(--radius-full);
+    background: var(--text-tertiary);
+    justify-self: center;
+}
+
+.tree.awake .tree-mark {
+  background: transparent;
+    box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.tree.waiting .tree-mark {
+  background: var(--text-warning);
+}
+
+.tree-text {
+  min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.tree-title {
+  overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    line-height: var(--lh-sm);
+    font-weight: 550;
+}
+
+.tree-say {
+  overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+}
+
+.tree-say.q {
+  color: var(--text-warning);
+    font-family: var(--font-serif);
+    font-size: var(--text-xs);
+}
+
+.tree-branch {
+  min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.tree-branch-name {
+  overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+}
+
+.tree-branch-base {
+  overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+}
+
+.tree-state {
+  min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+}
+
+.tree.awake .tree-state {
+  color: var(--accent);
+}
+
+.tree.waiting .tree-state {
+  color: var(--text-warning);
+}
+
+.tree-age {
+  justify-self: end;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+    white-space: nowrap;
+}
+
+.tree.awake .tree-age {
+  color: var(--accent);
+}
+
+.home-lede {
+  margin: 0 0 24px;
+    max-width: 38rem;
+    color: var(--text-secondary);
+    font-family: var(--font-serif);
+    font-size: var(--text-md);
+    line-height: var(--lh-md);
+}
+
+.home-lede b {
+  color: var(--text-primary);
+    font-weight: 500;
+}
+
+.home-sched {
+  display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    min-height: 2rem;
+    margin-top: 32px;
+    padding: 8px 12px;
+    border: 1px dashed var(--shell-line);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: var(--text-xs);
+    line-height: var(--lh-sm);
+    text-align: left;
+    cursor: pointer;
+    overflow: hidden;
+}
+
+.home-sched:hover {
+  border-color: var(--accent);
+    background: var(--surface-card);
+}
+
+.home-sched > .icon {
+  flex: 0 0 auto;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.home-sched-name {
+  flex: 0 0 auto;
+    color: var(--text-primary);
+    font-weight: 550;
+}
+
+.home-sched-what {
+  min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+}
+
+.home-sched-more {
+  flex: 0 0 auto;
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+    white-space: nowrap;
+}
+
+.home-footnote {
+  display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 14px 0 0;
+    padding: 16px 0 0;
+    border-top: 1px solid var(--shell-line);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    line-height: var(--lh-sm);
+}
+
+.home-footnote > .icon {
+  flex: 0 0 auto;
+    align-self: flex-start;
+    margin-top: 2px;
+    font-size: 12px;
+}
+
+.home-footnote .d {
+  color: var(--text-tertiary);
 }

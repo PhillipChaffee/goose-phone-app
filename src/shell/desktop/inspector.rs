@@ -455,13 +455,13 @@ pub(crate) fn Inspector(plane: Plane, on_subject: bool) -> Element {
                 }
 
                 if !facts.is_empty() {
-                    Facts { title: "goose server", facts: facts.clone() }
+                    Facts { title: "goose server", facts }
                 }
                 if !tree.is_empty() {
-                    Facts { title: "Working tree", facts: tree.clone() }
+                    Facts { title: "Working tree", facts: tree }
                 }
                 if !session.is_empty() {
-                    Facts { title: "This conversation", facts: session.clone() }
+                    Facts { title: "This conversation", facts: session }
                 }
 
                 if let Some(pull) = pull {
