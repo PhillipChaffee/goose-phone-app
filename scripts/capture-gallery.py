@@ -91,18 +91,42 @@ DESKTOP = "desktop-"
 # here would be a second place to remember.
 FEATURES = sorted(p.name for p in (ROOT / "assets" / "features").glob("*.css"))
 
-# And the two sheets that are deliberately NOT in that directory, because the
-# audit links the whole of it into phone frames (`src/css.rs` explains both).
+# And the sheets that are deliberately NOT in that directory, because the audit
+# links the whole of it into phone frames (`src/css.rs` explains all of them).
 # They belong to the desktop frames alone.
 #
-# ORDER IS NOT FREE: `src/app.rs` emits STYLES, then SHELL (desktop.css), then
-# PLATFORM (macos.css) — and it carries the write-up of what getting that wrong
-# did, since the two sheets set `--chrome-h`/`--traffic-w` on the same
+# ORDER IS NOT FREE: `src/app.rs` emits STYLES, then SHELL (`assets/desktop/`),
+# then PLATFORM (macos.css) — and it carries the write-up of what getting that
+# wrong did, since the two sides set `--chrome-h`/`--traffic-w` on the same
 # `.app > .shell` selector at equal specificity and the later one wins. Linked
 # the other way round the reservation is always zero and the gallery would show
 # a nav toggle sitting on the macOS close button, which is a window nobody
 # ships.
-SHELL_SHEETS = ["../assets/desktop.css", "../assets/platform/macos.css"]
+#
+# AND THE SHELL HALF IS ITSELF ORDERED. `src/css.rs` `concat!`s
+# `assets/desktop/`'s fifteen region files in filename order, so the sort below
+# IS the cascade: the prefixes are zero-padded so that Python's `sorted`,
+# `readdirSync().sort()` in `docs/audit.js` and the const list in `src/css.rs`
+# all agree, and a sheet that lands in a different slot here is a different
+# cascade from the one that ships. macos.css is appended after the sort, not
+# swept up by it — PLATFORM comes last by `src/app.rs`'s order, and its name
+# would sort it into the middle.
+SHELL_REGIONS = sorted(p.name for p in (ROOT / "assets" / "desktop").glob("*.css"))
+if not SHELL_REGIONS:
+    # A glob that comes back empty is the quiet version of a missing sheet: the
+    # desktop frames would still render, still fill the page and still look like
+    # a gallery, with every one of them unstyled. Nothing downstream would say
+    # so — `docs/audit.js` measures the app's own sheets and never opens this
+    # file.
+    print(
+        "assets/desktop/ has no .css in it — every desktop frame would render "
+        "with the whole shell sheet missing",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+SHELL_SHEETS = [f"../assets/desktop/{f}" for f in SHELL_REGIONS] + [
+    "../assets/platform/macos.css"
+]
 
 
 def head(key: str) -> str:
@@ -176,8 +200,8 @@ PAGE = """<!doctype html>
   feature sheet; a <strong>desktop</strong> frame is the 1440×860 window
   <code>src/main.rs</code> opens (its <code>with_inner_size</code>, and
   the size <code>docs/audit.js</code> takes as its reference cell), and links
-  <code>../assets/desktop.css</code> and
-  <code>../assets/platform/macos.css</code> after them, in the order
+  every region sheet in <code>../assets/desktop/</code>, in filename order,
+  then <code>../assets/platform/macos.css</code> — the order
   <code>src/app.rs</code> emits them. So the styling is exactly what ships, on
   either shell. Frames render in whichever colour scheme your OS is set to;
   check both.

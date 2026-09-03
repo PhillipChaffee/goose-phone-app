@@ -137,7 +137,7 @@ fn launch() {
 /// and wry's `WKWebView` covers that view, so it never draws and the hook
 /// never runs. Measured on a real window at two different insets — (20, 18)
 /// and (31, 25) — the lights did not move: both put the close button at
-/// logical (9, 9). So the strip in `assets/desktop.css` is sized to where
+/// logical (9, 9). So the strip in `assets/desktop/` is sized to where
 /// macOS actually puts them, and `--traffic-w` records where they end.
 ///
 /// `src/shell/desktop/mod.rs` renders the region that drags the window: with the

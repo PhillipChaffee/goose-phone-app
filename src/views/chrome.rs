@@ -227,7 +227,7 @@ impl RowAction {
 /// An empty `actions` renders no container at all. On the phone that means the
 /// row does not move, because a row that swipes open onto nothing is worse than
 /// one that does not swipe; on the desktop it means no icons and, through
-/// `assets/desktop.css`'s `:has()` rules, no gutter reserved for them. Two of
+/// `assets/desktop/`'s `:has()` rules, no gutter reserved for them. Two of
 /// the five features arriving after this one have nothing destructive to put on
 /// a row.
 #[component]
@@ -307,7 +307,7 @@ pub(crate) fn ListRow(
             }
             if !actions.is_empty() {
                 // The container, its class and its place in the row are the
-                // same on both shells; `assets/desktop.css` re-flexes
+                // same on both shells; `assets/desktop/` re-flexes
                 // `.session-swipe` from `flex: 0 0 100%` to `flex: 1 1 auto`,
                 // which brings this element from past the row's right edge to
                 // inside it without a single change to the markup. That is why

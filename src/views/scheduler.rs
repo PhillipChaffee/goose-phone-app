@@ -270,7 +270,7 @@ fn row(ctx: &AppCtx, job: &ScheduledJob, started: &HashSet<String>, now: i64) ->
 /// Read by two things that are never on screen together: the header below,
 /// and — on the desktop — the window's own bar, which takes the heading out of
 /// the pane and paints it in `.shell-chrome` instead
-/// (`src/shell/desktop/mod.rs`, `assets/desktop.css`).
+/// (`src/shell/desktop/mod.rs`, `assets/desktop/`).
 ///
 /// The `None` arm is the view's own dead-end fallback and it is the one on
 /// this table that is genuinely reachable: the poll replaces the list under

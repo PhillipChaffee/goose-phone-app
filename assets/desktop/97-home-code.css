@@ -1,0 +1,281 @@
+.home.home-code {
+  --measure: 64rem;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    overflow: hidden;
+    padding-top: 16px;
+    padding-bottom: 16px;
+}
+
+.home-code .home-inner {
+  flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    max-width: var(--measure);
+    margin: 0 auto;
+    padding: 0;
+}
+
+.home-code .home-board {
+  flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: 12px;
+}
+
+.home-code .home-dock {
+  flex: 0 0 auto;
+    padding-top: 12px;
+}
+
+.home-code .home-standing {
+  display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0 0 16px;
+    padding: 10px 12px;
+    border: 1px solid var(--text-warning);
+    border-radius: var(--radius-lg);
+    background: var(--tint-warn);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    line-height: var(--lh-sm);
+}
+
+.home-code .home-standing .btn {
+  flex: 0 0 auto;
+    margin-left: auto;
+    min-height: 2rem;
+}
+
+.home-code .home-tiles {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    margin-top: 0;
+}
+
+.home-tile-sub {
+  margin-top: auto;
+    padding-top: 6px;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.home-tile.live {
+  border-color: var(--accent);
+    background: var(--tint-live);
+}
+
+.home-tile.live .home-tile-value {
+  color: var(--accent);
+}
+
+.repo-head {
+  display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 20px 0 8px;
+    padding: 0 4px;
+    color: var(--text-secondary);
+}
+
+.repo-head > .icon {
+  flex: 0 0 auto;
+    align-self: center;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.repo-head-name {
+  flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    line-height: var(--lh-sm);
+}
+
+.repo-head-base {
+  flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+}
+
+.repo-head-facts {
+  flex: 0 0 auto;
+    margin-left: auto;
+    display: flex;
+    align-items: baseline;
+    gap: 13px;
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.repo-head-facts .live {
+  color: var(--accent);
+}
+
+.repo-head-facts .warn {
+  color: var(--text-warning);
+}
+
+.tree {
+  display: grid;
+    grid-template-columns: 0.75rem minmax(0, 1.35fr) minmax(0, 1.05fr) 8.5rem 4.625rem;
+    gap: 12px;
+    align-items: center;
+    width: 100%;
+    margin-bottom: 8px;
+    padding: 10px 13px;
+    border: 1px solid var(--shell-line);
+    border-radius: var(--radius-lg);
+    background: var(--surface-card);
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.tree:hover {
+  border-color: var(--text-tertiary);
+    background: var(--surface-raise);
+}
+
+.tree.waiting {
+  border-color: var(--text-warning);
+    background: var(--tint-warn);
+}
+
+.tree.awake {
+  border-color: var(--accent);
+    background: var(--tint-live);
+}
+
+.tree-mark {
+  width: 8px;
+    height: 8px;
+    border-radius: var(--radius-full);
+    background: var(--text-tertiary);
+    justify-self: center;
+}
+
+.tree.awake .tree-mark {
+  background: transparent;
+    box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.tree.waiting .tree-mark {
+  background: var(--text-warning);
+}
+
+.tree-text {
+  min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.tree-title {
+  overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    line-height: var(--lh-sm);
+    font-weight: 550;
+}
+
+.tree-say {
+  overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+}
+
+.tree-say.q {
+  color: var(--text-warning);
+    font-family: var(--font-serif);
+    font-size: var(--text-xs);
+}
+
+.tree-branch {
+  min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.tree-branch-name {
+  overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+}
+
+.tree-branch-base {
+  overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+}
+
+.tree-state {
+  min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+}
+
+.tree.awake .tree-state {
+  color: var(--accent);
+}
+
+.tree.waiting .tree-state {
+  color: var(--text-warning);
+}
+
+.tree-age {
+  justify-self: end;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+    white-space: nowrap;
+}
+
+.tree.awake .tree-age {
+  color: var(--accent);
+}
+

@@ -1,6 +1,6 @@
 //! The desktop shell: a pinned nav, a list, and what the list opens.
 //!
-//! Three columns — nav, list, detail — and `assets/desktop.css` reflows them
+//! Three columns — nav, list, detail — and `assets/desktop/` reflows them
 //! to two and then to one as the window narrows. NONE of that is decided here.
 //! The breakpoints are `@media` rules in a stylesheet a phone binary does not
 //! contain, so pane count costs zero Rust and nothing in this app listens to a
@@ -10,7 +10,7 @@
 //! What it does not have, on purpose: no swipe tray (the rows carry their
 //! actions inline, `src/views/chrome.rs`), no pull-to-refresh (a mount
 //! re-fetch and ⌘R below), no hamburger (the phone's is hidden by
-//! `assets/desktop.css`; the nav's own toggle is below), and no drag-resize on
+//! `assets/desktop/`; the nav's own toggle is below), and no drag-resize on
 //! the nav.
 //!
 //! The nav DOES collapse, and that is the one thing about it the window gets a
@@ -434,7 +434,7 @@ const fn home_leaf(plane: Plane) -> &'static str {
 /// nothing else. Every screen has a name; the band says it now.
 ///
 /// The consequence is that `.chrome-title` is always present, so
-/// `assets/desktop.css`'s `:has(.chrome-title)` suppression of the pane's own
+/// `assets/desktop/`'s `:has(.chrome-title)` suppression of the pane's own
 /// heading became unconditional — which is what the mockups draw, where no
 /// screen has a pane header at all.
 pub(crate) fn crumb_parts(
@@ -705,7 +705,7 @@ pub(crate) fn AppShell() -> Element {
     // the window's bar needs: Dioxus has no portal, so no header rendered
     // inside a pane can be MOVED into `.shell-chrome` — but a `String` travels
     // anywhere. So the title is carried as data and painted in the bar below,
-    // and `assets/desktop.css` takes the pane's own copy of it back out.
+    // and `assets/desktop/` takes the pane's own copy of it back out.
     let detail = (dest.detail)(&ctx);
     let crumb = detail.as_ref().map(|detail| detail.crumb.clone());
 
@@ -914,7 +914,7 @@ pub(crate) fn AppShell() -> Element {
                 //
                 // `TopBar { conn: true }` is a fact about a SCREEN, so at
                 // three columns two screens each painted one and
-                // `assets/desktop.css` hid the detail's above 902px. The
+                // `assets/desktop/` hid the detail's above 902px. The
                 // consequence was a badge that jumped columns when the window
                 // was dragged across that width — the state of the connection
                 // moving because the layout reflowed. In the bar it belongs to
@@ -1142,7 +1142,7 @@ pub(crate) fn AppShell() -> Element {
 
             // THE THIRD COLUMN. Rendered unconditionally and hidden by the
             // sheet, not by Rust: `data-insp` on `.shell` above is the one
-            // fact, and `assets/desktop.css` decides both whether the column
+            // fact, and `assets/desktop/` decides both whether the column
             // has a width and whether the window is wide enough for it. That
             // is this shell's standing rule — width decides only how many
             // columns, entirely inside the stylesheet, so nothing in Rust ever
@@ -1196,7 +1196,7 @@ mod tests {
     use crate::state::{AppCtx, ConnState};
 
     // The layout's numbers. None of them appears in the binary — the
-    // columns are drawn by `assets/desktop.css` and nothing else, which is
+    // columns are drawn by `assets/desktop/` and nothing else, which is
     // exactly what keeps every resize listener out of this app. They live
     // here because being checkable is the only job they have.
     /// The sidebar's width, and the mockups' number — read out of their CSS
@@ -1338,7 +1338,7 @@ mod tests {
     #[test]
     fn the_desktop_sheet_spends_no_token_that_does_not_exist() {
         let main = include_str!("../../../assets/main.css");
-        let desktop = include_str!("../../../assets/desktop.css");
+        let desktop = crate::css::SHELL;
         let macos = include_str!("../../../assets/platform/macos.css");
 
         let defined: std::collections::HashSet<&str> = [main, desktop, macos]
@@ -1381,7 +1381,7 @@ mod tests {
         }
         assert!(
             missing.is_empty(),
-            "assets/desktop.css spends {} token(s) nothing defines: {}. \
+            "assets/desktop/ spends {} token(s) nothing defines: {}. \
              `var()` on an undefined name resolves to nothing and the whole \
              declaration is dropped, so those rules are silently not applying",
             missing.len(),
@@ -1408,18 +1408,24 @@ mod tests {
     /// Comments are stripped first because they contain braces — this file's
     /// own prose quotes rules — and a counter that read them would answer
     /// about the wrong thing.
+    ///
+    /// PART BY PART, not over the concatenation. `crate::css::SHELL` is fifteen
+    /// files joined, so an unbalanced one reported against the whole string
+    /// names 165k characters and a line number that belongs to no file on disk.
+    /// Walking [`crate::css::SHELL_PARTS`] costs nothing and names the file —
+    /// and it is strictly stronger, because a `}` too many in one region and a
+    /// `{` too many in the next cancel out in the concatenation and are two
+    /// failures here.
     #[test]
     fn the_stylesheet_closes_every_block_it_opens() {
-        for (name, raw) in [
-            (
-                "assets/desktop.css",
-                include_str!("../../../assets/desktop.css"),
-            ),
-            (
+        let sheets = crate::css::SHELL_PARTS
+            .iter()
+            .map(|&(name, raw)| (name, raw))
+            .chain(std::iter::once((
                 "assets/platform/macos.css",
                 include_str!("../../../assets/platform/macos.css"),
-            ),
-        ] {
+            )));
+        for (name, raw) in sheets {
             let mut code = String::with_capacity(raw.len());
             let mut rest = raw;
             while let Some((before, after)) = rest.split_once("/*") {
@@ -1456,7 +1462,7 @@ mod tests {
     }
 
     /// Where the sidebar stops taking a column is decided entirely inside
-    /// `assets/desktop.css`, which is exactly what keeps every resize listener
+    /// `assets/desktop/`, which is exactly what keeps every resize listener
     /// out of this app — and it is also what puts the number out of the
     /// compiler's reach. This is the only thing that notices when the
     /// arithmetic above and the sheet stop agreeing.
@@ -1472,7 +1478,7 @@ mod tests {
         // whole sheet would read that explanation as the thing it forbids.
         // `crate::selfscan::code_of` drops comment lines from Rust for exactly
         // this reason; CSS has one comment form and it is easier.
-        let raw = include_str!("../../../assets/desktop.css");
+        let raw = crate::css::SHELL;
         let mut sheet = String::with_capacity(raw.len());
         let mut rest = raw;
         while let Some((before, after)) = rest.split_once("/*") {
@@ -1487,13 +1493,13 @@ mod tests {
         let rule = format!("@media (max-width: {}px)", OVERLAY - 1);
         assert!(
             sheet.contains(&rule),
-            "assets/desktop.css has no `{rule}`, so the sidebar does not start \
+            "assets/desktop/ has no `{rule}`, so the sidebar does not start \
              floating where src/shell/desktop/mod.rs says it does"
         );
         for stale in ["max-width: 901px", "max-width: 571px"] {
             assert!(
                 !sheet.contains(stale),
-                "assets/desktop.css still has a `{stale}` query — that is a \
+                "assets/desktop/ still has a `{stale}` query — that is a \
                  tier from the three-column layout, and the columns it reflowed \
                  no longer exist"
             );
@@ -1538,7 +1544,7 @@ mod tests {
         crate::selfscan::code_of("src/shell/desktop/mod.rs", include_str!("mod.rs"))
     }
 
-    /// The attributes on the `.shell` div — the element `assets/desktop.css`
+    /// The attributes on the `.shell` div — the element `assets/desktop/`
     /// and `assets/platform/macos.css` key every state rule they have off.
     fn shell_attributes() -> String {
         let code = shell_code();
@@ -1547,7 +1553,7 @@ mod tests {
 
     /// What the window's own bar renders. The other half of the same
     /// question: `.shell-chrome` is where the connection badge has to be,
-    /// because `assets/desktop.css` hides every pane's copy of it
+    /// because `assets/desktop/` hides every pane's copy of it
     /// unconditionally.
     fn chrome_band() -> String {
         let code = shell_code();
@@ -1627,7 +1633,7 @@ mod tests {
         }
     }
 
-    /// The sidebar writes the three class names `assets/desktop.css` styles,
+    /// The sidebar writes the three class names `assets/desktop/` styles,
     /// and the sheet still styles all three.
     ///
     /// Two halves of one decision in two languages, which is the class of rule
@@ -1645,7 +1651,7 @@ mod tests {
     #[test]
     fn the_sidebar_writes_the_classes_the_sheet_styles() {
         let card = nav_card();
-        let sheet = include_str!("../../../assets/desktop.css");
+        let sheet = crate::css::SHELL;
         for class in [
             "plane-switch",
             "plane-seg",
@@ -1655,12 +1661,12 @@ mod tests {
         ] {
             assert!(
                 card.contains(&format!("\"{class}")),
-                "the sidebar no longer renders `{class}`, which assets/desktop.css \
+                "the sidebar no longer renders `{class}`, which assets/desktop/ \
                  still has rules for"
             );
             assert!(
                 sheet.contains(&format!(".{class}")),
-                "assets/desktop.css has no rule for `.{class}`, which the sidebar \
+                "assets/desktop/ has no rule for `.{class}`, which the sidebar \
                  renders — so the control ships unstyled"
             );
         }
@@ -1767,8 +1773,12 @@ mod tests {
     #[test]
     fn every_class_the_shell_renders_is_styled_somewhere() {
         let shell = shell_code();
-        let sheets = concat!(
-            include_str!("../../../assets/desktop.css"),
+        // `format!` and not `concat!`: `concat!` takes literals only, and the
+        // desktop sheet is now fifteen files joined by a `concat!` of its own
+        // in `src/css.rs`, which is a const rather than a literal.
+        let sheets = format!(
+            "{}{}",
+            crate::css::SHELL,
             include_str!("../../../assets/platform/macos.css"),
         );
         // A selector, not a substring. `.contains(".window-drag")` is
@@ -2112,7 +2122,7 @@ mod tests {
     }
 
     /// The window's bar takes the detail's title and its connection badge, and
-    /// `assets/desktop.css` is what stops the pane below painting either of
+    /// `assets/desktop/` is what stops the pane below painting either of
     /// them again. That half is invisible to the compiler in BOTH directions:
     /// the sheet names classes Rust never writes (`.conn-badge` comes from
     /// `views::ConnBadge`, `.title` and `.titlegroup` from six hand-rolled
@@ -2139,7 +2149,7 @@ mod tests {
     /// data-detail" — and putting them back is green again.
     #[test]
     fn the_pane_gives_up_what_the_window_bar_took() {
-        let sheet = include_str!("../../../assets/desktop.css");
+        let sheet = crate::css::SHELL;
 
         assert!(
             chrome_band().contains("PlaneConn { plane }"),
@@ -2153,7 +2163,7 @@ mod tests {
         ] {
             assert!(
                 sheet.contains(rule),
-                "assets/desktop.css never mentions `{rule}`, so the pane paints \
+                "assets/desktop/ never mentions `{rule}`, so the pane paints \
                  a second copy of what `.shell-chrome` is already showing"
             );
         }
@@ -2401,7 +2411,7 @@ mod tests {
     /// "deliberately subtle" is what the audit's contrast sweep is for.
     #[test]
     fn the_shell_paints_more_than_one_surface() {
-        let sheet = include_str!("../../../assets/desktop.css");
+        let sheet = crate::css::SHELL;
         let dark = block(sheet, ":root[data-theme=\"dark\"] .app > .shell {", "\n}");
 
         let rungs = [
@@ -2451,7 +2461,7 @@ mod tests {
     /// back at `--bg-primary`, and this fails naming the element.
     #[test]
     fn the_chrome_and_the_canvas_are_told_apart_by_name() {
-        let sheet = include_str!("../../../assets/desktop.css");
+        let sheet = crate::css::SHELL;
         for (rule, rung) in [
             (".shell-chrome {", "--surface-panel"),
             (".pane {", "--surface-canvas"),
@@ -2521,11 +2531,11 @@ mod tests {
     /// (measured: 234 passed, 1 failed); restoring the feature is green again.
     #[test]
     fn the_window_chrome_is_reserved_only_where_the_titlebar_is_hidden() {
-        let desktop = include_str!("../../../assets/desktop.css");
+        let desktop = crate::css::SHELL;
         let macos = include_str!("../../../assets/platform/macos.css");
         assert!(
             desktop.contains("--traffic-w: 0px"),
-            "assets/desktop.css must default the traffic-light slot to zero — \
+            "assets/desktop/ must default the traffic-light slot to zero — \
              only the platform sheet may claim room for lights"
         );
         assert!(
@@ -2585,11 +2595,11 @@ mod tests {
     /// data-nav" (measured: 234 passed, 1 failed); restored, it is green.
     #[test]
     fn the_stylesheet_acts_on_the_attribute_the_shell_sets() {
-        let sheet = include_str!("../../../assets/desktop.css");
+        let sheet = crate::css::SHELL;
         for rule in [r#"[data-nav="closed"]"#, ".nav-toggle", ".navcard"] {
             assert!(
                 sheet.contains(rule),
-                "assets/desktop.css never mentions `{rule}`, so the nav's \
+                "assets/desktop/ never mentions `{rule}`, so the nav's \
                  collapse control changes an attribute nothing styles"
             );
         }

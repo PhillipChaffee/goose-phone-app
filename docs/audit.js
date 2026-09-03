@@ -81,28 +81,53 @@ const STYLESHEETS = [
 // `<textarea>`'s default 182x21 box and buttons at radius 0, which read as a
 // design regression rather than as a missing file. One stat each, at startup,
 // so neither outcome has to be diagnosed from the findings.
-// The two sheets a DESKTOP state is measured against, on top of the list
-// above, in the order src/app.rs emits them: STYLES, then SHELL, then
-// PLATFORM.
+// The sheets a DESKTOP state is measured against, on top of the list above, in
+// the order src/app.rs emits them: STYLES, then SHELL, then PLATFORM.
 //
-// ORDER IS THE WHOLE CARE HERE. Both files set `--chrome-h` and `--traffic-w`
-// on the same `.app > .shell` selector — desktop.css defaults them and
+// ORDER IS THE WHOLE CARE HERE. Both sides set `--chrome-h` and `--traffic-w`
+// on the same `.app > .shell` selector — assets/desktop/ defaults them and
 // macos.css raises them — so at equal specificity the later sheet wins.
 // src/app.rs carries the write-up of getting it the other way round: the
 // reservation was always zero and the nav toggle painted on top of the macOS
 // close button at the rail width. Linked in the wrong order this would audit a
 // window nobody ships and report it clean.
 //
-// And they are linked PER STATE rather than from a directory, which is what
-// makes it structurally impossible for them to reach a phone frame. That is
-// exactly the property `assets/features/` cannot give — src/css.rs keeps both
-// of these out of it for that reason — and the cost of getting it wrong is
-// measured rather than feared: copy the two into assets/features/, so every
-// phone frame gets them too, and `node docs/audit.js light` against a Clean
-// tree reports 716 findings — 438 OVERFLOW-X, 266 SPILL, 12 CLIPPED-X. A
-// phone state laid out as three columns is not a phone state.
+// THE SHELL HALF IS A DIRECTORY NOW, AND SORTED IS THE CASCADE. src/css.rs
+// concatenates assets/desktop/'s fifteen region files in filename order, so
+// this list must be that same order or the audit measures a cascade the app
+// never emits — two rules of equal specificity, and whichever comes last wins.
+// The prefixes are zero-padded precisely so that readdirSync().sort() here,
+// the const list in src/css.rs and sorted() in scripts/capture-gallery.py
+// cannot disagree. macos.css is appended AFTER that sort rather than being
+// part of it, because "macos.css last" is now a property of a partly-computed
+// list: PLATFORM comes last by src/app.rs's order, and a name-sorted directory
+// would put it in the middle.
+//
+// And they are linked PER STATE rather than from the phone's own directory,
+// which is what makes it structurally impossible for them to reach a phone
+// frame. That is exactly the property `assets/features/` cannot give —
+// src/css.rs keeps all of these out of it for that reason — and the cost of
+// getting it wrong is measured rather than feared: copy them into
+// assets/features/, so every phone frame gets them too, and
+// `node docs/audit.js light` against a Clean tree reports 716 findings — 438
+// OVERFLOW-X, 266 SPILL, 12 CLIPPED-X. A phone state laid out as three columns
+// is not a phone state.
+const SHELL_CSS = path.join(ASSETS, 'desktop');
+const SHELL_REGIONS = fs.existsSync(SHELL_CSS)
+  ? fs.readdirSync(SHELL_CSS).filter((f) => f.endsWith('.css')).sort()
+  : [];
+// A COMPUTED LIST CAN COME BACK EMPTY, and the per-file guard below cannot see
+// it: an empty list has no missing file and no zero-byte file in it, so every
+// desktop state would render against macos.css alone and the run would go on to
+// report whatever that is. The zero-byte case was already the loud one (73664
+// findings for an empty main.css); this is the quiet one, and it is the failure
+// the split newly makes possible.
+if (SHELL_REGIONS.length === 0) {
+  console.error(`${SHELL_CSS} has no .css in it — every desktop state would be measured with the whole shell sheet missing`);
+  process.exit(1);
+}
 const DESKTOP_SHEETS = [
-  path.join(ASSETS, 'desktop.css'),
+  ...SHELL_REGIONS.map((f) => path.join(SHELL_CSS, f)),
   path.join(ASSETS, 'platform', 'macos.css'),
 ];
 for (const sheet of [...STYLESHEETS, ...DESKTOP_SHEETS]) {
@@ -284,7 +309,7 @@ const coverage = (states) => {
   //
   // `crumb_parts` (src/shell/desktop/mod.rs) is total now: an open detail, a
   // home screen and a destination's own root all produce a crumb, so the band
-  // names something on every screen and `assets/desktop.css`'s
+  // names something on every screen and `assets/desktop/`'s
   // `:has(.chrome-title)` suppression of the pane's own heading is
   // unconditional. The old check cannot pass any longer — it asks for a state
   // the shell no longer has — and the useful question inverts with it: a state
@@ -762,7 +787,7 @@ const DESKTOP_SCALES = [16];
 // The shell's own state, walked rather than captured: the nav's collapse, and
 // whether the window is fullscreen.
 //
-// `data-nav` is a plain attribute on `.shell` that only assets/desktop.css
+// `data-nav` is a plain attribute on `.shell` that only assets/desktop/
 // reads (src/shell/desktop.rs sets it; a test there checks the sheet acts on
 // it), so flipping it here is a real reflow of a real rule and not a fiction —
 // which is what separates it from `data-insp`, a fact about what the reader
@@ -846,7 +871,7 @@ const AT_REST_CSS = '*, *::before, *::after { transition: none !important;'
 // reported as Clean. Asserted rather than defaulted, because "whichever one
 // happens to be first" is not a reference size.
 //
-// ONE PER SHELL, and the desktop's is not optional either: assets/desktop.css
+// ONE PER SHELL, and the desktop's is not optional either: assets/desktop/
 // splits `--nav-fill` and `--shell-line` by theme on purpose, and
 // docs/design.md records that the split came out of a measured 1.53:1 slab and
 // a 1.13:1 selected pill. A colour walk that does not run at 1440x860 in both
@@ -1252,7 +1277,7 @@ const GEOMETRY = () => {
   const bars = [...document.querySelectorAll('.topbar, .shell-chrome')];
   for (const bar of bars) {
     const heading = bar.querySelector(':scope > .title, :scope > .titlegroup, :scope > .chrome-title');
-    // RENDERED, not merely present. `assets/desktop.css` takes the detail
+    // RENDERED, not merely present. `assets/desktop/` takes the detail
     // pane's own heading out with `display: none` once the window's bar is
     // carrying it, and a `display: none` box reports 0x0 at the origin — which
     // is "outside the bar" by arithmetic and inside it by every meaning the
@@ -1294,7 +1319,7 @@ const GEOMETRY = () => {
   //
   // This is the whole claim the window bar exists to make, and until now it
   // was made by nothing but three `display: none` rules in
-  // `assets/desktop.css`. Delete any of them and the app paints the open
+  // `assets/desktop/`. Delete any of them and the app paints the open
   // thing's name in the band AND again in the pane a few pixels below it,
   // while every other check in this file stays green: nothing clips, nothing
   // overflows, nothing collides, because two headings in two different bars
@@ -1323,7 +1348,7 @@ const GEOMETRY = () => {
     const band = shown('.shell-chrome > .chrome-title');
     // A DESCENDANT COMBINATOR, DELIBERATELY UNLIKE THE RULE IT GUARDS.
     //
-    // `assets/desktop.css` hides the pane's copy with `.pane-detail .topbar >
+    // `assets/desktop/` hides the pane's copy with `.pane-detail .topbar >
     // .title`, and this check used to be written with the same `>`. That is
     // the one shape a guard must never take: a heading nested one element
     // deeper is un-hidden by the sheet and unseen by the check in the same
@@ -1358,7 +1383,7 @@ const GEOMETRY = () => {
     }
     // The connection is the window's, full stop — there is one socket, so a
     // second badge is a second answer to a question with one answer. No guard
-    // needed: `assets/desktop.css` hides every pane's copy unconditionally,
+    // needed: `assets/desktop/` hides every pane's copy unconditionally,
     // so more than one rendered is always wrong.
     //
     // Measured, on the shipping grid: neuter `.pane .topbar > .conn-badge`
@@ -1378,7 +1403,7 @@ const GEOMETRY = () => {
     // indicator ENTIRELY and every gate stays green: nothing overflows,
     // nothing collides, nothing is doubled, and the contrast walk is a loop
     // over elements that are there. Measured, on this tree: broaden
-    // `assets/desktop.css`'s `.pane .topbar > .conn-badge` to a bare
+    // `assets/desktop/`'s `.pane .topbar > .conn-badge` to a bare
     // `.conn-badge` — the ordinary way an over-eager selector is written, and
     // it hides the shell's copy along with the panes' — and every desktop
     // state loses its dot at every size in both themes while
@@ -1427,11 +1452,11 @@ const GEOMETRY = () => {
     // 4 states (`desktop-scheduler-detail` and three long-text passes) x 2
     // themes x the one 572x700 window x 2 of the 3 shell states, the
     // fullscreen cell being wider by the 76px it hands back. The fix is in
-    // `assets/desktop.css`: `.chrome-sub` is `flex: 1 1 0` now, so the
+    // `assets/desktop/`: `.chrome-sub` is `flex: 1 1 0` now, so the
     // qualifier takes what is left after the name rather than bidding against
     // it, and the run is Clean again.
     //
-    // AND EVERY SIBLING, NOT THE BADGE. `assets/desktop.css` drops
+    // AND EVERY SIBLING, NOT THE BADGE. `assets/desktop/` drops
     // `.conn-label` at 571px and under, which takes the badge to an 18px dot —
     // so at the two narrowest window sizes on this grid the badge cannot
     // outbid anything and a badge-only check is dead exactly where the band is
@@ -1556,7 +1581,7 @@ const GEOMETRY = () => {
   // connection badge — and every one of those is free to grow: a long enough
   // session name, a long enough agent version, a wider `--traffic-w`. Squeeze
   // this to nothing and the window is stuck where it is, with no error, no
-  // clipping and nothing else on screen out of place. `assets/desktop.css`
+  // clipping and nothing else on screen out of place. `assets/desktop/`
   // answers that with `flex: 1 0 96px`; this is what notices when something
   // takes that back.
   //
@@ -1655,7 +1680,7 @@ const GEOMETRY = () => {
   // failure the whole phone-size axis exists to reach, and one TITLE-TALLER
   // cannot see, because the heading is still inside the now-taller bar.
   //
-  // AND IT IS ASKED ONLY WHERE THERE IS A SCRIM. `assets/desktop.css` sets
+  // AND IT IS ASKED ONLY WHERE THERE IS A SCRIM. `assets/desktop/` sets
   // `.app::before { display: none }`: on that shell the bar is `position:
   // static`, nothing scrolls under it, and there is no band of material to
   // check. Chromium still reports the SPECIFIED height for a `display: none`
@@ -1701,7 +1726,7 @@ const GEOMETRY = () => {
   // `getComputedStyle(el).display` inside a `display: none` SUBTREE returns
   // the element's own specified value — `flex`, `list-item` — and nothing
   // about the ancestor that is hiding it. Below the three-column breakpoint
-  // `assets/desktop.css` hides whichever of the list and the detail is not
+  // `assets/desktop/` hides whichever of the list and the detail is not
   // the one you are looking at, and every row inside the hidden column then
   // measured zero and reported as an empty row. Measured: 384 findings on the
   // first desktop run, all `.session-item`, all of them a list the window is

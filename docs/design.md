@@ -1311,8 +1311,38 @@ paint, and an earlier read reports every bar 62px too high.
 ## The desktop shell
 
 The same design system, worn a second way. `assets/main.css` is untouched by
-it: everything below lives in `assets/desktop.css`, which `src/css.rs` embeds
+it: everything below lives in `assets/desktop/`, which `src/css.rs` embeds
 only in a desktop binary.
+
+**Fifteen files, and the sort is the cascade.** `assets/desktop/` is a
+directory rather than one sheet — `00-tokens.css`, `10-sidebar-frame.css`,
+`20-plane-switch.css`, `30-sidebar-list.css`, `40-home-chat.css`,
+`50-band.css`, `55-panes.css`, `60-sidebar-extra.css`, `65-responsive.css`,
+`70-overrides.css`, `80-measure.css`, `90-inspector.css`, `95-transcript.css`,
+`97-home-code.css`, `98-home-sched.css` — because one 4278-line file is one
+file every branch of a wide change appends to at once, and parallel appends had
+already left it declaring `--insp-add`/`--insp-del` twice. The split was purely
+mechanical: no rule was edited, reordered or reformatted, the parts are
+contiguous over the original's 1–4278, each is brace-balanced on its own, and
+`cat assets/desktop/*.css` reproduces the old file byte for byte. That
+byte-identity is the whole safety argument — identical bytes are an identical
+token stream and therefore an identical cascade — so a change that has to move
+a rule between files is a *second* commit, never part of a split.
+
+The numeric prefixes are zero-padded so that Rust's `concat!` order in
+`src/css.rs`, `readdirSync().sort()` in `docs/audit.js` and `sorted()` in
+`scripts/capture-gallery.py` all produce the same sequence: **the filename sort
+IS the cascade order**, and a sheet that lands in a different slot in any one of
+those three is a different window from the one that ships. Leave gaps when you
+number a new region. `assets/platform/macos.css` is appended after the sort in
+all three, never swept into it — `src/app.rs` emits STYLES, then SHELL, then
+PLATFORM, and the platform sheet has to win the `--chrome-h`/`--traffic-w`
+declarations it shares with `00-tokens.css` at equal specificity.
+
+Two files are named for where they *are*, not where they belong:
+`60-sidebar-extra.css` is sidebar rules that were appended after the band's,
+and `98-home-sched.css` is home-screen rules that were appended after the Code
+half's. Moving either would forfeit the byte-identity proof, so they stayed put.
 
 **Platform and width are different axes.** The platform decides the
 *affordances* and it decides them at compile time — the desktop shell has
@@ -1398,7 +1428,7 @@ column count travels that way, and nothing may start to.
 **The window's own bar says what the window has open.** `.shell-chrome` is
 the band the traffic lights are painted in, and it carries three things: the
 nav toggle, the name of whatever the detail column is showing, and the
-connection. `assets/desktop.css` then takes that same heading back out of the
+connection. `assets/desktop/` then takes that same heading back out of the
 pane below it (`[data-detail="open"] .pane-detail .topbar > .title`), so there
 is **one title per window** where there used to be one per column.
 
@@ -1522,7 +1552,8 @@ move; the 117px comes entirely off the badge. Nothing at 572pt and above moves
 at all. Reproduce it by putting the rail rule back — append
 `@media (max-width: 571px) { .shell-chrome > .conn-badge .conn-label { display:
 inline } .shell-chrome > .conn-badge { padding-right: 12px } }` to
-`assets/desktop.css` and re-run the axis.
+`assets/desktop/98-home-sched.css` and re-run the axis. The *last* file in the
+sort, because the point of an append is that the later copy wins.
 
 **And inside the title group the qualifier yields to the name.** Both were
 `flex: 0 1 auto`, which takes a deficit off two items in proportion to what
@@ -1664,7 +1695,7 @@ move with the window.
 
 **The shell's own state walks in place of the text axis.** `data-nav` and
 `data-fullscreen` are plain attributes on `.shell` that only
-`assets/desktop.css` and `assets/platform/macos.css` read, so flipping them is
+`assets/desktop/` and `assets/platform/macos.css` read, so flipping them is
 a real reflow of a real rule rather than a fiction — which is exactly what
 separates them from `data-detail`, a fact about what the app has open that has
 to be *captured* and must never be flipped. Three cells, chosen rather than
@@ -1700,18 +1731,23 @@ band like it does on every platform that never had them (**392**, with
 `--chrome-pad` held at 0). Both, for the dead block: **784**.
 
 **The desktop sheets are linked per state, never from a directory.** This is
-why `assets/desktop.css` and `assets/platform/macos.css` are deliberately *not*
+why `assets/desktop/` and `assets/platform/macos.css` are deliberately *not*
 in `assets/features/`: the audit links that whole directory into every 402×874
 phone frame. Building the `<link>` list from the state instead makes it
 structurally impossible for a desktop rule to reach a phone frame. The cost of
-getting it wrong is measured rather than feared — copy the two into
+getting it wrong is measured rather than feared — copy them into
 `assets/features/` and `node docs/audit.js light` against a clean tree reports
 **716 findings** (438 OVERFLOW-X, 266 SPILL, 12 CLIPPED-X). A phone state laid
 out as three columns is not a phone state. Their **order** is the other half of
-that care: both files set `--chrome-h` and `--traffic-w` on the same
+that care, in two parts. Between the two sides: `00-tokens.css` and
+`macos.css` both set `--chrome-h` and `--traffic-w` on the same
 `.app > .shell` selector, so at equal specificity the later sheet wins, and the
 wrong order is the one that made the reservation always zero. An audit linking
-them that way would measure a window nobody ships and report it clean.
+them that way would measure a window nobody ships and report it clean. And
+*within* `assets/desktop/`, the readdir sort has to reproduce `src/css.rs`'s
+`concat!` exactly, which is what the zero-padded prefixes are for — the audit's
+list is computed and the app's is written out, and they are only the same
+cascade because both are the same sort.
 
 #### The calibration, measured
 
@@ -1753,9 +1789,12 @@ floor.
 How each row is reproduced: **append** the declarations to the sheet named and
 re-run. Appending is what makes them faithful without a rewrite — every one of
 these is at the same specificity as the rule it is fighting, so the later copy
-wins, and a `git checkout` of the one file puts the tree back.
+wins, and a `git checkout` of the one file puts the tree back. Append to
+`98-home-sched.css`, the last file in `assets/desktop/`'s sort: appending into
+the middle of the directory puts the copy *before* the rule it is meant to
+beat, and the row silently fails to reproduce.
 
-| put back, appended to `assets/desktop.css` | reported | where |
+| put back, appended to `assets/desktop/98-home-sched.css` | reported | where |
 |---|---|---|
 | `.nav-toggle { position: absolute; z-index: calc(var(--z-chrome) + 1); top: 20px; left: calc(var(--nav-w) - var(--shell-gap) - 44px); margin-top: 0 }` — **the regression that shipped** | **224 CHROME-SLOT** and 426 TITLE-COLLIDE (650) | the slot findings at 480×560 and 571×700 **only**, never 572 and up — but in **nav open and nav closed alike**, 28 states × 2 themes × 2 widths × 2 cells |
 | the same collision behind `[data-nav="closed"]` — `.shell[data-nav="closed"] .nav-toggle { position: absolute; z-index: calc(var(--z-chrome) + 1); top: 14px; left: var(--shell-gap); margin-top: 0 }` | **392 CHROME-SLOT** | nav **closed** only, all seven widths |
@@ -1804,7 +1843,7 @@ it was first recorded as doing: 480 through 902, down to a strip **0px** wide,
 falling silent only at 1180 and above.
 
 **One check had to be taught what "not rendered" means.** `TITLE-TALLER`
-compared a heading's box against its bar's, and `assets/desktop.css` now takes
+compared a heading's box against its bar's, and `assets/desktop/` now takes
 the detail pane's heading out with `display: none` — which reports 0×0 at the
 origin, "outside the bar" by arithmetic and inside it by every meaning the
 check has. Re-measured at `d716047` by dropping the guard from a scratch copy
@@ -1865,8 +1904,8 @@ the line the subtitle took, the safer the title looked — and the defect it was
 written for was still on screen: at 572×700 on the captured
 `desktop-scheduler-detail`, unstressed, the group held 211px while the heading
 inside it was cut to 108 and the badge spent 135 on an agent version. Pointed
-at the heading it reports **16** on a tree that had been Clean. The fix is
-`assets/desktop.css`: `.chrome-sub` is `flex: 1 1 0`, so the qualifier grows
+at the heading it reports **16** on a tree that had been Clean. The fix is in
+`assets/desktop/50-band.css`: `.chrome-sub` is `flex: 1 1 0`, so the qualifier grows
 into what the name did not want instead of bidding against it — heading 173px
 and uncut at the same window, and nothing changed where there is room. A large
 `flex-shrink` was tried first and rejected as asymptotic: at a factor of 100

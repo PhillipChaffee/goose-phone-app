@@ -58,7 +58,7 @@ pub fn App() -> Element {
         // It used to sit between the two, and that was wrong in a way only the
         // second platform sheet could expose. iOS did not care — `SHELL` is
         // empty in a phone binary, so there was nothing after it to lose to.
-        // macOS did: `assets/desktop.css` defaults `--chrome-h`/`--traffic-w`
+        // macOS did: `assets/desktop/` defaults `--chrome-h`/`--traffic-w`
         // to zero on `.app > .shell` and `assets/platform/macos.css` raises
         // them on the same selector, so at equal specificity the later sheet
         // won and the reservation was always zero — measured, the nav toggle

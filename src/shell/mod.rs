@@ -8,8 +8,8 @@
 //! appear on a phone.
 //!
 //! WIDTH decides one thing, and it is not decided here: how many columns
-//! `assets/desktop.css` draws. That sheet is desktop-only (see [`crate::css`]),
-//! so its `@media (min-width: …)` rules are physically unreachable from a phone
+//! `assets/desktop/` draws. Those sheets are desktop-only (see [`crate::css`]),
+//! so their `@media (min-width: …)` rules are physically unreachable from a phone
 //! binary — which is why no Rust in this app observes a window resize. The rule
 //! in `src/viewport.rs` (the native renderer sends every listened-to event
 //! through a synchronous XHR) is honoured here by having nothing to listen to.
@@ -170,7 +170,7 @@ const _: () = assert!(DUMP_PREFIX.is_empty());
 /// `Some` on the desktop, and it is not decoration there: at the narrowest
 /// width the pinned nav collapses to a 56px icon rail, and a column of glyphs
 /// with no way to ask what they are is a navigation you have to learn. The
-/// label itself stays in the DOM at that width — `assets/desktop.css`
+/// label itself stays in the DOM at that width — `assets/desktop/`
 /// collapses it to a zero-size box rather than removing it — so the button's
 /// accessible name is unchanged and this is the pointer's copy of it.
 ///

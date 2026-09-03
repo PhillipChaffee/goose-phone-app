@@ -358,7 +358,7 @@ the class of check a long capability list needs more of, and a crate boundary is
 where they stop working. `src/css.rs:20-27` and `:59-97` would take the same
 damage — **nine** `include_str!`s reaching up out of a shared crate into
 `assets/`, two more than when this was written, because the desktop shell
-brought `assets/desktop.css` and `assets/platform/macos.css` with it. Add a
+brought `assets/desktop/` and `assets/platform/macos.css` with it. Add a
 `pub(crate)`→`pub` sweep across ~22,300 lines of `src/`, on a repo whose
 `src/main.rs:9-11` is explicitly laid out to keep concurrent branches out of
 each other's hunks, and it is three commits and a wrecked `git blame` in
@@ -533,7 +533,7 @@ the type rather than writing it.
 
 | Capability | Status | What it needs | Cost |
 |---|---|---|---|
-| Desktop gallery axis | **SHIPPED** (`f214b54`, `ece4857`, `d716047`) | Was: "the gallery covers the phone shell only and nothing in `assets/desktop.css` is audited", with two named blockers. Both are gone. `scripts/capture-gallery.py` now takes several logs in one invocation, and the dump key carries `shell::DUMP_PREFIX` (`src/app.rs`), so a desktop `chats` is `desktop-chats` and cannot overwrite the phone's. `docs/audit.js` walks a second grid: 28 desktop states × 2 themes × 7 window sizes × 1 text size × 3 shell states. Read *What the desktop axis covers* at the end of `docs/design.md`, not this row | — |
+| Desktop gallery axis | **SHIPPED** (`f214b54`, `ece4857`, `d716047`) | Was: "the gallery covers the phone shell only and nothing in `assets/desktop/` is audited", with two named blockers. Both are gone. `scripts/capture-gallery.py` now takes several logs in one invocation, and the dump key carries `shell::DUMP_PREFIX` (`src/app.rs`), so a desktop `chats` is `desktop-chats` and cannot overwrite the phone's. `docs/audit.js` walks a second grid: 28 desktop states × 2 themes × 7 window sizes × 1 text size × 3 shell states. Read *What the desktop axis covers* at the end of `docs/design.md`, not this row | — |
 | ⌘R as a real menu item | reachable | The debt is logged under *Refresh is arrival, plus a chord* in `docs/design.md`'s desktop section, deferred because "a menu accelerator *consumes* the key on macOS, so it would have to replace the JS listener rather than sit beside it". A binding table makes that one row changing `Js(REFRESH_KEY)` → `Accel("CmdOrCtrl+R")`, with a duplicate-chord test guarding the swap | trivial |
 | Fix the last ambient `Shell::CURRENT` reads | cleanup | Six call sites in three files, re-checked at `d716047`: `src/views/mod.rs:68`, `:72` (`SwipeDelete`, which is why that pair used to be counted as one), `src/views/chrome.rs:281`, `:318`, `:322`, `src/views/scheduler.rs:83`. These are the last places a view reads the ambient shell instead of taking it, and it is why `SwipeDelete`'s mobile arm is verified by nothing | trivial |
 

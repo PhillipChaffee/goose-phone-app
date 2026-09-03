@@ -152,7 +152,7 @@ fn row(
 /// Read by two things that are never on screen together: the header below,
 /// and — on the desktop — the window's own bar, which takes the heading out of
 /// the pane and paints it in `.shell-chrome` instead
-/// (`src/shell/desktop/mod.rs`, `assets/desktop.css`). The `None` arm is the same
+/// (`src/shell/desktop/mod.rs`, `assets/desktop/`). The `None` arm is the same
 /// dead-end fallback the view renders, for the same reason: the open recipe
 /// and the Detail screen are set and cleared together, so it is unreachable —
 /// but a window bar naming nothing would be worse than one naming the kind of

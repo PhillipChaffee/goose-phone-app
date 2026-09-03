@@ -1,0 +1,65 @@
+/* The nav is a COLUMN and a CARD, and they are two elements because they have
+ * two jobs.
+ *
+ * This is the column. It owns the width, it owns the collapse, and it clips —
+ * so when it animates to nothing the card inside slides out of view at the
+ * width it has always had. The alternative, one element that shrinks, reflows
+ * its own contents the whole way: "Session History" rewraps to four lines and
+ * back again over 200ms, which is a lot of motion to say "gone". */
+.navpane {
+  flex: 0 0 var(--nav-w);
+  width: var(--nav-w);
+  display: flex;
+  min-height: 0;
+  padding: var(--shell-gap);
+  overflow: hidden;
+  /* The phone's own drawer curve (`.drawer`, assets/main.css), so the two
+   * shells open the same panel at the same speed. */
+  transition:
+    flex-basis 200ms cubic-bezier(0.32, 0.72, 0, 1),
+    width 200ms cubic-bezier(0.32, 0.72, 0, 1),
+    padding 200ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* And this is the card: a rounded, outlined panel floating on the page with
+ * room around it, which is the phone's grammar ("chrome floats, content
+ * scrolls under it") arriving on the desktop, and the reference's own
+ * description of the same panel — "the sidebar is a rounded outlined card
+ * floating on it with breathing room" (AppLayout.tsx).
+ *
+ * --radius-xl, because docs/design.md's tier for "containers that hold other
+ * things" is 16px and this holds every destination in the app.
+ *
+ * A FIXED width, not `100%`: the column's width is what animates, and a
+ * percentage of an animating box is a box that reflows for 200ms. */
+.navcard {
+  flex: 0 0 auto;
+  width: calc(var(--nav-w) - 2 * var(--shell-gap));
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Plain padding again. The card used to hold the traffic lights clear of its
+   * own wordmark; the bar above it does that now, so this is just a card. */
+  padding: 12px 8px;
+  background: var(--nav-fill);
+  border: 1px solid var(--shell-line);
+  border-radius: var(--radius-xl);
+  /* Instant on the way in, deferred on the way out: the card has to be gone
+   * from the tab order once it is off screen, but taking it out at the START
+   * of the slide would make the panel disappear rather than leave. */
+  visibility: visible;
+  transition: visibility 0s;
+}
+
+.shell[data-nav="closed"] .navpane {
+  flex-basis: 0;
+  width: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.shell[data-nav="closed"] .navcard {
+  visibility: hidden;
+  transition: visibility 0s 200ms;
+}
+

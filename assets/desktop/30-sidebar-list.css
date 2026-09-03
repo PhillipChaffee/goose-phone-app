@@ -1,0 +1,537 @@
+/* ── the sidebar's own controls and list ────────────────────────────────
+ *
+ * Everything from here to `.nav-footer` is new with the restructure: the
+ * sidebar stopped being a list of seven destinations and became the plane's
+ * own workspace — make one, reach what you saved, scan what you have.
+ *
+ * The vertical order is the information architecture and the CSS does not
+ * decide it (`src/shell/desktop/mod.rs` does): switch, New, Library, list,
+ * footer. What the sheet decides is which of them scrolls, and only one does. */
+
+/* NEW, and it is a button rather than a row: it makes something, it does not
+ * go somewhere. Full width because it is the sidebar's primary action, and
+ * `--accent` because it is the only one. */
+.nav-new {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  margin: 0 0 8px;
+  padding: 0 12px;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+/* The plus is accent and the word is not. `.new .p{color:var(--accent)}` — the
+ * mockups spend the accent on the GLYPH that means "make one", so the control
+ * reads as an action at a glance without a filled button competing with the
+ * plane badge two inches above it. */
+.nav-new .icon {
+  color: var(--accent);
+}
+
+.nav-new:hover {
+  border-color: var(--text-tertiary);
+}
+
+/* THE LIBRARY DISCLOSURE. One row, shut by default, and it holds what the half
+ * has SAVED rather than what it is doing.
+ *
+ * It is quieter than a destination row on purpose — smaller type, secondary
+ * ink — because the thing below it is what the sidebar is for. A disclosure
+ * that competed with the list would be the flat destination list again with an
+ * extra click. */
+/* ── the library disclosure ── */
+.nav-library {
+  /* A BORDERED BOX on the card wash, where it was a bare row: `.libdisc` in
+   * 22-nav-disclosure.html is `height:30px;border:1px solid; border-radius:8px;
+   * background:rgba(255,255,255,.014)`, and the box is what tells a disclosure
+   * apart from the destinations it discloses.
+   *
+   * `font: inherit` and `width: 100%` are load-bearing and were dropped once
+   * in this pass: without the shorthand the element is a `button`, so the UA
+   * resets its family to the platform default — `docs/audit.js` refuses to
+   * measure a run where any element computes a font this run did not pin, and
+   * that refusal is what caught it. */
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  /* 30px in the mockup, 32 here: `docs/audit.js` fails any `button` under 32
+   * in either axis, and the floor wins over the picture. */
+  min-height: 2rem;
+  margin: 0 0 0.6875rem;
+  padding: 0 0.625rem;
+  border: 1px solid var(--shell-line);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-library:hover {
+  background: color-mix(in srgb, var(--bg-tertiary) 50%, var(--nav-fill));
+  color: var(--text-primary);
+}
+
+/* The chevron turns rather than swapping glyph: one icon, one state, and no
+ * second SVG to keep in step. 90deg and not 180 — it points at the row when
+ * shut and down at what it opened when not. */
+.nav-library .icon {
+  transition: transform 150ms ease;
+}
+
+.nav-library.open .icon {
+  transform: rotate(90deg);
+}
+
+.nav-library-label {
+  flex: 1 1 auto;
+  text-align: left;
+}
+
+/* The count is the whole reason the row can stay shut: it says how much is
+ * behind it without opening it. */
+.nav-library-count {
+  flex: 0 0 auto;
+  /* CHANGE: mono, per the mockup and per this sheet's own mono rule. The
+     shipped block's `flex: 0 0 auto` and colour are kept. */
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+/* THE LIST, and the one thing in the card that scrolls.
+ *
+ * `.drawer-nav` in assets/main.css is `flex: 1; overflow-y: auto`, which was
+ * right when the destinations were the card's body. They are not any more —
+ * they are behind the disclosure — so that rule is overridden below and the
+ * scrolling moves here. Two `flex: 1` scrollers in one card is two boxes
+ * fighting over the same height, and the loser collapses to nothing. */
+/* `0 1 auto`, not `0 0 auto`: it takes only the height it needs, and gives
+ * height back when there is not enough.
+ *
+ * It shipped as `0 0 auto` and the audit caught what that costs — with the
+ * library expanded at 480x560 the card's content ran 22px past its box
+ * (`SPILL div.navcard content leaves the box by 22px`, and `CLIPPED-Y
+ * aside.navpane scroll=522 client=508`) across all nine states that had it
+ * open. Four 48px rows that refuse to shrink is 192px the short window does
+ * not have.
+ *
+ * The session list below is `1 1 auto`, so it still absorbs surplus first and
+ * this only starts scrolling once the list is already at nothing — which is
+ * the order the reader wants. Two scrollers in one card is not ideal and is
+ * the price of the library and the list being separate components; the
+ * alternative, one scroller over both, is a change in `mod.rs`'s structure
+ * rather than in this sheet. */
+.navcard .drawer-nav {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* A DESTINATION ROW AT POINTER SIZE. `.drawer-item` in assets/main.css is
+ * 48px tall with a 14px gap at `--text-md`, and every number in it was chosen
+ * for a thumb — its own comment measures a two-line "Scheduler" label at AX5
+ * on a 375x667 phone. Five of those rows is 240px, and this column is 252px
+ * wide: the library alone filled a third of the sidebar's height before a
+ * single session appeared under it.
+ *
+ * 32px is not a taste either — it is the floor `docs/audit.js` holds this
+ * shell's pointer targets to, stated once further down where the row actions
+ * take it. The mockups spend less again (`.libnav` is one 11.5px line for the
+ * whole library), but 32 is where this app's own gate sits and a gate is a
+ * better place to stop than a picture.
+ *
+ * main.css is untouched: the phone's 48px row is still the phone's. */
+.navcard .drawer-item {
+  min-height: 32px;
+  gap: 8px;
+  padding: 0 8px;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+.nav-sessions {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin-top: 8px;
+  /* THE FADE, and the padding is what makes it legal.
+   *
+   * `.list{-webkit-mask-image:linear-gradient(#000 92%,transparent);
+   * mask-image:linear-gradient(#000 92%,transparent)}` — the sidebar's list
+   * dissolving into the footer instead of ending at a hard edge, which is the
+   * single largest thing separating this sidebar from the mockups' after the
+   * type. Both properties, because this is WKWebView.
+   *
+   * A PERCENTAGE IS NOT SAFE HERE and the mockups' is. `.list` in the mockups
+   * is `overflow: hidden` — it does not scroll, so the faded 8% is always the
+   * bottom of a list that continues. This one scrolls, so at scroll-end the
+   * last row's own text would render under the fade permanently: at the 820pt
+   * window the scroller is about 500px, 8% is 40px, and a 50px row would sit
+   * mostly inside it. The contrast walk would not catch it either — it reads
+   * `cs.color` and `cs.opacity`, and a mask sets neither.
+   *
+   * So the gradient is a LENGTH and the scroller pads by the same length: the
+   * fade always lands on the padding, never on a row. 24px at the 500px
+   * scroller is 95.2%, three points off the mockups' 92 and visually the same
+   * ramp. The two numbers are the same number and a test holds them equal. */
+  padding-bottom: 24px;
+  -webkit-mask-image: linear-gradient(#000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(#000 calc(100% - 24px), transparent);
+}
+
+.nav-sessions-empty {
+  margin: 12px 8px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+/* A band heading — Today, Yesterday, Earlier. Deliberately NOT `.drawer-item`,
+ * for the reason `.drawer-group` states in assets/main.css: docs/audit.js keys
+ * its tap-target check off that class, and a heading is not a target. */
+/* ── a band heading with a count ── */
+.nav-band {
+  /* A flex row, so the count can be pushed to the end. */
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  padding: 0.75rem 0.5rem 0.25rem;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-sm);
+  font-weight: 600;
+  /* .05em, NOT the plane badge's .09em, and the mockups draw the distinction:
+   * `.grp.time .name` is .05em while `.sec-h .ttl` and `.plane-badge` are .09.
+   * Two tiers of uppercase label, and at 10.5px .09em is nearly a pixel of air
+   * per letter — enough to take a word as long as YESTERDAY apart. */
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* A row. Two lines of text, a mark, and an age — no tile, no action gutter,
+ * no fab. See `src/shell/desktop/sidebar.rs` for why this is not the list view
+ * that already exists, and for the measurement that settled it. */
+/* The row is a DIV and the openable part inside it is the button — see the
+ * note in `sidebar.rs`. A button cannot legally hold the two action buttons,
+ * and an HTML parser meeting that hoists them out and unravels the tree. */
+.nav-row {
+  /* THE SHIPPED BLOCK, put back. These eight were lost in the pass that added
+     `position: relative` below, and the sidebar's rows spent an afternoon
+     running out through the side of their own card — no width, so no box for
+     `.nav-row-title`'s ellipsis to be computed against. */
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  /* ADD one declaration to the shipped block: the actions below measure
+     against this. Without it they measure against `.pane`, which is the
+     positioned ancestor, and land in the content column. */
+  position: relative;
+}
+
+/* What opens the row: everything except the actions, and the whole of it is
+ * the target. `flex: 1 1 auto` with `min-width: 0` so the title ellipsises
+ * rather than pushing the actions off the card. */
+.nav-row-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* THE TAP FLOOR, WHICH THIS BUTTON NEVER DECLARED.
+   *
+   * It is a `button`, so docs/audit.js:1163 measures it, and its height is
+   * whatever its text comes to — `.nav-row`'s own `min-height: 44px` is on the
+   * PARENT div and does not stretch a `flex-start` child. A row with two lines
+   * is fine; a row with one is not, and one-line rows are reachable:
+   * `sidebar.rs:120` declares `subtitle: Option<String>` and `:256` fills it
+   * with `(!chat.repo.trim().is_empty()).then(…)`, so a code chat whose repo is
+   * blank renders no `.nav-row-sub`. At the old --lh-sm that was a 20px button;
+   * at 18 it is worse. Latent rather than new, and the re-scale is the moment
+   * to close it. */
+  min-height: 32px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-row:hover {
+  background: color-mix(in srgb, var(--bg-tertiary) 50%, var(--nav-fill));
+}
+
+/* WHICH ROW THE PANE IS SHOWING.
+ *
+ * The three-column layout had this as `.session-item.on` and the restructure
+ * dropped it; that rule's own comment is the argument for putting it back —
+ * "an unmarked list is a list that does not say where the pane beside it came
+ * from". It matters more here than it did there, because the sidebar is on
+ * screen at every width and in every state now, so an unmarked list is
+ * permanently silent about what you are looking at.
+ *
+ * The same `--bg-tertiary` that `.drawer-item.active` and `.plane-seg.active`
+ * spend, for the reason main.css established: it is the one token that reads
+ * as selected in both themes. The inset outline is theirs too — the fill is
+ * 1.13:1 on the light card and a non-text indicator owes 3:1.
+ *
+ * It has to out-rank hover, and it does: hover is a 50% mix of the same token
+ * and this is 100% of it, so the row you are pointing at never looks more
+ * selected than the row that is open. */
+.nav-row.on {
+  background: var(--bg-tertiary);
+  box-shadow: inset 0 0 0 1px var(--border-secondary);
+}
+
+/* AND THE ROW'S SECONDARY TEXT STEPS UP WITH IT.
+ *
+ * `.session-item.on` already carries this rule and states the reason — "the
+ * fill that says 'this one' costs the text on it half a point of contrast" —
+ * and this row was written without it and measured wrong for exactly that.
+ * `--text-secondary` is 4.64:1 on the card, which is what I checked, and only
+ * **4.01:1** on the selected fill in light and **4.24:1** in dark. The audit
+ * reported both against the 4.5 a 12px label owes.
+ *
+ * Hover is the same problem one step smaller (4.32:1 light) and takes the same
+ * answer, so the two are one rule. `--text-primary` measures 7.93:1 on the
+ * selected fill and 8.53:1 on hover, which is clear in every combination. */
+.nav-row.on .nav-row-sub,
+.nav-row.on .nav-row-age,
+.nav-row:hover .nav-row-sub,
+.nav-row:hover .nav-row-age {
+  color: var(--text-primary);
+}
+
+/* ── the row's own actions ──────────────────────────────────────────────
+ *
+ * Rename and delete, on the row, revealed by the pointer. That is this shell's
+ * stated pattern — CLAUDE.md describes the desktop as "a list and a detail
+ * pane with row actions always on the row" — and it is also the only place
+ * they can go: the pane is about to become the plane's home screen, and the
+ * full list view that used to carry them is not on the desktop any more.
+ *
+ * THEY COST NO WIDTH. The row is 268px less its chrome, and an always-present
+ * action gutter is exactly what made the old list view unusable here (see
+ * `sidebar.rs`). So they take the AGE's place on hover rather than sitting
+ * beside it: same box, one at a time, and the title never moves.
+ *
+ * `:focus-within` as well as `:hover`, or the actions would be reachable by
+ * pointer only — a row tabbed to would swap nothing in and the buttons behind
+ * it would be invisible but focusable, which is worse than absent. */
+.nav-row-actions {
+  flex: 0 0 auto;
+  /* OUT OF FLOW, which is what lets the age move.
+   *
+   * They used to take the age's box, which is how the shipped sheet kept its
+   * promise that they "COST NO WIDTH". With the age on the meta line that box
+   * is gone, and putting them back in flow would shrink the title by 66px the
+   * moment the pointer arrived — a title that re-ellipsises on hover. Out of
+   * flow they take no width at rest and cause no reflow when they appear; they
+   * cover the tail of a title that is already ellipsised.
+   *
+   * They paint the row's own hover fill so the covered text does not shine
+   * through the 2px between the two controls. */
+  position: absolute;
+  top: 0.375rem;
+  right: 0.5rem;
+  display: none;
+  gap: 0.125rem;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-tertiary) 50%, var(--nav-fill));
+}
+
+.nav-row:hover .nav-row-actions,
+.nav-row:focus-within .nav-row-actions {
+  display: inline-flex;
+}
+
+
+/* 32x32, which is `.row-action`'s size and is not negotiable.
+ *
+ * This was written as 24 on the reasoning that the row is 44px tall and a
+ * 32px control in it "leaves 6px above and below" — and `docs/audit.js`
+ * rejected it: `SMALL-TAP button.nav-row-act 24x24`, its rule being that any
+ * `button` under 32 in either axis is too small to hit. The reasoning was
+ * also just wrong about the arithmetic, because the row's padding came down
+ * to 6 to make room rather than the control coming down to 24.
+ *
+ * `flex: 0 0 auto` because the same run reported `15x24` as well: inside a
+ * flex row these shrink, and a 15px-wide delete is worse than a small one.
+ *
+ * The row does not jump when they appear. A two-line row's content box is
+ * already 42px (two 20px lines and the 2px gap), and a one-line row is held
+ * at 32 by the control itself plus 12 of padding — which is the 44px
+ * `min-height` it had anyway. */
+.nav-row-act {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.nav-row-act:hover {
+  border-color: var(--text-tertiary);
+  color: var(--text-primary);
+}
+
+/* Destructive keeps its own colour under the pointer rather than resolving to
+ * the ordinary one — `.row-action.danger:hover`'s rule, in the tokens that
+ * already hold exactly those values. */
+.nav-row-act.danger:hover {
+  color: var(--text-danger);
+  border-color: var(--border-danger);
+  background: color-mix(in srgb, var(--bg-danger) 10%, var(--bg-primary));
+}
+
+/* The search field sits above the list and below the disclosure — it filters
+ * the list and nothing else, so it belongs to the list. Margin rather than
+ * padding on `.nav-sessions`, so the scroller's first row still meets its top
+ * edge when the field is scrolled past. */
+.nav-search {
+  flex: 0 0 auto;
+  margin: 8px 0 0;
+}
+
+/* The text column takes what is left and is allowed to shrink, which is what
+ * lets the title ellipsise instead of pushing the age off the card. */
+.nav-row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+/* Secondary, not tertiary, and for the reason written on `.mark.idle`: on the
+ * card tertiary is 2.03:1 in light, and this is text, which owes 4.5. The
+ * hierarchy survives — the title is --text-primary at 8.77:1 and this is
+ * 4.64:1, which is a clear step down without being unreadable. */
+.nav-row-sub {
+  /* CHANGE: `flex: 1 1 auto` added so the age can sit at the end of the meta
+     line; every other declaration in the shipped block is kept. */
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+.nav-row-age {
+  padding-top: 1px;
+  /* CHANGE: it now sits at the end of the meta line rather than beside the
+     title, so it is pushed rather than placed. `padding-top: 1px` goes — it
+     existed to drop the age onto the title's baseline and there is no title
+     beside it any more. Everything else in the shipped block is kept. */
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* THE MARK, and colour is the whole signal — there is no room for a word.
+ *
+ * 8px on a 44px row, centred against the title's own line box by the 6px of
+ * top padding rather than by `align-items: center`, which would drift down as
+ * soon as a row grew its second line.
+ *
+ * `--text-danger` is deliberately not used for `waiting`: nothing is wrong,
+ * something is ASKING, and amber is what this app already spends on that (see
+ * the `Needs input` rows in the mockups). Red would say the agent failed. */
+.mark {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: var(--radius-full);
+}
+
+.mark.waiting {
+  background: var(--text-warning);
+}
+
+/* The same teal the start button spends, so "something is happening here" is
+ * one colour across the window rather than blue in the sidebar and teal in
+ * the pane. `--accent` and not `--accent-fill`: this is an 8px dot on the
+ * card, which is the surface the text accent was measured against. */
+/* ── the marks, as the mockups shape them ── */
+.mark.running {
+  /* A RING, not a fill. `.dot.run{background:transparent;border:2px solid
+   * var(--accent)}` — the mockups reserve the solid disc for the state you must
+   * act on (amber) and draw the machine's own activity as an outline, which is
+   * what stops a busy list reading as a wall of alarm. This shipped as a filled
+   * accent disc, which is the inverse. */
+  background: transparent;
+  box-shadow: inset 0 0 0 0.125rem var(--accent);
+}
+
+/* Idle is an outline rather than a fill: an idle tree is the DEFAULT state and
+ * a list of filled dots says everything is happening at once.
+ *
+ * --text-secondary and NOT --text-tertiary, which is what this was written as
+ * and what the arithmetic rejected. A non-text indicator owes 3:1, and against
+ * the card tertiary measures **2.03:1 in light** and 2.87:1 in dark — under it
+ * in both themes, which is the one direction a "subtle" choice is not allowed
+ * to go. Secondary is 4.64:1 and 7.75:1. The other two marks were never in
+ * doubt: warning is 5.11:1 / 11.25:1 and info 5.23:1 / 6.74:1. */
+.mark.idle {
+  /* A FLECK, not a ring. `.dot.none{background:#31373f;width:5px;height:5px}` —
+   * idle is the default state of most of the list and the mockups make it the
+   * smallest, quietest thing on the row. This shipped as a 1px outline ring,
+   * which is now what `running` means.
+   *
+   * `transform` and not `width`/`height`: a mark that changed box size per state
+   * would shift every title 1.5px depending on what the agent was doing. 8 x
+   * 0.625 is exactly the mockup's 5. */
+  background: var(--text-secondary);
+  box-shadow: none;
+  transform: scale(0.625);
+}
+

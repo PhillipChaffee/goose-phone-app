@@ -1,0 +1,133 @@
+
+/* `position: relative` is load-bearing and is not about the pane's own
+ * painting. `.fab` and anything else a view positions absolutely measure
+ * against the nearest positioned ancestor, which without this is `.app` — so
+ * the list's "New chat" pill would float in the bottom-right corner of the
+ * WINDOW, over the detail column, rather than over the list it belongs to.
+ * Modals are unaffected: `.modal-backdrop` and `.toast` are `position: fixed`
+ * already, and nothing here introduces a transform for them to be trapped by
+ * (the same property `.app` deliberately preserves for backdrop-filter). */
+.pane {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* The CANVAS rung, and it names the rung rather than `--bg-primary` so the
+   * one line that says "this column is not the chrome" cannot be re-pointed
+   * by a remap meant for the views nested inside it. */
+  background: var(--surface-canvas);
+}
+
+/* Two columns become one, at every width.
+ *
+ * The list column is gone: it moved into the sidebar (`.nav-sessions`), which
+ * is what the whole restructure is. With it went `clamp(330px, 30%, 460px)`,
+ * the `@media (max-width: 901px)` block that collapsed two panes into one, and
+ * `data-detail` — the attribute existed only so the sheet could say WHICH of
+ * two columns held something, and one column does not need telling.
+ *
+ * What replaced the attribute is `:has(.chrome-title)` further down, and it is
+ * strictly better: the pane hides its own heading when the BAND is actually
+ * showing one, rather than when a hand-maintained attribute says the band
+ * ought to be. The two can no longer drift. */
+
+/* ONE COLUMN, AND THE SIDEBAR FLOATS OVER IT.
+ *
+ * 628 is derived, not chosen: 268 of sidebar plus the 360 of content the
+ * measure system needs (section 6) is the narrowest window that can show both
+ * at once. Below it something has to give, and until this restructure the
+ * answer was a 72px rail — the destinations stayed on screen as icons and the
+ * labels collapsed.
+ *
+ * A rail cannot survive the sidebar holding the plane's LIST. Fourteen pixels
+ * of content box is not a session title, and an icon rail with no list is a
+ * sidebar with its body cut out. So the sidebar becomes an overlay at this
+ * width: full 268px, floating over the content with the content still behind
+ * it, exactly as `data-nav="closed"` already animates it away.
+ *
+ * The DEFAULT does not change and cannot: nothing in Rust observes a resize,
+ * `nav_open` starts true, and `src/main.rs` opens the window at 1180x820. So a
+ * narrow window is only ever reached by dragging one, and dragging it narrow
+ * with the sidebar open leaves the sidebar open — over the content, where the
+ * toggle and ⌘/ both still shut it. That is the whole behaviour, and it is
+ * `position: absolute` plus a shadow rather than any new state.
+ *
+ * MIN_INNER stays (480, 560): the floor is now a content column with an
+ * overlay available, which is a usable window, so nothing forces it up. */
+
+.chrome-parent {
+  flex: 0 1 auto;
+  min-width: 0;
+  /* An identifier — the name of a destination or a server — so mono, by the
+     rule `.nav-row-age` states in this sheet. */
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  /* The mockup sets this `--dim` (#98a1ac). --text-secondary is this app's
+     nearest rung and measures 4.64:1 on the light panel (#f4f6f7) and 8.78:1
+     on the dark one (#181a1e). --text-tertiary would be 2.03:1 in light and is
+     the exact ink a previous pass shipped and the audit rejected at 2.91:1. */
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chrome-sep {
+  flex: 0 0 auto;
+  padding: 0 0.25rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  color: var(--text-secondary);
+}
+
+/* THE HOST IS THE FIRST THING THE BAND GIVES UP.
+ *
+ * `<code>` inside the pill is the mockups' own (`.conn code`), and it is 234px
+ * of band once the agent string is beside it — enough to cut the window's
+ * title to 126px at 704, which is `docs/audit.js`'s TITLE-OUTBID. It goes at
+ * every width narrower than three columns: the inspector already says `host`
+ * on its own row, so nothing is lost where the inspector is on screen, and
+ * where it is not the band is too tight to spend 90px on an address.
+ *
+ * Written as `max-width: 971px` rather than folded into the 627 tier, because
+ * this turns at the three-column breakpoint and that tier turns at the
+ * two-column one — two different questions that happen to both be about
+ * width. */
+@media (max-width: 971px) {
+  .shell-chrome > .conn-badge .conn-host {
+    display: none;
+  }
+}
+
+/* AND THE AGENT STRING ELLIPSISES RATHER THAN SPILLING.
+ *
+ * `assets/main.css` caps `.conn-label` at 9.25rem and argues against an
+ * ellipsis there — "goose-mock 1...." reads as a rendering fault rather than
+ * as a shortened name — and that is right on a phone, where the bar has one
+ * other thing in it. In this band the pill now yields to the window's title
+ * (see its `flex`), so it can be asked for less than its content, and the
+ * alternative to an ellipsis is three pixels of the version number painted
+ * outside the pill's own border. A truncation is a worse name; a spill is a
+ * broken box. */
+.shell-chrome > .conn-badge .conn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shell-chrome > .conn-badge .conn-host {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+  color: var(--text-secondary);
+  max-width: 9.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+

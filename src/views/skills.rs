@@ -156,7 +156,7 @@ fn file_count(files: usize) -> String {
 /// Read by two things that are never on screen together: the header below,
 /// and — on the desktop — the window's own bar, which takes the heading out of
 /// the pane and paints it in `.shell-chrome` instead
-/// (`src/shell/desktop/mod.rs`, `assets/desktop.css`). The `None` arm is the
+/// (`src/shell/desktop/mod.rs`, `assets/desktop/`). The `None` arm is the
 /// view's own dead-end fallback, for the reason stated there.
 pub(crate) fn crumb(ctx: &AppCtx) -> Crumb {
     (ctx.skills.open)().map_or_else(

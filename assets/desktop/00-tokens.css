@@ -1,0 +1,520 @@
+/* ═══ the desktop shell ══════════════════════════════════════════════════
+ *
+ * Compiled into a desktop binary and nothing else (`src/css.rs`, SHELL). Two
+ * things follow from that, and both are the point:
+ *
+ *  - The `@media (max-width: …)` rules below are the ENTIRE width mechanism.
+ *    A phone binary does not contain this file, so they are unreachable from
+ *    one — which is why no Rust in this app observes a window resize, and why
+ *    the rule in src/viewport.rs (the native renderer sends every listened-to
+ *    event through a synchronous XHR) is honoured by having nothing to listen
+ *    to.
+ *
+ *  - Width decides pane count and NOTHING else. A narrow desktop window is a
+ *    narrow desktop app: the rows keep their inline action icons at every
+ *    width, there is no swipe tray and no pull-to-refresh at any width, and
+ *    the nav never becomes an overlay you have to dismiss. That is the same
+ *    position goose's own desktop app takes — its one width threshold
+ *    (NavigationContext.tsx, 700px) collapses the sidebar and changes nothing
+ *    else about how anything behaves.
+ *
+ *    The nav's own collapse is not a width response and is not decided here:
+ *    it is a button, `data-nav` on `.shell` is what it sets, and the sheet
+ *    reads that attribute. It is now the ONLY such attribute: `data-detail`
+ *    went with the list column. Width still tells Rust nothing.
+ *
+ * It is additive: assets/main.css is not edited by this branch, and every
+ * colour here is a token that exists in light and in dark.
+ *
+ * NOT in assets/features/, deliberately. docs/audit.js links that whole
+ * directory into 402x874 PHONE frames, and these rules would restyle every
+ * audited phone state into a layout no phone binary can produce. The exclusion
+ * is the same one assets/platform/ios.css takes, for a different reason. The
+ * cost is stated plainly: nothing in this file is audited yet, because the
+ * gallery holds no desktop state to audit. Capturing them needs a desktop run.
+ */
+
+/* ── 1. the shell and its columns ───────────────────────────────────────
+ *
+ * The widths are the mockups' and the breakpoints are their sum, which is the
+ * difference between a breakpoint and a round number:
+ *
+ *   three columns  212 + 330 + 360 = 902   (the mockups' "900", worked out)
+ *   two columns    212       + 360 = 572
+ *   one column     the nav column drops to 72, which is a 56px card
+ *
+ * Those are COLUMN widths and the card inside each is the column minus two
+ * `--shell-gap`s, which is why the sums did not move when the nav started
+ * floating: the breathing room came out of the panel, not out of the layout.
+ *
+ * 360 is not a taste either: docs/design.md records that "320pt is a defensive
+ * width rather than a device; the narrowest this app really meets is 360", and
+ * `node docs/measure-composer.js 360` is a gate. The numbers are stated once,
+ * in src/shell/desktop.rs, and a test there checks this file against them. */
+
+.app > .shell {
+  /* The SIDEBAR column, gap included, and it is wider than it was because it
+   * now holds the plane's own list rather than seven destination labels.
+   *
+   * 268 is the mockups' number, read out of their CSS rather than off the
+   * picture: `.body { grid-template-columns: 268px minmax(0,1fr) 344px }`.
+   * The card inside it is this minus two gaps, so 252, and the row's text
+   * column is 252 less 8+8 of card padding and 14+8 for the mark — about 214,
+   * which is what the mockup insets its own rows to.
+   *
+   * It also has to be this wide. Measured in Chromium against these sheets,
+   * the OLD list view's title box renders 0px at 212 and 25px at 270; the
+   * compact row in `src/shell/desktop/sidebar.rs` exists because no width
+   * short of about 390 makes that row fit, and 390 is a third of the window.
+   * Still inside goose's own 160..400 band for the same panel. */
+  --nav-w: 268px;
+  /* The breathing room around anything that floats. goose's own desktop app
+   * spends exactly this on the same panel (`p-2` in AppLayout.tsx). */
+  --shell-gap: 8px;
+  /* THE WINDOW'S OWN CHROME, now that it is inside the app.
+   *
+   * `src/main.rs` hides the titlebar, so the traffic lights are painted ON the
+   * app's own surface. WHERE they land is macOS's decision and not ours —
+   * tao's `with_traffic_light_inset` is a no-op under wry (the reason is
+   * written up in src/main.rs), so these two numbers are MEASURED off a real
+   * window rather than chosen: three discs at 20pt centres occupying
+   * x 9..63, y 9..22.5.
+   *
+   * `--chrome-h` is the band kept clear of anything the app wants to put at
+   * the top left, and the band the window is dragged by. 52 rather than the
+   * 23 the lights strictly need, because a control butted against them reads
+   * as a fourth one — goose leaves the same gap, its lights at y 16 and its
+   * first nav row at 78 (AppLayout.tsx + Navigation.tsx).
+   *
+   * `--traffic-w` is where the lights END plus breathing room, so the toggle
+   * beside them and the header indent when the nav is shut are both derived
+   * from one number rather than guessed twice. */
+  --chrome-h: 44px;
+  --traffic-w: 0px;
+  /* How far down the bar its controls sit. NOT `align-items: center`, because
+   * on macOS the bar's controls have to line up with the traffic lights, and
+   * the lights are not centred in it — AppKit paints them at logical y 9..22.5
+   * (centre 16) in a 52pt bar whose centre is 26. Ten points out is exactly
+   * the misalignment this token exists to remove. Where there are no lights,
+   * centring in the bar is right and this is half of what is left after a
+   * 32pt control. */
+  --chrome-pad: 6px;
+  /* WHAT THE NAV CARD PAINTS, and it is a different answer per theme because
+   * the two themes separate surfaces by different means.
+   *
+   * Measured, in the shipping build: the nav was `--bg-secondary` in both, so
+   * in dark it was #3f434b on a #22252a page — 1.53:1, a pale blue-grey slab
+   * bolted to the side of a near-black window. Worse, it took the selected
+   * destination with it: `.drawer-item.active` is `--bg-tertiary` (#474e57),
+   * which on that slab is 1.13:1, so the one pill whose whole job is to say
+   * where you are was the faintest thing in the column.
+   *
+   * Both numbers invert when the fill goes. Against the page instead, the
+   * active pill is 1.60:1 — and that is not a coincidence, it is the
+   * reference: sampled out of the goose desktop screenshots, its sidebar fill
+   * and its canvas fill are the SAME colour (#202125), the panel is separated
+   * by a 1px #383a41 border and nothing else, and its selected pill measures
+   * 1.58:1. In dark `--bg-primary` here is that same "no fill at all", said in
+   * a token so the hover mix below has something to mix against.
+   *
+   * Light keeps its fill, because light has the opposite problem: #f4f6f7 on
+   * #ffffff is 1.09:1 — a step you have to look for, not one that shouts —
+   * and taking it away would leave the card resting on nothing.
+   *
+   * THAT REASONING WAS RIGHT ABOUT THE PILL AND WRONG ABOUT THE WINDOW, and
+   * the ramp below is the correction. Painting the nav the same colour as the
+   * page did fix the contrast pair, but it also left this shell with exactly
+   * TWO dark surfaces — #22252a for the band, the sidebar AND the content
+   * column, and #3f434b for every card on them. So the columns did not read
+   * as columns, and a card was a +29-luminance slab rather than a raised
+   * plane. The mockups have four rungs and use all of them. */
+  --nav-fill: var(--surface-panel);
+
+  /* ── THE SURFACE RAMP ─────────────────────────────────────────────────
+   *
+   * `assets/main.css` gives three background tokens, and they were composed
+   * for a phone: one page, one card, one pressed state, on a screen with no
+   * columns to tell apart. A window has columns, and the difference between
+   * this shell and its mockups was mostly here — one fill doing three jobs.
+   *
+   * The mockups declare five (`10-home-chat.html:8-12`):
+   *
+   *   --win #101215   --panel #181a1e   --canvas #1e2126
+   *   --surface #24282e   --surface-2 #2a2f36
+   *
+   * Four are load-bearing and are taken verbatim in dark, because dark is the
+   * only mode those mockups draw. `--win` is not: nothing in this app paints
+   * behind the window, since `.shell` fills it.
+   *
+   *   PANEL   the band and the sidebar — the chrome that frames content
+   *   CANVAS  the content column, one step lighter so the columns separate
+   *   CARD    a thing ON the canvas: `rgba(255,255,255,.013)` composited,
+   *           which is #212429 — a wash, not a slab
+   *   RAISE   that card hovered or selected
+   *
+   * Every ink still clears its floor on all four; measured, worst case first:
+   *
+   *              panel   canvas  card    raise
+   *   primary     17.42   16.14   15.57   14.81
+   *   secondary    8.78    8.14    7.85    7.47
+   *   accent       7.26    6.73    6.49    6.17
+   *
+   * LIGHT DOES NOT TAKE THIS RAMP, and that is the same rule as before rather
+   * than an exception to it: light already separates its columns, because
+   * `--nav-fill` was `--bg-secondary` and the pane is white. What light must
+   * NOT do is take the wash — #fafbfc on #ffffff is a card you cannot see,
+   * and main.css's buttons paint `--bg-secondary` too, so they would vanish
+   * with it. Light separates with fills, dark separates with a ramp. */
+  --surface-panel: var(--bg-secondary);
+  --surface-canvas: var(--bg-primary);
+  --surface-card: var(--bg-secondary);
+  --surface-raise: var(--bg-tertiary);
+
+  /* ── THE ACCENT, and it is desktop-only on purpose ────────────────────
+   *
+   * `assets/main.css` has no accent token and should not gain one: it is the
+   * PHONE's design system, and this is a colour the phone's surfaces were
+   * never composed against. Declared here, where the desktop already declares
+   * `--nav-w`, `--shell-gap` and `--nav-fill`, so the phone is untouched by
+   * construction rather than by care.
+   *
+   * The value comes from the mockups' own sheet (`--accent:#13bbaf`), and in
+   * dark it is now taken VERBATIM. It could not be before, and the ramp above
+   * is the whole reason it can be now: the surface it failed on was the old
+   * `--bg-secondary` card, #3f434b, where it measured 4.14:1. That card is
+   * gone — a card in dark is the 1.3% wash, #212429 — and against the four
+   * rungs the teal actually meets, the mockups' own value clears with room:
+   *
+   *   #13bbaf  7.26:1 panel   6.73:1 canvas   6.49:1 card   6.17:1 raise
+   *
+   * Light still cannot have it (2.40:1 on white) and keeps the derived value:
+   *
+   *   light #0b6b64   6.36:1 on the pane, 5.87:1 on the card
+   *
+   * A FILL is a separate token, because a filled control inverts the problem:
+   * the ink has to clear the fill rather than the fill clearing the page.
+   * Dark keeps the mockups' vivid teal with their own ink (#0c1a19 on #13bbaf
+   * is 7.44:1); light needs a deeper fill for white to sit on (#ffffff on
+   * #0e7a73 is 5.19:1). */
+  --accent: #0b6b64;
+  --accent-fill: #0e7a73;
+  --accent-ink: #ffffff;
+
+  /* ── THE DESKTOP TYPE SCALE ────────────────────────────────────────────
+   * The mockups are `body{font-size:13px;line-height:1.45}` with a working
+   * range of 9.5 to 30. This app's body is 16 on 24. Every rung below is a
+   * mockup value read out of their CSS, re-expressed as a rem against the
+   * desktop's 16px root (assets/platform/ios.css is NOT compiled into a macOS
+   * binary, so the root here is the browser's 16 — its own header says so).
+   *
+   * Declared HERE and nowhere else, so the phone is untouched by construction:
+   * a phone binary does not contain this file (src/css.rs, SHELL).
+   *
+   * THE ROOT DECLARATION IS THE SHELL'S OWN, and it is not optional.
+   * `body { font-size: var(--text-md) }` in assets/main.css was substituted at
+   * `:root`, where --text-md is 1rem — a custom property resolves on the
+   * element that DECLARES it, not on the one that uses the rule. So
+   * re-pointing --text-md alone would leave every `font: inherit` control in
+   * this shell inheriting 16px. This line is the mockups' `body` rule and it
+   * is the only literal in the block, because nothing may reference it: every
+   * rung has a name. */
+  font-size: 0.8125rem;
+  line-height: 1.45;
+
+  /* 10px. NEW, and the floor. The mockups spend 10px 55 times — `.plane-badge`,
+   * `.libcols .lb`, `.tag`, `.trow .brs` — and 9.5px on three uppercase 700
+   * badges (`.pill`, `.st-t .l`, `.fcard .fh .badge`). 9.5 is NOT taken: the
+   * audit relaxes to 3:1 only at 18.66px (docs/audit.js:1715), so a 9.5px caps
+   * label owes the full 4.5:1 while being the least legible string on screen.
+   * Their 9px is not a rung at all — grepped, it is `.cv` chevrons, `.tick` and
+   * `.check .ic`, every one a glyph, and this app draws those as SVG `.icon`
+   * sized by `--icon-*`.
+   *
+   * FOR UPPERCASE TRACKED LABELS ONLY, and only in --text-primary,
+   * --text-secondary or --accent-ink-on-accent-fill. Measured on the ramp:
+   * secondary 8.78/8.14/7.85/7.47 dark on panel/canvas/card/raise and
+   * 5.02/4.64/4.01 light on canvas/card/raise; --accent-ink on --accent-fill is
+   * 7.44 dark and 5.19 light. --text-tertiary is banned at every rung — 3.26
+   * dark at its best and 2.20 light — which is the 2.91:1 the audit already
+   * caught once on `.recent-fact`. */
+
+  /* ── THE INSPECTOR'S COLUMN AND ITS TWO DIFF INKS ────────────────────
+   *
+   * `--insp-w` is the mockups' third column, identical in all eight files.
+   *
+   * The two inks are NOT called `--diff-add` / `--diff-del`, and the rename is
+   * the whole point: those two names already exist in `assets/main.css` and
+   * are deliberately theme-INVARIANT, because they are painted on `--code-bg`,
+   * which is the same colour in both themes. Declaring them here would put a
+   * light value on the app's real diff screen — #2f6b3d measures 2.19:1 on
+   * `--code-bg` — so the inspector would have quietly broken the one screen it
+   * is summarising. These are the inspector's own, on the panel rung:
+   * #2f6b3d is 4.83:1 on light's panel and #7ee0a4 is 11.55:1 on dark's. */
+  --insp-w: 344px;
+  --insp-add: #2f6b3d;
+  --insp-del: #b3261e;
+
+
+  /* ── THE TRANSCRIPT'S SURFACES ────────────────────────────────────────
+   * The open conversation had NO desktop rule of any kind: it was the phone's
+   * design verbatim, so in dark the user's turn was a pure-white pill floated
+   * right — the brightest object in the window — and the tool card painted
+   * #33373e, a slab brighter than every rung of the ramp around it.
+   *
+   * `--tool-live-line` is #2a8a84 and not the mockups' darker teal: measured,
+   * theirs is 1.95:1 against its own fill and 2.22:1 against the canvas, so
+   * the one line distinguishing a running tool from a finished one was
+   * invisible on both sides of itself. Nothing in the audit measures a border,
+   * which is why this had to be worked out rather than caught. */
+  --tool-surface: var(--surface-card);
+  --slab-sunken: var(--code-bg);
+  --tool-live-fill: var(--surface-card);
+  --tool-live-line: var(--accent);
+
+
+  /* ── THE TWO TINTS THE BOARD WASHES ITS ROWS WITH ────────────────────
+   *
+   * A tree blocked on the reader, and a tree whose container is awake. The
+   * mockups draw both as translucent — `rgba(240,180,41,.05)` and
+   * `rgba(19,187,175,.04)` — and these are those two composited ONCE, at the
+   * canvas, because `docs/audit.js` resolves a computed background and a
+   * translucent fill gives two different answers depending on what it lands
+   * on: the canvas behind the board, and the card wash inside a group.
+   *
+   * One value per tier rather than the mockups' two-shades-of-each: a fifth of
+   * a percent apart is not a distinction a reader can use.
+   *
+   * Measured on `--tint-live`: `--text-primary` 14.92:1 dark / 9.16:1 light,
+   * `--text-secondary` 7.52 / 4.64, `--accent` 6.22 / 5.87. */
+  --tint-warn: #f8f6f0;
+  --tint-live: #f1f7f7;
+
+  --text-3xs: 0.625rem;
+
+  /* 10.5px, the mockups' single most-used size (246 declarations): mono ages,
+   * counts, `.lsec-h .ttl`, `.sec-h .ttl`, `.row .ago`, `.needs`. It was 11px
+   * (0.6875rem) — the comment above this token in the shipping sheet describes
+   * that value and must be rewritten with it. */
+  --text-2xs: 0.65625rem;
+
+  /* 11.5px, the mockups' second most-used (176): `.mini`, `.tool .nm`,
+   * `.file .pth`, `.check .nm`, `.meter .lab`, `.libbtn`. */
+  --text-xs: 0.71875rem;
+
+  /* 12.5px, the control-label rung: `.seg div`, `.newbtn`, `.row .t`, `.chip`,
+   * `.start .t`, `.libpop .it .t`, `.ask .opt`. It is also the rung the shell's
+   * base pairs with — 12.5 against --lh-sm's 18 is 1.44, the mockups' body
+   * ratio to two places. */
+  --text-sm: 0.78125rem;
+
+  /* 15px, THE READING RUNG, and it is deliberately larger than the chrome —
+   * that inversion is the mockups' whole typographic move. Three exact matches:
+   * `.prose{font-size:15px}` (the transcript, which assets/main.css sets from
+   * this token on `.md`, so it re-scales with no rule of its own),
+   * `.launch.calm .field{font-size:15px}` (the home composer) and the send
+   * glyph, whose 13/28 ratio in the mockups is 15/32 here. */
+  --text-md: 0.9375rem;
+
+  /* 16px. The mockups use it once (`.pal-in .q`) and this app spends it on
+   * `.md h3` and `.pane-empty-line`; it exists to keep the markdown ladder
+   * monotone — h1 27, h2 20 (main.css's one literal), h3 16, h4/body 15. */
+  --text-lg: 1rem;
+
+  /* 21px, `.st-t .n` verbatim — the tile numeral, and the only user. */
+  --text-xl: 1.3125rem;
+
+  /* 27px, `.hello h1` verbatim. */
+  --text-2xl: 1.6875rem;
+
+  /* 30px. NEW. `.hello h1.big{font-size:30px;line-height:1.25}` — the chat
+   * home's greeting, which is the one element the mockups set LARGER than this
+   * app's --text-2xl and the reason the greeting has read small since it
+   * landed. */
+  --text-3xl: 1.875rem;
+
+  /* 16px. Serves --text-xs at 1.39 (`.chrome-sub`, `.composer-chip`) and
+   * --text-3xs at 1.60. */
+  --lh-xs: 1rem;
+
+  /* 18px, down from 20. The workhorse: --text-sm 1.44 (the mockups' body ratio
+   * exactly), --text-xs 1.57, --text-2xs 1.71. Two derived numbers follow it
+   * and neither needs editing — `.chrome-title`'s
+   * `padding-top: max(0px, calc((32px - var(--lh-sm)) / 2))` becomes 7, and
+   * `.input`'s six-line cap becomes 108px. */
+  --lh-sm: 1.125rem;
+
+  /* 22px. --text-md 1.47, --text-lg 1.375. NOT prose's line-height: `.md`
+   * declares a unitless 1.65 of its own in assets/main.css, one hundredth off
+   * the mockups' `.prose{line-height:1.6}`, and is left alone. */
+  --lh-md: 1.375rem;
+
+  /* 24px, down from 32. --text-xl 1.14, against `.st-t .n{line-height:1.15}`. */
+  --lh-xl: 1.5rem;
+
+  /* 34px. NEW. --text-2xl 1.26, against the mockups' 1.25. */
+  --lh-2xl: 2.125rem;
+
+  /* 38px. NEW. --text-3xl 1.267, against `.hello h1.big{line-height:1.25}`. */
+  --lh-3xl: 2.375rem;
+
+  /* RESTATED VERBATIM, and that is the entire point: these two expressions live
+   * on `:root` in assets/main.css, where `var(--text-xs)` was substituted
+   * against :root's 0.75rem and froze at 12px. Repeating the identical text
+   * here re-resolves it against this block's --text-xs, giving 11.5px on a
+   * 19.17px line — `.fcard pre{font-size:11.5px;line-height:1.7}`. The min()
+   * is the AX5 cap and is inert at a fixed 16px root; it is kept so the
+   * expression stays one expression in two places. Columns only go UP. */
+  --text-code: min(var(--text-xs), 20px);
+  --lh-code: calc(var(--text-code) * 5 / 3);
+
+  /* ICONS ARE NOT TEXT and have a scale of their own (see main.css), but that
+   * scale was composed against a 16px body. Against a 12.5px one a 20px glyph
+   * is 1.6x its label; the mockups draw 12-13px glyphs beside 12.5px text. The
+   * ceiling comes down with it so a 44px `.icon-btn` circle still holds it with
+   * a ring, and the four users are the only ones that read this token rather
+   * than `1em`: `.nav-toggle`, `.conn-badge`, `.send`, `.icon-btn`.
+   * --icon-lg is NOT touched: its users are 44px circles whose glyph is meant
+   * to dominate them, and nothing in this shell renders one. */
+  --icon-md: clamp(16px, 1rem, 20px);
+
+  /* Every structural line in the shell: the nav card's edge and the divider
+   * between the two content columns. One token, two theme values, chosen so
+   * the line lands at the SAME strength in both — light #cbd1d6 on white is
+   * 1.44:1 and dark #3f434b on #22252a is 1.42:1. Taking one value for both
+   * is what put a 1.9:1 divider next to a 1.4:1 card edge in dark, which reads
+   * as two different kinds of line for no reason. */
+  --shell-line: var(--border-secondary);
+  /* The page's own secondary grey, held under a second name so a rule further
+   * down can mix against it. `.session-item.on` raises `--text-secondary` for
+   * the marked row, and a custom property may not name itself — see the note
+   * there. Nothing else reads this. */
+  --row-quiet: var(--text-secondary);
+  /* The shell paints the PANEL, and the content column paints over it. So the
+   * gutter the nav card floats in is chrome rather than canvas, and the
+   * sidebar reads as one continuous band from the window's bar to the bottom
+   * edge — which is what the mockups draw, where `.side` is full-bleed panel
+   * with no gutter at all. The card's radius and hairline survive inside it,
+   * because the floating panel is this app's own language and design.md's
+   * first rule; what changes is only what it floats ON. */
+  background: var(--surface-panel);
+  flex: 1;
+  min-height: 0;
+  /* A COLUMN: the window's own bar, then the columns of content. It was a row
+   * with the bar's contents absolutely positioned over it, and that could not
+   * be made to work — the traffic lights land at logical (9, 9) and the nav
+   * card is inset 8 with a 16px radius, so the two fought over one corner no
+   * matter how the paddings were arranged. A band that spans the window is
+   * what gives the lights somewhere of their own to be. */
+  display: flex;
+  flex-direction: column;
+}
+
+/* The bar. Height is a token because two other things read it, and it exists
+ * on every platform — `--traffic-w` is zero where the titlebar was not hidden,
+ * so the bar simply starts with the toggle instead of leaving room first. */
+.shell-chrome {
+  flex: 0 0 var(--chrome-h);
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding-left: 6px;
+  /* The band is CHROME, so it paints the panel rung and the sidebar beneath it
+   * paints the same one — which is what makes the content column read as the
+   * one place content is. It declared no background at all until now, so it
+   * inherited the page and the window had a single fill from edge to edge. */
+  background: var(--surface-panel);
+  border-bottom: 1px solid var(--shell-line);
+}
+
+/* Where AppKit paints the traffic lights. Nothing renders them and nothing may
+ * cover them — this box is empty on purpose, and it is `flex: 0 0` so it holds
+ * its width rather than being squeezed by the drag region beside it. */
+.traffic-slot {
+  flex: 0 0 var(--traffic-w);
+  align-self: stretch;
+}
+
+.shell-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+/* DARK TAKES THE RAMP. Written twice because the two selectors mean different
+ * things — the media query is "the system says dark and the app has not
+ * overridden it", the attribute is "the app says dark" — and a test holds the
+ * two bodies identical. Every value here is measured on `--surface-panel` and
+ * `--accent` above.
+ *
+ * The three `--bg-*` lines are the leverage, and they are the reason this is a
+ * pass over the whole app rather than over this sheet. `src/views/` is shared
+ * with the phone and has never carried a `cfg(target_os)`; it paints
+ * `--bg-primary` for a page and `--bg-secondary` for a card. Remapping those
+ * HERE, on the shell, puts every nested view — settings, the transcript, the
+ * lists — on the ramp without one desktop-only view or one branch in Rust.
+ *
+ * `--bg-secondary` gets `--surface` (#24282e) and NOT the card wash, because
+ * main.css spends that token on CONTROLS as well as cards (`.btn.secondary`,
+ * `.icon-btn.action`, `.chip`), and the wash is 1.04:1 against the canvas —
+ * a card you can see the edge of, but a button that is gone. The mockups draw
+ * the same distinction: their card is `rgba(255,255,255,.013)` and their
+ * controls are `--surface` with a hairline. The shell's own cards therefore
+ * name `--surface-card` directly rather than going through `--bg-secondary`.
+ *
+ * The two border tokens soften but do not go to the mockups' `--line-soft`
+ * (1.09:1), because main.css has controls whose only edge is a border and
+ * they would have vanished. #2f343b is 1.29:1 on the canvas against the
+ * mockups' 1.23:1 and the old 1.63:1 — most of the way, with nothing lost. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .app > .shell {
+    --insp-add: #7ee0a4;
+    --insp-del: #ff9b98;
+    --insp-add: #7ee0a4;
+  --insp-del: #ff9b98;
+  --slab-sunken: #1a1d22;
+  --tool-live-fill: #202d31;
+  --tool-live-line: #2a8a84;
+  --tint-warn: #282826;
+  --tint-live: #1d292d;
+  --surface-panel: #181a1e;
+    --surface-canvas: #1e2126;
+    --surface-card: #212429;
+    --surface-raise: #24282e;
+    --bg-primary: var(--surface-canvas);
+    --bg-secondary: var(--surface-raise);
+    --bg-tertiary: #2a2f36;
+    --border-primary: #2f343b;
+    --border-secondary: #3b414a;
+    --shell-line: #2c3138;
+    --accent: #13bbaf;
+    --accent-fill: #13bbaf;
+    --accent-ink: #0c1a19;
+  }
+}
+
+:root[data-theme="dark"] .app > .shell {
+  --surface-panel: #181a1e;
+  --surface-canvas: #1e2126;
+  --surface-card: #212429;
+  --surface-raise: #24282e;
+  --bg-primary: var(--surface-canvas);
+  --bg-secondary: var(--surface-raise);
+  --bg-tertiary: #2a2f36;
+  --border-primary: #2f343b;
+  --border-secondary: #3b414a;
+  --shell-line: #2c3138;
+  --accent: #13bbaf;
+  --accent-fill: #13bbaf;
+  --accent-ink: #0c1a19;
+}
+
+/* The one control whose only separation was the fill that just softened.
+ * `.icon-btn.action` (main.css:830-839) is `--bg-secondary` with no border at
+ * all — 1.63:1 against the old page, 1.09:1 against the canvas. It gets the
+ * hairline every other control in the mockups already has, rather than the
+ * ramp getting a louder rung for its sake. */
+.app > .shell .icon-btn.action {
+  border: 1px solid var(--border-primary);
+}
+
