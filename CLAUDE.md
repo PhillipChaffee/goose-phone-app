@@ -8,7 +8,10 @@ worn a second way (see the two-shells paragraph at the end).
 - `src/` — the Dioxus app (`state.rs` holds connection lifecycle + transcript folding)
 - `crates/goose-acp-client/` — UI-independent ACP protocol library (tokio + tungstenite + rustls)
 - `crates/opencode-client/` — the other backend: the code-agent manager and the per-chat `OpenCode` servers behind it (reqwest + rustls)
-- `crates/mock-goose-server/` — protocol-faithful fake server for testing without an API key
+- `crates/mock-goose-server/` — protocol-faithful fake goose, for testing without an API key
+- `crates/mock-opencode-server/` — the same for the other backend: the
+  code-agent manager and the per-chat `OpenCode` servers behind it, so the
+  whole Code plane runs with no container engine and no paid key
 - `scripts/check-server.sh` — verifies a goose server is in the shape the app needs
 - `docs/iphone-setup.md` — end-to-end iPhone deployment walkthrough
 
@@ -18,9 +21,30 @@ Common commands:
 cargo clippy --workspace --all-targets -- -D warnings   # the CI lint gate
 cargo test --workspace               # all tests
 cargo fmt --all -- --check           # formatting gate
-cargo run -p mock-goose-server       # fake server on :3285 (secret "mock-secret")
+cargo run -p mock-goose-server       # fake goose on :3285 (secret "mock-secret")
+cargo run -p mock-opencode-server    # fake code agents on :4399 ("mock-code-secret")
 dx serve --desktop                   # the desktop shell (the phone's is iOS/Android only)
 ```
+
+**Testing the whole app locally.** Start both fakes, then serve with the
+`GOOSE_DEV_*` seeds so a rebuild does not mean retyping five fields. They are
+read by `dev_seed!` in `src/state.rs` and expand to nothing in a release build,
+so a development endpoint cannot ride along into one:
+
+```bash
+GOOSE_DEV_SERVER_URL=http://127.0.0.1:3285 \
+GOOSE_DEV_SECRET_KEY=mock-secret \
+GOOSE_DEV_WORKING_DIR=$PWD \
+GOOSE_DEV_CODE_URL=http://127.0.0.1:4399 \
+GOOSE_DEV_CODE_PASSWORD=mock-code-secret \
+  dx serve --desktop
+```
+
+The fields arrive filled; press **Save & Connect** once per launch, because the
+app deliberately starts disconnected. `MOCK_FIXTURES=empty` on either fake
+gives the connected-and-empty state every empty-list message is written for,
+and the code fake takes `slow`, `ask`, `fail` and `notool` as prompt keywords
+the way the goose one takes `slow` and `notool`.
 
 Lint policy: `[workspace.lints]` in the root `Cargo.toml` turns on clippy's
 pedantic, nursery and cargo groups plus restriction picks (`unwrap_used`,

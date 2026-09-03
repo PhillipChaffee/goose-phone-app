@@ -26,6 +26,7 @@
 //! intended outcome rather than an unfinished one. What is here is measured
 //! from `AppCtx` and nothing else.
 
+use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 
 use crate::icons::Icon;
@@ -745,6 +746,37 @@ fn hour_now() -> u32 {
     u32::try_from((secs / 3_600) % 24).unwrap_or(0)
 }
 
+/// DIAL THE CODE GATEWAY ON ARRIVAL.
+///
+/// Its own component with nothing to render, because MOUNTING is the trigger
+/// and a `use_effect` on `Home` could not be. `Home` is one component for both
+/// halves, so switching plane changes a PROP rather than remounting — and a
+/// `use_effect` does not re-run for a prop, only for a signal it read. Worse,
+/// the first draft read `plane` before it read `code_conn` and returned early
+/// on the chat half, so it subscribed to nothing at all and could never re-run
+/// for any reason. Measured: the Code plane sat at "Not connected" with the
+/// gateway answering, and the mock server's log had not one request in it.
+///
+/// `use_hook` and not `use_effect`, which is `views::code::CodeSessionsView`'s
+/// own shape for the same job, down to the two guards: nothing to do if a
+/// client already exists, and nothing to dial if no gateway is configured.
+#[component]
+fn CodeDial() -> Element {
+    let ctx = crate::state::use_app_ctx();
+    use_hook(|| {
+        if ctx.code_client.peek().is_none()
+            && !ctx.settings.peek().code_server_url.trim().is_empty()
+        {
+            spawn_forever(async move {
+                if crate::code::code_connect(&ctx).await {
+                    crate::code::start_code_poll(&ctx);
+                }
+            });
+        }
+    });
+    rsx! {}
+}
+
 /// The plane's home screen.
 ///
 /// Its own component rather than rsx inside `AppShell`, for `SidebarList`'s
@@ -789,33 +821,6 @@ pub(crate) fn Home(plane: Plane) -> Element {
     // make it over, including one that arrives after this screen is already up
     // — which on the desktop is the common case, because the home screen is
     // what the window opens on.
-    // THE CODE HALF HAS TO CONNECT ITSELF, and nothing on the desktop ever
-    // did. `views::code::CodeSessionsView` is the only thing in the app that
-    // calls `code_connect`, and this shell renders THIS component where that
-    // view would be — so the code plane was never dialled: the board, the
-    // sidebar's tree list and every tile read an empty `code_chats` forever,
-    // with the standing line correctly reporting a socket nobody had tried.
-    //
-    // Fires only out of `Disconnected`, and that guard is the whole of it.
-    // Reading `code_conn` is what re-arms the effect; `Connecting` is this
-    // effect's own write coming back, `Connected` is done, and `Failed` must
-    // NOT retry on its own — a gateway that is switched off would otherwise be
-    // dialled in a tight loop for as long as the window is open.
-    use_effect(move || {
-        if plane != Plane::Code {
-            return;
-        }
-        if !matches!((ctx.code_conn)(), crate::state::ConnState::Disconnected) {
-            return;
-        }
-        let ctx = ctx;
-        spawn(async move {
-            if crate::code::code_connect(&ctx).await {
-                crate::code::start_code_poll(&ctx);
-            }
-        });
-    });
-
     use_effect(move || {
         if plane == Plane::Chat && (ctx.conn)().is_connected() {
             crate::recipes::refresh(&ctx);
@@ -869,10 +874,14 @@ pub(crate) fn Home(plane: Plane) -> Element {
                 if plane == Plane::Chat {
                     h1 { class: "home-greeting", "{part_of_day(hour_now())}." }
                 }
-                // THE LEDE, three clauses of it, in the reading face. Over a
-                // dead socket `lede` answers `None` and the one honest
-                // sentence takes its place — see `standing`.
-                if let Some(lede) = lede(&ctx, connected) {
+                // THE LEDE, three clauses of it, in the reading face — and the
+                // CHAT half's only. It counts `ctx.sessions` and names the
+                // goose server, so on the code plane it read "No conversations
+                // yet with the goose server on 127.0.0.1:3285" over a board of
+                // five working trees: the wrong half's facts, confidently. The
+                // code half has no lede in the mockups either, because its
+                // board is the answer to the same question.
+                if let Some(lede) = lede(&ctx, connected).filter(|_| plane == Plane::Chat) {
                     p { class: "home-lede",
                         "{lede.opening} {lede.before}"
                         if let Some(host) = lede.host.clone() {
@@ -880,7 +889,11 @@ pub(crate) fn Home(plane: Plane) -> Element {
                         }
                         "{lede.after}"
                     }
-                } else {
+                } else if !connected {
+                    // Connected, the code half says nothing here: the tiles and
+                    // the board below are the standing line, and a sentence
+                    // over them would be the count said twice. Disconnected,
+                    // both halves owe the reader the reason.
                     p { class: "home-standing", "{standing(plane, connected, count)}" }
                 }
 
@@ -1070,6 +1083,17 @@ pub(crate) fn Home(plane: Plane) -> Element {
                 // a conversation count is already the lede's first clause, and
                 // everything else the mockup tiles there is spend and latency,
                 // which have no source.
+                // THE CODE HALF HAS TO DIAL ITSELF, and nothing on the
+                // desktop ever did: `views::code::CodeSessionsView` is the
+                // only thing in the app that calls `code_connect`, and this
+                // shell renders `Home` where that view would be. So the board,
+                // the sidebar's tree list and every tile read an empty
+                // `code_chats` forever, with the standing line correctly
+                // reporting a socket nobody had tried to open.
+                if plane == Plane::Code {
+                    CodeDial {}
+                }
+
                 if plane == Plane::Code {
                     div { class: "home-tiles",
                         for tile in code_tiles(&ctx) {
