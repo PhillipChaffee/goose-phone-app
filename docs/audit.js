@@ -318,9 +318,35 @@ const coverage = (states) => {
   const untitled = desktop.filter((state) => !state.body.includes('chrome-title'));
   if (untitled.length) {
     gaps.push(`${untitled.length} desktop state(s) render no .chrome-title `
-      + `(${untitled.map((s) => s.key).join(', ')}) — the band is total now, so a`
+      + `(${untitled.map((s) => s.label).join(', ')}) — the band is total now, so a`
       + " state with no title is a screen the window cannot name AND one whose pane"
       + ' heading is hidden by `:has(.chrome-title)` without anything replacing it');
+  }
+  // AND EVERY DESKTOP STATE MUST CARRY THE COLUMN THE SHELL AXIS COLLAPSES.
+  //
+  // `DESKTOP_SHELL`'s fourth cell shuts the inspector and INSP-SHUT checks
+  // that the room came back. Both are silent on a state whose markup has no
+  // `.insp` in it at all: `querySelector` returns null, the width is zero, the
+  // claim passes, and the cell walks a frame that was already collapsed. That
+  // is the same disease this whole function treats one level down — a gate
+  // reporting Clean because its subject went missing rather than because it
+  // was right.
+  //
+  // Asked of the store rather than of the layout because it is a question
+  // about the CAPTURE. src/shell/desktop/mod.rs:1143-1150 renders the column
+  // unconditionally and lets the sheet hide it, so a desktop state without one
+  // is either markup that stopped being rendered or a store older than the
+  // change that stopped rendering it — and neither is something a viewport
+  // sweep can tell you.
+  //
+  // The class as a whole TOKEN, not as a substring: `.insp-toggle` lives in
+  // the band and would answer for the column it opens.
+  const noInsp = desktop.filter((state) => !/class="(?:[^"]*\s)?insp(?:\s[^"]*)?"/.test(state.body));
+  if (noInsp.length) {
+    gaps.push(`${noInsp.length} desktop state(s) render no .insp column `
+      + `(${noInsp.map((s) => s.label).join(', ')}) — the shell axis's `
+      + '`data-insp: closed` cell would collapse nothing there and INSP-SHUT would'
+      + ' pass on an empty question');
   }
   return gaps;
 };
@@ -784,19 +810,41 @@ const DESKTOP_SIZES = [
 // ever opts into a system text size, this list grows and that stops being true.
 const DESKTOP_SCALES = [16];
 
-// The shell's own state, walked rather than captured: the nav's collapse, and
-// whether the window is fullscreen.
+// The shell's own state, walked rather than captured: the nav's collapse, the
+// inspector's, and whether the window is fullscreen.
 //
 // `data-nav` is a plain attribute on `.shell` that only assets/desktop/
 // reads (src/shell/desktop.rs sets it; a test there checks the sheet acts on
-// it), so flipping it here is a real reflow of a real rule and not a fiction —
-// which is what separates it from `data-insp`, a fact about what the reader
-// last asked for that has to be captured and must never be flipped. It is
-// worth the second pass because the rail tier and the collapsed tier are where
-// the window chrome gets crowded: the toggle, the traffic-light reservation
-// and the nav card are all in the same corner, and the one regression this
-// shell has already shipped — a toggle painted on top of the macOS close
-// button — lived in exactly that cell.
+// it), so flipping it here is a real reflow of a real rule and not a fiction.
+// It is worth the second pass because the rail tier and the collapsed tier are
+// where the window chrome gets crowded: the toggle, the traffic-light
+// reservation and the nav card are all in the same corner, and the one
+// regression this shell has already shipped — a toggle painted on top of the
+// macOS close button — lived in exactly that cell.
+//
+// `data-insp` IS THE SAME KIND OF FACT, and this list said the opposite until
+// the fourth cell went in: that it was "a fact about what the reader last
+// asked for that has to be captured and must never be flipped". Both halves
+// of that were wrong.
+//
+//   Flippable, because the column is not conditional markup. Rust renders the
+//   inspector unconditionally and the SHEET hides it —
+//   src/shell/desktop/mod.rs:1143-1150 says so in as many words — so every
+//   captured state carries the whole third column in its bytes whatever the
+//   attribute happened to say, and flipping it lays out markup that is really
+//   there. Exactly `data-nav`'s situation, one column over.
+//
+//   And "captured" is the reason it MUST be flipped rather than the reason it
+//   must not. `inspector_open` is `use_synced_storage` (src/state.rs:557), a
+//   preference the app restores; `nav_open` is a plain `use_signal(|| true)`
+//   (src/shell/desktop/mod.rs:686), open again at every launch. So the one
+//   value this grid was taking from the store is the one an operator's own
+//   machine decides, and a capture run on a machine whose inspector was shut
+//   would have quietly turned every cell collapsed — the expanded arrangement
+//   all 26 desktop states were written for gone from the grid, with the
+//   summary line still claiming a shell axis. Every cell states all three
+//   attributes now, so no cell's arrangement is a fact about the machine the
+//   capture ran on.
 //
 // AND THE WINDOW'S OWN TWO STATES, in the same list rather than as a second
 // product.
@@ -810,27 +858,67 @@ const DESKTOP_SCALES = [16];
 // once matched a real fullscreen window. A rule no frame ever renders and no
 // window ever triggers is indistinguishable from a rule that works.
 //
-// Three cells and not four, chosen rather than multiplied. Fullscreen changes
-// exactly one thing — the band, which loses its indent and gains its padding —
-// and the band is the same band whether the nav is open or shut, so
-// closed x fullscreen measures the collapsed cell a second time and nothing
-// else. Stated as a product this would be a 100% cost on the desktop half for
-// one new arrangement; stated as a list it is 50%.
+// FOUR CELLS AND NOT EIGHT, chosen rather than multiplied — the same
+// discipline the first three were chosen with, applied to the attribute that
+// doubled the product. Measured on `desktop-chats` at rest, at the reference
+// window, as nav / .pane-main / .insp in px:
+//
+//   nav open,   insp open     268 /  828 / 344   the captured arrangement
+//   nav closed, insp open       0 / 1096 / 344
+//   nav open,   insp closed   268 / 1172 /   0   mockup 31, NOT walked
+//   nav closed, insp closed     0 / 1440 /   0   mockup 32, the cell added
+//
+// The added cell is mockup 32's, and it takes the pane to the whole window:
+// 1440px of content column, against 1096 for the widest the three cells before
+// it ever rendered. Every centred `--measure` and every gutter in
+// assets/desktop/80-measure.css is at its most stretched there — 400px a side
+// at the reference — and that geometry had never been laid out by anything.
+//
+// MOCKUP 31'S CELL IS THE ONE LEFT OUT, and the reason is measured rather than
+// asserted. At six of the nine window sizes it renders a frame identical to
+// the `nav open` cell already walked: assets/desktop/90-inspector.css's
+// `@media (max-width: 971px) { .shell .insp { display: none } }` (:468-471)
+// hides the inspector below 972 outright, and the one rule that brings it back
+// in the 704..971 band (:474-477) needs the nav SHUT to match — so at 480,
+// 627, 628, 703, 704 and 971, flipping `data-insp` under an open nav changes
+// nothing at all. At the other three it differs from the added cell only in
+// how wide the pane is (704/1172/1332 against 972/1440/1600), and nothing in
+// assets/desktop/ couples the pane's CONTENTS to `data-nav`: the four rules
+// that read it touch `.navpane`, `.navcard`, `.nav-toggle` and `.insp`, and
+// nothing else. A pane at 1172 is a pane at a width, and the added cell
+// already sweeps the pane from 480 to 1600 across the size axis. THAT STOPS
+// BEING TRUE the moment a rule makes the pane's contents depend on `data-nav`
+// as well as on its width — #136 proposes exactly that, a `--measure` term
+// keyed on `data-nav` and `data-insp` — and when one lands, this paragraph is
+// what to re-read rather than the cell count.
+//
+// Fullscreen x insp is redundant for the reason fullscreen x nav-closed
+// already was: fullscreen changes exactly one thing, the band, which loses its
+// indent and gains its padding, and the band is the same band whichever
+// columns are under it — `grep -rn data-insp assets/` reaches one file and it
+// is the inspector's own.
+//
+// Stated as a product this axis would be 8 cells for two new arrangements;
+// stated as a list it is 4 — a third more desktop cells, and 28s against 29s
+// locally for `node docs/audit.js both`, which is inside the spread between
+// two runs of the same file. The phone half is 98 of the 124 states and it did
+// not move.
 const DESKTOP_SHELL = [
-  { label: 'nav open', attrs: { 'data-nav': 'open', 'data-fullscreen': 'false' } },
-  { label: 'nav closed', attrs: { 'data-nav': 'closed', 'data-fullscreen': 'false' } },
-  { label: 'nav open, fullscreen', attrs: { 'data-nav': 'open', 'data-fullscreen': 'true' } },
+  { label: 'nav open, insp open', attrs: { 'data-nav': 'open', 'data-fullscreen': 'false', 'data-insp': 'open' } },
+  { label: 'nav closed, insp open', attrs: { 'data-nav': 'closed', 'data-fullscreen': 'false', 'data-insp': 'open' } },
+  { label: 'nav open, insp open, fullscreen', attrs: { 'data-nav': 'open', 'data-fullscreen': 'true', 'data-insp': 'open' } },
+  { label: 'nav closed, insp closed', attrs: { 'data-nav': 'closed', 'data-fullscreen': 'false', 'data-insp': 'closed' } },
 ];
 
-// EVERY attribute the shell writes onto `.shell`, which is more than the two
-// this file flips. `src/shell/desktop/mod.rs:783-790` is the whole list and the
-// only source for it: `data-nav`, `data-fullscreen`, `data-insp`.
+// EVERY attribute the shell writes onto `.shell`, which used to be more than
+// the ones this file flips and is now exactly them.
+// `src/shell/desktop/mod.rs:783-790` is the whole list and the only source for
+// it: `data-nav`, `data-fullscreen`, `data-insp`.
 //
-// The first two arrive from DESKTOP_SHELL above and the third arrives in the
-// CAPTURE, and the difference is why the check below reads all three rather
-// than trusting the two it sets. `setAttribute` on an element that exists
-// cannot fail, so "did my write land" is close to a tautology; the question
-// that is not a tautology is whether the captured markup carries these
+// All three arrive from DESKTOP_SHELL above, and the check below still READS
+// all three before writing any of them. `setAttribute` on an element that
+// exists cannot fail, so "did my write land" is close to a tautology; the
+// question that is not a tautology is whether the captured markup carries these
 // attributes ON THIS ELEMENT in the first place. It answers two failures at
 // once: an attribute the app renamed or dropped (the store re-captured, the
 // sheet's `[data-insp="closed"]` rules now matching nothing ever), and an
@@ -1572,6 +1660,53 @@ const GEOMETRY = () => {
     }
   }
 
+  // AND THE COLLAPSE HAS TO COLLAPSE SOMETHING, OR THE FOURTH CELL BOUGHT
+  // NOTHING — the block above's lesson, applied to the axis added after it,
+  // and measured before this was written rather than after.
+  //
+  // `DESKTOP_SHELL` grew a `data-insp: closed` cell so that
+  // `assets/desktop/90-inspector.css:12-14` — `.shell[data-insp="closed"] .insp
+  // { display: none }`, the only rule in the tree keyed on that value — would
+  // be rendered by something. RENDERING a rule is not CHECKING it, which is the
+  // whole of the FULLSCREEN note above: measured on this tree with the cell in
+  // and this check out, repointing that rule at a value nothing writes
+  // (`[data-insp="shut"]`) so the third column stays open in the collapsed cell
+  // leaves `node docs/audit.js both` **Clean** — 0 findings for a toggle that
+  // has stopped toggling. Nothing else notices, and nothing else can: a column
+  // that is still there is 344px of correctly laid out inspector, and every
+  // check in this file is about a box being in the wrong place rather than
+  // about a box being there at all.
+  //
+  // With this check in, the same sabotage is **156 findings** — 26 desktop
+  // states x 2 themes x the three window sizes where the sheet is not already
+  // hiding the column for width alone (972, 1440, 1600) x the one collapsed
+  // cell. The three-cell sweep this axis replaced reports Clean on the same
+  // broken sheet, which is the whole argument for both halves of this change
+  // in one number.
+  //
+  // So the cell carries its own claim, in the one number that rule exists to
+  // produce: with the inspector shut, the third column holds no room. Read off
+  // the LAYOUT and not off `display`, because `visibility: hidden` and
+  // `opacity: 0` are both collapses that keep their 344px — and the pane is
+  // then the one thing on screen that has not moved, which is the version of
+  // this bug somebody would ship while looking straight at it.
+  //
+  // What this cannot say, stated rather than implied: an inspector hidden in
+  // EVERY cell passes here, because there is then nothing to give back. That
+  // failure is the loud kind — a whole column missing from the window the app
+  // opens — and the quiet half of it, the markup going away, is asked of the
+  // store in `coverage` before a browser is launched.
+  const shut = document.querySelector('.shell[data-insp="closed"]');
+  if (shut) {
+    const held = shut.querySelector('.insp');
+    const room = held ? held.getBoundingClientRect().width : 0;
+    if (room > 0.5) {
+      out.push(`INSP-SHUT    the inspector still holds ${room.toFixed(0)}px of the window while`
+        + ' `data-insp="closed"` — the column the toggle just shut is still on screen,'
+        + ' and the pane never got the room back');
+    }
+  }
+
   // THE WINDOW HAS TO STAY DRAGGABLE.
   //
   // `src/main.rs` hides the macOS titlebar, which takes AppKit's own drag
@@ -1966,7 +2101,7 @@ const compareFonts = async (states) => {
   // Which shell drew a state is in its key and nowhere else — see
   // DESKTOP_PREFIX. It decides three things at once: which stylesheets the
   // rebuilt page links, which viewport sizes it is walked at, and whether the
-  // nav's collapse is walked as a second axis.
+  // shell's own collapses are walked as a second axis.
   const states = Object.entries(JSON.parse(fs.readFileSync(STATES, 'utf8')))
     .map(([label, body]) => ({ label, body, desktop: label.startsWith(DESKTOP_PREFIX) }));
   if (states.length === 0) {
@@ -2082,8 +2217,8 @@ const compareFonts = async (states) => {
       //
       // WHICH grid, from the state. A phone state walks phone sizes at four
       // text sizes; a desktop state walks window sizes at the one root a
-      // desktop build has, and walks the nav's collapse instead of a text
-      // scale. Two products, not one — the summary line below states them
+      // desktop build has, and walks the shell's own collapses instead of a
+      // text scale. Two products, not one — the summary line below states them
       // separately for that reason.
       const sizes = state.desktop ? DESKTOP_SIZES : SIZES;
       const scales = state.desktop ? DESKTOP_SCALES : SCALES;
@@ -2141,10 +2276,13 @@ const compareFonts = async (states) => {
                 // and they are the evidence; overwriting them and reading back
                 // would only ever confirm this walk's own assignment.
                 const before = Object.fromEntries(all.map((a) => [a, shell.getAttribute(a)]));
-                // Set here for the same reason `data-nav` is: the captured
-                // markup can only ever say "false" for `data-fullscreen`,
-                // because a window being driven for a capture is not a window
-                // in fullscreen.
+                // Set here for the same reason `data-nav` is, and for one of
+                // its own each. The captured markup can only ever say "false"
+                // for `data-fullscreen`, because a window being driven for a
+                // capture is not a window in fullscreen; and it says whatever
+                // the operator's own stored `inspector_open` said for
+                // `data-insp`, which is a fact about a machine rather than
+                // about this app.
                 for (const [name, value] of Object.entries(attrs)) shell.setAttribute(name, value);
                 return all
                   .filter((a) => before[a] === null)
@@ -2152,9 +2290,9 @@ const compareFonts = async (states) => {
               }, { attrs: nav.attrs, all: SHELL_ATTRS });
               // AND IT SAYS SO WHEN IT COULD NOT, which `if (!shell) return;`
               // did not. Everything the shell axis buys is bought by these
-              // attributes: with no `.shell` to put them on, the three cells
-              // are three walks of one identical frame and the summary line
-              // goes on advertising "3 shell states". Measured: rename the
+              // attributes: with no `.shell` to put them on, the cells are
+              // that many walks of one identical frame and the summary line
+              // goes on advertising a shell axis. Measured: rename the
               // class consistently — in `src/shell/desktop.rs`'s markup and in
               // both desktop sheets, which is what an ordinary refactor does —
               // and the layout is untouched, the axis quietly stops existing
@@ -2167,14 +2305,14 @@ const compareFonts = async (states) => {
               // attribute, and it is silent in the same way: the sheet keys a
               // block off a name the app no longer writes on that element,
               // every cell renders the frame the capture already had, and the
-              // grid reports Clean over an axis that walked one frame three
+              // grid reports Clean over an axis that walked one frame four
               // times. Reported and not measured — an axis that is not there
               // is a fact about the instrument, and a broken instrument does
               // not get to return a number.
               if (problems.length) {
                 console.error(`${state.label} is keyed as a desktop state but ${problems.join('; ')}`
                   + `, so the shell axis (${DESKTOP_SHELL.map((c) => c.label).join(' / ')}) would`
-                  + ' walk the same frame three times — have they been renamed or moved in'
+                  + ` walk the same frame ${DESKTOP_SHELL.length} times — have they been renamed or moved in`
                   + ' src/shell/desktop/mod.rs without being renamed here, or is'
                   + ' docs/gallery-states.json older than that change?');
                 process.exit(1);
@@ -2221,8 +2359,8 @@ const compareFonts = async (states) => {
   //
   // AND THE TWO SHELLS ARE STATED SEPARATELY, for exactly that reason one
   // level up. They are different grids — six phone sizes at four text sizes
-  // against seven window sizes at one, with the nav's collapse in place of the
-  // text axis — so a single sentence over both would claim four times the
+  // against nine window sizes at one, with the shell's own collapses in place
+  // of the text axis — so a single sentence over both would claim four times the
   // scale coverage the desktop half has.
   const themeCount = `${themes.length} theme${themes.length > 1 ? 's' : ''}`;
   const count = (desktop) => states.filter((z) => !!z.desktop === desktop).length;
@@ -2234,7 +2372,9 @@ const compareFonts = async (states) => {
       + ` x ${scales.length} text size${scales.length > 1 ? 's' : ''} (${scales.join('/')}px)`
       + (desktop
         ? ` x ${DESKTOP_SHELL.length} shell states (`
-          + `${DESKTOP_SHELL.map((c) => c.label).join('/')})`
+          // ' / ' and not '/': every label names two collapses now and carries
+          // a comma of its own, so the tighter separator ran them together.
+          + `${DESKTOP_SHELL.map((c) => c.label).join(' / ')})`
         : '');
   };
   const shells = [false, ...(count(true) ? [true] : [])];
