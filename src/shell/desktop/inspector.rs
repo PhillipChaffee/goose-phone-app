@@ -601,3 +601,429 @@ pub(crate) fn Inspector(plane: Plane, on_subject: bool) -> Element {
         }
     }
 }
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test scaffolding: a fixture this file wrote that will not parse \
+              is a broken test rather than a runtime condition"
+)]
+mod tests {
+    use super::{
+        chat_facts, code_facts, context_meter, extension_chips, session_facts, tool_timeline,
+        touched_files, Chord, Inspector, CHORDS,
+    };
+    use crate::nav::Plane;
+    use crate::state::{ChatItem, ConnState};
+    use dioxus::prelude::*;
+
+    /// THE LEGEND MAY NOT PROMISE A CHORD NOTHING BINDS.
+    ///
+    /// This is the panel's honesty check and the one a reader catches you out
+    /// on fastest, because they press it. The mockups' legends list ten
+    /// shortcuts — ⌘N, ⌘⇧K, ⌘1/⌘2, ⌘K, ⌘⇧N, ⌘D, ⌘⇧P, J/K, V, ⌘↵ — and this
+    /// shell listens for four.
+    ///
+    /// Held BOTH ways, which is what makes it more than a spelling test: every
+    /// row of the legend must name a chord some script matches, and the number
+    /// of keydown listeners in the shell must equal the number of rows. Add a
+    /// row without a listener and the first half fails; bind a chord without
+    /// listing it and the second does.
+    ///
+    /// REPRODUCED: delete `INSP_KEY`'s listener and the count drops to 3 while
+    /// `CHORDS` still has 4 — fails. Add a fifth `Chord` — fails. Put both
+    /// back and it is green.
+    #[test]
+    fn the_legend_promises_only_chords_the_shell_binds() {
+        let shell = crate::selfscan::code_of("src/shell/desktop/mod.rs", include_str!("mod.rs"));
+        let listeners = shell.matches("addEventListener('keydown'").count();
+        assert_eq!(
+            listeners,
+            CHORDS.len(),
+            "the shell binds {listeners} keydown listeners and the inspector's \
+             legend lists {} chords. A legend row with nothing behind it is \
+             worse than a wrong number, because the reader presses it",
+            CHORDS.len()
+        );
+
+        // And each row names a key some script actually tests for. The scripts
+        // match on the CHARACTER, so the last character of the chord is the
+        // one to look for — 'esc' is the exception and matches by name.
+        for Chord { keys, what } in CHORDS {
+            // The scripts match on the CHARACTER, so the last character of
+            // the chord is the one to look for. Lowercased, because
+            // `REFRESH_KEY` compares `e.key.toLowerCase()` — a chord's glyph
+            // is upper case and the key it is is not. Escape is the one that
+            // matches by name rather than by character.
+            let needle = match keys {
+                "esc" => "Escape".to_owned(),
+                other => format!(
+                    "'{}'",
+                    other
+                        .chars()
+                        .next_back()
+                        .unwrap_or('?')
+                        .to_lowercase()
+                        .collect::<String>()
+                ),
+            };
+            assert!(
+                shell.contains(&needle),
+                "the legend offers `{keys}` for \"{what}\" and no script in the \
+                 shell tests for {needle}"
+            );
+        }
+    }
+
+    /// THE ONE METER WITH A SOURCE, and a zero limit is not one.
+    ///
+    /// `Usage` is `(tokens used, context limit)` — the fact this shell's own
+    /// comments got wrong twice — so the mockups' `Context 83k / 1M · 8%` is
+    /// honest. A `contextLimit` of 0 is a server that did not answer, not a
+    /// window with no room in it, and `views::chat::crowding` guards the same
+    /// way for the same reason.
+    ///
+    /// REPRODUCED: drop the `limit == 0` return and the second half fails.
+    #[test]
+    fn the_context_meter_reads_the_window_and_refuses_a_zero() {
+        let meter = crate::testkit::with_ctx(
+            |ctx| {
+                let mut usage = ctx.usage;
+                usage.set(Some((83_000, 1_000_000)));
+            },
+            context_meter,
+        );
+        assert!(
+            meter.is_some(),
+            "a usage update arrived, so there is a meter"
+        );
+        let meter = meter.unwrap_or_else(|| super::Meter {
+            label: "Context",
+            value: String::new(),
+            pct: 0,
+            warn: false,
+        });
+        assert_eq!(meter.pct, 8, "83k of 1M is 8%");
+        assert!(meter.value.contains("83k"), "{}", meter.value);
+        assert!(meter.value.contains("1.0M"), "{}", meter.value);
+        assert!(!meter.warn, "8% is not crowding");
+
+        let none = crate::testkit::with_ctx(
+            |ctx| {
+                let mut usage = ctx.usage;
+                usage.set(Some((0, 0)));
+            },
+            context_meter,
+        );
+        assert!(
+            none.is_none(),
+            "a zero limit was rendered as a window with no room in it"
+        );
+    }
+
+    /// Past the point `crowding` speaks up, the meter says so.
+    #[test]
+    fn a_crowded_window_is_marked_as_one() {
+        let meter = crate::testkit::with_ctx(
+            |ctx| {
+                let mut usage = ctx.usage;
+                usage.set(Some((900_000, 1_000_000)));
+            },
+            context_meter,
+        );
+        let meter = meter.expect("a usage update arrived");
+        assert_eq!(meter.pct, 90);
+        assert!(
+            meter.warn,
+            "90% of the window is past the point `views::chat::crowding` \
+             already treats as worth telling the reader about, and the two \
+             must not disagree"
+        );
+    }
+
+    /// The server block says where it is talking to, and nothing it cannot
+    /// know. The mockup's other two rows — a round-trip percentile and a
+    /// tailnet ACL pair — have no source at all.
+    #[test]
+    fn the_server_block_says_only_what_this_client_knows() {
+        let facts = crate::testkit::with_ctx(
+            |ctx| {
+                let mut settings = ctx.settings;
+                settings.write().server_url = "https://tail-mini.ts.net:3285/acp".to_owned();
+                let mut conn = ctx.conn;
+                conn.set(ConnState::Connected {
+                    agent: "goose 1.47.0".to_owned(),
+                });
+            },
+            chat_facts,
+        );
+        let by = |k: &str| {
+            facts
+                .iter()
+                .find(|f| f.key == k)
+                .map(|f| f.value.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(by("host"), "tail-mini.ts.net:3285", "scheme and path kept");
+        assert_eq!(by("agent"), "goose 1.47.0");
+        assert!(!by("transport").is_empty());
+        for fact in &facts {
+            assert!(
+                !fact.value.contains("ms") && !fact.value.contains('$'),
+                "a row is quoting a latency or a price, neither of which any \
+                 server here reports: {} = {}",
+                fact.key,
+                fact.value
+            );
+        }
+    }
+
+    /// A disconnected client names no agent — it has not been told one.
+    #[test]
+    fn an_unopened_socket_names_no_agent() {
+        let facts = crate::testkit::with_ctx(|_| {}, chat_facts);
+        assert!(
+            facts.iter().all(|f| f.key != "agent"),
+            "an agent was named over a socket nobody has opened"
+        );
+    }
+
+    /// The session block is the server's OWN option list, all of it — not the
+    /// mockup's hardcoded primary/fallback pair. goose sends no `fallback` and
+    /// a server that grows a fourth option gets a row for free.
+    #[test]
+    fn the_session_block_is_whatever_the_server_offers() {
+        let facts = crate::testkit::with_ctx(
+            |ctx| {
+                let mut opts = ctx.config_options;
+                opts.set(vec![
+                    option("model", "Model", "opus", "Claude Opus 5"),
+                    option("mode", "Mode", "auto", "Auto"),
+                ]);
+            },
+            session_facts,
+        );
+        assert_eq!(facts.len(), 2);
+        assert_eq!(facts[0].key, "Model");
+        assert_eq!(facts[0].value, "Claude Opus 5");
+        assert!(facts[0].accent, "the model is the block's subject");
+        assert!(!facts[1].accent, "and it is the only one");
+    }
+
+    /// An option the server sent no current value for is not a row: a key with
+    /// nothing after it is a slot pretending to be a fact.
+    #[test]
+    fn an_option_with_no_answer_is_not_a_row() {
+        let facts = crate::testkit::with_ctx(
+            |ctx| {
+                let mut opts = ctx.config_options;
+                opts.set(vec![serde_json::from_value(serde_json::json!({
+                    "id": "model", "name": "Model", "options": [],
+                }))
+                .expect("a config option this test wrote")]);
+            },
+            session_facts,
+        );
+        assert!(facts.is_empty(), "{facts:?}");
+    }
+
+    /// With no code chat open the working-tree block is absent rather than a
+    /// heading over nothing.
+    #[test]
+    fn no_open_tree_means_no_tree_block() {
+        let facts = crate::testkit::with_ctx(|_| {}, code_facts);
+        assert!(facts.is_empty());
+    }
+
+    /// "2 of 5 viewed" is real on both halves: the count is the files, and
+    /// "viewed" is the fingerprint comparison the review screen itself uses to
+    /// decide whether a file is still read after the agent changed it again.
+    ///
+    /// REPRODUCED: compare `seen` against anything but `fingerprint` — against
+    /// `Some(_)`, say — and the stale row counts as viewed and this fails.
+    #[test]
+    fn a_file_is_viewed_only_while_its_fingerprint_still_matches() {
+        let (files, seen) = crate::testkit::with_ctx(
+            |ctx| {
+                let mut diff = ctx.code_diff;
+                // a.rs was read at the fingerprint it still has; b.rs was read
+                // and then changed underneath the reader.
+                let view = [("src/a.rs", 7_u64), ("src/b.rs", 4)]
+                    .into_iter()
+                    .map(|(path, seen)| {
+                        (
+                            path.to_owned(),
+                            crate::code::FileView {
+                                seen: Some(seen),
+                                ..crate::code::FileView::default()
+                            },
+                        )
+                    })
+                    .collect();
+                diff.set(crate::code::DiffState {
+                    files: vec![
+                        diff_file("src/a.rs", 12, 3, 7),
+                        diff_file("src/b.rs", 1, 0, 9),
+                    ],
+                    view,
+                    ..crate::code::DiffState::default()
+                });
+            },
+            touched_files,
+        );
+        assert_eq!(files.len(), 2);
+        assert_eq!(
+            seen, 1,
+            "the file that changed after it was read still counted"
+        );
+        assert_eq!(files[0].added, 12);
+        assert_eq!(files[0].removed, 3);
+    }
+
+    /// The timeline is capped and reads oldest-first, so the newest call is at
+    /// the bottom where the eye already is.
+    #[test]
+    fn the_timeline_is_capped_and_ends_with_the_newest() {
+        let steps = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chat = ctx.chat;
+                chat.write().items = (0..12)
+                    .map(|n| ChatItem::Tool {
+                        id: format!("t{n}"),
+                        title: format!("tool {n}"),
+                        kind: "execute".to_owned(),
+                        status: "completed".to_owned(),
+                        output: String::new(),
+                    })
+                    .collect();
+            },
+            |ctx| tool_timeline(ctx, 4),
+        );
+        let names: Vec<&str> = steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["tool 8", "tool 9", "tool 10", "tool 11"]);
+    }
+
+    /// A running call is marked live, so the block says what is happening now
+    /// rather than only what happened.
+    #[test]
+    fn a_call_still_running_is_marked_as_one() {
+        let steps = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chat = ctx.chat;
+                chat.write().items = vec![ChatItem::Tool {
+                    id: "t".to_owned(),
+                    title: "cargo test".to_owned(),
+                    kind: "execute".to_owned(),
+                    status: "in_progress".to_owned(),
+                    output: String::new(),
+                }];
+            },
+            |ctx| tool_timeline(ctx, 8),
+        );
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].dot, "live");
+    }
+
+    /// Extensions are chips with a state, because "loaded" and "on" are not
+    /// the same thing and the composer's own count says so too.
+    #[test]
+    fn the_extension_chips_carry_whether_each_is_on() {
+        let chips = crate::testkit::with_ctx(
+            |ctx| {
+                let mut list = ctx.extensions.list;
+                list.write().items =
+                    vec![extension("developer", true), extension("todoist", false)];
+            },
+            extension_chips,
+        );
+        assert_eq!(chips.len(), 2);
+        assert!(chips[0].on);
+        assert!(!chips[1].on);
+    }
+
+    /// THE COLUMN INVENTS NOTHING, rendered.
+    ///
+    /// The unit tests above hold each source; this holds the thing a reader
+    /// sees. Every category on the never-fake register at once, against a
+    /// context with a connection and a session — the state in which the panel
+    /// has the most to say and so the most room to say something it cannot
+    /// know.
+    #[test]
+    fn the_inspector_paints_no_figure_it_has_no_source_for() {
+        let html = crate::testkit::render_settled(
+            |ctx| {
+                let mut conn = ctx.conn;
+                conn.set(ConnState::Connected {
+                    agent: "goose 1.47.0".to_owned(),
+                });
+                let mut usage = ctx.usage;
+                usage.set(Some((83_000, 1_000_000)));
+            },
+            || rsx! { Inspector { plane: Plane::Chat, on_subject: true } },
+        );
+        assert!(html.contains("insp-scroll"), "the column did not render");
+        for forbidden in ["$", " ms", "p50", "p99", "warm", "uptime", "queue"] {
+            assert!(
+                !html.contains(forbidden),
+                "the inspector printed {forbidden:?}, which no server on either \
+                 wire reports — the mockups' panel is where nearly every \
+                 invented number in the design lives, and this is the check \
+                 that keeps them out"
+            );
+        }
+    }
+
+    /// With nothing connected and nothing open the column says so, rather than
+    /// rendering a stack of empty headings.
+    #[test]
+    fn an_empty_inspector_says_it_is_empty() {
+        let html =
+            crate::testkit::render(|| rsx! { Inspector { plane: Plane::Code, on_subject: false } });
+        assert!(html.contains("insp-empty"), "{html}");
+    }
+
+    /// Built through serde for `home::tests::recipe`'s reason: these DTOs gain
+    /// fields as the protocol does.
+    fn option(id: &str, name: &str, value: &str, label: &str) -> goose_acp_client::ConfigOption {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "name": name,
+            "currentValue": value,
+            "options": [{ "value": value, "name": label }],
+        }))
+        .expect("a config option this test wrote")
+    }
+
+    /// `home::tests::extension`'s shape, with the flag as a parameter.
+    fn extension(name: &str, enabled: bool) -> goose_acp_client::GooseExtensionEntry {
+        goose_acp_client::GooseExtensionEntry {
+            extension: goose_acp_client::GooseExtension::mcp(
+                goose_acp_client::McpServer::Stdio(goose_acp_client::StdioMcpServer::new(
+                    name,
+                    "uvx",
+                    Vec::new(),
+                )),
+                Vec::new(),
+                "test",
+                Vec::new(),
+            ),
+            enabled,
+            config_key: Some(name.to_owned()),
+            extra: serde_json::Map::new(),
+        }
+    }
+
+    fn diff_file(path: &str, added: u32, removed: u32, fingerprint: u64) -> crate::code::DiffFile {
+        crate::code::DiffFile {
+            info: opencode_client::FileDiff {
+                file: path.to_owned(),
+                additions: added,
+                deletions: removed,
+                ..opencode_client::FileDiff::default()
+            },
+            fingerprint,
+            lines: Vec::new(),
+            gaps: Vec::new(),
+        }
+    }
+}

@@ -1190,6 +1190,8 @@ mod tests {
     use dioxus::prelude::*;
 
     use super::MIN_INNER;
+    use super::{band_after, conn_of, crumb_parts, seg_count, standing_line};
+    use crate::nav::Plane;
     use crate::nav::{Destination, DESTINATIONS};
     use crate::state::{AppCtx, ConnState};
 
@@ -1873,6 +1875,202 @@ mod tests {
              paints two titles — or always does, and the screens the bar does \
              not name paint none"
         );
+    }
+
+    /// THE BAND REPORTS THE HALF IT IS OVER, and it did not.
+    ///
+    /// `docs/gallery-states.json`'s `desktop-code-list` was captured showing a
+    /// green dot and "goose-mock 1.47.0" — the CHAT server's agent string —
+    /// across the top of a pane whose every row comes from the other wire.
+    /// `views::ConnBadge` reads `ctx.conn` outright, which is right on a phone
+    /// and wrong in a window with a plane switch in it.
+    ///
+    /// REPRODUCED: point `conn_of`'s `Code` arm at `(ctx.conn)()` — the state
+    /// this shipped in — and this fails on the second assertion.
+    #[test]
+    fn the_band_reports_the_half_it_is_over() {
+        let (chat, code) = crate::testkit::with_ctx(
+            |ctx| {
+                let mut conn = ctx.conn;
+                conn.set(ConnState::Connected {
+                    agent: "goose 1.47.0".to_owned(),
+                });
+                // The code gateway is not answering, which is the ordinary
+                // case on the desktop until something dials it.
+                let mut code = ctx.code_conn;
+                code.set(ConnState::Disconnected);
+            },
+            |ctx| (conn_of(ctx, Plane::Chat), conn_of(ctx, Plane::Code)),
+        );
+        assert!(
+            chat.is_connected(),
+            "the chat half's own connection was lost"
+        );
+        assert!(
+            !code.is_connected(),
+            "the band reported the chat server's connection over the code \
+             plane — a green dot for a socket nobody has opened, which is the \
+             worst thing a status indicator can be"
+        );
+    }
+
+    /// A COUNT IS ONLY OFFERED BY A HALF THAT ANSWERED.
+    ///
+    /// `home::standing`'s rule — "saying 12 conversations over a dead socket
+    /// is the kind of confident wrongness that makes a reader stop trusting
+    /// the whole screen" — applied to the band and the switch. It matters more
+    /// here: the code half is not connected until something dials it, and the
+    /// band is on screen the entire time, so an ungated count paints a
+    /// confident `0` beside "Code" at every launch.
+    ///
+    /// REPRODUCED: drop the `is_connected()` gate from either function and the
+    /// matching assertion fails.
+    #[test]
+    fn a_count_is_only_offered_by_a_half_that_answered() {
+        fn seeded(ctx: &AppCtx) {
+            let mut sessions = ctx.sessions;
+            sessions.set(vec![session("s1"), session("s2")]);
+        }
+        fn seeded_and_up(ctx: &AppCtx) {
+            seeded(ctx);
+            let mut conn = ctx.conn;
+            conn.set(ConnState::Connected {
+                agent: "goose".to_owned(),
+            });
+        }
+        let offline = crate::testkit::with_ctx(seeded, |ctx| {
+            (
+                seg_count(ctx, Plane::Chat),
+                band_after(ctx, Plane::Chat),
+                standing_line(ctx, Plane::Chat),
+            )
+        });
+        assert_eq!(offline.0, None, "a count over a socket nobody opened");
+        assert_eq!(offline.1, None);
+        assert_eq!(offline.2, None);
+
+        let online = crate::testkit::with_ctx(seeded_and_up, |ctx| {
+            (
+                seg_count(ctx, Plane::Chat),
+                band_after(ctx, Plane::Chat),
+                standing_line(ctx, Plane::Chat),
+            )
+        });
+        assert_eq!(online.0, Some(2));
+        let after = online.1.unwrap_or_default();
+        assert!(after.starts_with("2 conversations"), "{after}");
+        assert!(
+            after.contains("nothing waiting on you"),
+            "the band should answer the question rather than leave the clause \
+             out when the answer is none: {after}"
+        );
+        assert_eq!(online.2.as_deref(), Some("2 conversations kept"));
+    }
+
+    /// THE CRUMB NAMES THE THING INSIDE THE THING IT IS IN, and never itself
+    /// twice.
+    ///
+    /// Three arms and each is a different shape. An open detail is
+    /// `parent / leaf`; a home screen is `parent / the half's own word`; a
+    /// destination's own root is the leaf alone, because "Recipes / Recipes"
+    /// is a stutter rather than a path. The fourth case is the one this
+    /// shipped wrong: Settings is reachable as a detail AND is its own
+    /// destination, so its crumb title and its label are the same string.
+    ///
+    /// REPRODUCED: write the first arm as an unconditional
+    /// `parent: Some(dest.label)` — the state this shipped in — and the
+    /// Settings assertion fails with "Settings / Settings".
+    #[test]
+    fn the_crumb_names_the_thing_inside_the_thing_it_is_in() {
+        let chats = crate::nav::DESTINATIONS
+            .iter()
+            .find(|d| d.id == "chats")
+            .unwrap_or(&crate::nav::DESTINATIONS[0]);
+
+        let open = crumb_parts(
+            chats,
+            Plane::Chat,
+            false,
+            Some(crate::nav::Crumb {
+                title: "A conversation".to_owned(),
+                subtitle: None,
+            }),
+            None,
+        );
+        assert_eq!(open.parent, Some("Chats"));
+        assert_eq!(open.leaf, "A conversation");
+
+        let home = crumb_parts(chats, Plane::Chat, true, None, Some("2 threads".to_owned()));
+        assert_eq!(home.parent, Some("Chats"));
+        assert_eq!(home.leaf, "All conversations");
+        assert_eq!(home.after.as_deref(), Some("2 threads"));
+
+        let root = crumb_parts(chats, Plane::Chat, false, None, None);
+        assert_eq!(
+            root.parent, None,
+            "a destination's own root named itself either side of a slash"
+        );
+        assert_eq!(root.leaf, "Chats");
+
+        let itself = crumb_parts(
+            chats,
+            Plane::Chat,
+            false,
+            Some(crate::nav::Crumb {
+                title: "Chats".to_owned(),
+                subtitle: None,
+            }),
+            None,
+        );
+        assert_eq!(
+            itself.parent, None,
+            "the band read `Chats / Chats`, which is a stutter and not a path"
+        );
+    }
+
+    /// The two halves say different things, in their own vocabulary.
+    #[test]
+    fn each_half_counts_in_its_own_words() {
+        let code = crate::testkit::with_ctx(
+            |ctx| {
+                let mut conn = ctx.code_conn;
+                conn.set(ConnState::Connected {
+                    agent: "opencode".to_owned(),
+                });
+                let mut chats = ctx.code_chats;
+                chats.set(vec![tree("c1", "one"), tree("c2", "two")]);
+            },
+            |ctx| band_after(ctx, Plane::Code).unwrap_or_default(),
+        );
+        assert!(code.contains("2 working trees"), "{code}");
+        assert!(code.contains("2 repos"), "{code}");
+        assert!(
+            !code.contains("conversation"),
+            "the code half borrowed the chat half's noun: {code}"
+        );
+    }
+
+    fn session(id: &str) -> goose_acp_client::SessionInfo {
+        goose_acp_client::SessionInfo {
+            session_id: id.to_owned(),
+            cwd: None,
+            title: Some(id.to_owned()),
+            updated_at: None,
+            meta: None,
+        }
+    }
+
+    fn tree(id: &str, repo: &str) -> opencode_client::ChatMeta {
+        opencode_client::ChatMeta {
+            id: id.to_owned(),
+            repo: repo.to_owned(),
+            title: id.to_owned(),
+            branch: String::new(),
+            base: String::new(),
+            status: "stopped".to_owned(),
+            model: None,
+            last_active: 0.0,
+        }
     }
 
     /// THE WINDOW HAS MORE THAN ONE SURFACE IN IT.

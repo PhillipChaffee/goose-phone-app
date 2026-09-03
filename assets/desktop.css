@@ -2068,6 +2068,16 @@
   min-width: 0;
   margin-top: var(--chrome-pad);
   overflow: hidden;
+  /* A ROW ON ONE LINE, and these four were lost once in this pass — with no
+     `display: flex` the crumb's four spans stacked, the band grew past its own
+     `--chrome-h`, and `docs/audit.js` reported the nav toggle "aligned on
+     traffic lights that are not there" 64 times, which is what an overgrown
+     band looks like from the outside. Pinned to 32 so the band's four controls
+     are one height and `--chrome-pad` centres all of them together. */
+  display: flex;
+  align-items: baseline;
+  height: 32px;
+  padding-top: max(0px, calc((32px - var(--lh-sm)) / 2));
   /* The mockup's `.band-mid` puts 9px between the badge and the crumb; the
      band's own `gap: 4px` supplies four of them. */
   margin-left: 0.3125rem;
@@ -2122,8 +2132,22 @@
  * asymptotic rather than exact. At a factor of 100 the heading still gives up
  * 1.2px of a 65px deficit, which is a cut title by any measurement and a check
  * that has to be given a tolerance to hide it. */
+/* THE COUNTS YIELD TO THE NAME, and `flex: 1 1 0` is what stopped them.
+ *
+ * That basis makes this GROW into the free space, so on the chat home the
+ * counts line took 405px and the title beside it was cut to 211 — which is
+ * `docs/audit.js`'s TITLE-OUTBID, 88 times, and it is right: the band's job is
+ * to say what is open, and a qualifier that crowds out the thing it qualifies
+ * has the priority backwards.
+ *
+ * A shrink factor of 200 and not 1, and that is the whole fix: flexbox
+ * distributes a shortfall in PROPORTION to each item's factor times its basis,
+ * so with both at 1 the title and the counts were cut together and the audit
+ * went on reporting it. At 200 the counts absorb effectively all of it — down
+ * to nothing, since `min-width: 0` and the ellipsis let this box reach zero —
+ * and the name is only ever cut once the counts have already gone. */
 .chrome-sub {
-  flex: 1 1 0;
+  flex: 0 200 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2167,8 +2191,17 @@
  * cap and ellipsis from assets/main.css. */
 /* ── the connection, as the mockups' pill ── */
 .shell-chrome > .conn-badge {
-  padding-right: 12px;
-  flex: 0 0 auto;
+  /* Shrinkable, and heavily — `.chrome-sub`'s note has the arithmetic. A pill
+     that could not give anything back cut the window's title at every width
+     under three columns. */
+  flex: 0 200 auto;
+  min-width: 0;
+  /* Nothing may leave the pill. The label ellipsises and the host is dropped
+     below three columns, but the dot and the paddings are fixed, so at the
+     narrowest the sum still lands three pixels past the border this rule
+     draws — and a control whose ink crosses its own outline reads as broken
+     rather than as tight. */
+  overflow: hidden;
   /* 24px, not the 32 this shipped with. The mockup's pill is a slim lozenge
      (`padding:3px 10px 3px 8px`) and a 32px-tall `border-radius: 999px` is a
      capsule the size of the toggle. The 4px of extra top margin is derived,
@@ -2266,6 +2299,41 @@
   font-size: var(--text-xs);
   line-height: var(--lh-sm);
   color: var(--text-secondary);
+}
+
+/* THE HOST IS THE FIRST THING THE BAND GIVES UP.
+ *
+ * `<code>` inside the pill is the mockups' own (`.conn code`), and it is 234px
+ * of band once the agent string is beside it — enough to cut the window's
+ * title to 126px at 704, which is `docs/audit.js`'s TITLE-OUTBID. It goes at
+ * every width narrower than three columns: the inspector already says `host`
+ * on its own row, so nothing is lost where the inspector is on screen, and
+ * where it is not the band is too tight to spend 90px on an address.
+ *
+ * Written as `max-width: 971px` rather than folded into the 627 tier, because
+ * this turns at the three-column breakpoint and that tier turns at the
+ * two-column one — two different questions that happen to both be about
+ * width. */
+@media (max-width: 971px) {
+  .shell-chrome > .conn-badge .conn-host {
+    display: none;
+  }
+}
+
+/* AND THE AGENT STRING ELLIPSISES RATHER THAN SPILLING.
+ *
+ * `assets/main.css` caps `.conn-label` at 9.25rem and argues against an
+ * ellipsis there — "goose-mock 1...." reads as a rendering fault rather than
+ * as a shortened name — and that is right on a phone, where the bar has one
+ * other thing in it. In this band the pill now yields to the window's title
+ * (see its `flex`), so it can be asked for less than its content, and the
+ * alternative to an ellipsis is three pixels of the version number painted
+ * outside the pill's own border. A truncation is a worse name; a spill is a
+ * broken box. */
+.shell-chrome > .conn-badge .conn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .shell-chrome > .conn-badge .conn-host {
@@ -2370,9 +2438,6 @@
 }
 
 @media (max-width: 627px) {
-    .shell-chrome > .conn-badge .conn-host {
-    display: none;
-    }
 
     .chrome-parent,
     .chrome-sep {

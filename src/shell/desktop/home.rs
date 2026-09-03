@@ -1215,8 +1215,8 @@ pub(crate) fn Home(plane: Plane) -> Element {
 )]
 mod tests {
     use super::{
-        code_tiles, compose_chips, compose_placeholder, part_of_day, recent_for, standing, Home,
-        RecentState,
+        code_board, code_tiles, compose_chips, compose_placeholder, footnote, lede, part_of_day,
+        recent_for, sched_line, standing, Home, RecentState, TreeState,
     };
     use crate::nav::Plane;
     use crate::views::press::Pressable;
@@ -1575,6 +1575,265 @@ mod tests {
             "_meta": { "messageCount": turns, "lastMessageSnippet": snippet },
         }))
         .expect("a session row this test wrote")
+    }
+
+    /// THE BOARD GROUPS BY REPO, and a question outranks a running container.
+    ///
+    /// The mockup's board is per-repo groups of working trees, which is the
+    /// shape a fleet has: a tree belongs to a repo and you look for it there.
+    /// `TreeState`'s precedence is `sidebar::Mark`'s, deliberately — one tree
+    /// shows a mark in the sidebar and a word on the board, and the two
+    /// disagreeing about it in one window would be worse than either being
+    /// wrong.
+    ///
+    /// REPRODUCED: swap the `Waiting`/`Awake` arms in `code_board` and the
+    /// third assertion fails; drop the grouping and the first two do.
+    #[test]
+    fn the_board_groups_by_repo_and_a_question_outranks_a_container() {
+        let groups = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    meta("c1", "goose-phone-app", "running", 300.0),
+                    meta("c2", "goose-phone-app", "stopped", 200.0),
+                    meta("c3", "personal-ai-setup", "running", 100.0),
+                ]);
+                // c1's container is up AND it is asking. The ask wins.
+                let mut perms = ctx.code_permissions;
+                perms.set(vec![(
+                    "c1".to_owned(),
+                    opencode_client::CodePermission {
+                        title: "Run cargo clippy?".to_owned(),
+                        ..opencode_client::CodePermission::default()
+                    },
+                )]);
+            },
+            |ctx| code_board(ctx, 2_000_000_000),
+        );
+        assert_eq!(groups.len(), 2, "two repos, two groups");
+        assert_eq!(groups[0].repo, "goose-phone-app");
+        assert_eq!(groups[0].trees.len(), 2);
+        assert_eq!(
+            groups[0].trees[0].state,
+            TreeState::Waiting,
+            "a tree whose container is up AND which is blocked on the reader \
+             read as merely awake — the one state that is about THEM"
+        );
+        assert_eq!(groups[0].waiting, 1);
+        assert_eq!(
+            groups[0].awake, 0,
+            "the waiting tree is not also counted awake"
+        );
+        assert_eq!(groups[1].awake, 1);
+        assert_eq!(
+            groups[0].trees[0].say.as_deref(),
+            Some("Run cargo clippy?"),
+            "the row should carry the question it is blocked on"
+        );
+    }
+
+    /// A repo heading names a base only when every tree in it shares one.
+    ///
+    /// Two bases in one repo is a fact about the trees and not about the repo,
+    /// so the heading says nothing rather than picking one of them.
+    #[test]
+    fn a_repo_heading_claims_a_base_only_when_they_all_share_it() {
+        let same = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    based("c1", "repo", "main"),
+                    based("c2", "repo", "main"),
+                ]);
+            },
+            |ctx| code_board(ctx, 2_000_000_000),
+        );
+        assert_eq!(same[0].base.as_deref(), Some("from main"));
+
+        let mixed = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    based("c1", "repo", "main"),
+                    based("c2", "repo", "release"),
+                ]);
+            },
+            |ctx| code_board(ctx, 2_000_000_000),
+        );
+        assert_eq!(
+            mixed[0].base, None,
+            "the heading picked one of two bases and presented it as the repo's"
+        );
+    }
+
+    /// A tree the manager sent with no repo is filed rather than dropped.
+    ///
+    /// `ChatMeta.repo` is `serde(default)`, so an empty one is reachable, and
+    /// a working tree missing from the board is worse than one filed oddly.
+    #[test]
+    fn a_tree_with_no_repo_still_appears() {
+        let groups = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![meta("c1", "  ", "stopped", 1.0)]);
+            },
+            |ctx| code_board(ctx, 2_000_000_000),
+        );
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].repo, "no repo");
+        assert_eq!(groups[0].trees.len(), 1);
+    }
+
+    /// THE LEDE SAYS NOTHING OVER A DEAD SOCKET, and never says "since".
+    ///
+    /// The mockup's third clause is "one still streaming since 09:14", and
+    /// there is no source for the "since": `running_sessions` is a bare
+    /// `HashSet<String>` with no stamp near it, and `updated_at` is when the
+    /// session last CHANGED rather than when the turn began.
+    ///
+    /// REPRODUCED: drop the `connected` guard and the first assertion fails
+    /// with a count over a socket nobody opened.
+    #[test]
+    fn the_lede_is_silent_when_there_is_nothing_to_report() {
+        let offline = crate::testkit::with_ctx(
+            |ctx| {
+                let mut sessions = ctx.sessions;
+                sessions.set(vec![bare("s1"), bare("s2")]);
+            },
+            |ctx| lede(ctx, false),
+        );
+        assert!(offline.is_none(), "the lede counted over a dead socket");
+
+        let online = crate::testkit::with_ctx(
+            |ctx| {
+                let mut sessions = ctx.sessions;
+                sessions.set(vec![bare("s1"), bare("s2")]);
+                let mut settings = ctx.settings;
+                settings.write().server_url = "http://tail-mini:3285".to_owned();
+                let mut running = ctx.running_sessions;
+                running.write().insert("s1".to_owned());
+            },
+            |ctx| lede(ctx, true),
+        );
+        let lede = online.expect("connected, so there is a lede");
+        assert_eq!(lede.host.as_deref(), Some("tail-mini:3285"));
+        assert!(lede.before.contains("2 conversations"), "{}", lede.before);
+        assert!(lede.after.contains("1 still streaming"), "{}", lede.after);
+        assert!(
+            !lede.after.contains("since"),
+            "the lede claimed to know when a turn started, which nothing \
+             records: {}",
+            lede.after
+        );
+    }
+
+    /// A RUNNING JOB OUTRANKS THE SERVER'S ORDER, because it is the only fact
+    /// on that row about this moment. And the row never claims a next-run
+    /// time: `ScheduledJob` has no such field and this app has no timezone to
+    /// turn a cron expression into one.
+    #[test]
+    fn the_schedule_row_prefers_the_job_that_is_running() {
+        let sched = crate::testkit::with_ctx(
+            |ctx| {
+                let mut list = ctx.scheduler.list;
+                list.write().items = vec![job("first", false), job("second", true)];
+            },
+            |ctx| sched_line(ctx, 2_000_000_000),
+        );
+        let sched = sched.expect("two live jobs, so there is a row");
+        assert!(
+            sched.name.to_lowercase().contains("second"),
+            "the row named a queued job while another was running: {}",
+            sched.name
+        );
+        assert_eq!(sched.more, 1, "the other live job should be counted");
+        assert!(
+            !sched.what.contains("next"),
+            "the row claimed a next-run time, which goose does not compute and \
+             this app has no timezone to derive: {}",
+            sched.what
+        );
+    }
+
+    /// Nothing scheduled means no row, by `no_starters_means_no_section`'s
+    /// rule.
+    #[test]
+    fn nothing_scheduled_means_no_row() {
+        let sched = crate::testkit::with_ctx(|_| {}, |ctx| sched_line(ctx, 2_000_000_000));
+        assert!(sched.is_none());
+    }
+
+    /// THE FOOTNOTE COUNTS THE OTHER HALF ONLY ONCE IT HAS ANSWERED.
+    ///
+    /// Until this window has been to the Code half, `code_chats` is empty for
+    /// want of a fetch rather than for want of trees — so "Code has 0 working
+    /// trees" would be a wrong number rather than an empty one.
+    ///
+    /// REPRODUCED: drop the `is_connected()` gate and the first assertion
+    /// fails.
+    #[test]
+    fn the_footnote_counts_the_other_half_only_once_it_has_answered() {
+        let (first, second) = crate::testkit::with_ctx(|_| {}, footnote);
+        assert!(!first.is_empty());
+        assert_eq!(
+            second, None,
+            "the footnote reported the code half's tree count over a socket \
+             nothing has dialled"
+        );
+
+        let (_, second) = crate::testkit::with_ctx(
+            |ctx| {
+                let mut conn = ctx.code_conn;
+                conn.set(crate::state::ConnState::Connected {
+                    agent: "opencode".to_owned(),
+                });
+                let mut chats = ctx.code_chats;
+                chats.set(vec![meta("c1", "r", "stopped", 1.0)]);
+            },
+            footnote,
+        );
+        assert_eq!(second.as_deref(), Some("Code has 1 working tree."));
+    }
+
+    fn meta(id: &str, repo: &str, status: &str, last: f64) -> opencode_client::ChatMeta {
+        opencode_client::ChatMeta {
+            id: id.to_owned(),
+            repo: repo.to_owned(),
+            title: id.to_owned(),
+            branch: String::new(),
+            base: String::new(),
+            status: status.to_owned(),
+            model: None,
+            last_active: last,
+        }
+    }
+
+    fn based(id: &str, repo: &str, base: &str) -> opencode_client::ChatMeta {
+        opencode_client::ChatMeta {
+            base: base.to_owned(),
+            ..meta(id, repo, "stopped", 1.0)
+        }
+    }
+
+    fn bare(id: &str) -> goose_acp_client::SessionInfo {
+        goose_acp_client::SessionInfo {
+            session_id: id.to_owned(),
+            cwd: None,
+            title: Some(id.to_owned()),
+            updated_at: None,
+            meta: None,
+        }
+    }
+
+    fn job(id: &str, running: bool) -> goose_acp_client::ScheduledJob {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "source": "/x.yaml",
+            "cron": "0 30 9 * * *",
+            "currentlyRunning": running,
+            "paused": false,
+        }))
+        .expect("a scheduled job this test wrote")
     }
 
     /// The starters are named from the server's lists, capped, and recipes
