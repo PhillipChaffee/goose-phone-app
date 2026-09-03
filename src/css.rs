@@ -297,6 +297,266 @@ mod tests {
         out
     }
 
+    /// The body of the first `{ … }` that follows `opens`, comments already
+    /// gone, as a list of `(property, value)` in source order.
+    ///
+    /// Innermost only, and that is what makes it safe on a sheet that nests:
+    /// the needles below all name a selector whose block holds declarations and
+    /// no nested rule, so stopping at the first `}` cannot truncate one.
+    fn declarations(css: &str, opens: &str) -> Vec<(String, String)> {
+        let after = css.split_once(opens).map(|(_, rest)| rest);
+        assert!(
+            after.is_some(),
+            "no `{opens}` in the sheet — the block this test reads is not there \
+             to be read, so it is asserting nothing"
+        );
+        let body = after
+            .unwrap_or_default()
+            .split_once('}')
+            .map_or("", |(body, _)| body);
+        body.split(';').filter_map(split_declaration).collect()
+    }
+
+    /// `prop: value` split in two, or `None` for anything that is not a
+    /// declaration — a selector fragment, a media condition, trailing space.
+    ///
+    /// The property test is deliberately narrow: a CSS property is ASCII
+    /// letters, digits, `-` and `_` and nothing else, so a stray `@media
+    /// (max-width: 900px)` or a `url(data:…)` cannot be mistaken for one.
+    fn split_declaration(decl: &str) -> Option<(String, String)> {
+        let (prop, value) = decl.split_once(':')?;
+        let prop = prop.trim();
+        if prop.is_empty()
+            || !prop
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return None;
+        }
+        Some((prop.to_owned(), value.split_whitespace().collect()))
+    }
+
+    /// THE TWO DARK BODIES ARE ONE PALETTE, and until this test they were not.
+    ///
+    /// `00-tokens.css` writes the dark ramp twice, because the two selectors
+    /// mean different things: `@media (prefers-color-scheme: dark)` is "the
+    /// system says dark and the app has not overridden it", and
+    /// `:root[data-theme="dark"]` is "the app says dark". The comment above
+    /// them claimed a test held the two identical. There was none, for the
+    /// whole life of the file, and they drifted to 20 declarations against 13.
+    ///
+    /// Four of the seven that went missing would have painted a LIGHT value on
+    /// a dark window the first time anything set `data-theme`: `--tint-warn`
+    /// #f8f6f0 and `--tint-live` #f1f7f7 as near-white slabs under white text
+    /// (1.08:1), and the two inspector diff inks at 2.7:1. Nothing could see
+    /// it — `docs/audit.js` switches themes with `emulateMedia`, never with the
+    /// attribute, so the whole attribute arm is unmeasured by every rendered
+    /// check in this repo and this test is the only thing that reads it.
+    ///
+    /// Order and value, not just the property set: two bodies that declare the
+    /// same names in a different order are still one palette, but two that give
+    /// `--accent` different values are exactly the bug, and a set comparison
+    /// would pass them. Whitespace inside a value is normalised away so
+    /// `var(--surface-card)` and `var( --surface-card )` are one value; nothing
+    /// else is.
+    ///
+    /// REPRODUCED: delete any one line from either body, or change one hex in
+    /// one of them, and this fails naming the property and both values.
+    #[test]
+    fn the_two_dark_bodies_are_one_palette() {
+        const FILE: &str = "00-tokens.css";
+        let sheet = super::SHELL_PARTS
+            .iter()
+            .find(|&&(name, _)| name == FILE)
+            .map(|&(_, body)| without_comments(body))
+            .unwrap_or_default();
+        assert!(
+            !sheet.is_empty(),
+            "no `{FILE}` in `SHELL_PARTS` — the desktop's token block has been \
+             renamed, and this test now checks nothing"
+        );
+
+        let media = declarations(&sheet, ":root:not([data-theme=\"light\"]) .app > .shell {");
+        let attribute = declarations(&sheet, ":root[data-theme=\"dark\"] .app > .shell {");
+
+        assert_eq!(
+            media.len(),
+            attribute.len(),
+            "the dark media body declares {} properties and the \
+             `data-theme=\"dark\"` body declares {}. Whichever is short falls \
+             back to the LIGHT declaration on `.app > .shell`, which is how a \
+             near-white slab ends up behind white text on a dark window.\n\
+             \n  media only:     {:?}\n  attribute only: {:?}",
+            media.len(),
+            attribute.len(),
+            media
+                .iter()
+                .filter(|d| !attribute.contains(d))
+                .collect::<Vec<_>>(),
+            attribute
+                .iter()
+                .filter(|d| !media.contains(d))
+                .collect::<Vec<_>>(),
+        );
+        for (from_media, from_attribute) in media.iter().zip(attribute.iter()) {
+            assert_eq!(
+                from_media, from_attribute,
+                "the two dark bodies disagree: the media query says `{}: {}` \
+                 and the attribute says `{}: {}`. They are one palette said \
+                 twice, and a reader who forces dark on a light system gets \
+                 whichever of the two is wrong.",
+                from_media.0, from_media.1, from_attribute.0, from_attribute.1,
+            );
+        }
+    }
+
+    /// NOTHING DECLARES THE SAME PROPERTY TWICE IN ONE BLOCK.
+    ///
+    /// Not a style rule — a damage detector. `00-tokens.css` shipped
+    /// `--insp-add` and `--insp-del` declared twice in the same body, the
+    /// second pair mis-indented, which is what two branches appending to one
+    /// 4278-line sheet leaves behind: git merges both hunks cleanly, the sheet
+    /// still parses, the cascade still resolves, and the only trace is that one
+    /// of the two values is now unreachable. Splitting the sheet into fifteen
+    /// region files narrows the target; it does not remove it, because six
+    /// lanes still write six files at once and five of the issues in this
+    /// campaign were found to prescribe the same declaration from two places.
+    ///
+    /// Whole directory, not just the tokens: the same pass found `.insp-chip`
+    /// and `.insp-key` each carrying one `background` from two different
+    /// issues, and those land in `90-inspector.css`.
+    ///
+    /// Innermost blocks only, so an `@media` wrapper is walked into rather than
+    /// treated as one giant block. A repeated property with a DIFFERENT value
+    /// is the bug this is about; a repeated property with the same value is
+    /// caught too, and is the same mistake with the damage still latent.
+    ///
+    /// REPRODUCED: restore either duplicated line in `00-tokens.css`'s dark
+    /// media body and this fails naming the file and the property.
+    #[test]
+    fn no_block_declares_the_same_property_twice() {
+        for &(name, raw) in super::SHELL_PARTS {
+            let sheet = without_comments(raw);
+            let mut rest = sheet.as_str();
+            while let Some(open) = rest.find('{') {
+                let after = rest.get(open + 1..).unwrap_or_default();
+                let end = after.find(['{', '}']).unwrap_or(after.len());
+                // A `{` here means a nested rule, so this is not the innermost
+                // block and its declarations belong to the blocks inside it.
+                if after.as_bytes().get(end) == Some(&b'}') {
+                    let mut seen: Vec<String> = Vec::new();
+                    for (prop, value) in after
+                        .get(..end)
+                        .unwrap_or_default()
+                        .split(';')
+                        .filter_map(split_declaration)
+                    {
+                        assert!(
+                            !seen.contains(&prop),
+                            "{name} declares `{prop}` twice in one block, the \
+                             second time as `{prop}: {value}`. Only one of the \
+                             two is reachable; the other is a change somebody \
+                             made and does not have. This is what a parallel \
+                             append leaves behind, and nothing else in the repo \
+                             can see it — the sheet parses either way."
+                        );
+                        seen.push(prop);
+                    }
+                }
+                rest = after.get(end..).unwrap_or_default();
+            }
+        }
+    }
+
+    /// EVERY DESKTOP TOKEN THIS PASS DECIDED, PINNED BY NAME AND VALUE.
+    ///
+    /// The one defence against the failure mode this campaign is built to
+    /// avoid. Six lanes write six region files; a lane that changes a colour
+    /// here changes every string in the window, and git merges a one-hex edit
+    /// without a marker, `cargo` does not read CSS, and `docs/audit.js` only
+    /// asks whether the result still clears 4.5:1 — which a wrong value
+    /// usually does. So each of these is a decision with a measurement behind
+    /// it in `00-tokens.css`, and moving one has to mean editing this list.
+    ///
+    /// `color` is in the table and is not a token, deliberately: it is the
+    /// single line that makes the ink remap arrive at all. `assets/main.css`
+    /// has `body { color: var(--text-primary) }` and that `var()` substitutes
+    /// at `body`, on `:root`'s value — so without this restatement on the
+    /// shell, remapping `--text-primary` changes the colour of almost nothing
+    /// and every gate in the repo passes over a no-op.
+    ///
+    /// REPRODUCED: change any one value in `00-tokens.css` and this fails
+    /// naming the property, the value it found and the value it expected.
+    #[test]
+    fn the_desktop_tokens_are_the_values_that_were_measured() {
+        const FILE: &str = "00-tokens.css";
+        let sheet = super::SHELL_PARTS
+            .iter()
+            .find(|&&(name, _)| name == FILE)
+            .map(|&(_, body)| without_comments(body))
+            .unwrap_or_default();
+
+        let base = declarations(&sheet, ".app > .shell {");
+        let dark = declarations(&sheet, ":root[data-theme=\"dark\"] .app > .shell {");
+
+        // The ink ladder and the line that delivers it; the status trio; the
+        // faint rung, the soft hairline, the two inspector rungs and the light
+        // ramp's fifth. Light first, then what dark overrides.
+        for (block, block_name, pins) in [
+            (
+                &base,
+                "the light `.app > .shell` block",
+                [
+                    ("color", "var(--text-primary)"),
+                    ("--ink-faint", "var(--text-secondary)"),
+                    ("--insp-detail", "var(--text-primary)"),
+                    ("--accent-dim", "var(--accent-fill)"),
+                    ("--shell-line-soft", "var(--border-primary)"),
+                    ("--card-on-panel", "#ffffff"),
+                    ("--text-turn", "0.84375rem"),
+                    ("--icon-md", "clamp(13px,0.8125rem,16px)"),
+                ]
+                .as_slice(),
+            ),
+            (
+                &dark,
+                "the dark block",
+                [
+                    ("--text-primary", "#e9ecef"),
+                    ("--text-secondary", "#98a1ac"),
+                    ("--ink-faint", "#98a1ac"),
+                    ("--text-warning", "#f0b429"),
+                    ("--bg-warning", "#f0b429"),
+                    ("--text-success", "#68d391"),
+                    ("--bg-success", "#68d391"),
+                    ("--text-danger", "#f0736f"),
+                    ("--bg-danger", "#f0736f"),
+                    ("--shell-line-soft", "#242830"),
+                    ("--accent-dim", "#0e7a73"),
+                    ("--insp-detail", "#c3cad2"),
+                    ("--card-on-panel", "var(--surface-card)"),
+                ]
+                .as_slice(),
+            ),
+        ] {
+            for &(prop, want) in pins {
+                let found = block
+                    .iter()
+                    .find(|(name, _)| name == prop)
+                    .map(|(_, value)| value.as_str());
+                assert_eq!(
+                    found,
+                    Some(want),
+                    "{block_name} of {FILE} gives `{prop}` as {found:?} and the \
+                     measurement it was chosen by says {want}. If the value is \
+                     meant to move, move it here in the same commit — this list \
+                     is the only thing in the repo that can tell a considered \
+                     change from a merge that silently kept one lane's answer."
+                );
+            }
+        }
+    }
+
     /// THE FADE AND THE PADDING ARE ONE NUMBER, and for as long as there was no
     /// test the comment saying so was the only thing saying so.
     ///

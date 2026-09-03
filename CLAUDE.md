@@ -143,10 +143,14 @@ has to be the platform's.
 **The desktop has a type scale of its own**, declared on `.app > .shell` in
 `assets/desktop/00-tokens.css`: the mockups' ladder, body 13px on 1.45 against
 the phone's 16 on 24, with a 10px floor. It is all `rem`, so the root is still
-the reader's. Two traps are written up there and both are load-bearing: a
-custom property declared on `:root` substitutes AT `:root`, so `body {
-font-size: var(--text-md) }` and `--text-code` never see a shell override and
-the shell restates both.
+the reader's. **Three** traps are written up there and all three are
+load-bearing: a custom property declared on `:root` substitutes AT `:root`, so
+`body { font-size: var(--text-md) }`, `body { color: var(--text-primary) }` and
+`--text-code` never see a shell override, and the shell restates all three. The
+third is the one that nearly shipped as a no-op — remapping the ink tokens
+changes almost nothing in this window unless `.app > .shell` also says
+`color: var(--text-primary)`, and no gate in the repo can tell that apart from
+a change that worked.
 
 **Nothing may display a number no server sends.** Dollar figures, latency
 percentiles, container counts, queue depth, per-turn durations and the user's
