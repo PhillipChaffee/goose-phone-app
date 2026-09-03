@@ -23,6 +23,15 @@ a phone run followed by a desktop run would each delete the other's states.
 Pass --merge if you really do want to build the set up over several runs; it
 names every key it carries over so a stale one cannot pass unnoticed.
 
+    scripts/capture-gallery.py --only desktop- /tmp/desktop.log
+
+is the third mode and the one to reach for when the change is confined to one
+shell. It DECLARES A SCOPE: inside the prefix the run is authoritative exactly
+as a full run is — a state matching it that the app no longer emits is dropped
+and named — and outside it every key is carried over untouched, counted rather
+than listed. See the note on `--only` in `main` for why that is not `--merge`
+under another name.
+
 Which shell a state came from is in its KEY — `src/shell/mod.rs` gives the
 desktop's dumps a `desktop-` prefix and the phone's none — and that one string
 does both jobs it has to do: it keeps the two sets from colliding here, and it
@@ -201,9 +210,61 @@ CELL = """  <div class="cell" style="width: {w}px">
   </div>"""
 
 
+def parse_args(argv: list[str]) -> tuple[list[str], bool, str | None] | None:
+    """`(log paths, --merge, --only prefix)`, or `None` after printing why not.
+
+    Hand-rolled rather than `argparse` because the positional half is "every
+    remaining argument is a log" and the flag half is two flags; what argparse
+    would add here is a dependency on its opinion about `--only=` versus
+    `--only `, both of which the loop below takes.
+    """
+    args: list[str] = []
+    merge = False
+    only: str | None = None
+    pending = list(argv)
+    while pending:
+        arg = pending.pop(0)
+        if arg == "--merge":
+            merge = True
+        elif arg == "--only":
+            if not pending:
+                print("--only takes a key prefix, e.g. --only desktop-", file=sys.stderr)
+                return None
+            only = pending.pop(0)
+        elif arg.startswith("--only="):
+            only = arg.split("=", 1)[1]
+        else:
+            args.append(arg)
+
+    # Both at once is a contradiction rather than a combination: --merge keeps
+    # every key it did not capture and --only exists to DROP the ones inside
+    # its scope. Answering "which wins" would give the freshness guarantee a
+    # spelling under which it quietly does not hold.
+    if merge and only is not None:
+        print(
+            "--merge and --only contradict each other: --merge keeps every key "
+            "it did not capture, --only drops the ones inside its prefix",
+            file=sys.stderr,
+        )
+        return None
+    # An empty prefix matches every key, so `--only ''` is a plain run wearing a
+    # flag that says a scope was declared. Rejected rather than accepted as a
+    # no-op, because the report it prints would claim a scope it does not have.
+    if only == "":
+        print(
+            "--only needs a non-empty prefix; an empty one matches every key, "
+            "which is what a run with no --only already does",
+            file=sys.stderr,
+        )
+        return None
+    return args, merge, only
+
+
 def main() -> int:
-    args = [a for a in sys.argv[1:] if a != "--merge"]
-    merge = "--merge" in sys.argv
+    parsed = parse_args(sys.argv[1:])
+    if parsed is None:
+        return 2
+    args, merge, only = parsed
     # SEVERAL logs, unioned, and the store still replaced wholesale from the
     # union. That is what keeps "a run replaces the gallery" true now that
     # there are two shells writing into one store: --merge is not the answer,
@@ -229,6 +290,32 @@ def main() -> int:
         if markup.strip():
             states[key] = markup.strip()
 
+    # THE SCOPE, checked before anything is carried. A run that says
+    # `--only desktop-` and hands over a log full of phone dumps has not
+    # narrowed a capture, it has mistyped one — and the shape of that mistake
+    # is the reason this is an error and not a warning: a prefix that matches
+    # nothing (`--only destkop-`) would otherwise carry the WHOLE previous
+    # store over, drop nothing, and print a success line, which is the silent
+    # staleness this flag was added to prevent wearing the flag that prevents
+    # it.
+    if only is not None:
+        if outside := sorted(k for k in states if not k.startswith(only)):
+            print(
+                f"--only {only} claims this run is authoritative for that prefix, "
+                f"but the log holds {len(outside)} state(s) outside it: "
+                f"{', '.join(outside)}. Drop --only, or fix the prefix",
+                file=sys.stderr,
+            )
+            return 1
+        if not states:
+            print(
+                f"--only {only} captured nothing — no dump in the log has that "
+                "prefix, so this run would carry the whole store over unchanged "
+                "and call it a capture",
+                file=sys.stderr,
+            )
+            return 1
+
     carried = sorted(set(previous) - set(states))
     if merge:
         for key in carried:
@@ -237,6 +324,42 @@ def main() -> int:
             print(
                 "carried over from a previous run (NOT captured now, may be "
                 f"stale): {', '.join(carried)}",
+                file=sys.stderr,
+            )
+    elif only is not None:
+        # HOW THIS DIFFERS FROM --merge, which is the whole question about it.
+        #
+        # --merge carries over every key the run did not visit, so a key that
+        # the app has STOPPED emitting survives; that is why it names all of
+        # them, and why the block above calls it "not the answer" for a routine
+        # capture. --only carries over exactly the keys the run never claimed:
+        # the operator states a scope up front, the scope is checked against
+        # the log above, and inside it this run is as authoritative as a full
+        # one — `dropped` below is the same drop a plain run makes, on the same
+        # evidence. So the carried set is by construction the half of the store
+        # this capture said nothing about, which is why it is counted rather
+        # than listed: a stale key cannot hide in it that could not equally
+        # hide in a store nobody ran the script over at all.
+        #
+        # What it buys is that the two shells stop being one indivisible
+        # capture. A desktop-only change needs a desktop window and an
+        # operator; without this it also needs a booted simulator and a phone
+        # driven through 49 screens, and the honest way to avoid that was
+        # --merge, which gives up the freshness guarantee for the desktop half
+        # as well as the phone's.
+        kept = [k for k in carried if not k.startswith(only)]
+        dropped = [k for k in carried if k.startswith(only)]
+        for key in kept:
+            states[key] = previous[key]
+        print(
+            f"--only {only}: authoritative for {len(states) - len(kept)} captured "
+            f"state(s); carried {len(kept)} outside that prefix over unchanged",
+            file=sys.stderr,
+        )
+        if dropped:
+            print(
+                f"dropped (matches {only}, not visited this run): "
+                f"{', '.join(dropped)}",
                 file=sys.stderr,
             )
     elif carried:

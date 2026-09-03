@@ -83,7 +83,12 @@ carries a `desktop-` prefix from `src/shell::DUMP_PREFIX` — and that is also
 what decides whether `assets/desktop.css` and `assets/platform/macos.css` are
 linked, so a desktop rule cannot reach a phone frame. Both shells write into
 one `docs/gallery-states.json`, so a capture takes **both logs in one
-invocation**: `scripts/capture-gallery.py /tmp/applog.txt /tmp/desktop.log`.
+invocation**: `scripts/capture-gallery.py /tmp/applog.txt /tmp/desktop.log` —
+or `--only desktop- /tmp/desktop.log`, which declares a scope, stays
+authoritative inside it and carries the phone's half over untouched. A store
+that stops describing the app is caught by
+`every_class_the_desktop_shell_renders_is_in_the_captured_store`, not by the
+audit: the audit renders what it is given.
 
 `docs/style-gallery.html` renders every phone state in a 402x874 frame and
 every desktop state in the 1440x860 window `src/main.rs` opens, each against

@@ -1808,6 +1808,309 @@ mod tests {
         }
     }
 
+    // ---- is the store still a description of this app? -------------------
+    //
+    // `docs/gallery-states.json` is 62 states of real markup, and everything
+    // visual this repo checks reads it: `docs/audit.js` measures those states
+    // and `docs/style-gallery.html` renders them. A capture REPLACES it, so
+    // between captures it is a photograph — and the one thing a photograph
+    // cannot show is that the thing it is of has changed. Markup lands, the
+    // store keeps saying what the app said on the day it was driven, and the
+    // audit goes on reporting Clean over it. That is not hypothetical: it has
+    // already produced a Clean audit over a sidebar the app no longer
+    // rendered.
+    //
+    // ONE DIRECTION IS DECIDABLE AND THE OTHER IS NOT, which is the whole
+    // shape of this check. `src/selfscan.rs` rejects captured markup as
+    // evidence and is right to: "the shell has stopped rendering this" cannot
+    // be read off a capture, because a stale answer is still an answer. The
+    // question here is the reverse one — the shell renders `.tree-branch`, is
+    // there any captured state that contains it — and that one the source
+    // settles, because the source is what ships. Source is authoritative for
+    // what the app emits; the store is then measured against it, never the
+    // other way round.
+
+    /// Every class name the four files of the desktop shell render, mapped to
+    /// the one that renders it.
+    ///
+    /// Through [`crate::selfscan::code_of`] for the reason its module comment
+    /// gives at length: `include_str!` of a file pulls in that file's own test
+    /// module, and a scan that reads its own assertions is a scan that cannot
+    /// fail. The allowlist below is written in this same file, so without the
+    /// cut every name on it would be its own evidence.
+    fn rendered_classes() -> std::collections::BTreeMap<String, &'static str> {
+        let mut out = std::collections::BTreeMap::new();
+        for (name, source) in [
+            ("mod.rs", include_str!("mod.rs")),
+            ("home.rs", include_str!("home.rs")),
+            ("inspector.rs", include_str!("inspector.rs")),
+            ("sidebar.rs", include_str!("sidebar.rs")),
+        ] {
+            let code = crate::selfscan::code_of(name, source);
+            for start in code.match_indices("class:").map(|(at, m)| at + m.len()) {
+                let value = attribute_value(&code[start..]);
+                // Odd `split('"')` fields are the string literals. No class
+                // value in this tree contains an escaped quote, which is the
+                // one thing that would fool both this and the scan below.
+                for literal in value.split('"').skip(1).step_by(2) {
+                    for token in literal.split_whitespace() {
+                        // `class: "{class}"` and `class: "insp-step-dot
+                        // {step.dot}"` interpolate: the name is decided at run
+                        // time, and asking the store about the literal
+                        // `{step.dot}` would be asking about a string no
+                        // browser ever sees.
+                        if token.contains('{') || token.contains('}') {
+                            continue;
+                        }
+                        out.entry(token.to_owned()).or_insert(name);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The source of one `rsx!` attribute value: from `rest` to the comma that
+    /// ends it.
+    ///
+    /// Not `split(',')`, because a dozen of the class attributes in this shell
+    /// are `class: if row.selected { "nav-row on" } else { "nav-row" },` and a
+    /// naive split takes the first branch and loses the second — along with
+    /// `on`, `active`, `off`, `seen` and every other state modifier, which are
+    /// exactly the names a capture is most likely never to have driven. Depth
+    /// counts both braces and parens so `class: value_class(fact.mono,
+    /// fact.accent),` is one value and not two.
+    fn attribute_value(rest: &str) -> &str {
+        let mut depth = 0_i32;
+        let mut quoted = false;
+        for (at, c) in rest.char_indices() {
+            if quoted {
+                quoted = c != '"';
+                continue;
+            }
+            match c {
+                '"' => quoted = true,
+                '{' | '(' => depth += 1,
+                '}' | ')' => {
+                    depth -= 1;
+                    // Out of the element this attribute is on: the value was
+                    // the last one and had no trailing comma.
+                    if depth < 0 {
+                        return &rest[..at];
+                    }
+                }
+                ',' if depth == 0 => return &rest[..at],
+                _ => {}
+            }
+        }
+        rest
+    }
+
+    /// Every class name any captured DESKTOP state contains.
+    ///
+    /// The desktop's half of the store alone. A phone state is markup from the
+    /// other shell, and counting it would let `.warn` be "covered" by a phone
+    /// banner while no desktop frame the audit measures has ever contained
+    /// one — which is a state this app does not have, answering a question
+    /// about a state it does.
+    fn captured_classes() -> std::collections::BTreeSet<String> {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/gallery-states.json");
+        let raw = std::fs::read_to_string(&path).unwrap_or_default();
+        let states: std::collections::BTreeMap<String, String> =
+            serde_json::from_str(&raw).unwrap_or_default();
+        assert!(!states.is_empty(), "cannot read {}", path.display());
+
+        let mut out = std::collections::BTreeSet::new();
+        let mut seen = 0_usize;
+        for markup in states
+            .iter()
+            .filter(|(key, _)| key.starts_with(crate::shell::DUMP_PREFIX_DESKTOP))
+            .map(|(_, markup)| markup)
+        {
+            seen += 1;
+            for tail in markup.split("class=\"").skip(1) {
+                let value = tail.split('"').next().unwrap_or_default();
+                out.extend(value.split_whitespace().map(str::to_owned));
+            }
+        }
+        assert!(
+            seen > 0,
+            "docs/gallery-states.json holds no `{}` state at all, so every \
+             assertion below would be a claim about an empty set",
+            crate::shell::DUMP_PREFIX_DESKTOP
+        );
+        out
+    }
+
+    /// THE GAP, NAMED. Classes the desktop shell renders that no captured
+    /// state contains — so the audit has never measured one, and the gallery
+    /// has never shown one.
+    ///
+    /// THIS LIST MAY ONLY SHRINK. It is not a set of exemptions: it is the
+    /// unmeasured surface of this shell, written down at the size it was on
+    /// the day the check landed, and the test below fails if an entry stops
+    /// being needed — either because a capture reached it or because the shell
+    /// stopped rendering it. Adding to it is how the gate this whole block
+    /// exists to build gets given away one name at a time; the answer to a new
+    /// name is a capture that drives the screen it is on, not a line here.
+    ///
+    /// What is on it is one story and it is worth knowing before reading the
+    /// list. Nearly all of it is the CODE PLANE and the INSPECTOR WITH A
+    /// SUBJECT: `desktop-code-list` was captured against a code gateway that
+    /// was not connected, so the repo groups, the worktree rows and every
+    /// panel the inspector draws for a live session have never been in front
+    /// of the audit. The rest is state modifiers on screens that were captured
+    /// in their calm state — `warn`, `urgent`, `live`, `seen` — and the
+    /// Scheduler block of a home screen.
+    const UNCAPTURED: &[&str] = &[
+        // The inspector's diff counts, and its file list.
+        "add",
+        "del",
+        "insp-file",
+        "insp-file-count",
+        "insp-file-path",
+        "insp-file-tick",
+        "insp-files",
+        "seen",
+        // The inspector's cards, meters and timeline — everything it draws
+        // when it has a subject rather than the empty state.
+        "insp-card",
+        "insp-card-num",
+        "insp-card-sub",
+        "insp-card-title",
+        "insp-card-top",
+        "insp-meter",
+        "insp-meter-label",
+        "insp-meter-value",
+        "insp-meters",
+        "insp-step",
+        "insp-step-arg",
+        "insp-step-dot",
+        "insp-step-name",
+        "insp-step-state",
+        "insp-step-text",
+        "insp-timeline",
+        "insp-track",
+        // The Code half's home screen: repositories and their worktrees.
+        "repo-group",
+        "repo-head",
+        "repo-head-base",
+        "repo-head-facts",
+        "repo-head-name",
+        "tree-age",
+        "tree-branch",
+        "tree-branch-base",
+        "tree-branch-name",
+        "tree-mark",
+        "tree-say",
+        "tree-state",
+        "tree-text",
+        "tree-title",
+        // A home screen's Scheduler block, and the tile subtitle.
+        "home-sched",
+        "home-sched-more",
+        "home-sched-name",
+        "home-sched-what",
+        "home-tile-sub",
+        // States nothing captured was in: a session that needs an answer, one
+        // that is awake, a figure over its bar, a quoted line.
+        "live",
+        "nav-row-needs",
+        "q",
+        "recent-state",
+        "urgent",
+        "warn",
+        // The pane with nothing in it. Reached only by a destination that has
+        // no root, which nothing in the store was driven to.
+        "pane-empty",
+        "pane-empty-hint",
+        "pane-empty-line",
+    ];
+
+    /// The store still describes the app — or says exactly where it does not.
+    ///
+    /// REPRODUCED, because a check that cannot fail is worse than none and
+    /// this repo has shipped two of those. Both directions were measured on
+    /// this tree.
+    ///
+    /// ADDITIVE, which is the campaign's standing rule for markup and so the
+    /// staleness this will actually meet: one `span { class: "chrome-nonce" }`
+    /// added to the window's bar and nothing else touched. This fails with
+    /// ".chrome-nonce (mod.rs)" — and `node docs/audit.js both` on the very
+    /// same tree reports **Clean**, because the audit reads the store and the
+    /// stylesheets and no Rust at all. There is nothing else in the repo that
+    /// can see an element the app gained and the store never did.
+    ///
+    /// A RENAME, the other shape: `class="navcard"` renamed across all
+    /// thirteen desktop states, which is what a store one generation behind a
+    /// renamed class looks like. This fails with ".navcard (mod.rs)". The
+    /// audit reports 14,728 findings on that one — but that is the sidebar's
+    /// layout collapsing without its panel rule, not the audit noticing a
+    /// stale name, and it is a number a purely cosmetic class would not have
+    /// produced. The audit measures what it is given; only this can ask
+    /// whether it was given the right thing.
+    ///
+    /// It fails in the other direction too, which is what makes [`UNCAPTURED`]
+    /// a ledger rather than a suppression: add a name to that list which is
+    /// already in the store and the second assertion names it back.
+    #[test]
+    fn every_class_the_desktop_shell_renders_is_in_the_captured_store() {
+        let rendered = rendered_classes();
+        // The floor, `src/shell/mod.rs`'s habit: say out loud that the scan
+        // found something. A scan that matched nothing would pass forever.
+        assert!(
+            rendered.len() > 120,
+            "the class scan found only {} names across the four files of the \
+             desktop shell, which is fewer than the shell has — has `class:` \
+             stopped being how an attribute is written?",
+            rendered.len()
+        );
+        let captured = captured_classes();
+
+        let missing: Vec<String> = rendered
+            .iter()
+            .filter(|(class, _)| !captured.contains(class.as_str()))
+            .filter(|(class, _)| !UNCAPTURED.contains(&class.as_str()))
+            .map(|(class, file)| format!(".{class} ({file})"))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "the desktop shell renders {} class(es) that no captured state in \
+             docs/gallery-states.json contains: {}. The store is a photograph \
+             of the app and this is the app having changed since it was taken \
+             — re-capture (`scripts/capture-gallery.py --only {} <log>` drives \
+             the desktop half alone), because until then every audit and every \
+             gallery frame is measuring markup that no longer ships.",
+            missing.len(),
+            missing.join(", "),
+            crate::shell::DUMP_PREFIX_DESKTOP
+        );
+
+        let landed: Vec<&&str> = UNCAPTURED
+            .iter()
+            .filter(|class| captured.contains(**class))
+            .collect();
+        assert!(
+            landed.is_empty(),
+            "UNCAPTURED names {landed:?}, which the store now contains. The \
+             list may only shrink: delete them from it, so that the next class \
+             to go uncaptured is a failure and not a line in a list that has \
+             stopped being true."
+        );
+
+        let gone: Vec<&&str> = UNCAPTURED
+            .iter()
+            .filter(|class| !rendered.contains_key(**class))
+            .collect();
+        assert!(
+            gone.is_empty(),
+            "UNCAPTURED names {gone:?}, which the desktop shell no longer \
+             renders. Same rule: delete them. An entry that names nothing is \
+             an entry nobody can check."
+        );
+    }
+
     /// The window's bar takes the detail's title and its connection badge, and
     /// `assets/desktop.css` is what stops the pane below painting either of
     /// them again. That half is invisible to the compiler in BOTH directions:
