@@ -75,6 +75,12 @@ pub(crate) fn path_for(name: &str) -> Option<&'static str> {
         // The mockups' 2x2 disclosure glyph, rescaled from their 16-unit grid
         // to this file's 24-unit one. Nothing here was close: `archive` is a
         // box with a lid, `package` a cube, `list` three rules.
+        // The `sidebar` path with its divider moved from x=9.5 to x=14.5 —
+        // the same rectangle, the rule on the other side. One glyph per
+        // direction rather than one that flips, for `sidebar`'s stated reason:
+        // which side "the panel" is on never changes, and an icon that mirrors
+        // itself is an icon you have to read.
+        "inspector" => "M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM14.5 5v14",
         "grid" => "M3.5 3.5h6.5v6.5H3.5zM14 3.5h6.5v6.5H14zM3.5 14h6.5v6.5H3.5zM14 14h6.5v6.5H14z",
         "sparkle" => "M12 3v6M12 15v6M3 12h6M15 12h6M6.5 6.5 9 9M15 15l2.5 2.5M17.5 6.5 15 9M9 15l-2.5 2.5",
         "archive" => "M3 5h18v4H3zM5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M9.5 13h5",

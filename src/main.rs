@@ -92,7 +92,20 @@ fn launch() {
     let (min_w, min_h) = shell::MIN_INNER;
     let window = WindowBuilder::new()
         .with_title("Goose")
-        .with_inner_size(LogicalSize::new(1180.0, 820.0))
+        // 1440 IS THE MOCKUPS' OWN WIDTH, and it is arithmetic rather than
+        // deference. The sidebar and the inspector are 268 + 344 = 612 of
+        // chrome. At the 1180 this opened at, that leaves 568 for the content
+        // column — under the 40rem (640px) `--measure` `.pane-main` is built
+        // around, so every screen would render at its cap-collapsed width and
+        // the inspector would have shipped having quietly narrowed the thing
+        // it comments on. At 1440 the content column is 828: the 640 measure
+        // plus 94 of gutter each side, which is what the mockups draw.
+        //
+        // 860 AND NOT THE MOCKUPS' 900. A 1440x900 display has about 875 of
+        // usable height once the menu bar is out, so a 900-tall window opens
+        // taller than the screen it is on. 860 clears it and is still 40 more
+        // than before. `with_min_inner_size` is untouched — see `MIN_INNER`.
+        .with_inner_size(LogicalSize::new(1440.0, 860.0))
         .with_min_inner_size(LogicalSize::new(min_w, min_h));
     let window = integrate_titlebar(window);
     dioxus::LaunchBuilder::desktop()

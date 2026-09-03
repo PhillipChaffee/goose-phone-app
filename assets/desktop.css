@@ -237,6 +237,23 @@
    * 7.44 dark and 5.19 light. --text-tertiary is banned at every rung — 3.26
    * dark at its best and 2.20 light — which is the 2.91:1 the audit already
    * caught once on `.recent-fact`. */
+
+  /* ── THE INSPECTOR'S COLUMN AND ITS TWO DIFF INKS ────────────────────
+   *
+   * `--insp-w` is the mockups' third column, identical in all eight files.
+   *
+   * The two inks are NOT called `--diff-add` / `--diff-del`, and the rename is
+   * the whole point: those two names already exist in `assets/main.css` and
+   * are deliberately theme-INVARIANT, because they are painted on `--code-bg`,
+   * which is the same colour in both themes. Declaring them here would put a
+   * light value on the app's real diff screen — #2f6b3d measures 2.19:1 on
+   * `--code-bg` — so the inspector would have quietly broken the one screen it
+   * is summarising. These are the inspector's own, on the panel rung:
+   * #2f6b3d is 4.83:1 on light's panel and #7ee0a4 is 11.55:1 on dark's. */
+  --insp-w: 344px;
+  --insp-add: #2f6b3d;
+  --insp-del: #b3261e;
+
   --text-3xs: 0.625rem;
 
   /* 10.5px, the mockups' single most-used size (246 declarations): mono ages,
@@ -416,7 +433,11 @@
  * mockups' 1.23:1 and the old 1.63:1 — most of the way, with nothing lost. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .app > .shell {
-    --surface-panel: #181a1e;
+    --insp-add: #7ee0a4;
+    --insp-del: #ff9b98;
+    --insp-add: #7ee0a4;
+  --insp-del: #ff9b98;
+  --surface-panel: #181a1e;
     --surface-canvas: #1e2126;
     --surface-card: #212429;
     --surface-raise: #24282e;
@@ -725,18 +746,35 @@
  * extra click. */
 /* ── the library disclosure ── */
 .nav-library {
-  /* CHANGE: it becomes a bordered box on the card wash rather than a bare row.
-   * Everything not listed here in the shipped block is kept. */
+  /* A BORDERED BOX on the card wash, where it was a bare row: `.libdisc` in
+   * 22-nav-disclosure.html is `height:30px;border:1px solid; border-radius:8px;
+   * background:rgba(255,255,255,.014)`, and the box is what tells a disclosure
+   * apart from the destinations it discloses.
+   *
+   * `font: inherit` and `width: 100%` are load-bearing and were dropped once
+   * in this pass: without the shorthand the element is a `button`, so the UA
+   * resets its family to the platform default — `docs/audit.js` refuses to
+   * measure a run where any element computes a font this run did not pin, and
+   * that refusal is what caught it. */
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  /* 30px in the mockup, 32 here: `docs/audit.js` fails any `button` under 32
+   * in either axis, and the floor wins over the picture. */
   min-height: 2rem;
   margin: 0 0 0.6875rem;
   padding: 0 0.625rem;
-  gap: 0.5rem;
   border: 1px solid var(--shell-line);
   border-radius: var(--radius-md);
   background: var(--surface-card);
   color: var(--text-secondary);
+  font: inherit;
   font-size: var(--text-xs);
   line-height: var(--lh-sm);
+  text-align: left;
+  cursor: pointer;
 }
 
 .nav-library:hover {
@@ -867,8 +905,7 @@
  * its tap-target check off that class, and a heading is not a target. */
 /* ── a band heading with a count ── */
 .nav-band {
-  /* CHANGE: it becomes a flex row so the count can be pushed to the end.
-     Everything else in the shipped block is kept verbatim. */
+  /* A flex row, so the count can be pushed to the end. */
   display: flex;
   align-items: baseline;
   gap: 0.375rem;
@@ -877,7 +914,11 @@
   font-size: var(--text-2xs);
   line-height: var(--lh-sm);
   font-weight: 600;
-  letter-spacing: 0.09em;
+  /* .05em, NOT the plane badge's .09em, and the mockups draw the distinction:
+   * `.grp.time .name` is .05em while `.sec-h .ttl` and `.plane-badge` are .09.
+   * Two tiers of uppercase label, and at 10.5px .09em is nearly a pixel of air
+   * per letter — enough to take a word as long as YESTERDAY apart. */
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
@@ -3040,3 +3081,488 @@
  * "No chats match" was stranded about 500pt below the search field it was
  * answering. Only in the LIST column — in the detail, "That recipe is no
  * longer open." is the whole screen and centred is where it belongs. */
+
+.insp {
+  flex: 0 0 var(--insp-w);
+  width: var(--insp-w);
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface-panel);
+  border-left: 1px solid var(--shell-line);
+}
+
+.shell[data-insp="closed"] .insp {
+  display: none;
+}
+
+.insp-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 0.5rem;
+  -webkit-mask-image: linear-gradient(#000 96%, transparent);
+  mask-image: linear-gradient(#000 96%, transparent);
+}
+
+.insp-sec {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2rem;
+  padding: 0.6875rem 0.875rem 0.4375rem;
+}
+
+.insp-sec-title {
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-sm);
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.insp-sec-meta {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.insp-sec-act {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  min-height: 2rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--text-2xs);
+  line-height: var(--lh-sm);
+  cursor: pointer;
+}
+
+.insp-sec-act:hover {
+  border-color: var(--text-tertiary);
+  color: var(--text-primary);
+}
+
+.insp-kv {
+  padding: 0 0.875rem 0.25rem;
+}
+
+.insp-kv-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  padding: 0.25rem 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.insp-kv-value {
+  margin-left: auto;
+  max-width: 11.25rem;
+  color: var(--text-primary);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.insp-kv-value.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.insp-kv-value.accent {
+  color: var(--accent);
+}
+
+.insp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3125rem;
+  padding: 0.125rem 0.875rem 0.25rem;
+}
+
+.insp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  padding: 0.125rem 0.5625rem 0.125rem 0.4375rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-full);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-sm);
+}
+
+.insp-chip > i {
+  flex: 0 0 auto;
+  width: 0.3125rem;
+  height: 0.3125rem;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
+.insp-chip.off {
+  color: var(--text-secondary);
+}
+
+.insp-chip.off > i {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--text-secondary);
+}
+
+.insp-card {
+  display: block;
+  width: calc(100% - 1.5rem);
+  margin: 0.125rem 0.75rem 0.25rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.insp-card:hover {
+  border-color: var(--border-secondary);
+}
+
+.insp-card-top {
+  display: flex;
+  align-items: center;
+  gap: 0.4375rem;
+}
+
+.insp-card-num {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-sm);
+}
+
+.insp-tag {
+  padding: 0.125rem 0.375rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-sm);
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.insp-tag.ok {
+  color: var(--text-success);
+  border-color: color-mix(in srgb, var(--text-success) 35%, transparent);
+}
+
+.insp-tag.warn {
+  color: var(--text-warning);
+  border-color: color-mix(in srgb, var(--text-warning) 35%, transparent);
+}
+
+.insp-tag.bad {
+  color: var(--text-danger);
+  border-color: color-mix(in srgb, var(--text-danger) 35%, transparent);
+}
+
+.insp-card-title {
+  margin-top: 0.375rem;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+.insp-card-sub {
+  margin-top: 0.3125rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.insp-files {
+  padding: 0 0.75rem 0.25rem;
+}
+
+.insp-file {
+  display: grid;
+  grid-template-columns: 1rem 1fr auto;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.375rem;
+  border-radius: var(--radius-sm);
+}
+
+.insp-file-tick {
+  width: 0.875rem;
+  height: 0.875rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-sm);
+  color: transparent;
+  font-size: 0.5625rem;
+  line-height: 1;
+}
+
+.insp-file-tick.seen {
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
+  color: var(--accent-ink);
+}
+
+.insp-file-path {
+  min-width: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.insp-file-count {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.insp-file-count .add {
+  color: var(--insp-add);
+}
+
+.insp-file-count .del {
+  color: var(--insp-del);
+}
+
+.insp-timeline {
+  padding: 0 0.875rem 0.125rem;
+}
+
+.insp-step {
+  display: grid;
+  grid-template-columns: 0.5625rem 1fr auto;
+  gap: 0.5625rem;
+  align-items: baseline;
+  padding: 0.3125rem 0;
+}
+
+.insp-step + .insp-step {
+  border-top: 1px solid var(--border-primary);
+}
+
+.insp-step-dot {
+  width: 0.3125rem;
+  height: 0.3125rem;
+  margin-top: 0.375rem;
+  border-radius: var(--radius-full);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--text-secondary);
+}
+
+.insp-step-dot.live {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+.insp-step-dot.bad {
+  background: var(--text-danger);
+  box-shadow: none;
+}
+
+.insp-step-name {
+  display: block;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.insp-step-arg {
+  display: block;
+  margin-top: 0.0625rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.insp-step-state {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+}
+
+.insp-step-state.live {
+  color: var(--accent);
+}
+
+.insp-meters {
+  padding: 0.25rem 0.875rem 0.625rem;
+  border-top: 1px solid var(--border-primary);
+}
+
+.insp-meter + .insp-meter {
+  margin-top: 0.5625rem;
+}
+
+.insp-meter-label {
+  display: flex;
+  align-items: baseline;
+  margin-bottom: 0.3125rem;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.insp-meter-value {
+  margin-left: auto;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.insp-track {
+  height: 0.25rem;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.insp-track > i {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
+.insp-track > i.warn {
+  background: var(--text-warning);
+}
+
+.insp-keys {
+  padding: 0.5625rem 0.875rem 0.75rem;
+  border-top: 1px solid var(--shell-line);
+}
+
+.insp-key-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5625rem;
+  padding: 0.1875rem 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+.insp-key {
+  flex: 0 0 auto;
+  min-width: 1.75rem;
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-sm);
+  text-align: center;
+}
+
+.insp-key.wide {
+  min-width: 2.75rem;
+}
+
+.insp-empty {
+  padding: 1.5rem 0.875rem;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+}
+
+.insp-toggle {
+  flex: 0 0 auto;
+  margin-top: var(--chrome-pad);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  margin-right: 0.375rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--icon-md);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.insp-toggle:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-color: var(--border-secondary);
+}
+
+@media (max-width: 971px) {
+  .shell .insp {
+    display: none;
+  }
+}
+
+@media (max-width: 971px) and (min-width: 704px) {
+  .shell[data-nav="closed"][data-insp="open"] .insp {
+    display: grid;
+  }
+}
+
+@media (max-width: 703px) {
+  .shell-chrome > .insp-toggle {
+    display: none;
+  }
+}

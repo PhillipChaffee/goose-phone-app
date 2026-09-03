@@ -21,6 +21,7 @@
 use dioxus::prelude::*;
 
 mod home;
+mod inspector;
 mod sidebar;
 
 use std::fmt::Write as _;
@@ -183,6 +184,9 @@ const NAV_KEY: &str = r"
   document.addEventListener('keydown', (e) => {
     if (e.key !== '/') return;
     if (!e.metaKey && !e.ctrlKey) return;
+    // LOAD-BEARING, not defensive. `INSP_KEY` below is this chord with
+    // Option added, so without this line the one press would toggle both
+    // panels and the reader would never see the inspector move on its own.
     if (e.altKey) return;
     e.preventDefault();
     dioxus.send('toggle');
@@ -190,7 +194,44 @@ const NAV_KEY: &str = r"
 })();
 ";
 
-/// Wire ⌘/ to the nav's own open signal.
+/// Cmd-Option-slash shows and hides the inspector. Ctrl+Alt+/ elsewhere.
+///
+/// The nav's chord with Option added, because the two panels are the same
+/// gesture on opposite sides of the window and goose's own
+/// `CommandOrControl+/` is already spent on the left one. `NAV_KEY`'s
+/// `altKey` guard is what keeps the two apart, and its comment now says so.
+///
+/// JS rather than a Rust `onkeydown`, for `REFRESH_KEY`'s reason. BOTH
+/// characters are matched because on macOS Option+/ produces a division sign,
+/// so the event's `key` is not a slash at all once Option is down.
+const INSP_KEY: &str = r"
+(() => {
+  if (window.__inspKeyWired) return;
+  window.__inspKeyWired = true;
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== '/' && e.key !== '÷') return;
+    if (!e.metaKey && !e.ctrlKey) return;
+    if (!e.altKey) return;
+    e.preventDefault();
+    dioxus.send('toggle-insp');
+  });
+})();
+";
+
+/// Wire the inspector chord to its own open signal.
+fn use_insp_key(mut open: Signal<bool>) {
+    use_effect(move || {
+        let mut eval = document::eval(INSP_KEY);
+        spawn(async move {
+            while eval.recv::<String>().await.is_ok() {
+                let now = *open.peek();
+                open.set(!now);
+            }
+        });
+    });
+}
+
+/// Wire the nav chord to the nav's own open signal.
 fn use_nav_key(mut nav_open: Signal<bool>) {
     use_effect(move || {
         let mut eval = document::eval(NAV_KEY);
@@ -278,6 +319,20 @@ const fn new_label(plane: Plane) -> &'static str {
     match plane {
         Plane::Chat => "New chat",
         Plane::Code => "New code session",
+    }
+}
+
+/// What the inspector control says it will do.
+///
+/// "Inspector" and deliberately NOT "details": `nav::Destination`'s `Detail`
+/// is already this shell's word for the CONTENT column and its `Crumb` is what
+/// the band's title is drawn from, so "Show details" would name two different
+/// columns in one window.
+const fn insp_toggle_label(open: bool) -> &'static str {
+    if open {
+        "Hide inspector"
+    } else {
+        "Show inspector"
     }
 }
 
@@ -628,6 +683,7 @@ pub(crate) fn AppShell() -> Element {
     use_arrival_refresh(dest);
     use_refresh_key();
     use_nav_key(nav_open);
+    use_insp_key(ctx.inspector_open);
     use_dismiss_key();
     // The chrome strip is only real while the traffic lights are on screen;
     // fullscreen takes them away. Read off the window rather than guessed at —
@@ -684,6 +740,14 @@ pub(crate) fn AppShell() -> Element {
     // Settings is deliberately not home for either half — it belongs to
     // neither plane, its detail is unconditional, and it takes the first arm.
     let on_home = detail.is_none() && dest.id == nav::primary(plane).id;
+    // WHAT THE INSPECTOR IS INSPECTING, and it is not `on_home` inverted:
+    // Settings, Recipes and Skills all produce a `detail` while belonging to
+    // NEITHER plane, and each plane's own signals (`ctx.chat`,
+    // `ctx.code_chat`) keep their last value after you leave — so an inspector
+    // keyed on `detail` alone would confidently describe a conversation nobody
+    // is looking at.
+    let on_subject = dest.plane == Some(plane) && detail.is_some();
+    let insp_open = ctx.inspector_open;
 
     // The half's library, computed once: the disclosure needs to know whether
     // it has anything before it decides to exist, and then needs the rows.
@@ -718,6 +782,7 @@ pub(crate) fn AppShell() -> Element {
             // no business there; here it sits with `data-detail` and
             // `data-nav`, set the same way, by the same render.
             "data-fullscreen": if fullscreen() { "true" } else { "false" },
+            "data-insp": if insp_open() { "open" } else { "closed" },
 
             // THE WINDOW'S OWN BAR, full width, above the columns.
             //
@@ -856,6 +921,18 @@ pub(crate) fn AppShell() -> Element {
                 // `ConnBadge` reads `ctx.conn` and nothing else, so the shell
                 // can ask for it as it stands.
                 PlaneConn { plane }
+
+                button {
+                    class: "insp-toggle",
+                    title: insp_toggle_label(insp_open()),
+                    "aria-label": insp_toggle_label(insp_open()),
+                    "aria-expanded": if insp_open() { "true" } else { "false" },
+                    onclick: move |_| {
+                        let now = *insp_open.peek();
+                        insp_open.clone().set(!now);
+                    },
+                    Icon { name: "inspector" }
+                }
             }
 
             div { class: "shell-body",
@@ -1057,6 +1134,15 @@ pub(crate) fn AppShell() -> Element {
                     {empty_detail(dest)}
                 }
             }
+
+            // THE THIRD COLUMN. Rendered unconditionally and hidden by the
+            // sheet, not by Rust: `data-insp` on `.shell` above is the one
+            // fact, and `assets/desktop.css` decides both whether the column
+            // has a width and whether the window is wide enough for it. That
+            // is this shell's standing rule — width decides only how many
+            // columns, entirely inside the stylesheet, so nothing in Rust ever
+            // listens to a DOM resize.
+            inspector::Inspector { plane, on_subject }
 
             }
         }

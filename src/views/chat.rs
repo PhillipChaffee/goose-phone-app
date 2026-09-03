@@ -652,7 +652,7 @@ pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
 /// class name still carries the raw value, so the colour rules keep working
 /// on both. Anything unrecognised is tidied rather than dropped: a backend
 /// that grows a new state shows that state instead of nothing.
-fn tool_status_label(status: &str) -> String {
+pub(crate) fn tool_status_label(status: &str) -> String {
     match status {
         "pending" => "Queued".to_owned(),
         "in_progress" | "running" => "Running".to_owned(),
@@ -711,7 +711,7 @@ fn tool_icon(kind: &str) -> &'static str {
 ///
 /// Returns `None` below the threshold, so the chip does not render at all
 /// rather than rendering empty.
-fn crowding(usage: Option<Usage>) -> Option<u128> {
+pub(crate) fn crowding(usage: Option<Usage>) -> Option<u128> {
     const SPEAK_UP_AT: u128 = 75;
     let (used, limit) = usage?;
     if limit == 0 {
