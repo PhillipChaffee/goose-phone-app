@@ -1,0 +1,612 @@
+/* ── the home screen ────────────────────────────────────────────────────
+ *
+ * What the content column shows when nothing is open: a greeting, one true
+ * sentence, and the thing you type into. It is deliberately sparser than the
+ * mockups, which are full of numbers no server sends — see the header of
+ * `src/shell/desktop/home.rs`.
+ *
+ * It takes the pane's own measure rather than the full width. `--measure` and
+ * `--gutter` are defined on `.pane-main` (section 6) and every screen in the
+ * column already reads them; a home screen that ran edge to edge would be the
+ * one place text was set at 1500px on a wide window. */
+.home {
+  display: flex;
+  justify-content: center;
+  /* `flex-start`, not the default `stretch`. As a flex item `.home-inner`
+   * would otherwise be sized to the CONTAINER's height, and content taller
+   * than that overflows the item instead of scrolling the pane — measured at
+   * 480x560 on the code half, whose tiles push it 45px past
+   * (`SPILL div.home-inner content leaves the box by 45px`, twelve cells).
+   * With `flex-start` the item takes its own height and `.scroll`'s
+   * `overflow-y` does what it is there for. */
+  align-items: flex-start;
+}
+
+.home-inner {
+  width: 100%;
+  max-width: var(--measure);
+  display: flex;
+  flex-direction: column;
+  /* Down from the top rather than centred in the column. Centred looks right
+   * at one window height and wrong at every other, and the composer is what
+   * the eye should land on — putting it in the middle of a 1000px window puts
+   * it below the fold of an 800px one. */
+  padding: 12vh 0 48px;
+}
+
+.home-greeting {
+  margin: 0 0 6px;
+  font-family: var(--font-serif);
+  /* The rung the phone's scale does not have, and the reason it now exists.
+   * `.hello h1.big{font-family:their --serif;font-size:30px;font-weight:500;
+   * letter-spacing:-.01em;line-height:1.25}` — 10-home-chat.html. It read at
+   * --text-2xl/--lh-xl (24 on 32) because that was the top of a scale composed
+   * for a phone; the mockups' greeting is six points larger than that and
+   * lighter, which is what makes it a salutation rather than a page title. */
+  font-size: var(--text-3xl);
+  line-height: var(--lh-3xl);
+  /* 500, not 600. At 30px in a serif, weight is what separates a greeting from
+   * a heading, and the mockups take the lighter of the two. */
+  font-weight: 500;
+  /* Display sizes need negative tracking or the counters open up; the mockups
+   * set it on both display elements (`.hello h1` and `.st-t .n`) and nowhere
+   * else. */
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.home-standing {
+  margin: 0 0 24px;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  line-height: var(--lh-md);
+}
+
+/* THE COMPOSER, and it is the reason the sidebar's New button hides while
+ * this is on screen — the owner's rule, in his words: "I don't think we need
+ * a new chat button when the big chat box is visible in the middle."
+ *
+ * A bordered card rather than a bare field, matching `.composer` in
+ * assets/main.css: the thing you type into is the primary object on this
+ * screen and an underline would read as one more form row. */
+.home-compose {
+  display: flex;
+  flex-direction: column;
+  /* ZERO, both of them, and that is the whole two-zone geometry.
+   *
+   * The mockups' composer is a FIELD ZONE, a full-bleed hairline, and a CONTROL
+   * ZONE — `.launch{border:1px solid their --line;border-radius:14px;
+   * overflow:hidden}` with `.field` and `.bar` carrying their own padding and
+   * `.bar` carrying the `border-top`. This shipped as a single 12px box with an
+   * 8px gap, so there was no line to draw: a border on the row would have been
+   * inset 12px on both sides and read as a rule under the text rather than as
+   * the seam between two zones. Padding moves to the children; the container
+   * keeps only the edge and the radius.
+   *
+   * `overflow: hidden` is what makes the hairline meet the curve instead of
+   * running past it. */
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-secondary);
+  /* 16px. `.launch.calm{border-radius:16px}` and --radius-xl are the same
+   * number, which is also design.md's tier for a container that holds other
+   * things. */
+  border-radius: var(--radius-xl);
+  /* THE CARD RUNG, AND NOT THE MOCKUPS'. `.launch{background:their --surface}`
+   * is #24282e, which is --surface-raise here. Taking it would be right in dark
+   * and wrong in light, where --surface-raise resolves to main.css's
+   * --bg-tertiary (#e3e6ea) and the placeholder — `.input::placeholder` is
+   * --text-secondary, #6f6f6f — measures 4.01:1 on it, under the 4.5 it owes.
+   * On --surface-card the same placeholder is 4.64:1 light and 7.85:1 dark.
+   * The floor wins over the picture; the 1px edge is what separates the
+   * control, as it does in the mockups. */
+  background: var(--surface-card);
+}
+
+.home-compose .input {
+  width: 100%;
+  /* THE FIELD ZONE. `.launch.calm .field{padding:17px 18px 15px}` — asymmetric,
+   * more above than below, because the control zone underneath supplies the
+   * lower half of the box's air. Padding is px here rather than rem to match
+   * every other box in this sheet; the type on it is rem, which is the rule
+   * that is actually about the reader's font-size. */
+  padding: 17px 18px 15px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  /* `font` first, then the family — the shorthand resets font-family, so the
+   * two cannot be written the other way round. */
+  font: inherit;
+  /* SERIF, `.launch .field{font-family:their --serif}`. It is the one place in
+   * this sheet a control takes the reading voice, and it is consistent rather
+   * than an exception: assets/main.css already sets the serif on
+   * `.bubble.user .bubble-text`, so what the reader writes is serif everywhere
+   * in this app. `.recent-quote` two sections down is the same decision. */
+  font-family: var(--font-serif);
+  /* 15px on a 22px line. `.launch.calm .field{font-size:15px}`. */
+  font-size: var(--text-md);
+  line-height: var(--lh-md);
+  resize: none;
+}
+
+.home-compose .input:focus {
+  outline: none;
+}
+
+.home-compose-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* THE CONTROL ZONE. `.launch .bar{padding:7px 10px 8px 10px}` — tighter than
+   * the field above it, because everything in it is a 32px control or a line of
+   * 11.5px mono rather than a paragraph. 7 + 32 + 8 is a 47px zone. */
+  padding: 7px 10px 8px;
+  /* THE FULL-BLEED HAIRLINE, and it is the seam this section exists for.
+   * `.launch .bar{border-top:1px solid their --line-soft}` — SOFTER than the
+   * composer's own outer edge, which is --border-secondary: a line inside a
+   * control separates two zones of one object, and drawing it at the same
+   * strength as the object's boundary makes it read as two stacked objects.
+   * --border-primary is #2f343b dark / #e3e6ea light against the outer
+   * #3b414a / #cbd1d6. Non-text and decorative — it divides, it does not
+   * signal — so no 3:1 is owed. */
+  border-top: 1px solid var(--border-primary);
+}
+
+/* THE HOME COMPOSER'S SEND, and it is `assets/main.css`'s `.send` with two
+ * numbers changed rather than a control of its own. The transcript's composer
+ * already has this circle; making the home screen's a different shape would
+ * teach the reader two answers to "how do I send this" in one app.
+ *
+ * 32px rather than 40, and the accent rather than `--bg-inverse`. The size is
+ * the mockups' (`.send{width:28px;height:28px}`) rounded up to this shell's
+ * pointer floor — 28 is below the 32 `docs/audit.js` holds desktop targets to,
+ * and the floor wins over the picture. The colour is the whole point of the
+ * control: it is the one saturated object on a resting home screen, and
+ * `--bg-inverse` in dark is white, which made it the brightest thing in the
+ * window while saying nothing. */
+.home-compose-row .send {
+  width: 32px;
+  height: 32px;
+  background: var(--accent-fill);
+  color: var(--accent-ink);
+  font-size: var(--text-md);
+}
+
+/* THE ACCENT'S ONE JOB on this screen: the control that starts the work.
+ *
+ * Spending it here and nowhere else is deliberate. An accent used on four
+ * things is a colour; used on one it is an instruction. `--accent-fill` and
+ * `--accent-ink` are a pair for exactly this — see the token note at the top
+ * of the file for why the fill is not the same value as the text accent. */
+.home-compose-row .btn.primary {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--accent-ink);
+}
+
+.home-compose-row .btn.primary:disabled {
+  background: var(--bg-tertiary);
+  border-color: var(--shell-line);
+  color: var(--text-secondary);
+}
+
+/* WHAT THE SESSION WILL BE, before it exists — model, host, extensions.
+ *
+ * One line and never more, which is `.chip-row`'s rule in assets/main.css and
+ * its reason: a composer that grows a row under the pointer is worse than a
+ * value you can read in full by widening the window. It shrinks and scrolls
+ * rather than wrapping, and the button beside it never moves. */
+.home-chips {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+/* A FACT, not a control. The mockups draw two visual classes in this row and
+ * the difference is the whole grammar of it: a thing you can CHANGE is a
+ * bordered box with a chevron (`.picker`), and a thing you can only READ is
+ * bare mono text between middots (`.mini .mono`). Every chip this app puts
+ * here is the second kind — the model, the host, the extension count, the
+ * context size are all read-only on this screen — so they are bare, and the
+ * filled pill they used to be was claiming to be pressable.
+ *
+ * The middot is a separator drawn by the row rather than a character in the
+ * text, so a chip does not have to know whether it is last. */
+.home-chip {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  /* 11.5px, up one rung from --text-2xs. `.mini{font-size:11.5px}` and
+   * `.mini .mono{font-size:11px}` — these are the composer's facts, they sit
+   * beside a 32px send button, and 10.5 put them below the mockups' own value
+   * for the same element. --text-secondary on --surface-card is 7.85:1 dark and
+   * 4.64:1 light. */
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  white-space: nowrap;
+}
+
+.home-chip + .home-chip::before {
+  content: "·";
+  margin: 0 6px;
+  /* WAS --text-tertiary, AND THAT IS A MISS THE AUDIT CANNOT REPORT.
+   *
+   * docs/audit.js's contrast walk keys on `[...el.childNodes].some(n =>
+   * n.nodeType === 3 …)` — a `::before` is not a child node, so this glyph has
+   * never been measured. Measured by hand it is 2.03:1 on the light card and
+   * 2.91:1 on the dark one; a separator is a non-text indicator and owes 3:1,
+   * and it fails in both. Secondary is 4.64 and 7.85.
+   *
+   * The mockups' own `.sep-dot{color:#454c56}` is fainter still (about 1.4:1)
+   * and is one of the places rule 3 outranks them. */
+  color: var(--text-secondary);
+}
+
+/* An address is compared character by character, so it gets the face built
+ * for that. The one place this shell reaches for `--font-mono`. */
+.home-chip.mono {
+  font-family: var(--font-mono);
+}
+
+/* ── pick up where you left off ─────────────────────────────────────────
+ *
+ * The mockups' `.crow`, and the densest block on the home screen: a status
+ * dot, a title over a QUOTED last message, and a trailing column of facts.
+ *
+ * Solid and faintly filled, against `.home-starter`'s dashed and unfilled one
+ * section below — the two-tier language named there. A thing that exists gets
+ * a card; a thing you could start gets an outline.
+ *
+ * A `button` with three spans in it and no nested control, which is the shape
+ * `.nav-row` had to be rebuilt into: a button containing buttons is invalid,
+ * and the parser hoists the inner ones out, which re-parents everything after
+ * them and produced 1600 findings the last time it happened here. The whole
+ * row is one target and the facts on it are text.
+ */
+.home-recent {
+  display: flex;
+  flex-direction: column;
+}
+
+.recent {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0 10px;
+  width: 100%;
+  margin-bottom: 7px;
+  padding: 11px 14px;
+  border: 1px solid var(--shell-line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.recent:hover {
+  border-color: var(--text-tertiary);
+  background: var(--surface-raise);
+}
+
+/* The dot is `sidebar::Mark`'s three states said in the same three colours, so
+ * a conversation that is streaming looks the same in both columns of the
+ * window. Idle is a filled fleck rather than a ring: the ring means "an agent
+ * is doing something", and a finished conversation is not. */
+.recent-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: var(--radius-full);
+  background: var(--text-tertiary);
+}
+
+.recent.running .recent-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.recent.waiting .recent-dot {
+  background: var(--text-warning);
+}
+
+.recent-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.recent-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  font-weight: 550;
+}
+
+/* SERIF, and it is the only place in this shell that sets a serif on
+ * something other than a heading. The mockups set their own serif token on
+ * the same element, and the reason is what the line IS:
+ * every other string on this screen is a label the app wrote, and this one is
+ * a sentence out of the conversation. The face is what says so — the same
+ * distinction `.md` already draws in the transcript.
+ *
+ * Two lines, then clipped. One line loses too much of a sentence to be worth
+ * reading; three makes the row taller than the two beneath it are worth. */
+.recent-quote {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--font-serif);
+  font-size: var(--text-xs);
+  /* --lh-sm, NOT --lh-md, and the re-scale is what forces it. At 11.5px on the
+   * new 22px --lh-md this quote would be a ratio of 1.91 — two clamped lines
+   * with more air between them than either has ink. `.crow .q` is 12.5px on
+   * `line-height:1.5`; --lh-sm gives 1.57, which is the closest rung and still
+   * looser than the chrome around it, which is what a serif quotation wants. */
+  line-height: var(--lh-sm);
+}
+
+.recent-facts {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+/* Mono, by `.nav-row-age`'s rule: a turn count and an age are values you
+ * compare between rows.
+ *
+ * `--text-secondary` and not `--text-tertiary`, which is what this shipped as
+ * and what `docs/audit.js` caught: tertiary is #606c7a, which is 2.91:1 on the
+ * card — under the 4.5 an 11px string owes, and 11px is exactly the size at
+ * which a reader is least able to make up the difference. Secondary is 7.85:1
+ * on the same surface. The mockups set their own faint grey here and do not
+ * clear it either; the floor wins over the picture, as it did for the send
+ * button's diameter. */
+.recent-fact {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-sm);
+  white-space: nowrap;
+}
+
+/* The one word on this row that is not a fact but a state, so it is the one
+ * that takes a colour. `streaming` is the accent; `needs you` is the amber
+ * this app already spends on a question an agent is blocked on, which is
+ * `.mark.waiting`'s token and `.home-tile.urgent`'s. */
+.recent-state {
+  color: var(--accent);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.recent.waiting .recent-state {
+  color: var(--text-warning);
+}
+
+/* The count beside a section heading. Not uppercase and not tracked — the
+ * heading is the label and this is its value, so it takes the same treatment
+ * every other number in this sheet takes. */
+.home-section-meta {
+  flex: 0 0 auto;
+  /* `.recent-fact`'s colour and its reason. */
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* ── ways to start ──────────────────────────────────────────────────────
+ *
+ * The recipes and skills the server actually has, capped at four. The sidebar
+ * keeps both behind the Library disclosure, so this is the one place they are
+ * visible without a click — which is the whole reason the section exists.
+ *
+ * There is no "pick up where you left off" beside it, though the mockup has
+ * one: the sidebar is showing exactly that list, permanently, three inches to
+ * the left. The mockup's sidebar was drawn before the list moved into it. */
+/* A section heading, and the count that belongs to it. `display: flex` with
+ * the meta pushed to the trailing edge, because the mockups' `.lsec-h` is a
+ * two-item row — the name of the section on one side, how many of the thing
+ * there are on the other — and a heading that says "12 threads" beside itself
+ * is the cheapest place in this column to put a number the reader wants. */
+.home-section {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  /* 26 and 7, from `.lsec.airy{margin-top:26px}` and `.lsec-h{margin-bottom:
+   * 7px}`. It was 32 and 8, which was proportionate to a 16px body and is not
+   * to a 13px one — the re-scale shrinks the type and leaves the gaps, and the
+   * result is a screen that reads as sparse rather than dense. */
+  margin: 26px 0 7px;
+  color: var(--text-secondary);
+  /* 10.5px. `.lsec-h .ttl{font-size:10.5px;font-weight:650;letter-spacing:
+   * .09em;text-transform:uppercase}` — the micro-label tier, so .09em is right
+   * here where it is not on `.nav-band`. */
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.home-starter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.home-starter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 8px 12px;
+  /* DASHED, and it is the one place in this sheet that is. The mockups draw a
+   * two-tier language on the home screen and the tiers are one border-style
+   * apart: a solid faintly-filled card is a thing that EXISTS (a conversation
+   * you can return to), a dashed unfilled one is a thing you could START.
+   * the mockups' `.start` is `1px dashed` their line colour, with no
+   * background at all. (Written out rather than quoted, because the token
+   * check further down reads this file as text and a mockup token named in a
+   * comment would look like a token this sheet spends.) */
+  border: 1px dashed var(--shell-line);
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Hover fills it in: the dashed edge says "not yet a thing", and pointing at
+ * it is the moment it could become one. */
+.home-starter:hover {
+  border-color: var(--accent);
+  background: var(--surface-card);
+}
+
+.home-starter-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.home-starter-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+/* What the thing IS, in the server's own word — "recipe" or "skill" — rather
+ * than a category this screen invented. */
+/* A ROW, so the part that has to be clipped can clip ITSELF.
+ *
+ * This was one nowrap span with `text-overflow: ellipsis` and a second span
+ * inside it carrying the description, and the audit found the bug that shape
+ * has: an ancestor's `overflow: hidden` clips what is PAINTED, but the inner
+ * inline box still measures its full width, so a long description reported
+ * `right=1775` in a 1180px window. Clipped is not the same as fitting, and it
+ * is the second measurement that decides whether a layout is sound.
+ *
+ * Two flex items now — the label at its natural width, the sentence taking
+ * what is left with a `min-width: 0` that lets it shrink below its content
+ * and an ellipsis of its own. */
+.home-starter-kind {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-sm);
+}
+
+/* The author's own sentence. Same colour as the label in front of it: a third
+ * tier would be `--text-tertiary`, which does not clear 4.5:1 at this size —
+ * see `.recent-fact`. The middot in the markup is what separates them. */
+.home-starter-what {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── the code half's counts ─────────────────────────────────────────────
+ *
+ * Four tiles, and every one of them is read off a signal. The mockup has
+ * nine; five of those (spend, containers warm, queue depth, cold-start
+ * seconds, runners busy) have no source on this side of the wire, so they are
+ * absent rather than zeroed — a tile reading `$0.00 / $4.00` is not honest
+ * emptiness, it is a wrong number.
+ *
+ * `auto-fit` rather than a fixed four, so the row reflows at the narrow tier
+ * instead of overflowing: at 480 the column is 464 and four 150px tiles are
+ * 600. */
+.home-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  /* 26, matching `.home-section` above, for the same reason: the section rhythm
+   * is one number and this was the second copy of the old one. */
+  margin-top: 26px;
+}
+
+.home-tile {
+  display: flex;
+    flex-direction: column;
+    padding: 12px;
+    border: 1px solid var(--shell-line);
+    border-radius: var(--radius-lg);
+    background: var(--surface-card);
+}
+
+/* The one tile that means "do something", in the colour this app already
+ * spends on a question an agent is blocked on — `.mark.waiting`'s token, so
+ * the count on the home screen and the dot on the sidebar row say the same
+ * thing in the same colour. */
+.home-tile.urgent {
+  border-color: var(--text-warning);
+    background: var(--tint-warn);
+}
+
+.home-tile-value {
+  font-family: var(--font-mono);
+  /* 21px on 24 — `.st-t .n{font-family:their --mono;font-size:21px;
+   * line-height:1.15;letter-spacing:-.01em}`. --lh-xl comes down from 32 to 24
+   * for exactly this pairing: 21 on 32 is 1.52, which floats a numeral in the
+   * middle of its tile. */
+  font-size: var(--text-xl);
+  line-height: var(--lh-xl);
+  /* Display tracking, the same -.01em the greeting takes, and for the mockups'
+   * own reason: these are the only two elements they set it on. */
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.home-tile.urgent .home-tile-value {
+  color: var(--text-warning);
+}
+
+.home-tile-label {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  /* The floor rung. `.st-t .l{font-size:9.5px;font-weight:700;
+   * letter-spacing:.08em;text-transform:uppercase}` — 9.5 is not taken (see the
+   * token block), 10 is the nearest compliant value, and it is still half a
+   * point denser than the 10.5 everything else in this sheet sits at, which is
+   * the hierarchy the mockup was drawing.
+   *
+   * ARITHMETIC, because this is the thinnest margin in the pass: 700 weight at
+   * 10px does NOT reach the audit's large-text relaxation (that wants 14px AND
+   * 700, or 18.66px unconditionally), so this owes the full 4.5:1.
+   * --text-secondary on --surface-card is 4.64:1 light and 7.85:1 dark. It
+   * passes light by 0.14, which is why the tile may not gain a hover fill:
+   * --surface-raise would take it to 4.01 and fail. */
+  font-size: var(--text-3xs);
+  line-height: var(--lh-xs);
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+

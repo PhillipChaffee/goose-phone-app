@@ -6,7 +6,7 @@
 //! a `header.topbar`, a `main.scroll.has-fab`, and a floating `.fab`. Dropped
 //! into the sidebar, three things break rather than merely crowd. The `.fab`
 //! escapes its containing block and lands in the window's bottom-right corner.
-//! The `.pane`-scoped rules in `assets/desktop.css` stop matching, so a second
+//! The `.pane`-scoped rules in `assets/desktop/` stop matching, so a second
 //! connection badge reappears and the empty-state rules inverse. And the row
 //! itself does not fit: 245px of chrome is spent before the first character of
 //! a title — 16 navpane + 16 navcard + 32 scroller edge + 2 border + 24 swipe
@@ -140,7 +140,7 @@ pub(crate) struct Row {
     /// True when the content pane is showing THIS row.
     ///
     /// The three-column layout had this and the restructure dropped it, which
-    /// `assets/desktop.css`'s own note on `.session-item.on` had already
+    /// `assets/desktop/`'s own note on `.session-item.on` had already
     /// argued against: "an unmarked list is a list that does not say where the
     /// pane beside it came from". With the list in the sidebar it is worse —
     /// the sidebar is on screen at ALL times now, so an unmarked list is
@@ -579,7 +579,7 @@ pub(crate) fn SidebarList(plane: Plane) -> Element {
                             }
 
                             // RENAME AND DELETE, in the age's place under the
-                            // pointer. `assets/desktop.css` swaps them; this
+                            // pointer. `assets/desktop/` swaps them; this
                             // renders both and lets the sheet decide, so there
                             // is no hover state in Rust and no `onmouseover`
                             // paying a synchronous XHR per frame.
@@ -1111,7 +1111,7 @@ mod tests {
         );
         assert!(
             html.contains(r#"class="nav-row on""#),
-            "the open row does not carry `nav-row on`, so assets/desktop.css \
+            "the open row does not carry `nav-row on`, so assets/desktop/ \
              has nothing to paint the selection with: {}",
             &html[..html.len().min(500)]
         );

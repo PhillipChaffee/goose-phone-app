@@ -1,0 +1,203 @@
+.pane-main .scroll.chat > .bubble.user {
+  align-self: stretch;
+  width: auto;
+  max-width: 100%;
+  margin-top: 0;
+  padding: 0;
+  background: none;
+  border-radius: 0;
+  color: var(--text-primary);
+}
+
+.pane-main .scroll.chat > .bubble.user > .bubble-text {
+  padding: 0.6875rem 0.875rem;
+  background: var(--surface-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+.pane-main .scroll.chat > .bubble.user .attach-file {
+  border-color: var(--border-secondary);
+}
+
+.pane-main .scroll.chat > .bubble.user .attach-file .attach-size {
+  color: var(--text-secondary);
+}
+
+.pane-main .scroll.chat > .who-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 1.25rem 0 0.4375rem;
+}
+
+.pane-main .scroll.chat > .who-line:first-child {
+  margin-top: 0;
+}
+
+.pane-main .scroll.chat > .who-line + * {
+  margin-top: 0;
+}
+
+.pane-main .scroll.chat > .timemark + .who-line {
+  margin-top: 0.75rem;
+}
+
+.pane-main .scroll.chat > .bubble.assistant {
+  margin-top: 0;
+  max-width: 100%;
+}
+
+.pane-main .scroll.chat > .bubble.assistant > .md {
+  line-height: 1.6;
+}
+
+.pane-main .scroll.chat > .thought {
+  margin-top: 0;
+  margin-bottom: 0.625rem;
+}
+
+.pane-main .scroll.chat > .thought > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4375rem;
+  min-height: 2rem;
+  padding: 0 0.625rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-style: normal;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.pane-main .scroll.chat > .thought > summary::before {
+  width: auto;
+  font-size: var(--text-sm);
+}
+
+.pane-main .scroll.chat > .thought > .md {
+  margin-top: 0.5rem;
+  padding-left: 0.625rem;
+  border-left: 1px solid var(--border-primary);
+}
+
+.pane-main .scroll.chat .tool {
+  margin-top: 0;
+  border-radius: var(--radius-lg);
+}
+
+.pane-main .scroll.chat .tool + .tool {
+  margin-top: 0.375rem;
+}
+
+.pane-main .scroll.chat .tool-head {
+  gap: 0.5625rem;
+  padding: 0.4375rem 0.6875rem;
+}
+
+.pane-main .scroll.chat .tool-head > .tool-icon {
+  display: none;
+}
+
+.pane-main .scroll.chat .tool[data-kind] > .tool-head::before {
+  content: attr(data-kind);
+  flex: 0 0 auto;
+  min-width: 2.375rem;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.pane-main .scroll.chat .tool-title {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.pane-main .scroll.chat .tool-status {
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+}
+
+.pane-main .scroll.chat .tool.status-in_progress,
+.pane-main .scroll.chat .tool.status-running {
+  background: var(--tool-live-fill);
+  border-color: var(--tool-live-line);
+}
+
+.pane-main .scroll.chat .tool > .tool-output > summary {
+  min-height: 2rem;
+  padding: 0 0.75rem;
+}
+
+.pane-main .scroll.chat .tool > .tool-output pre {
+  background: var(--slab-sunken);
+}
+
+.pane-main .scroll.chat > .tool-run {
+  margin-top: 0;
+}
+
+.pane-main .scroll.chat > .tool-run > summary {
+  min-height: 2rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+.pane-main .scroll.chat > .tool-run[open] > .tool:first-of-type {
+  margin-top: 0.375rem;
+}
+
+.pane-main .scroll.chat > .timemark {
+  margin-top: 1.5rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+}
+
+.pane-main .scroll.chat > .timemark::before,
+.pane-main .scroll.chat > .timemark::after {
+  background: var(--shell-line);
+}
+
+.pane-main .scroll.chat > .typing {
+  margin-top: 0.75rem;
+  padding-left: 0;
+}
+
+.pane-main .scroll.chat > .empty {
+  min-height: 0;
+  padding: 3rem 0;
+  text-align: left;
+}
+
+/* THE SPEAKER, on a real element. `src/views/chat.rs` emits an actual span at
+ * every change of speaker (and only on the desktop — see `attributed()`), so
+ * these two colours are strings `docs/audit.js` can measure. The first draft
+ * of this painted them with `content: attr(data-who)`, which the gate is
+ * structurally blind to: its walk keys on child text nodes. */
+.pane-main .scroll.chat > .who-line .who-name {
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  line-height: var(--lh-xs);
+  color: var(--text-secondary);
+}
+
+/* The agent's name is the accent's one use in the transcript, which is what
+ * makes the two sides scannable now that neither is aligned to an edge.
+ * 6.73:1 dark and 6.36:1 light on the canvas. */
+.pane-main .scroll.chat > .who-line .who-name.goose {
+  color: var(--accent);
+}
+

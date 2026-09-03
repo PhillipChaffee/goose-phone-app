@@ -191,7 +191,7 @@ fn ExtensionRow(entry: GooseExtensionEntry, toggle: Option<crate::extensions::To
 /// Read by two things that are never on screen together: the header below,
 /// and — on the desktop — the window's own bar, which takes the heading out of
 /// the pane and paints it in `.shell-chrome` instead
-/// (`src/shell/desktop/mod.rs`, `assets/desktop.css`). The `None` arm is the
+/// (`src/shell/desktop/mod.rs`, `assets/desktop/`). The `None` arm is the
 /// view's own fallback, and it is reachable: the list is refreshed under this
 /// screen, so an extension removed on the server disappears while its detail
 /// is up.

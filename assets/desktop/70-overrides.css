@@ -1,0 +1,439 @@
+/* ── 2. chrome that no longer floats ────────────────────────────────────
+ *
+ * On the phone the top of the screen is a row of detached glass controls over
+ * the page (docs/design.md: "Each carries its own glass. Nothing spans the
+ * width"). Three columns cannot have that. `.topbar` is `position: absolute`
+ * against `.app`, so three of them would stack in the same corner; and a
+ * floating pill per column, three abreast, is three pills where the eye
+ * expects one. A pane header is the title sitting on the page, which is what
+ * the agreed mockups show. This deviation is written up in docs/design.md. */
+
+/* One height for every pane header, and it is not a preference.
+ *
+ * The bars are siblings across a 1pt divider and their heights were 20pt
+ * apart: a list header holds a title and comes to about 48, a detail header
+ * holds a 44pt back chevron and often two lines of text and comes to about 64.
+ * Two headers at two heights across one divider is a seam that visibly
+ * stair-steps.
+ *
+ * 4rem is the taller of the two derived rather than measured: `.icon-btn` is
+ * min-height 44 and this bar's own padding is 10 top and bottom. In rem, so it
+ * follows the reader's font-size like everything else (design rule 14) — the
+ * chevron does not, but a bar that grows past its controls is the harmless
+ * direction.
+ *
+ * NO RULE UNDER IT, and that is a reversal.
+ *
+ * The first draft drew one, on the reasoning that a static bar is in normal
+ * flow and "borders separate, shadows float". True as far as it goes, and it
+ * missed what the line was actually separating: nothing. The bar is
+ * `--bg-primary` and so is the pane under it, the content does not scroll
+ * beneath it, and the header is already set apart by being a 4rem band of air
+ * with one heading in it. What the rule did do was meet the column divider at
+ * a right angle, once per pane, which is a corner — and a window whose
+ * structure is drawn in corners is the "boxy" this pass is about.
+ *
+ * The reference agrees and is explicit about it: goose's own desktop app
+ * headers (RecipesView, SkillsView, SchedulesView) are a title and a subtitle
+ * on the canvas with no divider anywhere, and its layout comment says the main
+ * content is "no border / no card; just flows on the canvas"
+ * (ui/desktop/src/components/Layout/AppLayout.tsx). The one line the shell
+ * still draws is the one between two columns, which does separate two things.
+ *
+ * `background` stays. It is the same colour as the pane, so it paints nothing
+ * — but `.topbar` inherits the phone's glass (`backdrop-filter` and a
+ * translucent tint), and an opaque fill is what overrides it. */
+.topbar {
+  position: static;
+  min-height: 4rem;
+  padding: 10px var(--edge);
+  border-bottom: 0;
+  background: var(--bg-primary);
+}
+
+/* Out of flow, centred and reserving room for controls at both ends — all
+ * three are answers to a floating bar. In a pane header the title starts at
+ * the leading edge and takes what is left. */
+.topbar > .title,
+.topbar > .titlegroup {
+  position: static;
+  transform: none;
+  max-width: none;
+  text-align: left;
+}
+
+/* The fourth property the reset above was missing, and the one that showed.
+ *
+ * `.titlegroup` is a flex column with `align-items: center` in assets/main.css,
+ * which is right for a title that is itself centred on the screen's centre
+ * line. Taking the centring off the GROUP and leaving it on its items left the
+ * subtitle centred under the title instead of sharing its left edge — "Review"
+ * floating over "3 files · +14 −9", "Pull requests" over
+ * "acme/widget-service · goose/retry-backoff" — so one header presented three
+ * different left edges. */
+.topbar > .titlegroup {
+  align-items: flex-start;
+}
+
+/* The glass belonged to the floating controls. On a bar that is itself a
+ * surface, a shadowed pill around each button is a second material for no
+ * reason. */
+.topbar > .icon-btn,
+.topbar-actions {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* The nav is already on screen, so a control that opens it does nothing —
+ * design rule 11. One rule rather than a branch in Rust, because there are two
+ * hamburgers: `views::chrome::TopBar` renders one for all twelve of its call
+ * sites, and `views/code.rs` hand-rolls a second. `display: none` takes it out
+ * of the tab order and the accessibility tree as well as off the screen. */
+.topbar > .icon-btn.menu {
+  display: none;
+}
+
+/* The band of material behind the status bar, and the padding that kept
+ * content out from under a bar that floated over it. Neither has anything to
+ * do here. */
+.app::before {
+  display: none;
+}
+
+.scroll,
+.compose {
+  padding-top: 12px;
+}
+
+/* ── 3. rows that do not swipe ──────────────────────────────────────────
+ *
+ * The row's markup does not change — this is the same `.session-item`,
+ * `.session-swipe` and `.session-actions` the phone renders, and that is why
+ * every `RowAction` call site in the app is untouched. What changes is one
+ * flex basis. `.session-swipe` is `flex: 0 0 100%` on the phone, which is what
+ * pushes the tray past the row's right edge and out of sight; letting it
+ * shrink brings the same element back inside the row.
+ *
+ * It also fixes a real bug rather than a wrong affordance. `.session-item` is
+ * `overflow-x: auto; scroll-snap-type: x mandatory` with the scrollbar hidden
+ * — on macOS a trackpad's two-finger swipe drives that natively, with no
+ * affordance to say so. Today the tray is reachable by accident and
+ * unreachable on purpose. */
+
+.session-item {
+  /* The positioning context for the actions below. Nothing else in a row is
+   * positioned, and `.pane` already carries `position: relative` for the FAB,
+   * so this changes what `.session-actions` measures against and nothing
+   * else. */
+  position: relative;
+  overflow-x: visible;
+  overflow-y: visible;
+  scroll-snap-type: none;
+}
+
+.session-swipe {
+  flex: 1 1 auto;
+}
+
+/* Top-right of the row, and OUT OF FLOW — which is the whole point.
+ *
+ * `.session-actions` is a flex sibling of `.session-swipe`, and `.session-swipe`
+ * holds the title, the meta line and the quote. Left in flow the two icons take
+ * 78px off all three: measured at the default 1180x820 window, a chat title's
+ * box was 111px against the 196px the same row gets with no actions on it, and
+ * the quote came out 141px wide with 220px of text clamped into 80px of box.
+ *
+ * The agreed mockups do not do that: they put the actions inside the row's TOP
+ * LINE, beside the title only, with the quote a sibling of that line spanning
+ * the whole card. Absolute is how the same arrangement is reached without
+ * touching the markup, which is what keeps every `RowAction` call site and the
+ * phone's DOM alike untouched — only the title line reserves the gutter, and
+ * the meta line and the quote get the row's full width. */
+/* 8px between the buttons, not the tray's 2.
+ *
+ * The pair this matters for is Chats': a pencil and a trash, 32pt each, with
+ * the IRREVERSIBLE one on the outside where an overshoot to the right lands.
+ * At 2pt apart the two targets were effectively one 66pt target with a delete
+ * at the end of it. 8 is the app's own smallest deliberate gap (`.btn-row`,
+ * `.modal-actions`) and it is what the gutter below is counted from. */
+.session-actions {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  gap: 8px;
+}
+
+/* The gutter the icons sit in, reserved on the title line and nowhere else.
+ *
+ * Counted rather than assumed: a row with one action reserves one 32px button,
+ * a row with two reserves two and the 8px between them, and a row with no
+ * actions at all — Skills, a scheduled run — renders no `.session-actions` and
+ * so matches neither rule and reserves nothing. `:has()` is what makes the
+ * count readable from the row; this sheet is in a macOS binary only, where the
+ * web view is WebKit 15.4 or newer. The 8px is the gap between the title and
+ * the first icon. */
+.session-item:has(> .session-actions) .session-head {
+  padding-right: 40px;
+}
+
+.session-item:has(> .session-actions > .row-action:nth-child(2)) .session-head {
+  padding-right: 80px;
+}
+
+/* Always visible, never revealed.
+ *
+ * goose's own desktop app hover-reveals the actions on a session CARD in a
+ * grid and shows them outright in a LIST row — ExtensionItem.tsx renders its
+ * gear unconditionally with `hover:text-text-primary`, and SchedulesView.tsx
+ * renders pause/resume/delete outright. A 330px column of rows is a list, so
+ * the icons are painted always and hover changes only their colour and their
+ * border. A delete you cannot see until you find it is not an affordance.
+ *
+ * 32px, not the mockups' 26. Two reasons that agree: docs/audit.js reports
+ * SMALL-TAP on any button under 32px in either axis, so 32 is this repo's own
+ * floor and desktop states will pass it when they are captured; and goose's
+ * own row buttons are `h-8`, which is 32. The 44px in docs/design.md is the
+ * HIG's TOUCH number and does not describe a pointer — the exception is
+ * written up there. */
+.row-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  /* A resting EDGE, not a transparent one waiting for a pointer.
+   *
+   * Scanning a list is the state these are read in, and at rest the pause bars
+   * in Scheduler and Extensions were 6.5 x 12.5pt of `--text-secondary` grey
+   * with no box round them, sitting beside a fully saturated red trash: one
+   * control shouting, two reading as typography. In light they barely
+   * registered at all. Hover already drew the border — this only moves it to
+   * where the reading happens, and the pointer keeps a step of its own below
+   * (`--border-secondary`, one value deeper, in both themes). */
+  border: 1px solid var(--border-primary);
+  /* A pill, and it is the design system's rule rather than a taste:
+   * docs/design.md tiers rounding, and the top tier is "anything whose shape
+   * is its identity — icon buttons, tabs, chips, send". Every icon button on
+   * the phone is `--radius-full`; these were `--radius-md`, so a list of
+   * 16px-rounded cards carried two 8px-rounded squares each and the squares
+   * were the only thing in the window at that radius. A control never sits at
+   * a tighter radius than the container around it — that rule, broken here, is
+   * the one docs/design.md names as what makes a UI read as boxy. */
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--icon-md);
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.row-action.danger {
+  color: var(--text-danger);
+}
+
+/* ── 4. the pointer tier ────────────────────────────────────────────────
+ *
+ * assets/main.css contains no `:hover` and no `:focus-visible` rule at all —
+ * the design system is `:active`-only, because it was written for a thumb.
+ * Every one of them is here, which is also what stops iOS inheriting sticky
+ * hover: the sheet is not in that binary.
+ *
+ * Colour and a border, never a reveal, and never a shape that moves: an icon
+ * that grows under the cursor is a target that moves while you are aiming. */
+
+/* The row deepens its buttons' edges when the pointer is over it — the
+ * mockups' `.card:hover .act{border-color}`, one token further now that the
+ * resting state owns `--border-primary`. */
+.session-item:hover .row-action {
+  border-color: var(--border-secondary);
+}
+
+.row-action:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-color: var(--border-secondary);
+}
+
+/* Destructive keeps its own colour under the cursor rather than resolving to
+ * the ordinary one — the reference's `text-red-500 hover:text-red-600`, in the
+ * token that already holds exactly that value (--text-danger is #c62828 light,
+ * #ff8080 dark). */
+.row-action.danger:hover {
+  color: var(--text-danger);
+  border-color: var(--border-danger);
+  background: color-mix(in srgb, var(--bg-danger) 10%, var(--bg-primary));
+}
+
+.session-item:hover {
+  border-color: var(--text-tertiary);
+}
+
+/* Hover gets a step of its own, and `--bg-tertiary` is not available for it.
+ *
+ * That token is what `.drawer-item.active` paints with in assets/main.css, and
+ * the comment above that rule is the reason it cannot be spent twice: "at
+ * 1.08:1 against the light page the selected destination was indistinguishable
+ * from the unselected ones". Tertiary was chosen BECAUSE it is the one value
+ * that reads as selected. Give it to hover as well and the pointer paints a
+ * second selected-looking pill, in a nav whose whole job is to say which
+ * destination you are on.
+ *
+ * A mix rather than a third token: the halfway point between what the card
+ * paints and what the selected pill paints is a step by construction, in light
+ * and in dark, because both ends are. `.row-action.danger:hover` above mixes
+ * for the same reason. `:not(.active)` so hovering where you already are does
+ * not dim the highlight.
+ *
+ * `--nav-fill` and not `--bg-secondary`, and that is the whole of what the
+ * theme split above costs. Mixing against the wrong end is not a subtle
+ * error: in dark the card now paints `--bg-primary`, so halfway to
+ * `--bg-secondary` was a #434952 pill on a #22252a card — 1.51:1, LOUDER than
+ * the 1.60:1 that means "you are here", and hover would have out-shouted
+ * selection. Against what the card actually paints it lands at 1.28:1, one
+ * clear step under. */
+.drawer-item:hover:not(.active) {
+  background: color-mix(in srgb, var(--bg-tertiary) 50%, var(--nav-fill));
+}
+
+/* An OUTLINE on the selected destination, not just a fill, and it is light
+ * mode this is for.
+ *
+ * `--bg-tertiary` on the dark card measures 1.60:1 and needs nothing; on the
+ * light card it is #e3e6ea on #f4f6f7, which is 1.13:1 — the same "you have to
+ * look for it" the fill split above was fixing in the other theme. A 3:1
+ * boundary is what a non-text indicator owes, and `--border-secondary` is
+ * 1.44:1 against the card's own fill on top of the pill's, which together read
+ * as a selected pill rather than a smudge.
+ *
+ * `box-shadow: inset` rather than `border`, because `.drawer-item` is
+ * `border: 0; padding: 0 12px` in assets/main.css: a real border would push
+ * every label and icon in the nav 1px inward on exactly the row that is
+ * highlighted, so the selected destination would visibly shift as you arrived
+ * at it. */
+.navpane .drawer-item.active {
+  box-shadow: inset 0 0 0 1px var(--border-secondary);
+}
+
+/* Which row the detail column is showing.
+ *
+ * The one state a three-column layout needs that one column never did: on the
+ * phone the list is not on screen beside what it opened, so there was nothing
+ * to mark. Here they are side by side, and an unmarked list is a list that does
+ * not say where the pane beside it came from. It is the mockups' `.card.on`.
+ *
+ * `--bg-tertiary` because that is the token main.css already proved reads as
+ * selected (see `.drawer-item.active`), and it is free here in a way it is not
+ * in the nav: rows sit on `--bg-primary`, and hover on a row is a border rather
+ * than a fill, so nothing else in a list is wearing it. */
+.session-item.on {
+  background: var(--bg-tertiary);
+  border-color: var(--text-tertiary);
+  /* AND THE ROW'S SECONDARY TEXT STEPS UP WITH IT, because the fill that says
+   * "this one" costs the text on it half a point of contrast.
+   *
+   * Found by the desktop axis on its first run and it is the only finding in
+   * that run that was the stylesheet's: `--text-secondary` measures 5.02:1 on
+   * the page in light and 4.01:1 on this fill, and 7.75:1 / 4.24:1 in dark —
+   * both under the 4.5 body text owes. It fires on the timestamp, the meta
+   * line and `.ext-tools`, which is every small string a row carries, and
+   * only ever on the ONE row the detail pane came from. Exactly the shape
+   * main.css's own note over `.session-age` reasons in ("secondary, not
+   * tertiary: tertiary measured 2.2:1 in light"); this is that argument
+   * arriving one surface later.
+   *
+   * The token rather than the three selectors, so a row that grows a fourth
+   * small string cannot miss it — and a mix rather than `--text-primary`,
+   * which is 7.93:1 and would paint the marked row's timestamp as loudly as
+   * its title. 30% lands at 4.88:1 light and 5.29:1 dark: over the bar with
+   * room, where 20% clears it by 0.09 in light and this file's own habit is
+   * not to pass by a rounding error. `.session-quote` reads it too and sits
+   * on `--bg-secondary`, where the same step takes it from 5.02 to 5.63.
+   *
+   * `--row-quiet` and not `--text-secondary` on the right-hand side, and that
+   * is a language rule rather than a preference: a custom property that names
+   * itself is a CYCLE, and the whole cycle then computes to the
+   * guaranteed-invalid value — so `--text-secondary: color-mix(…,
+   * var(--text-secondary))` would not be a darker grey, it would be every
+   * small string in the row falling back to whatever it inherits. The alias
+   * is declared on `.app > .shell` with the rest of this sheet's tokens,
+   * which is an ANCESTOR, so there is no cycle and it still carries whichever
+   * value the theme resolved. */
+  --text-secondary: color-mix(in srgb, var(--text-primary) 30%, var(--row-quiet));
+}
+
+/* The selected row is filled with `--bg-tertiary`, and in light that is
+ * #e3e6ea — the same value as `--border-primary`. The resting edge above would
+ * vanish on exactly the row the pointer is most likely to be aiming at, so the
+ * marked row takes the pointer's deeper token at rest too. */
+.session-item.on .row-action {
+  border-color: var(--border-secondary);
+}
+
+/* Keyboard focus, for every control in the app at once.
+ *
+ * `--text-primary` rather than a new accent token: it is defined in light and
+ * in dark, it is by construction the highest-contrast colour against every
+ * surface in the file, and inventing an accent is a design decision this
+ * branch has no mandate for. `:focus-visible` and not `:focus`, so a click
+ * does not leave a ring behind it.
+ *
+ * Outline and offset, and deliberately NOT `border-radius`. That is not an
+ * outline property — it changes the element's own corners, so a `radius-sm`
+ * here squared off every focused control in the app: measured, the FAB went
+ * from a 9999px pill to a 4px rectangle the moment it took focus, and
+ * `.session-item` from 16px to 4px. It also bought nothing, because WebKit and
+ * Chromium already draw an outline following the element's existing radius.
+ * The rule eight lines above — never a shape that moves — is the one this
+ * broke. */
+:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
+/* ── 5. the column with nothing in it ───────────────────────────────────
+ *
+ * The state a three-column app is in the moment it launches, and the one state
+ * with no precedent to copy: goose's own desktop app never has it, because
+ * there a detail replaces its list rather than sitting beside it. */
+
+.pane-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+/* Secondary, not tertiary. Measured against `--bg-primary` in a browser,
+ * `--text-tertiary` is 2.20:1 in light and 2.87:1 in dark — under the 3:1 that
+ * meaningful non-text has to meet, at both. docs/design.md's Deviations
+ * section already records that number and reserves tertiary for dots and
+ * rules; a 40px glyph that is the only thing in an empty column is not one of
+ * those. */
+.pane-empty > .icon {
+  font-size: 40px;
+  color: var(--text-secondary);
+}
+
+.pane-empty-line {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: var(--text-lg);
+  line-height: var(--lh-md);
+  color: var(--text-primary);
+}
+
+.pane-empty-hint {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+

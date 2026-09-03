@@ -1,0 +1,68 @@
+@media (max-width: 627px) {
+
+    .chrome-parent,
+    .chrome-sep {
+    display: none;
+    }
+
+    .shell-chrome > .conn-badge {
+    padding: 0 0.5rem;
+    border-color: transparent;
+    }
+
+  .navpane {
+    position: absolute;
+    z-index: 3;
+    top: var(--chrome-h);
+    bottom: 0;
+    left: 0;
+    /* The column stops reserving width — that is what makes the content take
+     * the whole window — while the CARD keeps its own, which is what makes it
+     * an overlay rather than a squeeze. The collapse rules above still work
+     * unchanged because they animate `flex-basis` and `width`, and both are
+     * still the properties being set here. */
+    width: calc(var(--nav-w) + var(--shell-gap));
+  }
+
+  /* A shadow, and it is the one place in this sheet that uses one instead of a
+   * border. docs/design.md's rule is that depth is for things that are ABOVE
+   * the page rather than on it, and this is the only element in the desktop
+   * shell that ever is. */
+  .shell[data-nav="open"] .navcard {
+    box-shadow: 0 8px 32px rgb(0 0 0 / 24%);
+  }
+
+  /* THE CONNECTION LOSES ITS WORDS HERE, and this rule is restored rather than
+   * new: it shipped with the old rail tier and went out with it when that
+   * block was deleted, which put the defect it was written for straight back.
+   *
+   * Measured by `docs/audit.js` at the 480pt floor immediately afterwards:
+   * `TITLE-OUTBID span.conn-badge holds 135px it could give back while the
+   * band's title is cut to 52px`. Fifteen characters of a title beside a fully
+   * spelled-out agent version is the wrong way round, and it is the exact
+   * finding #26 fixed once already.
+   *
+   * The dot stays and still carries the whole state in colour; the label was
+   * always the identification of a control, never the reading of one. */
+  .shell-chrome > .conn-badge .conn-label {
+    display: none;
+  }
+
+  .shell-chrome > .conn-badge {
+    padding-right: 8px;
+  }
+
+  /* AND THE PLANE BADGE GOES, which the old tier had no equivalent of because
+   * there was no badge.
+   *
+   * It is the second thing bidding for the band's width, at 54px, and it is
+   * the one that can be spared: below this breakpoint the sidebar is an
+   * overlay, so opening it puts the switch itself on screen over the content —
+   * the badge's whole justification is that the switch can be off screen, and
+   * here it is one keystroke away instead. The title cannot be replaced that
+   * cheaply. */
+  .plane-badge {
+    display: none;
+  }
+}
+

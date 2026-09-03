@@ -411,7 +411,7 @@ fn reviewed_chat(t: f64) -> Chat {
                 status: "modified".to_owned(),
             },
             FileDiff {
-                file: "assets/desktop.css".to_owned(),
+                file: "assets/desktop/30-sidebar-list.css".to_owned(),
                 patch: PATCH_CSS.to_owned(),
                 additions: 9,
                 deletions: 0,
@@ -523,10 +523,10 @@ const PATCH_SIDEBAR: &str = "Index: src/shell/desktop/sidebar.rs\n\
 +        .collect()\n\
  }\n";
 
-const PATCH_CSS: &str = "Index: assets/desktop.css\n\
+const PATCH_CSS: &str = "Index: assets/desktop/30-sidebar-list.css\n\
 ===================================================================\n\
---- assets/desktop.css\n\
-+++ assets/desktop.css\n\
+--- assets/desktop/30-sidebar-list.css\n\
++++ assets/desktop/30-sidebar-list.css\n\
 @@ -1,6 +1,15 @@\n\
  .nav-search {\n\
    margin: 0 8px 8px;\n\

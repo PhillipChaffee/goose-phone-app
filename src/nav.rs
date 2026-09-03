@@ -26,7 +26,7 @@ use crate::views;
 /// Dioxus has no portal, so nothing rendered inside a pane can be moved into
 /// the window's own bar — but a `String` travels anywhere. The desktop shell
 /// paints this in `.shell-chrome` (`src/shell/desktop/mod.rs`) and
-/// `assets/desktop.css` takes the same heading back out of the pane below, so
+/// `assets/desktop/` takes the same heading back out of the pane below, so
 /// there is one title per window rather than one per column.
 ///
 /// The subtitle sits BESIDE the title rather than under it, which is a

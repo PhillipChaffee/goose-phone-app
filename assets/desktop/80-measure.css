@@ -1,0 +1,271 @@
+/* ── 6. the measure ─────────────────────────────────────────────────────
+ *
+ * A phone form is as wide as the phone, so nothing in assets/main.css caps a
+ * line: there was never any surplus to spend. A detail pane is 1288pt at a
+ * 1500pt window and every control was spending all of it — measured, a
+ * 21-character server URL in a 1213pt field, "Reconnect" in a 621pt button,
+ * agent prose at 121 characters a line, "Kind" and "Yours" 853pt apart with
+ * nothing between them, and one helper sentence as a single 944pt line. That
+ * is not a wide layout, it is an uncapped one, and 1500 was this machine's
+ * ceiling rather than the app's: on a 27" display the same field is 2000pt.
+ *
+ * So the detail column gets a MEASURE and centres its content in it. Every
+ * screen at once, in one rule, rather than a cap per view — the whole point of
+ * a shell is that a feature landing tomorrow gets this without knowing it.
+ *
+ * 40rem, and the counter-proof for the number is in the app itself: the same
+ * Settings form at a 390pt field (the 56pt-rail width) reads perfectly, and
+ * the phone's is 370. 640 is between that and the 121-character line, at the
+ * top of the band the reference lands in — goose's own desktop app puts this
+ * exact form in a dialog capped `sm:max-w-[600px]`
+ * (ui/desktop/src/components/settings/providers/modal/ProviderConfigurationModal.tsx:347),
+ * its settings controls at `max-w-[260px]` and its helper paragraphs at
+ * `max-w-md` (AppSettingsSection.tsx:486, :346), and its empty chat at
+ * `max-w-2xl` = 672 (Hub.tsx:128). In rem so it tracks the reader's font-size:
+ * a measure is a count of CHARACTERS, and characters get bigger.
+ *
+ * CENTRED, not left-aligned, and the header goes with it. A capped column
+ * pinned left leaves 600pt of nothing on one side, which reads as a layout
+ * that failed rather than one that chose; centring it splits the slack. That
+ * only works if the pane header is capped to the same column, or the title
+ * sits at the pane's edge while its content starts 300pt inboard — so the bar
+ * takes the same gutter and its rule still spans the pane, because the rule
+ * belongs to the pane and the title belongs to the content.
+ *
+ * `max()` is what makes this a cap and not a layout: below 40rem + two edges
+ * every one of these resolves to `--edge` and NOTHING moves, which is the
+ * whole of the two-column and one-column tiers. Nothing here is inside a
+ * breakpoint for exactly that reason. */
+
+.pane-main {
+  --measure: 40rem;
+  /* Percentages in a custom property are substituted, not resolved, so this is
+   * one expression evaluated against each user's own containing block. Every
+   * user below is a child of `.pane-main` (or absolutely positioned against
+   * it), so `100%` is the pane's content width in all of them. */
+  --gutter: max(var(--edge), (100% - var(--measure)) / 2);
+}
+
+.pane-main .topbar,
+.pane-main .scroll:not(.diff),
+.pane-main .compose {
+  padding-left: var(--gutter);
+  padding-right: var(--gutter);
+}
+
+/* `.composer` is a bordered, shadowed card rather than a padded region, so it
+ * takes the gutter as margin — the card itself has to be the measure wide, or
+ * the send arrow stays 580pt from the chips it shares a bar with. */
+.pane-main .composer {
+  margin-left: var(--gutter);
+  margin-right: var(--gutter);
+}
+
+/* The one screen that is not prose and is not a form.
+ *
+ * A diff line is as long as the author left it, and the width is the whole
+ * reason this screen is better on a desktop than on a phone — it is the one
+ * capture in the review that was right at every width. So the scroller keeps
+ * `.scroll.diff`'s own zero gutter from assets/main.css (the file cards
+ * inside it are full-bleed by design), and its header keeps the pane's edge
+ * rather than the measure's, so the two still start at the same place. */
+.pane-main:has(.scroll.diff) .topbar {
+  padding-left: var(--edge);
+  padding-right: var(--edge);
+}
+
+/* The FAB lands on the measure's trailing edge instead of the pane's.
+ *
+ * It is still a floating pill in the corner — promoting it into the header is
+ * a change to what the views EMIT, and this branch's rule is that the shell
+ * decides layout and the views decide content. But "Run" 600pt to the right of
+ * the recipe it runs was the corner of a window; on the column's edge it is
+ * the corner of the thing. `.pane` is `position: relative`, so this measures
+ * against the pane exactly as `right: var(--edge)` did. */
+.pane-main .fab {
+  right: var(--gutter);
+}
+
+/* A short transcript starts at the top of the pane, not at the bottom of it.
+ *
+ * `.chat::before { margin-top: auto }` is what grows a conversation upward
+ * from the composer, and on a phone it is right: the composer is under your
+ * thumb and the last turn should be next to it. On a 940pt pane it meant a
+ * two-message chat opened with 651 of 726pt — 90% — empty above it, which
+ * reads as a fetch that failed rather than as a conversation. Nothing else
+ * about the transcript changes: the anchor only ever did anything while the
+ * content was SHORTER than the box, so a full transcript is untouched and
+ * still scrolled to its end by src/viewport.rs. */
+.pane-main .scroll.chat::before {
+  margin-top: 0;
+}
+
+/* One green dot per window, and now it is one because of where it is rather
+ * than because of how wide the window happens to be.
+ *
+ * `TopBar { conn: true }` is a fact about a SCREEN, and at three columns two
+ * screens are up — so Scheduler and Recipes painted two identical unlabelled
+ * 8pt dots, 1200pt apart, with nothing on screen explaining either. This used
+ * to be a `@media (min-width: 902px)` that hid the DETAIL's copy, which left
+ * the badge jumping between columns as the window was dragged across that
+ * width: the state of the connection appeared to move because the layout
+ * reflowed. `.shell-chrome` now carries it (`src/shell/desktop.rs`), so both
+ * panes give theirs up at every width and there is nothing left to reflow.
+ *
+ * `.pane .topbar >` and not `.pane-main .topbar >`: `views/code.rs` hand-
+ * rolls a badge of its own in the Code LIST's header, so a rule naming only
+ * the component's call sites would leave that one painting a second dot. */
+.pane .topbar > .conn-badge {
+  display: none;
+}
+
+/* AND ONE TITLE PER WINDOW, for the same reason and by the same means.
+ *
+ * The window's bar names whatever the detail column has open, so the pane
+ * below it must not name it again — three columns would otherwise show the
+ * chat's title twice, 500pt apart and at two different sizes. What is left in
+ * the pane's header is the back chevron and the screen's own controls, which
+ * are pane-scoped and stay: the chevron closes what is OPEN while the sidebar's
+ * list stays on screen, and in the window's bar that would read as a
+ * window-level Back.
+ *
+ * Keyed on `:has(.chrome-title)` rather than on `.pane-main` alone, because
+ * the pane's heading must go only when the BAND is carrying one — and it is
+ * not always. A non-primary destination's own root (the Recipes grid, the
+ * Skills grid) renders with nothing pushed on it, so `nav::Detail` is `None`,
+ * so there is no `Crumb` and no `.chrome-title`; the pane's own heading is
+ * then the only name the window has and hiding it would leave the window
+ * unnamed.
+ *
+ * This used to be `[data-detail="open"]`, an attribute the shell set from the
+ * same fact. `:has()` asks the markup the question directly instead, so the
+ * bar's title and the pane's suppression cannot drift apart — the failure the
+ * attribute made possible was exactly one of them changing without the other.
+ *
+ * `.topbar >`, so this reaches the six headers `views/code.rs` and
+ * `views/chat.rs` hand-roll exactly as it reaches `views::chrome::TopBar`'s.
+ * A Rust-side conditional inside the component would have covered eight of the
+ * fourteen call sites and left five of the nine detail screens painting a
+ * second title. The bar's height does not change: it is 4rem so that the two
+ * panes' headers do not stair-step across the divider between them, and that
+ * is still true of a header holding only a chevron. */
+.shell:has(.chrome-title) .pane-main .topbar > .title,
+.shell:has(.chrome-title) .pane-main .topbar > .titlegroup {
+  display: none;
+}
+
+/* …AND WHEN THAT LEAVES NOTHING, THE BAR GOES TOO.
+ *
+ * The rule above hides the heading, `.topbar > .icon-btn.menu` further up
+ * hides the drawer button the desktop has no drawer for, and `.topbar-actions`
+ * is often a screen with no controls. On Settings all three are true at once:
+ * the captured `desktop-settings` header is a hidden menu button, a hidden
+ * `h1`, and an empty actions box — 4rem of blank canvas between the window's
+ * bar and the first setting, on eight of thirteen states.
+ *
+ * The two `:not(:has())` clauses are the whole condition, and each names a
+ * thing that WOULD still be visible: a back chevron, or a control in the
+ * actions box. `> .topbar-actions > *` and not `:empty`, because an actions
+ * box that rendered nothing still contains Dioxus's placeholder comment and
+ * `:empty` would not match it — `> *` counts elements, which is the question.
+ *
+ * The mockups have no pane header on any screen; this does not go that far,
+ * because the chevron is real navigation and a window that keeps its list on
+ * screen still needs a way to close what is open. It removes the bar only
+ * where the bar is empty. */
+.shell:has(.chrome-title)
+  .pane-main
+  .topbar:not(:has(> .icon-btn.back)):not(:has(> .topbar-actions > *)) {
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* ── 7. the fourth line of a preview ────────────────────────────────────
+ *
+ * `.session-quote` clamps to three lines and pads by 10, and WebKit clips
+ * `overflow: hidden` at the PADDING box — so a preview needing four lines
+ * painted the fourth one into the bottom padding and had it sliced through the
+ * middle of its glyphs. It is in assets/main.css and it is not a desktop bug,
+ * but it fires whenever the text needs a fourth line, which a 330pt column
+ * makes routine and a 402pt phone does not.
+ *
+ * Fixed by moving the padding OUTSIDE the clip: a transparent bottom border is
+ * painted over by the element's own background (`background-clip` is
+ * `border-box` by default), so the box is the same height, the same colour and
+ * the same radius, and the clip edge is now exactly where the third line ends.
+ * No markup, no change to the three lines that are meant to be there.
+ *
+ * Desktop-only because the sheet is: the phone's copy of this rule is
+ * untouched, which is the promise this branch is under. */
+.session-quote {
+  padding-bottom: 0;
+  border-bottom: 10px solid transparent;
+}
+
+/* ── 8. dialogs that are not sheets ─────────────────────────────────────
+ *
+ * Every modal in this app is a phone action sheet: `align-items: flex-end` on
+ * the backdrop and two square corners where the card meets the bottom of the
+ * screen. On a phone that is the whole grammar — it arrives from the edge your
+ * thumb is at. In a 1500x940 window it is a card welded to the bottom of the
+ * frame with 766pt of dimmed, empty pane above it, and for the row overflow it
+ * is worse than misplaced: the "···" is in the TOP-RIGHT of the detail pane
+ * and the menu it opens appears at the bottom CENTRE of the window, 1224pt
+ * away, holding one item.
+ *
+ * Centred is what a desktop dialog is, and it is what goose's own desktop app
+ * does with the identical confirm — `fixed inset-0 flex items-center
+ * justify-center` on a `w-[500px] max-w-[90vw]` card
+ * (ui/desktop/src/components/sessions/SessionListView.tsx:242). The card keeps
+ * its 560 cap and everything inside it; only where it sits and which corners
+ * are round change here. Anchoring the overflow to its button is a popover,
+ * which is markup this shell does not own. */
+.modal-backdrop {
+  align-items: center;
+}
+
+.modal {
+  border-radius: var(--radius-xl);
+}
+
+/* A menu is not a dialog, and centred is where it says so.
+ *
+ * `.modal.sheet.menu` is the row overflow — on the phone it is a full-width
+ * strip of actions rising from the bottom edge, and 560 is the right width for
+ * that. Centred in a window it was a 560pt card holding one 100pt row, which
+ * reads as a dialog that forgot to say anything. The cap is the same idea as
+ * the measure: as wide as what is in it. `.menu` is already in the markup —
+ * `views::mod::OverflowSheet` carries it so `domdump.rs` can file the state
+ * under a key of its own — so this needs nothing new. */
+.modal.sheet.menu {
+  max-width: 22rem;
+}
+
+/* ── 9. two empty states are one too many ───────────────────────────────
+ *
+ * Search a list for something that is not in it and the window said two
+ * things at once: the list read `No chats match “zzzzqqq”.` and the column
+ * beside it read "Nothing open — Pick something from Chats to see it here."
+ * There is nothing to pick. A matched pair of shrugs, one of them giving an
+ * instruction the app has just finished making impossible.
+ *
+ * The list's sentence is the one that knows WHY, so it is the one that stays,
+ * and the detail keeps only its heading. `:has()` because the shell does not
+ * know what is in its list column and should not: `p.empty` is what every list
+ * in this app renders when it has nothing to show (`views/sessions.rs`,
+ * `views/skills.rs`, `views/recipes.rs`, `views/scheduler.rs`,
+ * `views/code.rs`), so the question is askable from the markup and needs no
+ * new signal, no prop and no plumbing through six views. */
+.shell:has(.nav-sessions-empty) .pane-main .pane-empty-hint {
+  display: none;
+}
+
+/* And the sentence itself moves up under the control that caused it.
+ *
+ * `.empty` is `min-height: 100%` in assets/main.css so the message centres in
+ * the box, which is right on a 874pt phone screen and wrong in a 940pt column:
+ * "No chats match" was stranded about 500pt below the search field it was
+ * answering. Only in the LIST column — in the detail, "That recipe is no
+ * longer open." is the whole screen and centred is where it belongs. */
+

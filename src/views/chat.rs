@@ -28,7 +28,7 @@ const SCROLL_ID: &str = "chat-scroll";
 /// Read by two things that are never on screen together: the header below,
 /// and — on the desktop — the window's own bar, which takes the heading out of
 /// the pane and paints it in `.shell-chrome` instead
-/// (`src/shell/desktop/mod.rs`, `assets/desktop.css`).
+/// (`src/shell/desktop/mod.rs`, `assets/desktop/`).
 pub(crate) fn crumb(ctx: &crate::state::AppCtx) -> crate::nav::Crumb {
     crate::nav::Crumb::plain(ctx.chat.read().title.clone())
 }
@@ -500,7 +500,7 @@ fn render_lost_asks(ctx: &AppCtx, session_id: Option<&str>) -> Element {
 /// the accent — and the phone has never had one, because on a phone the user's
 /// turn is a right-aligned bubble and the alignment IS the attribution. The
 /// desktop de-inverts that bubble into a left-aligned card (see
-/// `assets/desktop.css`), so alignment stops saying anything and something has
+/// `assets/desktop/`), so alignment stops saying anything and something has
 /// to.
 ///
 /// `Shell::CURRENT` is a `const`, so the phone binary compiles this branch out
@@ -1366,7 +1366,7 @@ mod tests {
 
     /// The pane's own header and — on a desktop build — the window bar both
     /// name the open chat, and `crumb` is the single expression they share
-    /// (`src/shell/desktop/mod.rs` reads it; `assets/desktop.css` takes the
+    /// (`src/shell/desktop/mod.rs` reads it; `assets/desktop/` takes the
     /// heading back out of the pane). If they stopped agreeing the window
     /// would title itself one thing while the pane said another, with nothing
     /// on screen to say which was stale. The subtitle half matters too: the

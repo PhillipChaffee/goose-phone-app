@@ -1,0 +1,92 @@
+.home-lede {
+  margin: 0 0 24px;
+    max-width: 38rem;
+    color: var(--text-secondary);
+    font-family: var(--font-serif);
+    font-size: var(--text-md);
+    line-height: var(--lh-md);
+}
+
+.home-lede b {
+  color: var(--text-primary);
+    font-weight: 500;
+}
+
+.home-sched {
+  display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    min-height: 2rem;
+    margin-top: 32px;
+    padding: 8px 12px;
+    border: 1px dashed var(--shell-line);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: var(--text-xs);
+    line-height: var(--lh-sm);
+    text-align: left;
+    cursor: pointer;
+    overflow: hidden;
+}
+
+.home-sched:hover {
+  border-color: var(--accent);
+    background: var(--surface-card);
+}
+
+.home-sched > .icon {
+  flex: 0 0 auto;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.home-sched-name {
+  flex: 0 0 auto;
+    color: var(--text-primary);
+    font-weight: 550;
+}
+
+.home-sched-what {
+  min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+}
+
+.home-sched-more {
+  flex: 0 0 auto;
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+    white-space: nowrap;
+}
+
+.home-footnote {
+  display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 14px 0 0;
+    padding: 16px 0 0;
+    border-top: 1px solid var(--shell-line);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    line-height: var(--lh-sm);
+}
+
+.home-footnote > .icon {
+  flex: 0 0 auto;
+    align-self: flex-start;
+    margin-top: 2px;
+    font-size: 12px;
+}
+
+.home-footnote .d {
+  color: var(--text-tertiary);
+}

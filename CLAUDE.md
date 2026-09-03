@@ -80,7 +80,7 @@ The audit walks a **second grid** for the desktop shell: seven window sizes at
 the one root a macOS build has, with three shell states — nav open, nav closed
 and fullscreen — in place of the text axis. A state says which grid it is on through its own key — a desktop dump
 carries a `desktop-` prefix from `src/shell::DUMP_PREFIX` — and that is also
-what decides whether `assets/desktop.css` and `assets/platform/macos.css` are
+what decides whether `assets/desktop/` and `assets/platform/macos.css` are
 linked, so a desktop rule cannot reach a phone frame. Both shells write into
 one `docs/gallery-states.json`, so a capture takes **both logs in one
 invocation**: `scripts/capture-gallery.py /tmp/applog.txt /tmp/desktop.log` —
@@ -108,7 +108,7 @@ session list, a content column, and an inspector. It splits at the top into a
 **Chat** half and a **Code** half (`nav::Plane`), chosen by the segmented
 control at the top of the sidebar; the two share no data and no vocabulary.
 Platform decides affordances; width decides only how many columns, entirely
-inside `assets/desktop.css` — so nothing in Rust listens to a **DOM** resize,
+inside `assets/desktop/` — so nothing in Rust listens to a **DOM** resize,
 which is the one that costs a synchronous XHR per frame. There is exactly one
 Rust resize listener in the tree and it is not that: `use_fullscreen` in
 `src/shell/desktop/mod.rs` takes a `tao` `Resized` as a trigger and reads the
@@ -119,18 +119,34 @@ The desktop's window chrome is inside the app: one band across the top holding
 the traffic lights' reservation, the nav toggle, the plane badge, a crumb
 naming whatever is open with the half's counts beside it, the plane's own
 connection, and the inspector toggle. `crumb_parts` is TOTAL — every screen
-has a name — so `assets/desktop.css`'s `:has(.chrome-title)` takes that
+has a name — so `assets/desktop/`'s `:has(.chrome-title)` takes that
 heading back out of the pane unconditionally and there is one title per
 window. The name travels as data on `nav::Destination` (`Detail`'s `Crumb`),
 because Dioxus has no portal.
 
+**The desktop's sheet is a directory, and the sort is the cascade.**
+`assets/desktop/` holds fifteen region files — `00-tokens.css` through
+`98-home-sched.css` — that `src/css.rs`'s `SHELL` `concat!`s in filename order,
+the same way `STYLES` assembles the phone's. One 4278-line sheet was one file
+every branch of a wide redesign appended to at once, and parallel appends had
+already left it carrying the same declaration twice; a region that needs rules
+of its own now brings its own file and nothing else in the list moves. The
+prefixes are zero-padded because **three** places produce that order and all
+three must agree: the `concat!` in `src/css.rs`, `readdirSync().sort()` in
+`docs/audit.js`, and `sorted()` in `scripts/capture-gallery.py`. A sheet that
+sorts into a different slot in any one of them is a different cascade from the
+one that ships. `assets/platform/macos.css` is appended after that sort, never
+swept into it — `src/app.rs` emits STYLES, then SHELL, then PLATFORM, and the
+two sides set `--chrome-h`/`--traffic-w` on the same selector, so the later one
+has to be the platform's.
+
 **The desktop has a type scale of its own**, declared on `.app > .shell` in
-`assets/desktop.css`: the mockups' ladder, body 13px on 1.45 against the
-phone's 16 on 24, with a 10px floor. It is all `rem`, so the root is still the
-reader's. Two traps are written up there and both are load-bearing: a custom
-property declared on `:root` substitutes AT `:root`, so `body { font-size:
-var(--text-md) }` and `--text-code` never see a shell override and the shell
-restates both.
+`assets/desktop/00-tokens.css`: the mockups' ladder, body 13px on 1.45 against
+the phone's 16 on 24, with a 10px floor. It is all `rem`, so the root is still
+the reader's. Two traps are written up there and both are load-bearing: a
+custom property declared on `:root` substitutes AT `:root`, so `body {
+font-size: var(--text-md) }` and `--text-code` never see a shell override and
+the shell restates both.
 
 **Nothing may display a number no server sends.** Dollar figures, latency
 percentiles, container counts, queue depth, per-turn durations and the user's

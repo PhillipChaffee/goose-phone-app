@@ -1,0 +1,332 @@
+/* ── the plane badge, in the window's bar ───────────────────────────────
+ *
+ * Which half the window is in, said in the one strip that is present at every
+ * width and in every state. The switch says it too and can be off screen; this
+ * cannot.
+ *
+ * Uppercase and small, which is the mockups' treatment and is doing a job: it
+ * has to read as a LABEL for the window rather than as another control beside
+ * the toggle, or it invites a click that does nothing. */
+.plane-badge {
+  flex: 0 0 auto;
+  /* THE BAND CENTRING FIX, and it is a real defect rather than a refinement.
+   *
+   * `.shell-chrome` is `align-items: flex-start` and every control in it is put
+   * back on the band's centre line by carrying `margin-top: var(--chrome-pad)`
+   * on a 32px box — `.nav-toggle`, `.chrome-title` and `.shell-chrome >
+   * .conn-badge` all do. The badge never did: it is an inline span with no
+   * height, so it computes 2 + --lh-sm + 2 and pins to y 0. On macOS
+   * (--chrome-h 52, --chrome-pad 0) that puts a 24px badge at 0..24 beside a
+   * 32px toggle at 0..32 — four points high of everything around it, in the one
+   * strip that is on screen in every state.
+   *
+   * The arithmetic --chrome-pad encodes is otherwise still correct and is not
+   * touched: macOS 0 + 32 centres on the traffic lights' own 15.75; elsewhere
+   * 6 + 32 in a 44 band centres on 22; fullscreen macOS 10 + 32 in 52 centres
+   * on 26. It is `align-items: center` everywhere except macOS-not-fullscreen,
+   * said as a token — and the re-scale does not move it, because all four boxes
+   * are pinned at 32px rather than sized by their text. */
+  display: inline-flex;
+  align-items: center;
+  margin-top: var(--chrome-pad);
+  height: 32px;
+  margin-left: 8px;
+  /* 2px 6px 2px 5px in the mockups; 8px either side here, because at 10px the
+   * word is 4 characters and a 5px inset makes the fill look like a mistake. */
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-fill);
+  color: var(--accent-ink);
+  /* 10px, the new floor rung, and this is the element it was added for:
+   * `.plane-badge{font-size:10px;font-weight:650;letter-spacing:.09em;
+   * text-transform:uppercase}`. --accent-ink on --accent-fill is 7.44:1 in dark
+   * and 5.19:1 in light. Weight 650 and 10px means the audit's large-text
+   * relaxation does not apply (it needs 14px AND 700, or 18.66px), so this owes
+   * the full 4.5 and clears it twice over. */
+  font-size: var(--text-3xs);
+  line-height: 1;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.nav-footer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* A rule rather than a gap. The footer is a different KIND of thing from the
+   * list above it, and 8px of nothing says "the list ended" less clearly than
+   * a line does — the same argument `.drawer-group` makes one level up. */
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--shell-line);
+}
+
+/* The collapse control. In flow in the bar, immediately after the room the
+ * traffic lights need — so it is in the same place on every platform and at
+ * every width, which is the property that matters most about the one control
+ * that brings the navigation back.
+ *
+ * It used to be absolutely positioned against `.shell` and slid between the
+ * nav card's corner and the window's. Both of those positions turned out to be
+ * the window's own once the titlebar was hidden, and a control that animates
+ * into the close button is a control that gets misclicked. goose's own app
+ * parks the identical button in the identical spot
+ * (`ui/desktop/src/components/Layout/AppLayout.tsx:112`).
+ *
+ * A pill, per docs/design.md's tier: an icon button's shape is its identity. */
+.nav-toggle {
+  flex: 0 0 auto;
+  margin-top: var(--chrome-pad);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--icon-md);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.nav-toggle:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-color: var(--border-secondary);
+}
+
+.shell[data-nav="closed"] .nav-toggle {
+  /* THE COLLAPSED STATE THE TOGGLE HAS NEVER HAD. `data-nav` is already on
+   * `.shell` (verified in docs/gallery-states.json: every desktop key opens
+   * `<div class="shell" data-nav="open" …>`), so this costs no Rust and no
+   * markup.
+   *
+   * The fill and the outline are UNANIMOUS across the mockups —
+   * `.toggle.collapsed{background:their --surface-2;box-shadow:inset 0 0 0 1px
+   * #383e47}` in 22-nav-disclosure and `.tgl.off{…}` in 30/31/32 are the same
+   * two declarations character for character. --bg-tertiary is this app's
+   * --surface-2 and is the token main.css already proved reads as selected
+   * (`.drawer-item.active`, `.plane-seg.active`, `.nav-row.on`), and the inset
+   * outline is those rules' too, for their reason verbatim: --bg-tertiary is
+   * 1.13:1 on the light card and a non-text indicator owes 3:1.
+   *
+   * NO ACCENT ON THE GLYPH, and that is a deliberate refusal rather than an
+   * omission. The two mockup sets contradict each other about it —
+   * 22-nav-disclosure paints the divider accent when COLLAPSED
+   * (`.toggle.collapsed::before{background:var(--accent)}`), while 30, 31 and
+   * 32 paint it accent when OPEN and grey it when off
+   * (`.tgl::before{background:var(--accent)}`, `.tgl.off::before{width:3px;
+   * background:#5a636e}`). Three files against one, in opposite directions, on
+   * a colour this shell spends on exactly one thing per screen. The ink steps
+   * to --text-primary instead, so the control that is switched off is not also
+   * the dimmer of the two: 13.48:1 dark and 7.93:1 light on the fill, against
+   * --text-secondary's 6.79 and 4.01 — and 4.01 is under the 4.5 the icon's own
+   * 3:1 floor does not require but its label's would.
+   *
+   * 26x22 (22-nav-disclosure) and 28x21 (30-collapse-left) are both under the
+   * 32 docs/audit.js:1163 holds every `button` to. The 32x32 the control
+   * already is stays; the floor wins over the picture, as it did for the send
+   * button's diameter.
+   *
+   * Specificity is 0,3,0 against `.nav-toggle:hover`'s 0,2,0, so this wins
+   * wherever it is placed — but it is written after the hover rule anyway, and
+   * the hover variant below exists because otherwise pointing at a collapsed
+   * toggle would report nothing. */
+  background: var(--bg-tertiary);
+  box-shadow: inset 0 0 0 1px var(--border-secondary);
+  color: var(--text-primary);
+}
+
+.shell[data-nav="closed"] .nav-toggle:hover {
+  /* Or the collapsed toggle would answer nothing to the pointer, since the rule
+   * above out-specifies `.nav-toggle:hover`. One step past the collapsed fill,
+   * mixed rather than fixed for `.drawer-item:hover`'s reason — the card paints
+   * a different rung per theme, so a literal is a step in one and a smudge in
+   * the other. */
+  background: color-mix(in srgb, var(--text-tertiary) 12%, var(--bg-tertiary));
+  border-color: var(--border-secondary);
+}
+
+/* WHAT THE WINDOW HAS OPEN, said once, in the window's own bar.
+ *
+ * `src/shell/desktop.rs` renders this from `nav::Detail`'s crumb whenever the
+ * detail column has something in it, and the rule further down takes the pane's
+ * own copy of the same heading back out. So there is one title per WINDOW where
+ * there used to be one per COLUMN — at three columns that is 64px of pane
+ * header given back at the top of every window, and a heading that no longer
+ * slides sideways when the nav collapses (measured: the detail title's x was
+ * 486 with the nav open and 380 with it shut, because it is padded by a gutter
+ * computed from the pane's own width).
+ *
+ * ONE LINE, and that is a constraint rather than a taste. `--chrome-h` is 52px
+ * measured off a real macOS window and the toggle beside this is a 32px control
+ * centred on the traffic lights at y 16; a two-line group centred on that same
+ * 16 starts above the top of the window. So the subtitle sits BESIDE the title
+ * — the same string the pane's `.subtitle` carries, from the same expression —
+ * on a baseline with it.
+ *
+ * 32px tall, matching the toggle, so the two are centred on the same line
+ * rather than each on its own idea of the bar's middle. */
+/* ── the crumb, in the window's bar ── */
+.chrome-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-top: var(--chrome-pad);
+  overflow: hidden;
+  /* A ROW ON ONE LINE, and these four were lost once in this pass — with no
+     `display: flex` the crumb's four spans stacked, the band grew past its own
+     `--chrome-h`, and `docs/audit.js` reported the nav toggle "aligned on
+     traffic lights that are not there" 64 times, which is what an overgrown
+     band looks like from the outside. Pinned to 32 so the band's four controls
+     are one height and `--chrome-pad` centres all of them together. */
+  display: flex;
+  align-items: baseline;
+  height: 32px;
+  padding-top: max(0px, calc((32px - var(--lh-sm)) / 2));
+  /* The mockup's `.band-mid` puts 9px between the badge and the crumb; the
+     band's own `gap: 4px` supplies four of them. */
+  margin-left: 0.3125rem;
+  /* WAS 8px. The crumb is parent + sep + leaf and the mockup spaces those with
+     the separator's own 4px padding, not with a flex gap — an 8px gap either
+     side of a `/` is 16px of nothing in the middle of one phrase. The gap the
+     old rule bought between heading and subtitle is restored as an explicit
+     margin on `.chrome-sub` below, at the mockup's own 9px. */
+  gap: 0;
+}
+
+/* Not the phone's `.title`, and not `--text-lg`. This is a window bar, not a
+ * page heading: the reference sets its band title at `text-xs font-medium`,
+ * and a 20px heading in a 52px strip beside a 32px icon button reads as a
+ * screen that has lost its layout. `--text-sm` is the rung this app already
+ * spends on chrome (`.session-title`). */
+.chrome-heading {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* THE QUALIFIER TAKES WHAT IS LEFT AFTER THE NAME, never the other way round.
+ *
+ * `flex: 1 1 0` and not the `0 1 auto` this shipped with, and it is a priority
+ * rather than a size. Both items had a shrink factor of 1 against an `auto`
+ * basis, which means a narrow band takes the deficit off them in proportion to
+ * how much each wanted — so the LONGER the subtitle, the more of the title it
+ * cost. Measured on the captured `desktop-scheduler-detail` at a 572pt window:
+ * the group had 211px, the subtitle spent 95 of it on "Runs every day at
+ * 2:30 AM" and the heading was cut to 108, narrower than the 135px the
+ * connection badge was spending on an agent version beside it. That is
+ * `docs/audit.js`'s TITLE-OUTBID, and it was invisible for as long as that
+ * check compared the badge against the whole group instead of the heading.
+ *
+ * A zero basis is what makes it exact. The subtitle no longer bids in the
+ * shrink phase at all — it asks for nothing and GROWS into whatever the
+ * heading did not want, so the heading keeps its intrinsic width until there
+ * is genuinely none left, and only then ellipsises. Same result at 572:
+ * heading 173px, uncut, subtitle 30px. Nothing changes where there is room —
+ * the group is `flex: 0 1 auto`, so at 1180pt it is still exactly heading plus
+ * gap plus the subtitle's own width (measured: 333px, unchanged).
+ *
+ * A large `flex-shrink` on the subtitle was tried first and rejected: it is
+ * asymptotic rather than exact. At a factor of 100 the heading still gives up
+ * 1.2px of a 65px deficit, which is a cut title by any measurement and a check
+ * that has to be given a tolerance to hide it. */
+/* THE COUNTS YIELD TO THE NAME, and `flex: 1 1 0` is what stopped them.
+ *
+ * That basis makes this GROW into the free space, so on the chat home the
+ * counts line took 405px and the title beside it was cut to 211 — which is
+ * `docs/audit.js`'s TITLE-OUTBID, 88 times, and it is right: the band's job is
+ * to say what is open, and a qualifier that crowds out the thing it qualifies
+ * has the priority backwards.
+ *
+ * A shrink factor of 200 and not 1, and that is the whole fix: flexbox
+ * distributes a shortfall in PROPORTION to each item's factor times its basis,
+ * so with both at 1 the title and the counts were cut together and the audit
+ * went on reporting it. At 200 the counts absorb effectively all of it — down
+ * to nothing, since `min-width: 0` and the ellipsis let this box reach zero —
+ * and the name is only ever cut once the counts have already gone. */
+.chrome-sub {
+  flex: 0 200 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* ADD this one declaration to the shipped block; nothing else in it changes.
+     The mockup's `.after` is `padding-left:9px`, and `.chrome-title` no longer
+     has a gap to supply it. */
+  margin-left: 0.5625rem;
+}
+
+/* The rest of the bar drags the window.
+ *
+ * A sibling of the toggle rather than the bar itself, so pressing the toggle
+ * cannot also start a drag — the reference needs a `no-drag` class for exactly
+ * this and the box tree gives it to us instead. It stretches, so the whole top
+ * edge is grabbable rather than a 212px patch of it.
+ *
+ * `flex-shrink: 0` on a 96px basis, and that is the one number in this bar that
+ * is load-bearing rather than cosmetic. `src/main.rs` hides the titlebar, so
+ * this strip is the ONLY way the window can be moved; let it shrink and a long
+ * enough title at the 480pt window floor takes the last of it and the window
+ * becomes undraggable. The title shrinks instead — it has `min-width: 0` and
+ * its own ellipsis, and a truncated title is normal. */
+.window-drag {
+  flex: 1 0 96px;
+  align-self: stretch;
+  min-width: 0;
+}
+
+/* The connection, at the trailing end of the window's bar.
+ *
+ * WITH ITS WORDS, which is a deviation from `assets/main.css`'s
+ * `.topbar .conn-label { display: none }` and from design rule 8 as that rule
+ * is written. The reason the rule gives is specific and does not survive the
+ * move: "the agent name and version are ~107px of text that a CENTRED title
+ * cannot clear". Nothing here is centred, and the strip this sits in was 1278px
+ * of nothing at a 1400pt window. An unlabelled 8px dot in the corner of a
+ * window bar is a control nobody can identify; the same dot with `goose 1.12.0`
+ * beside it is what the reference paints in the same place
+ * (`EnvironmentBadge`, `BaseChat.tsx`). `.conn-label` brings its own 9.25rem
+ * cap and ellipsis from assets/main.css. */
+/* ── the connection, as the mockups' pill ── */
+.shell-chrome > .conn-badge {
+  /* Shrinkable, and heavily — `.chrome-sub`'s note has the arithmetic. A pill
+     that could not give anything back cut the window's title at every width
+     under three columns. */
+  flex: 0 200 auto;
+  min-width: 0;
+  /* Nothing may leave the pill. The label ellipsises and the host is dropped
+     below three columns, but the dot and the paddings are fixed, so at the
+     narrowest the sum still lands three pixels past the border this rule
+     draws — and a control whose ink crosses its own outline reads as broken
+     rather than as tight. */
+  overflow: hidden;
+  /* 24px, not the 32 this shipped with. The mockup's pill is a slim lozenge
+     (`padding:3px 10px 3px 8px`) and a 32px-tall `border-radius: 999px` is a
+     capsule the size of the toggle. The 4px of extra top margin is derived,
+     not typed: (32 - 24) / 2, so the pill still centres on the toggle's line. */
+  height: 1.5rem;
+  margin-top: calc(var(--chrome-pad) + 0.25rem);
+  margin-right: 0.75rem;
+  padding: 0 0.625rem 0 0.5rem;
+  gap: 0.375rem;
+  border: 1px solid var(--shell-line);
+  border-radius: var(--radius-full);
+}
