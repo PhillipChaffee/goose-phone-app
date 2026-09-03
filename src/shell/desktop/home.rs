@@ -8,11 +8,19 @@
 //!
 //! WHAT IS NOT HERE, and why. The mockups' home screens are dense with numbers
 //! this app has no source for — dollars spent today, containers warm of six,
-//! round-trip p50/p99, server memory, session budget, context-window
-//! percentage. `Usage` is `(u64, u64)` and `crates/opencode-client` has no
-//! endpoint for any of it. The owner's instruction was to ship only what is
-//! real, so a row with no source is ABSENT rather than zeroed: a tile reading
-//! `$0.00 / $4.00` is not honest emptiness, it is a wrong number.
+//! round-trip p50/p99, server memory, session budget, queue depth.
+//! `crates/opencode-client` has no endpoint for any of it. The owner's
+//! instruction was to ship only what is real, so a row with no source is
+//! ABSENT rather than zeroed: a tile reading `$0.00 / $4.00` is not honest
+//! emptiness, it is a wrong number.
+//!
+//! CONTEXT-WINDOW SIZE IS NOT ON THAT LIST, though this file claimed twice
+//! that it was. `Usage` is not "tokens in and out" — `src/state.rs:178`
+//! declares it `(tokens used, context limit)` and the fill site reads goose's
+//! own `used` and `contextLimit` off a `usage_update`. So the mockups' "1M
+//! context" chip is honest, and `views::chat::crowding` was already computing
+//! the percentage. Corrected here rather than left standing, because a wrong
+//! comment about what the wire carries is how a real source stays unused.
 //!
 //! The consequence is that these are sparser than the picture, and that is the
 //! intended outcome rather than an unfinished one. What is here is measured
@@ -128,10 +136,144 @@ pub(crate) fn code_tiles(ctx: &AppCtx) -> Vec<Tile> {
     ]
 }
 
+/// WHAT THE READER WAS LAST DOING, offered back.
+///
+/// This block was cut once, on the reasoning that the sidebar three inches to
+/// the left is already listing the same sessions. That reasoning was wrong and
+/// the mockups say so directly: `10-home-chat.html` renders BOTH — twelve rows
+/// in `.side` AND three `.crow`s here — because they are not the same row. The
+/// sidebar's is a title, a message count and an age, compacted to fit 252px.
+/// This one carries the last thing that was actually SAID in the conversation,
+/// which is the only piece of real conversation content anywhere on the screen
+/// and the thing that makes "pick up where you left off" a question the reader
+/// can answer without opening anything.
+///
+/// Three, not twelve. The sidebar is the index; this is the shortcut, and a
+/// shortcut as long as the index is just the index again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Recent {
+    pub id: String,
+    pub title: String,
+    /// The last message, as the server summarised it. `None` renders no quote
+    /// rather than an empty one — a session with nothing said in it is a row
+    /// with two lines, not a row with a blank third.
+    pub quote: Option<String>,
+    /// "6 turns", or `None` where the server sent no count.
+    pub turns: Option<String>,
+    pub age: Option<String>,
+    pub state: RecentState,
+}
+
+/// What the row's dot and its trailing word say.
+///
+/// The same three states `sidebar::Mark` paints, deliberately — a conversation
+/// that is streaming is streaming in both columns, and two enums would be two
+/// chances for the sidebar and the home screen to disagree about it in the
+/// same window. It is a separate type only because this one has a WORD as well
+/// as a dot, which a 252px row has no room for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecentState {
+    /// An agent is mid-turn.
+    Running,
+    /// An agent asked something and is blocked on the answer. Outranks
+    /// running, for `sidebar::Mark`'s reason: a question waiting on the reader
+    /// is the only one of the three states that is about THEM.
+    Waiting,
+    Idle,
+}
+
+impl RecentState {
+    /// The word beside the dot, or `None` for a conversation that is merely
+    /// finished — which is most of them, and which needs no label.
+    pub(crate) const fn word(self) -> Option<&'static str> {
+        match self {
+            Self::Running => Some("streaming"),
+            Self::Waiting => Some("needs you"),
+            Self::Idle => None,
+        }
+    }
+
+    pub(crate) const fn class(self) -> &'static str {
+        match self {
+            Self::Running => "recent running",
+            Self::Waiting => "recent waiting",
+            Self::Idle => "recent",
+        }
+    }
+}
+
+/// The three most recent conversations, newest first.
+///
+/// `now` is a parameter for `sidebar::band_of`'s reason: a function that read
+/// the clock could only be checked by a test that also read it.
+pub(crate) fn recent_for(ctx: &AppCtx, now: i64) -> Vec<Recent> {
+    /// Three is the mockups' own count, and it is also what fits above the
+    /// fold of the 820pt window `src/main.rs` opens once the composer and a
+    /// section heading are above it.
+    const MOST: usize = 3;
+
+    let running = (ctx.running_sessions)();
+    let waiting: std::collections::HashSet<String> = (ctx.permission)()
+        .iter()
+        .map(|p| p.session_id.clone())
+        .collect();
+
+    let mut sessions = (ctx.sessions)();
+    sessions.sort_by_key(|s| {
+        std::cmp::Reverse(
+            s.updated_at
+                .as_deref()
+                .and_then(crate::state::rfc3339_to_epoch)
+                .unwrap_or(i64::MIN),
+        )
+    });
+
+    sessions
+        .iter()
+        .take(MOST)
+        .map(|info| Recent {
+            id: info.session_id.clone(),
+            title: info
+                .title
+                .clone()
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or_else(|| "Untitled chat".to_owned()),
+            quote: info
+                .last_message_snippet()
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty()),
+            turns: info.message_count().map(|n| {
+                if n == 1 {
+                    "1 turn".to_owned()
+                } else {
+                    format!("{n} turns")
+                }
+            }),
+            age: info
+                .updated_at
+                .as_deref()
+                .and_then(crate::state::rfc3339_to_epoch)
+                .filter(|stamp| *stamp <= now)
+                .map(crate::state::relative_time),
+            state: if waiting.contains(&info.session_id) {
+                RecentState::Waiting
+            } else if running.contains(&info.session_id) {
+                RecentState::Running
+            } else {
+                RecentState::Idle
+            },
+        })
+        .collect()
+}
+
 /// One thing the reader could start with that is not a blank prompt.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Starter {
     pub name: String,
+    /// The server's own one-line description of it. This is what makes a card
+    /// worth reading: `.start .s` in the mockups carries "summarises overnight
+    /// runs", not the word "recipe". `None` where the server sent none.
+    pub description: Option<String>,
     /// "recipe" or "skill" — the word the server uses, so the screen says what
     /// the thing IS rather than inventing a category for it.
     pub kind: &'static str,
@@ -156,6 +298,7 @@ pub(crate) fn starters_for(ctx: &AppCtx) -> Vec<Starter> {
         .iter()
         .map(|entry| Starter {
             name: entry.recipe.title.clone(),
+            description: one_line(&entry.recipe.description),
             kind: "recipe",
             icon: "book",
             tab: crate::state::Tab::Recipes,
@@ -163,6 +306,7 @@ pub(crate) fn starters_for(ctx: &AppCtx) -> Vec<Starter> {
         .collect();
     out.extend((ctx.skills.list)().items.iter().map(|skill| Starter {
         name: skill.name.clone(),
+        description: one_line(&skill.description),
         kind: "skill",
         icon: "sparkle",
         tab: crate::state::Tab::Skills,
@@ -170,6 +314,17 @@ pub(crate) fn starters_for(ctx: &AppCtx) -> Vec<Starter> {
     out.retain(|s| !s.name.trim().is_empty());
     out.truncate(MOST);
     out
+}
+
+/// The first line of a description, trimmed, or `None` if there is not one.
+///
+/// A recipe's description is free text the author wrote and some of them run
+/// to a paragraph. A card in a four-across grid has room for one line, and the
+/// CSS clamps — but clamping a paragraph mid-sentence reads as a bug, whereas
+/// its first line reads as a summary, which is what the author put there.
+fn one_line(text: &str) -> Option<String> {
+    let line = text.trim().lines().next().unwrap_or("").trim();
+    (!line.is_empty()).then(|| line.to_owned())
 }
 
 /// One fact under the composer, said in as few characters as it takes.
@@ -186,11 +341,17 @@ pub(crate) struct Chip {
 /// What the composer knows about the session it is about to start.
 ///
 /// The mockup's row is `Opus 5 · goose server · tail-mini:3285 · 7 extensions
-/// · 1M context · $0.41 today`. Three of those six have a source here and
-/// three do not: there is no context-window figure on the wire (`Usage` is
-/// `(u64, u64)`, tokens in and out) and no spend at all. They are absent
-/// rather than zeroed — the whole reason this screen is sparser than the
-/// picture.
+/// · 1M context · $0.41 today`. Five of those six have a source here; the
+/// spend does not, and no cost figure exists on either wire, so it is absent
+/// rather than zeroed.
+///
+/// The context size took two tries. It was called sourceless on the strength
+/// of a comment saying `Usage` is tokens in and out; it is
+/// `(used, context limit)`, so the limit is exactly the mockup's "1M context"
+/// and `views::chat::format_tokens` already knows how to say it. It appears
+/// only once a `usage_update` has arrived, which is honest: before the first
+/// turn the app genuinely does not know the window, and a guessed 200k would
+/// be the wrong kind of confident.
 pub(crate) fn compose_chips(ctx: &AppCtx, plane: Plane) -> Vec<Chip> {
     let mut out = Vec::new();
     match plane {
@@ -216,6 +377,12 @@ pub(crate) fn compose_chips(ctx: &AppCtx, plane: Plane) -> Vec<Chip> {
                 out.push(Chip {
                     text: format!("{loaded} extensions"),
                     mono: false,
+                });
+            }
+            if let Some((_, limit)) = (ctx.usage)().filter(|(_, limit)| *limit > 0) {
+                out.push(Chip {
+                    text: format!("{} context", crate::views::chat::format_tokens(limit)),
+                    mono: true,
                 });
             }
         }
@@ -289,6 +456,34 @@ pub(crate) fn Home(plane: Plane) -> Element {
     } else {
         Vec::new()
     };
+    let recent = if plane == Plane::Chat {
+        recent_for(&ctx, crate::state::now_secs())
+    } else {
+        Vec::new()
+    };
+
+    // THIS SCREEN FETCHES WHAT IT SHOWS, and until now it did not.
+    //
+    // `starters_for` reads `ctx.recipes.list` and `ctx.skills.list`, and the
+    // only things that ever filled those were `RecipesView` and `SkillsView`'s
+    // own mount effects — so "Ways to start" appeared only after the reader had
+    // visited the Library, which is precisely the click the section exists to
+    // save. Same for the extensions chip. On a cold launch the captured home
+    // screen rendered a placeholder comment where the section should be.
+    //
+    // Reactive rather than a one-shot, and the reason is `RecipesView`'s
+    // verbatim: the fetch is worth starting the moment there is a connection to
+    // make it over, including one that arrives after this screen is already up
+    // — which on the desktop is the common case, because the home screen is
+    // what the window opens on.
+    use_effect(move || {
+        if plane == Plane::Chat && (ctx.conn)().is_connected() {
+            crate::recipes::refresh(&ctx);
+            crate::skills::ensure_loaded(&ctx);
+            let ctx = ctx;
+            spawn(async move { crate::extensions::refresh(&ctx).await });
+        }
+    });
 
     // START, and it is the same sequence `recipes::run` uses: put the text
     // where the conversation will find it, then make the conversation. The
@@ -366,13 +561,29 @@ pub(crate) fn Home(plane: Plane) -> Element {
                                 }
                             }
                         }
+                        // `.send`, the circle, and NOT `.btn primary`.
+                        //
+                        // It is the same control the transcript's composer
+                        // already uses (`assets/main.css`), which is the point:
+                        // the thing you press to send is one shape everywhere
+                        // in the app, and the reader meets it here first. A
+                        // 131x40 rectangle reading "Start a chat" was saying
+                        // out loud what an arrow in a circle says by being
+                        // where it is — and, being `--bg-inverse` when live and
+                        // `--bg-tertiary` when not, it was also the reason a
+                        // resting home screen had no accent on it anywhere.
                         button {
-                            class: "btn primary",
+                            class: "send",
                             // A name of its own, so the control is findable by
                             // something other than the words inside it — which
                             // is what a screen reader needs and what
-                            // `views::press` locates by.
+                            // `views::press` locates by. It carries the whole
+                            // label now that the face is a glyph.
                             title: match plane {
+                                Plane::Chat => "Start a chat",
+                                Plane::Code => "Start a session",
+                            },
+                            "aria-label": match plane {
                                 Plane::Chat => "Start a chat",
                                 Plane::Code => "Start a session",
                             },
@@ -382,11 +593,71 @@ pub(crate) fn Home(plane: Plane) -> Element {
                             // and someone now has to delete.
                             disabled: draft().trim().is_empty(),
                             onclick: move |_| start(),
-                            Icon { name: "plus" }
-                            {
-                                match plane {
-                                    Plane::Chat => "Start a chat",
-                                    Plane::Code => "Start a session",
+                            Icon { name: "arrow-up" }
+                        }
+                    }
+                }
+
+                // PICK UP WHERE YOU LEFT OFF.
+                //
+                // See `Recent` for why this is here after being cut once. The
+                // short version: the sidebar's row and this one are not the
+                // same row, and the mockups render both.
+                if plane == Plane::Chat && !recent.is_empty() {
+                    div { class: "home-recent",
+                        h2 { class: "home-section",
+                            "Pick up where you left off"
+                            span { class: "home-section-meta",
+                                {
+                                    let n = (ctx.sessions)().len();
+                                    if n == 1 { "1 thread".to_owned() } else { format!("{n} threads") }
+                                }
+                            }
+                        }
+                        for row in recent {
+                            button {
+                                key: "{row.id}",
+                                class: row.state.class(),
+                                title: "{row.title}",
+                                // The sidebar row's sequence, and it has to be
+                                // this order: `open_session` sets `screen`, not
+                                // `tab`, and `nav::current` reads the tab
+                                // first — so a row pressed from any other
+                                // destination would open a session the window
+                                // was not looking at. Entering the plane first
+                                // is what makes the press land.
+                                onclick: {
+                                    let id = row.id;
+                                    move |_| {
+                                        (crate::nav::primary(Plane::Chat).go)(&ctx);
+                                        // Looked up rather than carried: `Recent`
+                                        // is what the row DRAWS, and `open_session`
+                                        // needs the whole `SessionInfo` — its cwd,
+                                        // its kind, the fields a summary has no
+                                        // business holding a stale copy of.
+                                        if let Some(info) =
+                                            (ctx.sessions)().iter().find(|s| s.session_id == id)
+                                        {
+                                            crate::state::open_session(&ctx, info.clone());
+                                        }
+                                    }
+                                },
+                                span { class: "recent-dot" }
+                                span { class: "recent-text",
+                                    span { class: "recent-title", "{row.title}" }
+                                    if let Some(quote) = row.quote.clone() {
+                                        span { class: "recent-quote", "{quote}" }
+                                    }
+                                }
+                                span { class: "recent-facts",
+                                    if let Some(turns) = row.turns.clone() {
+                                        span { class: "recent-fact", "{turns}" }
+                                    }
+                                    if let Some(word) = row.state.word() {
+                                        span { class: "recent-state", "{word}" }
+                                    } else if let Some(age) = row.age.clone() {
+                                        span { class: "recent-fact", "{age}" }
+                                    }
                                 }
                             }
                         }
@@ -400,12 +671,6 @@ pub(crate) fn Home(plane: Plane) -> Element {
                 // behind the Library disclosure — so this is the one place
                 // they are visible without a click. Named from the server's
                 // own list rather than invented.
-                //
-                // The mockup also has "Pick up where you left off", listing
-                // recent conversations. That is deliberately NOT here: the
-                // sidebar is showing exactly that list, permanently, three
-                // inches to the left. The mockup's sidebar was drawn before
-                // the list moved into it.
                 if plane == Plane::Chat && !starters.is_empty() {
                     div { class: "home-starters",
                         h2 { class: "home-section", "Ways to start" }
@@ -422,7 +687,20 @@ pub(crate) fn Home(plane: Plane) -> Element {
                                     Icon { name: starter.icon }
                                     span { class: "home-starter-text",
                                         span { class: "home-starter-name", "{starter.name}" }
-                                        span { class: "home-starter-kind", "{starter.kind}" }
+                                        // The taxonomy word AND the sentence,
+                                        // in that order and separated by a
+                                        // middot — the mockups' own
+                                        // "recipe · summarises overnight
+                                        // runs". The word alone was the whole
+                                        // second line, which told the reader
+                                        // what the card IS and nothing about
+                                        // what it would do.
+                                        span { class: "home-starter-kind",
+                                            "{starter.kind}"
+                                            if let Some(what) = starter.description.clone() {
+                                                span { class: "home-starter-what", " · {what}" }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -458,7 +736,10 @@ pub(crate) fn Home(plane: Plane) -> Element {
               is a broken test rather than a runtime condition"
 )]
 mod tests {
-    use super::{code_tiles, compose_chips, compose_placeholder, part_of_day, standing, Home};
+    use super::{
+        code_tiles, compose_chips, compose_placeholder, part_of_day, recent_for, standing, Home,
+        RecentState,
+    };
     use crate::nav::Plane;
     use crate::views::press::Pressable;
     use dioxus::prelude::*;
@@ -607,6 +888,206 @@ mod tests {
         assert_eq!(urgent, ["waiting on you"]);
     }
 
+    /// THE QUOTE IS THE POINT OF THIS BLOCK, and it is what the sidebar has
+    /// no room for.
+    ///
+    /// The section was cut once on the reasoning that the sidebar lists the
+    /// same sessions. This is the assertion that reasoning could not have
+    /// survived: the sidebar's row is a title, a count and an age, and the
+    /// last thing SAID in the conversation appears nowhere else in the
+    /// desktop shell. `last_message_snippet` is on the wire, the mock serves
+    /// it, and `views/sessions.rs` has been rendering it on the phone the
+    /// whole time.
+    ///
+    /// REPRODUCED: drop `quote` from `recent_for` and this fails; drop the
+    /// whole section and `the_recent_rows_are_pressable` fails as well.
+    #[test]
+    fn a_recent_row_carries_what_was_last_said_in_it() {
+        let rows = crate::testkit::with_ctx(
+            |ctx| {
+                let mut sessions = ctx.sessions;
+                sessions.set(vec![said(
+                    "s1",
+                    "Certificate rotation",
+                    "2026-09-02T10:00:00Z",
+                    "Re-issued the certificate and restarted the listener.",
+                    6,
+                )]);
+            },
+            |ctx| recent_for(ctx, 2_000_000_000),
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].quote.as_deref(),
+            Some("Re-issued the certificate and restarted the listener."),
+            "the row is not carrying the last message"
+        );
+        assert_eq!(rows[0].turns.as_deref(), Some("6 turns"));
+    }
+
+    /// Three, newest first, whatever order the server sent them in.
+    ///
+    /// The cap is what keeps this a shortcut rather than a second copy of the
+    /// sidebar; the sort is because `session/list` makes no ordering promise
+    /// and "pick up where you left off" is a claim about recency.
+    #[test]
+    fn the_recent_rows_are_the_three_newest() {
+        let rows = crate::testkit::with_ctx(
+            |ctx| {
+                let mut sessions = ctx.sessions;
+                sessions.set(vec![
+                    said("old", "Old", "2026-08-01T10:00:00Z", "x", 1),
+                    said("newest", "Newest", "2026-09-02T10:00:00Z", "x", 1),
+                    said("mid", "Mid", "2026-09-01T10:00:00Z", "x", 1),
+                    said("older", "Older", "2026-07-01T10:00:00Z", "x", 1),
+                ]);
+            },
+            |ctx| recent_for(ctx, 2_000_000_000),
+        );
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["newest", "mid", "old"],
+            "not the three newest, in order"
+        );
+    }
+
+    /// A QUESTION WAITING ON THE READER OUTRANKS AN AGENT THAT IS BUSY.
+    ///
+    /// The same precedence `sidebar::Mark` applies, and deliberately the same:
+    /// one conversation shows a mark in two columns of one window, and the two
+    /// disagreeing about what it is would be worse than either being wrong.
+    /// Of the three states it is the only one that is about the READER.
+    #[test]
+    fn a_blocked_conversation_says_so_even_while_it_is_running() {
+        let rows = crate::testkit::with_ctx(
+            |ctx| {
+                let mut sessions = ctx.sessions;
+                sessions.set(vec![said("s1", "Busy", "2026-09-02T10:00:00Z", "x", 2)]);
+                let mut running = ctx.running_sessions;
+                running.write().insert("s1".to_owned());
+                let mut perms = ctx.permission;
+                perms.set(vec![goose_acp_client::PermissionRequest {
+                    request_id: serde_json::Value::from(7),
+                    session_id: "s1".to_owned(),
+                    tool_call: goose_acp_client::ToolCallUpdate {
+                        tool_call_id: "call-1".to_owned(),
+                        ..goose_acp_client::ToolCallUpdate::default()
+                    },
+                    options: Vec::new(),
+                }]);
+            },
+            |ctx| recent_for(ctx, 2_000_000_000),
+        );
+        assert_eq!(rows[0].state, RecentState::Waiting);
+        assert_eq!(rows[0].state.word(), Some("needs you"));
+    }
+
+    /// An idle conversation gets no word at all.
+    ///
+    /// Most of them are idle. A row that labelled every finished conversation
+    /// "done" would spend a colour and a word on the default case, which is
+    /// what makes the two states that matter stop being visible.
+    #[test]
+    fn a_finished_conversation_is_not_labelled() {
+        assert_eq!(RecentState::Idle.word(), None);
+        assert_eq!(RecentState::Running.word(), Some("streaming"));
+    }
+
+    /// With nothing on the server there is no section, by `no_starters_means_
+    /// no_section`'s rule: a heading over an empty list is a promise the app
+    /// cannot keep.
+    #[test]
+    fn no_conversations_means_no_pick_up_section() {
+        let html = crate::testkit::render(|| rsx! { Home { plane: Plane::Chat } });
+        assert!(
+            !html.contains("Pick up where you left off"),
+            "an empty server still offered somewhere to pick up from"
+        );
+    }
+
+    /// AND THE ROWS ACTUALLY GO SOMEWHERE.
+    ///
+    /// The sidebar shipped its rows with no `onclick` at all, and every test
+    /// on them passed — they all asked what the list PAINTS. This asks what a
+    /// press DOES, and it asks it of the same two-step the sidebar needed:
+    /// `open_session` sets `ctx.screen` and not `ctx.tab`, and `nav::current`
+    /// reads the tab first, so a row pressed from anywhere but the chat plane
+    /// would set a screen the window was not looking at and do visibly
+    /// nothing.
+    ///
+    /// REPRODUCED: delete the `(nav::primary)(...)` line and this fails on the
+    /// tab; delete the `open_session` call and it fails on the session id.
+    #[test]
+    fn the_recent_rows_are_pressable() {
+        let _guard = crate::views::press::alone();
+        let mut screen = crate::views::press::Pressable::mount(
+            |ctx| {
+                let mut sessions = ctx.sessions;
+                sessions.set(vec![said(
+                    "s1",
+                    "Certificate rotation",
+                    "2026-09-02T10:00:00Z",
+                    "x",
+                    2,
+                )]);
+                // Somewhere else entirely, which is the case the two-step is
+                // for and the one a chat-plane-only harness cannot see.
+                let mut tab = ctx.tab;
+                tab.set(crate::state::Tab::Skills);
+            },
+            ChatHome,
+        );
+
+        screen.press("Certificate rotation");
+        screen.settle();
+
+        assert!(
+            screen.with(|ctx| (ctx.tab)() == crate::state::Tab::Home),
+            "the press did not enter the chat plane, so `nav::current` kept \
+             answering Skills and the row did visibly nothing"
+        );
+        assert_eq!(
+            screen.with(|ctx| (ctx.chat)().session_id),
+            Some("s1".to_owned()),
+            "the press did not open the session it names"
+        );
+    }
+
+    /// A description is one LINE, because a card has room for one.
+    ///
+    /// Recipe descriptions are free text and some run to a paragraph. Clamping
+    /// a paragraph mid-sentence reads as a bug; its first line reads as a
+    /// summary, which is what the author put there.
+    #[test]
+    fn a_starters_description_is_its_first_line() {
+        assert_eq!(
+            super::one_line("  Summarises overnight runs.\n\nThen files them.  "),
+            Some("Summarises overnight runs.".to_owned())
+        );
+        assert_eq!(super::one_line("   \n  "), None);
+        assert_eq!(super::one_line(""), None);
+    }
+
+    /// A `SessionInfo` with a snippet and a turn count on it, built through
+    /// serde for `recipe`'s reason — `_meta` is a JSON bag and a literal here
+    /// would be a second place to spell its keys.
+    fn said(
+        id: &str,
+        title: &str,
+        updated: &str,
+        snippet: &str,
+        turns: u64,
+    ) -> goose_acp_client::SessionInfo {
+        serde_json::from_value(serde_json::json!({
+            "sessionId": id,
+            "title": title,
+            "updatedAt": updated,
+            "_meta": { "messageCount": turns, "lastMessageSnippet": snippet },
+        }))
+        .expect("a session row this test wrote")
+    }
+
     /// The starters are named from the server's lists, capped, and recipes
     /// come first.
     ///
@@ -692,10 +1173,14 @@ mod tests {
 
     /// The chips say what the session WILL be, from sources that exist.
     ///
-    /// Three of the mockup's six facts have no source — context window, spend,
-    /// and the "goose server" label that is really the host again — so this
-    /// asserts on what IS derivable and, just as importantly, that nothing
-    /// invents the rest.
+    /// The "no context window" half of this test was WRONG and is corrected
+    /// here: it forbade the string "context" on the strength of a comment
+    /// saying `Usage` is tokens in and out. `src/state.rs:178` declares it
+    /// `(tokens used, context limit)`, so the limit is exactly the mockup's
+    /// "1M context" — and a test asserting a real source stays unused is worse
+    /// than no test, because it makes the next reader believe the source is
+    /// gone. What survives is the half that was right: money, which neither
+    /// wire reports and which must never appear.
     #[test]
     fn the_composer_chips_come_from_real_sources_only() {
         let chips = crate::testkit::with_ctx(
@@ -722,12 +1207,58 @@ mod tests {
                 "a chip is quoting money, which no endpoint reports: {}",
                 chip.text
             );
-            assert!(
-                !chip.text.contains("context"),
-                "a chip is quoting a context window, which is not on the wire: {}",
-                chip.text
-            );
         }
+        assert!(
+            !text.iter().any(|t| t.contains("context")),
+            "a context chip appeared with no `usage_update` received — before the \
+             first turn the app does not know the window, and a guessed one is \
+             the wrong kind of confident: {text:?}"
+        );
+    }
+
+    /// AND THE CONTEXT WINDOW IS ON THE WIRE, which this file said twice that
+    /// it was not.
+    ///
+    /// The companion to the correction above, and the one that would catch the
+    /// mistake coming back: it fails if the chip is dropped OR if it is
+    /// rendered from something other than the limit. `format_tokens` is
+    /// `views::chat`'s, so the composer and the transcript say a token figure
+    /// the same way.
+    #[test]
+    fn the_context_window_is_quoted_once_the_server_has_said_what_it_is() {
+        let chips = crate::testkit::with_ctx(
+            |ctx| {
+                let mut usage = ctx.usage;
+                usage.set(Some((83_000, 1_000_000)));
+            },
+            |ctx| compose_chips(ctx, Plane::Chat),
+        );
+        let text: Vec<&str> = chips.iter().map(|c| c.text.as_str()).collect();
+        assert!(
+            text.contains(&"1.0M context"),
+            "the context window is on the wire and the composer is not saying it: {text:?}"
+        );
+    }
+
+    /// A LIMIT OF ZERO IS NOT A CONTEXT WINDOW.
+    ///
+    /// `Usage` is two `u64`s and nothing stops a server sending `contextLimit:
+    /// 0`. Rendered, that is "0 context", which reads as a window with no room
+    /// in it rather than as a server that did not say — and it is also the
+    /// value `crowding` already guards against for the same reason.
+    #[test]
+    fn a_zero_limit_is_treated_as_no_answer_rather_than_as_no_room() {
+        let chips = crate::testkit::with_ctx(
+            |ctx| {
+                let mut usage = ctx.usage;
+                usage.set(Some((0, 0)));
+            },
+            |ctx| compose_chips(ctx, Plane::Chat),
+        );
+        assert!(
+            !chips.iter().any(|c| c.text.contains("context")),
+            "a zero context limit was printed as though it were a window"
+        );
     }
 
     /// An address gets the monospace face; a word does not.
