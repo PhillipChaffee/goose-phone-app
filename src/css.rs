@@ -336,6 +336,54 @@ mod tests {
         Some((prop.to_owned(), value.split_whitespace().collect()))
     }
 
+    /// THE PARSER'S ONE GUARD, EXERCISED — because the sheet does not exercise
+    /// it, and a scan that quietly stops recognising things is a scan that
+    /// quietly stops finding them.
+    ///
+    /// The two tests below walk fifteen files looking for a repeated property,
+    /// and everything they currently meet is a real declaration, so the reject
+    /// arm never runs against the shipped sheet. It exists for what those files
+    /// are one rule away from holding: `@media (max-width: 900px)` has a colon
+    /// and is not a declaration, and neither is the `url(data:…)` fragment a
+    /// data URI leaves behind when a value carrying its own `;` is split on it.
+    /// Read as a declaration, either would put a nonsense property name into
+    /// the seen list and could report a duplicate that is not there — a false
+    /// failure in a test whose whole job is to be believed.
+    #[test]
+    fn only_a_real_declaration_is_read_as_one() {
+        assert_eq!(
+            split_declaration("  --accent :  #13bbaf "),
+            Some(("--accent".to_owned(), "#13bbaf".to_owned())),
+            "a declaration with slack around it is still a declaration, and the \
+             value is compared after whitespace, so `var( --x )` and `var(--x)` \
+             are one value"
+        );
+        assert_eq!(
+            split_declaration("--text-code: min(var(--text-xs), 20px)"),
+            Some((
+                "--text-code".to_owned(),
+                "min(var(--text-xs),20px)".to_owned()
+            )),
+            "a value with its own spaces must survive as one string, or every \
+             calc() and clamp() in the sheet compares unequal to itself"
+        );
+        for not_a_declaration in [
+            "@media (max-width: 900px)",
+            "url(data:image/svg+xml,x)",
+            ": #13bbaf",
+            "--accent",
+            "  ",
+        ] {
+            assert_eq!(
+                split_declaration(not_a_declaration),
+                None,
+                "`{not_a_declaration}` is not a declaration and must not be read \
+                 as one — a scan that accepts it can report a duplicate property \
+                 that does not exist"
+            );
+        }
+    }
+
     /// THE TWO DARK BODIES ARE ONE PALETTE, and until this test they were not.
     ///
     /// `00-tokens.css` writes the dark ramp twice, because the two selectors
