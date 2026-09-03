@@ -170,6 +170,37 @@
   --surface-card: var(--bg-secondary);
   --surface-raise: var(--bg-tertiary);
 
+  /* AND THAT IS WHY LIGHT HAS A FIFTH RUNG, which dark does not need.
+   *
+   * Rendered light and censused: `--surface-card` resolves to
+   * `var(--bg-secondary)` #f4f6f7, which is `--surface-panel` to the byte. So
+   * a card ON a panel column is 1.00:1 against it, and the five rules that
+   * paint the card rung inside one — `.nav-new`, `.nav-library`
+   * (`30-sidebar-list.css`), `.insp-chip`, `.insp-card`, `.insp-key`
+   * (`90-inspector.css`), eight elements in the shipped window — are outlines
+   * with no body. In dark the same five are #212429 on #181a1e, 1.10:1.
+   *
+   * One value cannot fix it, and that is the whole reason for a second token
+   * rather than a different number above. Light's panel is #f4f6f7 and its
+   * canvas is #ffffff: they are 1.08:1 apart, so nothing sits between them
+   * far enough to read against both, and moving the card DOWN instead breaks
+   * the ink — `--text-secondary` #6f6f6f is 4.64:1 on #f4f6f7 and 4.39:1 on
+   * the #edf0f2 a darker card would need. The card rung therefore stays what
+   * it is on the canvas, and a card on a PANEL goes the other way, to white:
+   * #ffffff on #f4f6f7 is 1.08:1, the same step the canvas already gets, and
+   * every ink on it improves (primary 9.93:1, secondary 5.02:1).
+   *
+   * In dark this is an identity — `var(--surface-card)` — so the rule at the
+   * foot of this file that spends it changes nothing there. The mockups have
+   * no light mode; this rung is the app's own and is measured, not copied.
+   *
+   * NOT FIXED HERE, and recorded so the next reader does not go looking: in
+   * light `--surface-raise` is `--bg-tertiary` #e3e6ea, DARKER than the panel,
+   * so `.plane-seg.active` reads pressed-in where dark reads raised. Light has
+   * no headroom above #ffffff to raise into, and the one rule that reads wrong
+   * because of it is in `20-plane-switch.css`, not in a token. */
+  --card-on-panel: #ffffff;
+
   /* ── THE ACCENT, and it is desktop-only on purpose ────────────────────
    *
    * `assets/main.css` has no accent token and should not gain one: it is the
@@ -199,6 +230,70 @@
   --accent: #0b6b64;
   --accent-fill: #0e7a73;
   --accent-ink: #ffffff;
+
+  /* A DIMMED FILL, for the marks that are already spent rather than active.
+   * Declared here and spent in `90-inspector.css` by #111 — the seen-file tick
+   * and the chip's own square, which the mockups draw in #0e7a73 against the
+   * vivid #13bbaf they keep for a live accent.
+   *
+   * The decision the mockups do not make for us, and the reason this value is
+   * written down rather than assumed: #0e7a73 measures 3.00:1 on the dark card
+   * #212429 and 3.36:1 on the panel. `30-sidebar-list.css` holds this shell to
+   * "a non-text indicator owes 3:1", so the card case is exactly ON the floor
+   * and not over it. Taken knowingly: both marks are filled shapes with a
+   * border of their own, neither carries text, and the alternative is the
+   * live accent doing two jobs. Anything that puts a GLYPH on this fill needs
+   * its own value — #e9ecef on #0e7a73 is 4.37:1 and does not clear 4.5.
+   *
+   * Light needs no dimming: its accent fill is already this colour, because
+   * light's problem was the opposite one — white ink had to sit on it. */
+  --accent-dim: var(--accent-fill);
+
+  /* ── THE INK LADDER, AND THE ONE LINE THAT MAKES IT REACHABLE ─────────
+   *
+   * `assets/main.css:391` is `body { color: var(--text-primary) }`, and a
+   * custom property substitutes WHERE IT IS USED — at `body`, on `:root`'s own
+   * value. So remapping `--text-primary` on this shell moves nothing that
+   * inherits its colour, which in this window is almost every string in it.
+   * The restatement below is what makes the remap arrive; without it the whole
+   * ink pass is a no-op that every gate in the repo passes.
+   *
+   * That is the THIRD instance of one trap, and the two others are already
+   * written up in this file: `--text-md` at the type scale below, and
+   * `--text-code`, which is restated verbatim for the same reason. Three is a
+   * pattern rather than an accident — a token this shell remaps is only
+   * remapped for rules INSIDE the shell, and anything main.css declares on
+   * `body` or `:root` keeps the phone's value until the shell restates it.
+   *
+   * The ladder itself: the mockups paint four rungs and this window painted
+   * two. Their `--text` #e9ecef and `--dim` #98a1ac are taken verbatim in dark
+   * (measured on the ramp: primary 14.69/13.61/13.13/12.49, secondary
+   * 6.66/6.17/5.95/5.66 on panel/canvas/card/raise), replacing the phone's
+   * #ffffff and #b8b8b8 — which were composed for a phone's own two surfaces
+   * and read as halation and as a flat neutral grey against a blue-black
+   * window. Light keeps main.css's #3f434b and #6f6f6f: the mockups have no
+   * light mode and light's ink was never the complaint.
+   *
+   * THE THIRD RUNG IS A NAME AND, TODAY, NOT A THIRD COLOUR. The mockups'
+   * `--faint` #6a7480 carries 44 elements in their window — counts, ages,
+   * separators, the strings that should recede inside a control — and it
+   * measures 3.67:1 on this panel at best, 3.40 on the canvas, 3.28 on the
+   * card, 2.84 on a selected row. It fails the 4.5:1 floor everywhere, so it
+   * is rejected. So is the #7d8794 the issue that asked for this proposed:
+   * 4.78:1 dark but 3.36:1 once light resolves the same declaration.
+   *
+   * What is left above the floor IS `--text-secondary`'s own value, so
+   * `--ink-faint` ships as the dim rung under a second name. That is
+   * deliberate and it is not decoration: the eight strings the campaign hands
+   * this rung (`.chrome-sep`, `.conn-host`, `.nav-band-count`,
+   * `.nav-library-count`, `.nav-row-age`, `.insp-sec-meta`, `.insp-sec-title`,
+   * `.home-section-meta`) then say WHY they are quiet in the one place that
+   * can be changed, and a future decision to overrule the floor moves one
+   * declaration instead of eight. Never spend it on `.nav-row.on` or
+   * `.nav-row:hover` — those rows are another issue's, and the selected row is
+   * where the faint rung measured worst. */
+  color: var(--text-primary);
+  --ink-faint: var(--text-secondary);
 
   /* ── THE DESKTOP TYPE SCALE ────────────────────────────────────────────
    * The mockups are `body{font-size:13px;line-height:1.45}` with a working
@@ -254,6 +349,23 @@
   --insp-add: #2f6b3d;
   --insp-del: #b3261e;
 
+  /* A THIRD INSPECTOR INK, and it is a rung the ladder above does not have.
+   *
+   * Declared here and spent in `90-inspector.css` by #104 — `.insp-kv-value`,
+   * `.insp-chip`, `.insp-key`, `.insp-file-path`, `.insp-meter-value`, five
+   * rules that all say `color: var(--text-primary)` today, which made every
+   * mono detail in the right column as bright as a heading. The mockups draw
+   * them between #aeb6c0 and #ccd3da, a band below their own body ink, and the
+   * key/value distinction depends on it: their key is #98a1ac against a
+   * #c3cad2 value, and at `--text-primary` the value jumps a whole rung past
+   * where it should sit and the pair collapses.
+   *
+   * #c3cad2 is 10.54:1 on the panel and 9.41:1 on the card, so it is a
+   * deliberate rung and not a contrast concession. Light keeps
+   * `--text-primary`: #c3cad2 on light's panel is 1.3:1, and the mockups draw
+   * no light inspector to copy. */
+  --insp-detail: var(--text-primary);
+
 
   /* ── THE TRANSCRIPT'S SURFACES ────────────────────────────────────────
    * The open conversation had NO desktop rule of any kind: it was the phone's
@@ -306,6 +418,33 @@
    * base pairs with — 12.5 against --lh-sm's 18 is 1.44, the mockups' body
    * ratio to two places. */
   --text-sm: 0.78125rem;
+
+  /* 13.5px. NEW, and it is the one rung the reader WRITES on. The mockups
+   * declare 13.5px six times and every one is reading text: `.user` (their own
+   * turn), `.composer .field` (the reply box) and `.ask p`. Body is 13 on 1.45,
+   * so 13.5 is deliberately one notch ABOVE the chrome — the same inversion
+   * `--text-md`'s 15px encodes for `.prose`, said again at conversational size.
+   *
+   * This app shipped both of those a step the OTHER way: `95-transcript.css`
+   * puts the desktop user bubble on `--text-sm` (12.5px) and the composer
+   * inherits `.input { font-size: var(--text-sm) }` from main.css, which the
+   * shell re-resolves to the same 12.5 — half a point under the sidebar labels
+   * beside them and a full point under the mockups, in the two places the
+   * reader reads and writes their own words.
+   *
+   * NAMED BY ROLE and not `--text-…`-something, because the size ladder has no
+   * free rung between `sm` and `md` and renumbering it would rewrite every
+   * region file for one insertion. `turn` is what it is: a turn in the
+   * conversation, and the field that composes one.
+   *
+   * IT NEEDS NO LINE-HEIGHT OF ITS OWN, which is worth saying because this
+   * file is frozen after the token pass and a later rule cannot come back for
+   * one. The mockups' 13.5px runs on 19.575px — that is 1.45, the shell's own
+   * unitless `line-height` declared at the top of this block — so a rule that
+   * sets `font-size: var(--text-turn)` and leaves line-height alone lands on
+   * the mockup value exactly. `--lh-sm`'s 18px is what those two rules carry
+   * today and is what has to come OFF them. */
+  --text-turn: 0.84375rem;
 
   /* 15px, THE READING RUNG, and it is deliberately larger than the chrome —
    * that inversion is the mockups' whole typographic move. Three exact matches:
@@ -369,13 +508,42 @@
 
   /* ICONS ARE NOT TEXT and have a scale of their own (see main.css), but that
    * scale was composed against a 16px body. Against a 12.5px one a 20px glyph
-   * is 1.6x its label; the mockups draw 12-13px glyphs beside 12.5px text. The
-   * ceiling comes down with it so a 44px `.icon-btn` circle still holds it with
-   * a ring, and the four users are the only ones that read this token rather
-   * than `1em`: `.nav-toggle`, `.conn-badge`, `.send`, `.icon-btn`.
-   * --icon-lg is NOT touched: its users are 44px circles whose glyph is meant
-   * to dominate them, and nothing in this shell renders one. */
-  --icon-md: clamp(16px, 1rem, 20px);
+   * is 1.6x its label; the mockups draw 12-13px glyphs beside 12.5px text.
+   *
+   * THE FIRST RE-SCALE UNDER-DELIVERED, and the clamp is why. main.css is
+   * `clamp(20px, 1.25rem, 26px)` and this line was `clamp(16px, 1rem, 20px)`,
+   * which does pull 20 down to 16 — but 16 is the clamp's own FLOOR, and at
+   * the fixed 16px root a macOS build has (`assets/platform/macos.css` sets no
+   * root size) nothing below it is reachable. So the 12-13px the paragraph
+   * above composed against never arrived, and seven glyphs shipped a quarter
+   * larger than the marks in the sidebar directly beneath them: the window read
+   * as a 16px band stacked on a 12.5px list. Measured against the mockups,
+   * every SVG in both files is 12px or 13px but for one 15px gear.
+   *
+   * 13px at this root, ceiling still 16 so large text can grow it. The
+   * inventory the old comment carried is corrected with it, having gone stale
+   * twice over: `.conn-badge` does NOT read this token — `50-band.css` pins its
+   * own 24px height and its glyph measures 11.5px — and three more DO. The
+   * seven users, all of them: `.nav-toggle` (`50-band.css`), `.insp-toggle`
+   * (`90-inspector.css`), `.row-action` (`70-overrides.css`), and main.css's
+   * `.icon-btn`, `.send`, `.scroll-bottom` and `.session-tile`. Everything else
+   * is `1em` and already scales with its label. `.swipe-action .icon` reads it
+   * too and is not counted: there is no swipe tray at any width in this shell.
+   *
+   * --icon-lg IS STILL NOT TOUCHED, but not for the reason written here
+   * before. That reason — "its users are 44px circles whose glyph is meant to
+   * dominate them, and nothing in this shell renders one" — was false when it
+   * was written: main.css's `.icon-btn.back` reads `--icon-lg`, and a sweep of
+   * the thirteen captured desktop states finds a 28px chevron in a 44px circle
+   * in SIX of them (chat, chat-menu, extensions-detail, recipes-detail,
+   * scheduler-detail, skill), roughly twice the ink of anything else on screen
+   * and 30px below a 16px toggle. The premise was never checked against the
+   * capture. It is left alone all the same because the fix is one selector and
+   * not a rung: #131 puts `.app > .shell .topbar > .icon-btn.back` on
+   * `--icon-md` in `70-overrides.css`, so the pane's back control matches the
+   * band's 32px buttons and the phone's own 44px circle — which is a real
+   * touch target on a real phone — keeps the value it was composed with. */
+  --icon-md: clamp(13px, 0.8125rem, 16px);
 
   /* Every structural line in the shell: the nav card's edge and the divider
    * between the two content columns. One token, two theme values, chosen so
@@ -384,6 +552,38 @@
    * is what put a 1.9:1 divider next to a 1.4:1 card edge in dark, which reads
    * as two different kinds of line for no reason. */
   --shell-line: var(--border-secondary);
+  /* AND THE RUNG UNDER IT, because the shell's line system is inverted.
+   *
+   * The mockups draw two hairlines 0.14 apart and in that order: `--line`
+   * #2c3138, 1.23:1 on the canvas, for STRUCTURE — the band's bottom edge, the
+   * sidebar's right, the inspector's left, the buttons — and `--line-soft`
+   * #242830, 1.09:1, for DETAIL — the tool card, the output slab, the
+   * composer's bar, the library disclosure, the meters. This shell has two
+   * tiers 0.06 apart and the wrong way round: `--shell-line` #2c3138 at 1.23:1
+   * carries the structure, and `--border-primary` #2f343b at 1.29:1 — LOUDER —
+   * carries every inner detail, with `--border-secondary` #3b414a at 1.57:1
+   * louder still on two controls. So the rule inside the composer is drawn
+   * heavier than the rule under the window band, and the window has no line
+   * hierarchy at all.
+   *
+   * `--border-primary` cannot simply move down to meet it: main.css has
+   * controls whose only edge is a border and 1.09:1 would erase them, which is
+   * the argument recorded at the dark block below and it still stands. The
+   * missing rung is a THIRD token, spent only on pure dividers and on cards
+   * that are meant to recede into the canvas.
+   *
+   * The mockups' value verbatim in dark: #242830, 1.09:1 on the canvas,
+   * 1.18:1 on the panel, 1.05:1 on a card. Light takes `--border-primary`
+   * #e3e6ea (1.25:1 on white) against `--shell-line`'s #cbd1d6 (1.54:1) — the
+   * same two-tier order, in the only pair light already has.
+   *
+   * FOUR OPEN ISSUES EACH PROPOSED THEIR OWN #242830 LITERAL for this and all
+   * four consume the token instead: #67 (`.nav-library`), #87
+   * (`.home-compose-row`'s top border), #98 (the transcript's tool card,
+   * thought and output) and #106 (`.insp-meters`). Four literals are four
+   * places one value drifts, in four different region files, with nothing in
+   * the repo able to see them disagree. */
+  --shell-line-soft: var(--border-primary);
   /* The page's own secondary grey, held under a second name so a rule further
    * down can mix against it. `.session-item.on` raises `--text-secondary` for
    * the marked row, and a custom property may not name itself — see the note
@@ -444,8 +644,40 @@
 /* DARK TAKES THE RAMP. Written twice because the two selectors mean different
  * things — the media query is "the system says dark and the app has not
  * overridden it", the attribute is "the app says dark" — and a test holds the
- * two bodies identical. Every value here is measured on `--surface-panel` and
- * `--accent` above.
+ * two bodies identical: `the_two_dark_bodies_are_one_palette` in `src/css.rs`.
+ *
+ * THAT SENTENCE USED TO BE FALSE, and it is worth recording what it cost.
+ * The comment claimed the test for as long as the file existed; no such test
+ * was ever written. The media body drifted to 20 declarations and the
+ * attribute body stayed at 13, and four of the seven missing ones would have
+ * painted a LIGHT value on a dark window the first moment anything set
+ * `data-theme`: `--tint-warn` #f8f6f0 and `--tint-live` #f1f7f7 as near-white
+ * slabs carrying white text (1.08:1) behind `.home-tile.urgent`,
+ * `.home-code .home-standing` and the tree board, `--insp-add`/`--insp-del`
+ * dropping to 2.7:1 as diff counters, `--slab-sunken` INVERTING so the output
+ * slab was lighter than the tool card containing it, and a running tool losing
+ * its teal wash entirely. Nothing in the repo could see it: `docs/audit.js`
+ * switches themes with `page.emulateMedia({ colorScheme })` and never sets the
+ * attribute, so this arm is unmeasured by every rendered check there is. The
+ * same parallel appends left `--insp-add` and `--insp-del` declared TWICE in
+ * the media body, mis-indented, which is the visible tooth-mark of the same
+ * bite; a second test now refuses a repeated property in any block of any
+ * region file.
+ *
+ * Both bodies are therefore a bare declaration list, in one order, with every
+ * word of prose kept out here where it cannot drift between the copies.
+ *
+ * WHAT THE INK LINES ARE DOING IN A SURFACE BLOCK. Four rungs of ink and the
+ * six status tokens are main.css's PHONE dark values, which the shell's remap
+ * skipped while remapping every background beside them. #ffffff and #b8b8b8
+ * for a four-rung mockup ladder; lemon #ffd966 where the mockups use amber
+ * #f0b429, yellow-green #a3d795 for mint #68d391, salmon #ff8080/#ff6b6b for
+ * #f0736f. All three status hues clear their floors on the ramp — amber
+ * 9.35:1 on the panel, green 9.39:1, red 6.13:1 — and most of their spends are
+ * non-text indicators, which owe 3:1. `--diff-add` and `--diff-del` are NOT
+ * here and must not be: they are theme-invariant on `--code-bg`, and the
+ * inspector's own two inks exist under different names for that reason, which
+ * the comment on `--insp-add` above sets out in full.
  *
  * The three `--bg-*` lines are the leverage, and they are the reason this is a
  * pass over the whole app rather than over this sheet. `src/views/` is shared
@@ -468,28 +700,39 @@
  * mockups' 1.23:1 and the old 1.63:1 — most of the way, with nothing lost. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .app > .shell {
-    --insp-add: #7ee0a4;
-    --insp-del: #ff9b98;
-    --insp-add: #7ee0a4;
-  --insp-del: #ff9b98;
-  --slab-sunken: #1a1d22;
-  --tool-live-fill: #202d31;
-  --tool-live-line: #2a8a84;
-  --tint-warn: #282826;
-  --tint-live: #1d292d;
-  --surface-panel: #181a1e;
+    --surface-panel: #181a1e;
     --surface-canvas: #1e2126;
     --surface-card: #212429;
     --surface-raise: #24282e;
+    --card-on-panel: var(--surface-card);
     --bg-primary: var(--surface-canvas);
     --bg-secondary: var(--surface-raise);
     --bg-tertiary: #2a2f36;
     --border-primary: #2f343b;
     --border-secondary: #3b414a;
     --shell-line: #2c3138;
+    --shell-line-soft: #242830;
     --accent: #13bbaf;
     --accent-fill: #13bbaf;
     --accent-ink: #0c1a19;
+    --accent-dim: #0e7a73;
+    --text-primary: #e9ecef;
+    --text-secondary: #98a1ac;
+    --ink-faint: #98a1ac;
+    --text-warning: #f0b429;
+    --bg-warning: #f0b429;
+    --text-success: #68d391;
+    --bg-success: #68d391;
+    --text-danger: #f0736f;
+    --bg-danger: #f0736f;
+    --insp-add: #7ee0a4;
+    --insp-del: #ff9b98;
+    --insp-detail: #c3cad2;
+    --slab-sunken: #1a1d22;
+    --tool-live-fill: #202d31;
+    --tool-live-line: #2a8a84;
+    --tint-warn: #282826;
+    --tint-live: #1d292d;
   }
 }
 
@@ -498,15 +741,35 @@
   --surface-canvas: #1e2126;
   --surface-card: #212429;
   --surface-raise: #24282e;
+  --card-on-panel: var(--surface-card);
   --bg-primary: var(--surface-canvas);
   --bg-secondary: var(--surface-raise);
   --bg-tertiary: #2a2f36;
   --border-primary: #2f343b;
   --border-secondary: #3b414a;
   --shell-line: #2c3138;
+  --shell-line-soft: #242830;
   --accent: #13bbaf;
   --accent-fill: #13bbaf;
   --accent-ink: #0c1a19;
+  --accent-dim: #0e7a73;
+  --text-primary: #e9ecef;
+  --text-secondary: #98a1ac;
+  --ink-faint: #98a1ac;
+  --text-warning: #f0b429;
+  --bg-warning: #f0b429;
+  --text-success: #68d391;
+  --bg-success: #68d391;
+  --text-danger: #f0736f;
+  --bg-danger: #f0736f;
+  --insp-add: #7ee0a4;
+  --insp-del: #ff9b98;
+  --insp-detail: #c3cad2;
+  --slab-sunken: #1a1d22;
+  --tool-live-fill: #202d31;
+  --tool-live-line: #2a8a84;
+  --tint-warn: #282826;
+  --tint-live: #1d292d;
 }
 
 /* The one control whose only separation was the fill that just softened.
@@ -516,5 +779,24 @@
  * ramp getting a louder rung for its sake. */
 .app > .shell .icon-btn.action {
   border: 1px solid var(--border-primary);
+}
+
+/* THE TWO PANEL COLUMNS RE-POINT THE CARD RUNG, and this is the only rule in
+ * this file that is not a token declaration.
+ *
+ * It is here rather than in `10-sidebar-frame.css` and `90-inspector.css`
+ * because it declares nothing those files can see: a custom property inherits
+ * ALREADY SUBSTITUTED, so `--surface-card` resolved once on `.app > .shell` is
+ * the value every descendant gets, and the only way to give a column a
+ * different one is to re-declare it on the column. One rule naming both is a
+ * single place where the light ramp's fifth rung is spent; two rules in two
+ * files owned by two lanes is the shape this campaign is trying to avoid.
+ *
+ * `--card-on-panel` is `var(--surface-card)` in both dark bodies, so in dark
+ * this is an identity and changes nothing. See the rung's own comment above
+ * for why light needs it and why one value could not have done. */
+.app > .shell .navcard,
+.app > .shell .insp {
+  --surface-card: var(--card-on-panel);
 }
 
