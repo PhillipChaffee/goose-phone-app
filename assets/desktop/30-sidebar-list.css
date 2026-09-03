@@ -185,15 +185,22 @@
    * A PERCENTAGE IS NOT SAFE HERE and the mockups' is. `.list` in the mockups
    * is `overflow: hidden` — it does not scroll, so the faded 8% is always the
    * bottom of a list that continues. This one scrolls, so at scroll-end the
-   * last row's own text would render under the fade permanently: at the 820pt
-   * window the scroller is about 500px, 8% is 40px, and a 50px row would sit
+   * last row's own text would render under the fade permanently: in the 860pt
+   * window `src/main.rs:108` opens, this scroller measures 542px on the
+   * captured `desktop-chats`, 8% of it is 43px, and a 50px row would sit
    * mostly inside it. The contrast walk would not catch it either — it reads
    * `cs.color` and `cs.opacity`, and a mask sets neither.
    *
    * So the gradient is a LENGTH and the scroller pads by the same length: the
-   * fade always lands on the padding, never on a row. 24px at the 500px
-   * scroller is 95.2%, three points off the mockups' 92 and visually the same
-   * ramp. The two numbers are the same number and a test holds them equal. */
+   * fade always lands on the padding, never on a row. 24px at that 542px
+   * scroller is 95.6%, under four points off the mockups' 92 and visually the
+   * same ramp. Both figures are re-measured on the shipping window: this read
+   * 500px and 95.2% while it was written against the 820pt window the app
+   * opened at before the re-scale, and the conclusion is the one it always
+   * was. The three declarations below carry ONE number, and
+   * `the_sidebar_fade_lands_on_the_padding_it_is_measured_from` in
+   * `src/css.rs` holds them equal — a test this comment claimed for as long
+   * as there was none. */
   padding-bottom: 24px;
   -webkit-mask-image: linear-gradient(#000 calc(100% - 24px), transparent);
   mask-image: linear-gradient(#000 calc(100% - 24px), transparent);

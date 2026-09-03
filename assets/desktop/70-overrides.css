@@ -139,7 +139,8 @@
  *
  * `.session-actions` is a flex sibling of `.session-swipe`, and `.session-swipe`
  * holds the title, the meta line and the quote. Left in flow the two icons take
- * 78px off all three: measured at the default 1180x820 window, a chat title's
+ * 78px off all three: measured at the 1180x820 window that was the default
+ * then and is not now (`src/main.rs:108` opens 1440x860), a chat title's
  * box was 111px against the 196px the same row gets with no actions on it, and
  * the quote came out 141px wide with 220px of text clamped into 80px of box.
  *

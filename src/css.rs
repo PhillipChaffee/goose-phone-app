@@ -275,4 +275,107 @@ mod tests {
              walks them is measuring a sheet the app does not embed"
         );
     }
+
+    /// `css` with every `/* ... */` taken out.
+    ///
+    /// The block the test below reads has a `}` INSIDE a comment — it quotes
+    /// the mockups' own rule, `mask-image:linear-gradient(...)}` — so a brace
+    /// scan that counts it ends the block one declaration in and finds neither
+    /// number. Stripping first is what makes the scan honest.
+    fn without_comments(css: &str) -> String {
+        let mut out = String::with_capacity(css.len());
+        let mut rest = css;
+        while let Some(open) = rest.find("/*") {
+            out.push_str(rest.get(..open).unwrap_or_default());
+            let after = rest.get(open + 2..).unwrap_or_default();
+            rest = after
+                .find("*/")
+                .and_then(|close| after.get(close + 2..))
+                .unwrap_or_default();
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// THE FADE AND THE PADDING ARE ONE NUMBER, and for as long as there was no
+    /// test the comment saying so was the only thing saying so.
+    ///
+    /// `.nav-sessions` dissolves its last rows into the footer with a mask, and
+    /// the mockups do that with a percentage because their list does not
+    /// scroll. This one scrolls, so a percentage would park the fade on top of
+    /// the last row's own text at scroll-end — permanently, and invisibly to
+    /// `docs/audit.js`, whose contrast walk reads `color` and `opacity` and a
+    /// mask sets neither. The fix is that the gradient is a LENGTH and the
+    /// scroller pads by that same length, so the ramp always lands on padding.
+    ///
+    /// Which makes the two numbers one number, held apart in three
+    /// declarations — `padding-bottom` and the mask twice, because `WKWebView`
+    /// needs the `-webkit-` copy. Change one and the layout is still legal,
+    /// still renders, and quietly fades a row again. Nothing else in the
+    /// repo can see that: it is one sheet's arithmetic, not a rendered fault.
+    ///
+    /// The comment beside the rule claimed this test existed. It did not.
+    #[test]
+    fn the_sidebar_fade_lands_on_the_padding_it_is_measured_from() {
+        const FILE: &str = "30-sidebar-list.css";
+        // The space and the brace are what keep this off `.nav-sessions-empty`,
+        // which is a real selector four rules further down.
+        const SELECTOR: &str = ".nav-sessions {";
+
+        let sheet = super::SHELL_PARTS
+            .iter()
+            .find(|&&(name, _)| name == FILE)
+            .map(|&(_, body)| without_comments(body))
+            .unwrap_or_default();
+        assert!(
+            !sheet.is_empty(),
+            "no `{FILE}` in `SHELL_PARTS` — the sidebar's region file has been \
+             renamed or split, and this test now checks nothing"
+        );
+
+        let block = sheet
+            .find(SELECTOR)
+            .and_then(|at| sheet.get(at + SELECTOR.len()..))
+            .and_then(|rest| rest.split('}').next())
+            .unwrap_or_default();
+        assert!(
+            !block.is_empty(),
+            "no `{SELECTOR}` rule in {FILE}: the scroller this is about is \
+             styled somewhere else now, or under another name"
+        );
+
+        let padding = block
+            .find("padding-bottom:")
+            .and_then(|at| block.get(at + "padding-bottom:".len()..))
+            .and_then(|rest| rest.split(';').next())
+            .unwrap_or_default()
+            .trim();
+        let fades: Vec<&str> = block
+            .match_indices("calc(100% - ")
+            .filter_map(|(at, needle)| {
+                block
+                    .get(at + needle.len()..)
+                    .and_then(|rest| rest.split(')').next())
+            })
+            .collect();
+
+        assert_eq!(
+            fades.len(),
+            2,
+            "`.nav-sessions` should carry the fade twice — `mask-image` and the \
+             `-webkit-` copy WKWebView needs — and it carries {} `calc(100% - \
+             ...)`. One of the two is gone, so the fade is on one engine only.",
+            fades.len()
+        );
+        for fade in &fades {
+            assert_eq!(
+                *fade, padding,
+                "the fade is {fade} and the scroller pads {padding}. They are \
+                 one number in {FILE}: the ramp is a length precisely so it \
+                 lands on the padding rather than on a row, and a mask that \
+                 outruns the padding hides the last row's text at scroll-end \
+                 with nothing to report it."
+            );
+        }
+    }
 }
