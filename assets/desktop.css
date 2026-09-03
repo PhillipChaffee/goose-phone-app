@@ -200,18 +200,130 @@
   --accent-fill: #0e7a73;
   --accent-ink: #ffffff;
 
-  /* A denser label than the phone's floor.
+  /* ── THE DESKTOP TYPE SCALE ────────────────────────────────────────────
+   * The mockups are `body{font-size:13px;line-height:1.45}` with a working
+   * range of 9.5 to 30. This app's body is 16 on 24. Every rung below is a
+   * mockup value read out of their CSS, re-expressed as a rem against the
+   * desktop's 16px root (assets/platform/ios.css is NOT compiled into a macOS
+   * binary, so the root here is the browser's 16 — its own header says so).
    *
-   * `--text-xs` is 12px and is the smallest thing assets/main.css offers,
-   * because it was chosen for a thumb at arm's length. The desktop reads at
-   * half that distance with a pointer, and the mockups set their chrome
-   * labels at 10-11px — which is what makes them dense rather than merely
-   * small. 0.6875rem is 11px at the default root and still scales with it,
-   * so nothing here opts out of Dynamic Type.
+   * Declared HERE and nowhere else, so the phone is untouched by construction:
+   * a phone binary does not contain this file (src/css.rs, SHELL).
    *
-   * It is for LABELS only — chip text, tile captions, band headings — never
-   * for prose, and every use still owes 4.5:1. */
-  --text-2xs: 0.6875rem;
+   * THE ROOT DECLARATION IS THE SHELL'S OWN, and it is not optional.
+   * `body { font-size: var(--text-md) }` in assets/main.css was substituted at
+   * `:root`, where --text-md is 1rem — a custom property resolves on the
+   * element that DECLARES it, not on the one that uses the rule. So
+   * re-pointing --text-md alone would leave every `font: inherit` control in
+   * this shell inheriting 16px. This line is the mockups' `body` rule and it
+   * is the only literal in the block, because nothing may reference it: every
+   * rung has a name. */
+  font-size: 0.8125rem;
+  line-height: 1.45;
+
+  /* 10px. NEW, and the floor. The mockups spend 10px 55 times — `.plane-badge`,
+   * `.libcols .lb`, `.tag`, `.trow .brs` — and 9.5px on three uppercase 700
+   * badges (`.pill`, `.st-t .l`, `.fcard .fh .badge`). 9.5 is NOT taken: the
+   * audit relaxes to 3:1 only at 18.66px (docs/audit.js:1715), so a 9.5px caps
+   * label owes the full 4.5:1 while being the least legible string on screen.
+   * Their 9px is not a rung at all — grepped, it is `.cv` chevrons, `.tick` and
+   * `.check .ic`, every one a glyph, and this app draws those as SVG `.icon`
+   * sized by `--icon-*`.
+   *
+   * FOR UPPERCASE TRACKED LABELS ONLY, and only in --text-primary,
+   * --text-secondary or --accent-ink-on-accent-fill. Measured on the ramp:
+   * secondary 8.78/8.14/7.85/7.47 dark on panel/canvas/card/raise and
+   * 5.02/4.64/4.01 light on canvas/card/raise; --accent-ink on --accent-fill is
+   * 7.44 dark and 5.19 light. --text-tertiary is banned at every rung — 3.26
+   * dark at its best and 2.20 light — which is the 2.91:1 the audit already
+   * caught once on `.recent-fact`. */
+  --text-3xs: 0.625rem;
+
+  /* 10.5px, the mockups' single most-used size (246 declarations): mono ages,
+   * counts, `.lsec-h .ttl`, `.sec-h .ttl`, `.row .ago`, `.needs`. It was 11px
+   * (0.6875rem) — the comment above this token in the shipping sheet describes
+   * that value and must be rewritten with it. */
+  --text-2xs: 0.65625rem;
+
+  /* 11.5px, the mockups' second most-used (176): `.mini`, `.tool .nm`,
+   * `.file .pth`, `.check .nm`, `.meter .lab`, `.libbtn`. */
+  --text-xs: 0.71875rem;
+
+  /* 12.5px, the control-label rung: `.seg div`, `.newbtn`, `.row .t`, `.chip`,
+   * `.start .t`, `.libpop .it .t`, `.ask .opt`. It is also the rung the shell's
+   * base pairs with — 12.5 against --lh-sm's 18 is 1.44, the mockups' body
+   * ratio to two places. */
+  --text-sm: 0.78125rem;
+
+  /* 15px, THE READING RUNG, and it is deliberately larger than the chrome —
+   * that inversion is the mockups' whole typographic move. Three exact matches:
+   * `.prose{font-size:15px}` (the transcript, which assets/main.css sets from
+   * this token on `.md`, so it re-scales with no rule of its own),
+   * `.launch.calm .field{font-size:15px}` (the home composer) and the send
+   * glyph, whose 13/28 ratio in the mockups is 15/32 here. */
+  --text-md: 0.9375rem;
+
+  /* 16px. The mockups use it once (`.pal-in .q`) and this app spends it on
+   * `.md h3` and `.pane-empty-line`; it exists to keep the markdown ladder
+   * monotone — h1 27, h2 20 (main.css's one literal), h3 16, h4/body 15. */
+  --text-lg: 1rem;
+
+  /* 21px, `.st-t .n` verbatim — the tile numeral, and the only user. */
+  --text-xl: 1.3125rem;
+
+  /* 27px, `.hello h1` verbatim. */
+  --text-2xl: 1.6875rem;
+
+  /* 30px. NEW. `.hello h1.big{font-size:30px;line-height:1.25}` — the chat
+   * home's greeting, which is the one element the mockups set LARGER than this
+   * app's --text-2xl and the reason the greeting has read small since it
+   * landed. */
+  --text-3xl: 1.875rem;
+
+  /* 16px. Serves --text-xs at 1.39 (`.chrome-sub`, `.composer-chip`) and
+   * --text-3xs at 1.60. */
+  --lh-xs: 1rem;
+
+  /* 18px, down from 20. The workhorse: --text-sm 1.44 (the mockups' body ratio
+   * exactly), --text-xs 1.57, --text-2xs 1.71. Two derived numbers follow it
+   * and neither needs editing — `.chrome-title`'s
+   * `padding-top: max(0px, calc((32px - var(--lh-sm)) / 2))` becomes 7, and
+   * `.input`'s six-line cap becomes 108px. */
+  --lh-sm: 1.125rem;
+
+  /* 22px. --text-md 1.47, --text-lg 1.375. NOT prose's line-height: `.md`
+   * declares a unitless 1.65 of its own in assets/main.css, one hundredth off
+   * the mockups' `.prose{line-height:1.6}`, and is left alone. */
+  --lh-md: 1.375rem;
+
+  /* 24px, down from 32. --text-xl 1.14, against `.st-t .n{line-height:1.15}`. */
+  --lh-xl: 1.5rem;
+
+  /* 34px. NEW. --text-2xl 1.26, against the mockups' 1.25. */
+  --lh-2xl: 2.125rem;
+
+  /* 38px. NEW. --text-3xl 1.267, against `.hello h1.big{line-height:1.25}`. */
+  --lh-3xl: 2.375rem;
+
+  /* RESTATED VERBATIM, and that is the entire point: these two expressions live
+   * on `:root` in assets/main.css, where `var(--text-xs)` was substituted
+   * against :root's 0.75rem and froze at 12px. Repeating the identical text
+   * here re-resolves it against this block's --text-xs, giving 11.5px on a
+   * 19.17px line — `.fcard pre{font-size:11.5px;line-height:1.7}`. The min()
+   * is the AX5 cap and is inert at a fixed 16px root; it is kept so the
+   * expression stays one expression in two places. Columns only go UP. */
+  --text-code: min(var(--text-xs), 20px);
+  --lh-code: calc(var(--text-code) * 5 / 3);
+
+  /* ICONS ARE NOT TEXT and have a scale of their own (see main.css), but that
+   * scale was composed against a 16px body. Against a 12.5px one a 20px glyph
+   * is 1.6x its label; the mockups draw 12-13px glyphs beside 12.5px text. The
+   * ceiling comes down with it so a 44px `.icon-btn` circle still holds it with
+   * a ring, and the four users are the only ones that read this token rather
+   * than `1em`: `.nav-toggle`, `.conn-badge`, `.send`, `.icon-btn`.
+   * --icon-lg is NOT touched: its users are 44px circles whose glyph is meant
+   * to dominate them, and nothing in this shell renders one. */
+  --icon-md: clamp(16px, 1rem, 20px);
 
   /* Every structural line in the shell: the nav card's edge and the divider
    * between the two content columns. One token, two theme values, chosen so
@@ -611,21 +723,20 @@
  * ink — because the thing below it is what the sidebar is for. A disclosure
  * that competed with the list would be the flat destination list again with an
  * extra click. */
+/* ── the library disclosure ── */
 .nav-library {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 32px;
-  padding: 0 8px;
-  border: 0;
+  /* CHANGE: it becomes a bordered box on the card wash rather than a bare row.
+   * Everything not listed here in the shipped block is kept. */
+  min-height: 2rem;
+  margin: 0 0 0.6875rem;
+  padding: 0 0.625rem;
+  gap: 0.5rem;
+  border: 1px solid var(--shell-line);
   border-radius: var(--radius-md);
-  background: transparent;
+  background: var(--surface-card);
   color: var(--text-secondary);
-  font: inherit;
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   line-height: var(--lh-sm);
-  cursor: pointer;
 }
 
 .nav-library:hover {
@@ -652,9 +763,13 @@
 /* The count is the whole reason the row can stay shut: it says how much is
  * behind it without opening it. */
 .nav-library-count {
-  flex: 0 0 auto;
-  color: var(--text-secondary);
+  /* CHANGE: mono, per the mockup and per this sheet's own mono rule. The
+     shipped block's `flex: 0 0 auto` and colour are kept. */
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
   font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
 }
 
 /* THE LIST, and the one thing in the card that scrolls.
@@ -713,11 +828,31 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  /* The card floats over a page that scrolls; without this a flick past the
-   * end of the list carries the window behind it. `.drawer-nav` states the
-   * same rule for the same reason. */
   overscroll-behavior: contain;
   margin-top: 8px;
+  /* THE FADE, and the padding is what makes it legal.
+   *
+   * `.list{-webkit-mask-image:linear-gradient(#000 92%,transparent);
+   * mask-image:linear-gradient(#000 92%,transparent)}` — the sidebar's list
+   * dissolving into the footer instead of ending at a hard edge, which is the
+   * single largest thing separating this sidebar from the mockups' after the
+   * type. Both properties, because this is WKWebView.
+   *
+   * A PERCENTAGE IS NOT SAFE HERE and the mockups' is. `.list` in the mockups
+   * is `overflow: hidden` — it does not scroll, so the faded 8% is always the
+   * bottom of a list that continues. This one scrolls, so at scroll-end the
+   * last row's own text would render under the fade permanently: at the 820pt
+   * window the scroller is about 500px, 8% is 40px, and a 50px row would sit
+   * mostly inside it. The contrast walk would not catch it either — it reads
+   * `cs.color` and `cs.opacity`, and a mask sets neither.
+   *
+   * So the gradient is a LENGTH and the scroller pads by the same length: the
+   * fade always lands on the padding, never on a row. 24px at the 500px
+   * scroller is 95.2%, three points off the mockups' 92 and visually the same
+   * ramp. The two numbers are the same number and a test holds them equal. */
+  padding-bottom: 24px;
+  -webkit-mask-image: linear-gradient(#000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(#000 calc(100% - 24px), transparent);
 }
 
 .nav-sessions-empty {
@@ -730,13 +865,18 @@
 /* A band heading — Today, Yesterday, Earlier. Deliberately NOT `.drawer-item`,
  * for the reason `.drawer-group` states in assets/main.css: docs/audit.js keys
  * its tap-target check off that class, and a heading is not a target. */
+/* ── a band heading with a count ── */
 .nav-band {
-  padding: 12px 8px 4px;
+  /* CHANGE: it becomes a flex row so the count can be pushed to the end.
+     Everything else in the shipped block is kept verbatim. */
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  padding: 0.75rem 0.5rem 0.25rem;
   color: var(--text-secondary);
   font-size: var(--text-2xs);
   line-height: var(--lh-sm);
   font-weight: 600;
-  /* The plane badge's tracking, and its reason. */
   letter-spacing: 0.09em;
   text-transform: uppercase;
 }
@@ -748,17 +888,10 @@
  * note in `sidebar.rs`. A button cannot legally hold the two action buttons,
  * and an HTML parser meeting that hoists them out and unravels the tree. */
 .nav-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-  width: 100%;
-  min-height: 44px;
-  /* 6 rather than 8 vertically, so a 32px action and 12px of padding come to
-   * exactly the 44px `min-height` above and the row does not grow when the
-   * pointer reveals them. */
-  padding: 6px 8px;
-  border-radius: var(--radius-md);
-  color: var(--text-primary);
+  /* ADD one declaration to the shipped block: the actions below measure
+     against this. Without it they measure against `.pane`, which is the
+     positioned ancestor, and land in the content column. */
+  position: relative;
 }
 
 /* What opens the row: everything except the actions, and the whole of it is
@@ -767,6 +900,18 @@
 .nav-row-open {
   flex: 1 1 auto;
   min-width: 0;
+  /* THE TAP FLOOR, WHICH THIS BUTTON NEVER DECLARED.
+   *
+   * It is a `button`, so docs/audit.js:1163 measures it, and its height is
+   * whatever its text comes to — `.nav-row`'s own `min-height: 44px` is on the
+   * PARENT div and does not stretch a `flex-start` child. A row with two lines
+   * is fine; a row with one is not, and one-line rows are reachable:
+   * `sidebar.rs:120` declares `subtitle: Option<String>` and `:256` fills it
+   * with `(!chat.repo.trim().is_empty()).then(…)`, so a code chat whose repo is
+   * blank renders no `.nav-row-sub`. At the old --lh-sm that was a 20px button;
+   * at 18 it is worse. Latent rather than new, and the re-scale is the moment
+   * to close it. */
+  min-height: 32px;
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -841,9 +986,24 @@
  * pointer only — a row tabbed to would swap nothing in and the buttons behind
  * it would be invisible but focusable, which is worse than absent. */
 .nav-row-actions {
+  /* OUT OF FLOW, which is what lets the age move.
+   *
+   * They used to take the age's box, which is how the shipped sheet kept its
+   * promise that they "COST NO WIDTH". With the age on the meta line that box
+   * is gone, and putting them back in flow would shrink the title by 66px the
+   * moment the pointer arrived — a title that re-ellipsises on hover. Out of
+   * flow they take no width at rest and cause no reflow when they appear; they
+   * cover the tail of a title that is already ellipsised.
+   *
+   * They paint the row's own hover fill so the covered text does not shine
+   * through the 2px between the two controls. */
+  position: absolute;
+  top: 0.375rem;
+  right: 0.5rem;
   display: none;
-  flex: 0 0 auto;
-  gap: 2px;
+  gap: 0.125rem;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-tertiary) 50%, var(--nav-fill));
 }
 
 .nav-row:hover .nav-row-actions,
@@ -851,10 +1011,6 @@
   display: inline-flex;
 }
 
-.nav-row:hover .nav-row-age,
-.nav-row:focus-within .nav-row-age {
-  display: none;
-}
 
 /* 32x32, which is `.row-action`'s size and is not negotiable.
  *
@@ -933,6 +1089,10 @@
  * hierarchy survives — the title is --text-primary at 8.77:1 and this is
  * 4.64:1, which is a clear step down without being unreadable. */
 .nav-row-sub {
+  /* CHANGE: `flex: 1 1 auto` added so the age can sit at the end of the meta
+     line; every other declaration in the shipped block is kept. */
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -942,17 +1102,13 @@
 }
 
 .nav-row-age {
+  /* CHANGE: it now sits at the end of the meta line rather than beside the
+     title, so it is pushed rather than placed. `padding-top: 1px` goes — it
+     existed to drop the age onto the title's baseline and there is no title
+     beside it any more. Everything else in the shipped block is kept. */
   flex: 0 0 auto;
-  padding-top: 1px;
+  margin-left: auto;
   color: var(--text-secondary);
-  /* MONO, and this is the first of about a dozen. The mockups set every
-   * number, identifier and timestamp in `--mono` and everything else in the
-   * sans — which is most of why their chrome reads as an instrument panel
-   * rather than as prose. This sheet had exactly one mono rule in it.
-   *
-   * The rule being applied, so the next one does not have to re-decide: a
-   * value the reader COMPARES or COPIES is mono — an age, a count, a host, a
-   * branch, a token figure. A value they read as language is not. */
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   line-height: var(--lh-sm);
@@ -984,8 +1140,15 @@
  * one colour across the window rather than blue in the sidebar and teal in
  * the pane. `--accent` and not `--accent-fill`: this is an 8px dot on the
  * card, which is the surface the text accent was measured against. */
+/* ── the marks, as the mockups shape them ── */
 .mark.running {
-  background: var(--accent);
+  /* A RING, not a fill. `.dot.run{background:transparent;border:2px solid
+   * var(--accent)}` — the mockups reserve the solid disc for the state you must
+   * act on (amber) and draw the machine's own activity as an outline, which is
+   * what stops a busy list reading as a wall of alarm. This shipped as a filled
+   * accent disc, which is the inverse. */
+  background: transparent;
+  box-shadow: inset 0 0 0 0.125rem var(--accent);
 }
 
 /* Idle is an outline rather than a fill: an idle tree is the DEFAULT state and
@@ -998,8 +1161,17 @@
  * to go. Secondary is 4.64:1 and 7.75:1. The other two marks were never in
  * doubt: warning is 5.11:1 / 11.25:1 and info 5.23:1 / 6.74:1. */
 .mark.idle {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--text-secondary);
+  /* A FLECK, not a ring. `.dot.none{background:#31373f;width:5px;height:5px}` —
+   * idle is the default state of most of the list and the mockups make it the
+   * smallest, quietest thing on the row. This shipped as a 1px outline ring,
+   * which is now what `running` means.
+   *
+   * `transform` and not `width`/`height`: a mark that changed box size per state
+   * would shift every title 1.5px depending on what the agent was doing. 8 x
+   * 0.625 is exactly the mockup's 5. */
+  background: var(--text-secondary);
+  box-shadow: none;
+  transform: scale(0.625);
 }
 
 /* ── the home screen ────────────────────────────────────────────────────
@@ -1039,16 +1211,23 @@
 }
 
 .home-greeting {
-  margin: 0 0 8px;
+  margin: 0 0 6px;
   font-family: var(--font-serif);
-  /* The top of the scale, not a new rung. assets/main.css stops at
-   * --text-2xl / --lh-xl and says why there is no --lh-lg; adding a --text-3xl
-   * for one heading would mean editing the PHONE's design system for a screen
-   * the phone does not have. `.drawer-brand` pairs --text-xl with --lh-xl for
-   * the same reason. */
-  font-size: var(--text-2xl);
-  line-height: var(--lh-xl);
-  font-weight: 600;
+  /* The rung the phone's scale does not have, and the reason it now exists.
+   * `.hello h1.big{font-family:their --serif;font-size:30px;font-weight:500;
+   * letter-spacing:-.01em;line-height:1.25}` — 10-home-chat.html. It read at
+   * --text-2xl/--lh-xl (24 on 32) because that was the top of a scale composed
+   * for a phone; the mockups' greeting is six points larger than that and
+   * lighter, which is what makes it a salutation rather than a page title. */
+  font-size: var(--text-3xl);
+  line-height: var(--lh-3xl);
+  /* 500, not 600. At 30px in a serif, weight is what separates a greeting from
+   * a heading, and the mockups take the lighter of the two. */
+  font-weight: 500;
+  /* Display sizes need negative tracking or the counters open up; the mockups
+   * set it on both display elements (`.hello h1` and `.st-t .n`) and nowhere
+   * else. */
+  letter-spacing: -0.01em;
   color: var(--text-primary);
 }
 
@@ -1069,21 +1248,59 @@
 .home-compose {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px;
+  /* ZERO, both of them, and that is the whole two-zone geometry.
+   *
+   * The mockups' composer is a FIELD ZONE, a full-bleed hairline, and a CONTROL
+   * ZONE — `.launch{border:1px solid their --line;border-radius:14px;
+   * overflow:hidden}` with `.field` and `.bar` carrying their own padding and
+   * `.bar` carrying the `border-top`. This shipped as a single 12px box with an
+   * 8px gap, so there was no line to draw: a border on the row would have been
+   * inset 12px on both sides and read as a rule under the text rather than as
+   * the seam between two zones. Padding moves to the children; the container
+   * keeps only the edge and the radius.
+   *
+   * `overflow: hidden` is what makes the hairline meet the curve instead of
+   * running past it. */
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
   border: 1px solid var(--border-secondary);
+  /* 16px. `.launch.calm{border-radius:16px}` and --radius-xl are the same
+   * number, which is also design.md's tier for a container that holds other
+   * things. */
   border-radius: var(--radius-xl);
-  /* The CARD rung, named directly. Going through `--bg-secondary` would take
-   * the controls' fill instead — see the note on the dark block. */
+  /* THE CARD RUNG, AND NOT THE MOCKUPS'. `.launch{background:their --surface}`
+   * is #24282e, which is --surface-raise here. Taking it would be right in dark
+   * and wrong in light, where --surface-raise resolves to main.css's
+   * --bg-tertiary (#e3e6ea) and the placeholder — `.input::placeholder` is
+   * --text-secondary, #6f6f6f — measures 4.01:1 on it, under the 4.5 it owes.
+   * On --surface-card the same placeholder is 4.64:1 light and 7.85:1 dark.
+   * The floor wins over the picture; the 1px edge is what separates the
+   * control, as it does in the mockups. */
   background: var(--surface-card);
 }
 
 .home-compose .input {
   width: 100%;
+  /* THE FIELD ZONE. `.launch.calm .field{padding:17px 18px 15px}` — asymmetric,
+   * more above than below, because the control zone underneath supplies the
+   * lower half of the box's air. Padding is px here rather than rem to match
+   * every other box in this sheet; the type on it is rem, which is the rule
+   * that is actually about the reader's font-size. */
+  padding: 17px 18px 15px;
   border: 0;
   background: transparent;
   color: var(--text-primary);
+  /* `font` first, then the family — the shorthand resets font-family, so the
+   * two cannot be written the other way round. */
   font: inherit;
+  /* SERIF, `.launch .field{font-family:their --serif}`. It is the one place in
+   * this sheet a control takes the reading voice, and it is consistent rather
+   * than an exception: assets/main.css already sets the serif on
+   * `.bubble.user .bubble-text`, so what the reader writes is serif everywhere
+   * in this app. `.recent-quote` two sections down is the same decision. */
+  font-family: var(--font-serif);
+  /* 15px on a 22px line. `.launch.calm .field{font-size:15px}`. */
   font-size: var(--text-md);
   line-height: var(--lh-md);
   resize: none;
@@ -1097,6 +1314,19 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  /* THE CONTROL ZONE. `.launch .bar{padding:7px 10px 8px 10px}` — tighter than
+   * the field above it, because everything in it is a 32px control or a line of
+   * 11.5px mono rather than a paragraph. 7 + 32 + 8 is a 47px zone. */
+  padding: 7px 10px 8px;
+  /* THE FULL-BLEED HAIRLINE, and it is the seam this section exists for.
+   * `.launch .bar{border-top:1px solid their --line-soft}` — SOFTER than the
+   * composer's own outer edge, which is --border-secondary: a line inside a
+   * control separates two zones of one object, and drawing it at the same
+   * strength as the object's boundary makes it read as two stacked objects.
+   * --border-primary is #2f343b dark / #e3e6ea light against the outer
+   * #3b414a / #cbd1d6. Non-text and decorative — it divides, it does not
+   * signal — so no 3:1 is owed. */
+  border-top: 1px solid var(--border-primary);
 }
 
 /* THE HOME COMPOSER'S SEND, and it is `assets/main.css`'s `.send` with two
@@ -1165,7 +1395,12 @@
 .home-chip {
   flex: 0 0 auto;
   color: var(--text-secondary);
-  font-size: var(--text-2xs);
+  /* 11.5px, up one rung from --text-2xs. `.mini{font-size:11.5px}` and
+   * `.mini .mono{font-size:11px}` — these are the composer's facts, they sit
+   * beside a 32px send button, and 10.5 put them below the mockups' own value
+   * for the same element. --text-secondary on --surface-card is 7.85:1 dark and
+   * 4.64:1 light. */
+  font-size: var(--text-xs);
   line-height: var(--lh-sm);
   white-space: nowrap;
 }
@@ -1173,7 +1408,17 @@
 .home-chip + .home-chip::before {
   content: "·";
   margin: 0 6px;
-  color: var(--text-tertiary);
+  /* WAS --text-tertiary, AND THAT IS A MISS THE AUDIT CANNOT REPORT.
+   *
+   * docs/audit.js's contrast walk keys on `[...el.childNodes].some(n =>
+   * n.nodeType === 3 …)` — a `::before` is not a child node, so this glyph has
+   * never been measured. Measured by hand it is 2.03:1 on the light card and
+   * 2.91:1 on the dark one; a separator is a non-text indicator and owes 3:1,
+   * and it fails in both. Secondary is 4.64 and 7.85.
+   *
+   * The mockups' own `.sep-dot{color:#454c56}` is fainter still (about 1.4:1)
+   * and is one of the places rule 3 outranks them. */
+  color: var(--text-secondary);
 }
 
 /* An address is compared character by character, so it gets the face built
@@ -1280,7 +1525,12 @@
   color: var(--text-secondary);
   font-family: var(--font-serif);
   font-size: var(--text-xs);
-  line-height: var(--lh-md);
+  /* --lh-sm, NOT --lh-md, and the re-scale is what forces it. At 11.5px on the
+   * new 22px --lh-md this quote would be a ratio of 1.91 — two clamped lines
+   * with more air between them than either has ink. `.crow .q` is 12.5px on
+   * `line-height:1.5`; --lh-sm gives 1.57, which is the closest rung and still
+   * looser than the chrome around it, which is what a serif quotation wants. */
+  line-height: var(--lh-sm);
 }
 
 .recent-facts {
@@ -1357,12 +1607,18 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin: 32px 0 8px;
+  /* 26 and 7, from `.lsec.airy{margin-top:26px}` and `.lsec-h{margin-bottom:
+   * 7px}`. It was 32 and 8, which was proportionate to a 16px body and is not
+   * to a 13px one — the re-scale shrinks the type and leaves the gaps, and the
+   * result is a screen that reads as sparse rather than dense. */
+  margin: 26px 0 7px;
   color: var(--text-secondary);
+  /* 10.5px. `.lsec-h .ttl{font-size:10.5px;font-weight:650;letter-spacing:
+   * .09em;text-transform:uppercase}` — the micro-label tier, so .09em is right
+   * here where it is not on `.nav-band`. */
   font-size: var(--text-2xs);
-  line-height: var(--lh-sm);
-  font-weight: 600;
-  /* The plane badge's tracking, and its reason. */
+  line-height: var(--lh-xs);
+  font-weight: 650;
   letter-spacing: 0.09em;
   text-transform: uppercase;
 }
@@ -1466,7 +1722,9 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 8px;
-  margin-top: 32px;
+  /* 26, matching `.home-section` above, for the same reason: the section rhythm
+   * is one number and this was the second copy of the old one. */
+  margin-top: 26px;
 }
 
 .home-tile {
@@ -1485,11 +1743,16 @@
 }
 
 .home-tile-value {
-  /* Mono, not serif. It is a figure to compare against the tile beside it,
-   * and the serif was borrowed from the greeting, which is a sentence. */
   font-family: var(--font-mono);
+  /* 21px on 24 — `.st-t .n{font-family:their --mono;font-size:21px;
+   * line-height:1.15;letter-spacing:-.01em}`. --lh-xl comes down from 32 to 24
+   * for exactly this pairing: 21 on 32 is 1.52, which floats a numeral in the
+   * middle of its tile. */
   font-size: var(--text-xl);
   line-height: var(--lh-xl);
+  /* Display tracking, the same -.01em the greeting takes, and for the mockups'
+   * own reason: these are the only two elements they set it on. */
+  letter-spacing: -0.01em;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
@@ -1501,11 +1764,20 @@
 .home-tile-label {
   margin-top: 2px;
   color: var(--text-secondary);
-  font-size: var(--text-2xs);
-  line-height: var(--lh-sm);
-  /* `.st-t .l{font-size:9.5px;font-weight:700;letter-spacing:.08em;
-   * text-transform:uppercase}` — a caption under a numeral is a label, and a
-   * label is set in caps here the way band headings are. */
+  /* The floor rung. `.st-t .l{font-size:9.5px;font-weight:700;
+   * letter-spacing:.08em;text-transform:uppercase}` — 9.5 is not taken (see the
+   * token block), 10 is the nearest compliant value, and it is still half a
+   * point denser than the 10.5 everything else in this sheet sits at, which is
+   * the hierarchy the mockup was drawing.
+   *
+   * ARITHMETIC, because this is the thinnest margin in the pass: 700 weight at
+   * 10px does NOT reach the audit's large-text relaxation (that wants 14px AND
+   * 700, or 18.66px unconditionally), so this owes the full 4.5:1.
+   * --text-secondary on --surface-card is 4.64:1 light and 7.85:1 dark. It
+   * passes light by 0.14, which is why the tile may not gain a hover fill:
+   * --surface-raise would take it to 4.01 and fail. */
+  font-size: var(--text-3xs);
+  line-height: var(--lh-xs);
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -1522,25 +1794,43 @@
  * the toggle, or it invites a click that does nothing. */
 .plane-badge {
   flex: 0 0 auto;
+  /* THE BAND CENTRING FIX, and it is a real defect rather than a refinement.
+   *
+   * `.shell-chrome` is `align-items: flex-start` and every control in it is put
+   * back on the band's centre line by carrying `margin-top: var(--chrome-pad)`
+   * on a 32px box — `.nav-toggle`, `.chrome-title` and `.shell-chrome >
+   * .conn-badge` all do. The badge never did: it is an inline span with no
+   * height, so it computes 2 + --lh-sm + 2 and pins to y 0. On macOS
+   * (--chrome-h 52, --chrome-pad 0) that puts a 24px badge at 0..24 beside a
+   * 32px toggle at 0..32 — four points high of everything around it, in the one
+   * strip that is on screen in every state.
+   *
+   * The arithmetic --chrome-pad encodes is otherwise still correct and is not
+   * touched: macOS 0 + 32 centres on the traffic lights' own 15.75; elsewhere
+   * 6 + 32 in a 44 band centres on 22; fullscreen macOS 10 + 32 in 52 centres
+   * on 26. It is `align-items: center` everywhere except macOS-not-fullscreen,
+   * said as a token — and the re-scale does not move it, because all four boxes
+   * are pinned at 32px rather than sized by their text. */
+  display: inline-flex;
+  align-items: center;
+  margin-top: var(--chrome-pad);
+  height: 32px;
   margin-left: 8px;
-  padding: 2px 8px;
+  /* 2px 6px 2px 5px in the mockups; 8px either side here, because at 10px the
+   * word is 4 characters and a 5px inset makes the fill look like a mistake. */
+  padding: 0 8px;
   border-radius: var(--radius-sm);
-  /* FILLED, not outlined. In the mockups this is the accent's home — the one
-   * saturated object in the window's bar, and the thing that tells you which
-   * half of the app you are in before you read a word of it
-   * (`.plane-badge{color:#0c1a19;background:var(--accent)}`). It was a grey
-   * outline carrying grey text, which is what a disabled control looks like.
-   * `--accent-ink` on `--accent-fill` measures 7.44:1 in dark and 5.19:1 in
-   * light; both are on the token's own note. */
   background: var(--accent-fill);
   color: var(--accent-ink);
-  font-size: var(--text-2xs);
-  line-height: var(--lh-sm);
+  /* 10px, the new floor rung, and this is the element it was added for:
+   * `.plane-badge{font-size:10px;font-weight:650;letter-spacing:.09em;
+   * text-transform:uppercase}`. --accent-ink on --accent-fill is 7.44:1 in dark
+   * and 5.19:1 in light. Weight 650 and 10px means the audit's large-text
+   * relaxation does not apply (it needs 14px AND 700, or 18.66px), so this owes
+   * the full 4.5 and clears it twice over. */
+  font-size: var(--text-3xs);
+  line-height: 1;
   font-weight: 650;
-  /* .09em, the mockups' own. A 10-11px uppercase label needs more tracking
-   * than a lowercase one at any size — the caps are all the same height, so
-   * the word has no shape left to read except its letter rhythm. Both other
-   * uppercase labels in this sheet take it too. */
   letter-spacing: 0.09em;
   text-transform: uppercase;
   white-space: nowrap;
@@ -1601,6 +1891,58 @@
   border-color: var(--border-secondary);
 }
 
+.shell[data-nav="closed"] .nav-toggle {
+  /* THE COLLAPSED STATE THE TOGGLE HAS NEVER HAD. `data-nav` is already on
+   * `.shell` (verified in docs/gallery-states.json: every desktop key opens
+   * `<div class="shell" data-nav="open" …>`), so this costs no Rust and no
+   * markup.
+   *
+   * The fill and the outline are UNANIMOUS across the mockups —
+   * `.toggle.collapsed{background:their --surface-2;box-shadow:inset 0 0 0 1px
+   * #383e47}` in 22-nav-disclosure and `.tgl.off{…}` in 30/31/32 are the same
+   * two declarations character for character. --bg-tertiary is this app's
+   * --surface-2 and is the token main.css already proved reads as selected
+   * (`.drawer-item.active`, `.plane-seg.active`, `.nav-row.on`), and the inset
+   * outline is those rules' too, for their reason verbatim: --bg-tertiary is
+   * 1.13:1 on the light card and a non-text indicator owes 3:1.
+   *
+   * NO ACCENT ON THE GLYPH, and that is a deliberate refusal rather than an
+   * omission. The two mockup sets contradict each other about it —
+   * 22-nav-disclosure paints the divider accent when COLLAPSED
+   * (`.toggle.collapsed::before{background:var(--accent)}`), while 30, 31 and
+   * 32 paint it accent when OPEN and grey it when off
+   * (`.tgl::before{background:var(--accent)}`, `.tgl.off::before{width:3px;
+   * background:#5a636e}`). Three files against one, in opposite directions, on
+   * a colour this shell spends on exactly one thing per screen. The ink steps
+   * to --text-primary instead, so the control that is switched off is not also
+   * the dimmer of the two: 13.48:1 dark and 7.93:1 light on the fill, against
+   * --text-secondary's 6.79 and 4.01 — and 4.01 is under the 4.5 the icon's own
+   * 3:1 floor does not require but its label's would.
+   *
+   * 26x22 (22-nav-disclosure) and 28x21 (30-collapse-left) are both under the
+   * 32 docs/audit.js:1163 holds every `button` to. The 32x32 the control
+   * already is stays; the floor wins over the picture, as it did for the send
+   * button's diameter.
+   *
+   * Specificity is 0,3,0 against `.nav-toggle:hover`'s 0,2,0, so this wins
+   * wherever it is placed — but it is written after the hover rule anyway, and
+   * the hover variant below exists because otherwise pointing at a collapsed
+   * toggle would report nothing. */
+  background: var(--bg-tertiary);
+  box-shadow: inset 0 0 0 1px var(--border-secondary);
+  color: var(--text-primary);
+}
+
+.shell[data-nav="closed"] .nav-toggle:hover {
+  /* Or the collapsed toggle would answer nothing to the pointer, since the rule
+   * above out-specifies `.nav-toggle:hover`. One step past the collapsed fill,
+   * mixed rather than fixed for `.drawer-item:hover`'s reason — the card paints
+   * a different rung per theme, so a literal is a step in one and a smudge in
+   * the other. */
+  background: color-mix(in srgb, var(--text-tertiary) 12%, var(--bg-tertiary));
+  border-color: var(--border-secondary);
+}
+
 /* WHAT THE WINDOW HAS OPEN, said once, in the window's own bar.
  *
  * `src/shell/desktop.rs` renders this from `nav::Detail`'s crumb whenever the
@@ -1621,27 +1963,17 @@
  *
  * 32px tall, matching the toggle, so the two are centred on the same line
  * rather than each on its own idea of the bar's middle. */
+/* ── the crumb, in the window's bar ── */
 .chrome-title {
-  flex: 0 1 auto;
-  min-width: 0;
-  margin-top: var(--chrome-pad);
-  height: 32px;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  /* Baseline, then centre the baseline row. `align-items: baseline` is what
-   * lines a 14px title up with a 12px subtitle beside it — centring each of
-   * them separately leaves the smaller one floating 2px high — but it also
-   * parks the pair at the top of the box, so this puts the pair back on the
-   * toggle's centre line. Derived, not typed: the title's line box is
-   * `--lh-sm` and the box is the toggle's 32, so the slack above it is half
-   * the difference. `max()` because a negative padding is an invalid
-   * declaration rather than a small one, and a root font-size large enough to
-   * turn this negative should leave the title at the top of the band rather
-   * than losing the rule. Measured at the desktop's 16px root: the heading
-   * lands at y 6..26 in a 0..32 box, against a toggle at y 0..32. */
-  padding-top: max(0px, calc((32px - var(--lh-sm)) / 2));
-  overflow: hidden;
+  /* The mockup's `.band-mid` puts 9px between the badge and the crumb; the
+     band's own `gap: 4px` supplies four of them. */
+  margin-left: 0.3125rem;
+  /* WAS 8px. The crumb is parent + sep + leaf and the mockup spaces those with
+     the separator's own 4px padding, not with a flex gap — an 8px gap either
+     side of a `/` is 16px of nothing in the middle of one phrase. The gap the
+     old rule bought between heading and subtitle is restored as an explicit
+     margin on `.chrome-sub` below, at the mockup's own 9px. */
+  gap: 0;
 }
 
 /* Not the phone's `.title`, and not `--text-lg`. This is a window bar, not a
@@ -1688,17 +2020,10 @@
  * 1.2px of a 65px deficit, which is a cut title by any measurement and a check
  * that has to be given a tolerance to hide it. */
 .chrome-sub {
-  flex: 1 1 0;
-  min-width: 0;
-  color: var(--text-secondary);
-  /* An address, so mono — the mockups put their host in a `<code>`
-   * (`.conn code`). See `.nav-row-age` for the rule. */
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: var(--lh-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* ADD this one declaration to the shipped block; nothing else in it changes.
+     The mockup's `.after` is `padding-left:9px`, and `.chrome-title` no longer
+     has a gap to supply it. */
+  margin-left: 0.5625rem;
 }
 
 /* The rest of the bar drags the window.
@@ -1732,11 +2057,20 @@
  * beside it is what the reference paints in the same place
  * (`EnvironmentBadge`, `BaseChat.tsx`). `.conn-label` brings its own 9.25rem
  * cap and ellipsis from assets/main.css. */
+/* ── the connection, as the mockups' pill ── */
 .shell-chrome > .conn-badge {
   flex: 0 0 auto;
-  margin-top: var(--chrome-pad);
-  height: 32px;
-  padding-right: 12px;
+  /* 24px, not the 32 this shipped with. The mockup's pill is a slim lozenge
+     (`padding:3px 10px 3px 8px`) and a 32px-tall `border-radius: 999px` is a
+     capsule the size of the toggle. The 4px of extra top margin is derived,
+     not typed: (32 - 24) / 2, so the pill still centres on the toggle's line. */
+  height: 1.5rem;
+  margin-top: calc(var(--chrome-pad) + 0.25rem);
+  margin-right: 0.75rem;
+  padding: 0 0.625rem 0 0.5rem;
+  gap: 0.375rem;
+  border: 1px solid var(--shell-line);
+  border-radius: var(--radius-full);
 }
 
 /* `position: relative` is load-bearing and is not about the pane's own
@@ -1797,7 +2131,150 @@
  *
  * MIN_INNER stays (480, 560): the floor is now a content column with an
  * overlay available, which is a usable window, so nothing forces it up. */
+
+.chrome-parent {
+  flex: 0 1 auto;
+  min-width: 0;
+  /* An identifier — the name of a destination or a server — so mono, by the
+     rule `.nav-row-age` states in this sheet. */
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  /* The mockup sets this `--dim` (#98a1ac). --text-secondary is this app's
+     nearest rung and measures 4.64:1 on the light panel (#f4f6f7) and 8.78:1
+     on the dark one (#181a1e). --text-tertiary would be 2.03:1 in light and is
+     the exact ink a previous pass shipped and the audit rejected at 2.91:1. */
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chrome-sep {
+  flex: 0 0 auto;
+  padding: 0 0.25rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  color: var(--text-secondary);
+}
+
+.shell-chrome > .conn-badge .conn-host {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+  color: var(--text-secondary);
+  max-width: 9.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── the sidebar row's meta line ── */
+.nav-row-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.nav-row-sub.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0;
+}
+
+.nav-row.on .nav-row-actions {
+  background: var(--bg-tertiary);
+}
+
+/* ── "Needs input · 2m" ── */
+.nav-row-needs {
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+  font-weight: 600;
+  color: var(--text-warning);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nav-row.on .nav-row-needs {
+  color: var(--text-primary);
+}
+
+.nav-band-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 400;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+/* ── a count on each half of the switch ── */
+.plane-seg-count {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  /* NOT the mockup's --faint. The shipped `.plane-seg` comment records the
+   * measurement: --text-secondary on this track is 4.44:1 in light — 28 audit
+   * findings, one per desktop state — and --text-primary is 8.77:1. So the
+   * unselected count is distinguished by face and size, not by ink. */
+  color: var(--text-primary);
+}
+
+.plane-seg.active .plane-seg-count {
+  color: var(--accent);
+}
+
+.nav-library > .icon:first-child {
+  /* SCOPED. The shipped rules are `.nav-library .icon` and
+   * `.nav-library.open .icon`, which now match TWO icons — the chevron and the
+   * grid glyph beside the label — so the grid would rotate 90deg on open too.
+   * Replace both selectors with this one and `.nav-library.open >
+   * .icon:first-child`. */
+  transition: transform 150ms ease;
+}
+
+.nav-library-icon {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+/* ── the footer's standing line ── */
+.nav-standing {
+  margin: 0 0 0.5rem;
+  padding: 0 0.5rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 627px) {
+    .shell-chrome > .conn-badge .conn-host {
+    display: none;
+    }
+
+    .chrome-parent,
+    .chrome-sep {
+    display: none;
+    }
+
+    .shell-chrome > .conn-badge {
+    padding: 0 0.5rem;
+    border-color: transparent;
+    }
+
   .navpane {
     position: absolute;
     z-index: 3;

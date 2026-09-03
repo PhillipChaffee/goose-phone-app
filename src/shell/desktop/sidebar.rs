@@ -114,12 +114,26 @@ pub(crate) struct Row {
     /// The id the row navigates to.
     pub id: String,
     pub title: String,
-    /// Where it lives — the repo on the code plane, the message count on the
-    /// chat plane. `None` renders no second line at all rather than an empty
-    /// one, so a row with nothing to add is short instead of padded.
+    /// Where it lives, or what was last said in it — the repo and branch on
+    /// the code plane, the last message on the chat plane. `None` renders no
+    /// second line at all rather than an empty one, so a row with nothing to
+    /// add is short instead of padded.
     pub subtitle: Option<String>,
+    /// Set where the subtitle is an IDENTIFIER rather than language: a repo, a
+    /// branch. This sheet's own rule — a value the reader COMPARES or COPIES
+    /// is mono — and a chat's last message is language, so it is not.
+    pub subtitle_mono: bool,
     /// The age badge, already formatted.
     pub age: Option<String>,
+    /// HOW LONG AN ASK HAS BEEN WAITING, where that is knowable at all.
+    ///
+    /// `Some("2m")` on the chat half and `None` on the code half, and the
+    /// asymmetry is real rather than an omission: `ctx.lost_asks` records an
+    /// `asked_at` the instant an ask arrives, and `opencode_client::
+    /// CodePermission` is `{ id, session_id, title, kind, metadata }` with no
+    /// time field anywhere on that wire. A blocked code row says it is blocked
+    /// and does not guess at since when.
+    pub blocked_for: Option<String>,
     /// What the mark says. See [`Mark`].
     pub mark: Mark,
     pub band: Band,
@@ -184,6 +198,24 @@ pub(crate) fn chat_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
         .map(|p| p.session_id.clone())
         .collect();
 
+    // THE OLDEST OPEN ASK PER SESSION, which is the only "blocked since" this
+    // app has and is a real one. `crate::ask_journal`'s whole design decision
+    // is that a record is written the INSTANT an ask arrives — before it is
+    // queued, because the case the journal exists for is the app being killed
+    // — so `asked_at` is an arrival time and not a render time. `is_open`
+    // filters out asks that were answered or withdrawn, so an acknowledged
+    // loss from last week cannot date a live row.
+    let asked_at: std::collections::HashMap<String, i64> = (ctx.lost_asks)()
+        .iter()
+        .filter(|record| record.is_open())
+        .fold(std::collections::HashMap::new(), |mut acc, record| {
+            let at = acc
+                .entry(record.session_id.clone())
+                .or_insert(record.asked_at);
+            *at = (*at).min(record.asked_at);
+            acc
+        });
+
     let mut rows: Vec<Row> = (ctx.sessions)()
         .iter()
         .map(|info| {
@@ -195,13 +227,32 @@ pub(crate) fn chat_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
                     .clone()
                     .filter(|t| !t.trim().is_empty())
                     .unwrap_or_else(|| "Untitled chat".to_owned()),
-                subtitle: info.message_count().map(|n| {
-                    if n == 1 {
-                        "1 message".to_owned()
-                    } else {
-                        format!("{n} messages")
-                    }
-                }),
+                // THE LAST THING SAID IN IT. Every row read "2 messages" —
+                // six characters carrying nothing — while the snippet was on
+                // the same struct the row is built from, on the wire, served
+                // by the mock, and already rendered by the phone's own list.
+                //
+                // The count is the FALLBACK rather than the answer: a session
+                // the server sent no snippet for still needs a second line,
+                // and the count is what that row said before.
+                subtitle: info
+                    .last_message_snippet()
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| {
+                        info.message_count().map(|n| {
+                            if n == 1 {
+                                "1 message".to_owned()
+                            } else {
+                                format!("{n} messages")
+                            }
+                        })
+                    }),
+                subtitle_mono: false,
+                blocked_for: waiting
+                    .contains(&info.session_id)
+                    .then(|| asked_at.get(&info.session_id).copied().map(relative_time))
+                    .flatten(),
                 age: epoch.map(relative_time),
                 mark: if waiting.contains(&info.session_id) {
                     Mark::Waiting
@@ -253,7 +304,24 @@ pub(crate) fn code_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
             } else {
                 chat.title.clone()
             },
-            subtitle: (!chat.repo.trim().is_empty()).then(|| chat.repo.clone()),
+            // Repo AND branch, which is what a working tree IS. Both are
+            // identifiers, so the row sets them in mono — see `subtitle_mono`.
+            subtitle: {
+                let repo = chat.repo.trim();
+                let branch = chat.branch.trim();
+                match (repo.is_empty(), branch.is_empty()) {
+                    (false, false) => Some(format!("{repo} \u{b7} {branch}")),
+                    (false, true) => Some(repo.to_owned()),
+                    (true, false) => Some(branch.to_owned()),
+                    (true, true) => None,
+                }
+            },
+            subtitle_mono: true,
+            // NO TIMESTAMP EXISTS on this wire. The row still says it is
+            // blocked — that is the one state a reader must not miss — and
+            // says nothing about how long, rather than reaching into
+            // `CodePermission::metadata` for a field this app does not model.
+            blocked_for: None,
             age: (chat.last_active > 0.0).then(|| {
                 #[expect(
                     clippy::cast_possible_truncation,
@@ -376,7 +444,12 @@ pub(crate) fn SidebarList(plane: Plane) -> Element {
                 // `shell::render_group` states the same rule for the drawer.
                 if rows.iter().any(|row| row.band == band) {
                     if let Some(header) = band.header() {
-                        div { class: "nav-band", "{header}" }
+                        div { class: "nav-band",
+                            span { class: "nav-band-name", "{header}" }
+                            span { class: "nav-band-count",
+                                "{rows.iter().filter(|row| row.band == band).count()}"
+                            }
+                        }
                     }
                     for row in rows.iter().filter(|row| row.band == band) {
                         // A DIV WRAPPING A BUTTON, not a button holding
@@ -465,12 +538,42 @@ pub(crate) fn SidebarList(plane: Plane) -> Element {
                             }
                             span { class: "nav-row-text",
                                 span { class: "nav-row-title", "{row.title}" }
-                                if let Some(subtitle) = row.subtitle.clone() {
-                                    span { class: "nav-row-sub", "{subtitle}" }
+                                // THE META LINE. The age used to be a third
+                                // flex sibling aligned to the TITLE, which put
+                                // a timestamp on the row's most important line
+                                // and left the second one running the full
+                                // width. The mockups put both on the second
+                                // line, which is also what frees the top-right
+                                // for nothing at all.
+                                span { class: "nav-row-meta",
+                                    if let Some(subtitle) = row.subtitle.clone() {
+                                        span {
+                                            class: if row.subtitle_mono {
+                                                "nav-row-sub mono"
+                                            } else {
+                                                "nav-row-sub"
+                                            },
+                                            "{subtitle}"
+                                        }
+                                    }
+                                    if let Some(age) = row.age.clone() {
+                                        span { class: "nav-row-age", "{age}" }
+                                    }
                                 }
-                            }
-                            if let Some(age) = row.age.clone() {
-                                span { class: "nav-row-age", "{age}" }
+                                // A THIRD LINE, and only on a row that is
+                                // blocked. It is the one state that is about
+                                // the READER rather than about the agent, and
+                                // a coloured dot alone cannot say "for two
+                                // minutes".
+                                if row.mark == Mark::Waiting {
+                                    span { class: "nav-row-needs",
+                                        if let Some(since) = row.blocked_for.clone() {
+                                            "Needs input \u{b7} {since}"
+                                        } else {
+                                            "Needs input"
+                                        }
+                                    }
+                                }
                             }
 
                             }
@@ -769,10 +872,12 @@ mod tests {
         }
     }
 
-    /// The code plane's rows carry the repo, because a branch name alone does
-    /// not say which tree it is in and three repos can hold the same one.
+    /// The code plane's rows carry the repo AND the branch, because neither
+    /// alone says which tree it is: three repos can hold the same branch name,
+    /// and one repo holds a tree per branch. Both are identifiers, so the row
+    /// marks them for the mono face.
     #[test]
-    fn a_code_row_says_which_repo_it_is_in() {
+    fn a_code_row_says_which_tree_it_is() {
         let rows = crate::testkit::with_ctx(
             |ctx| {
                 let mut chats = ctx.code_chats;
@@ -791,8 +896,66 @@ mod tests {
         );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "inbox-triage");
-        assert_eq!(rows[0].subtitle.as_deref(), Some("goose-phone-app"));
+        assert_eq!(
+            rows[0].subtitle.as_deref(),
+            Some("goose-phone-app \u{b7} agent/x"),
+            "a working tree is a repo and a branch; naming one of them makes \
+             two trees of the same repo indistinguishable in the list"
+        );
+        assert!(
+            rows[0].subtitle_mono,
+            "a repo and a branch are things the reader compares character by \
+             character, and this sheet sets those in mono"
+        );
         assert_eq!(rows[0].mark, Mark::Running);
+    }
+
+    /// AND IT DEGRADES A FIELD AT A TIME rather than rendering a stray
+    /// separator. A tree with no branch is reachable — `ChatMeta.branch` is a
+    /// plain `String` and the manager sends `""` for a session that has not
+    /// cut one yet — and "goose-phone-app · " reads as a truncation bug.
+    #[test]
+    fn a_tree_missing_half_its_name_still_reads_as_a_name() {
+        let rows = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    tree("c1", "goose-phone-app", ""),
+                    tree("c2", "", "agent/y"),
+                    tree("c3", "", ""),
+                ]);
+            },
+            |ctx| code_rows(ctx, NOW),
+        );
+        let subs: Vec<Option<&str>> = rows.iter().map(|r| r.subtitle.as_deref()).collect();
+        assert!(
+            subs.contains(&Some("goose-phone-app")) && subs.contains(&Some("agent/y")),
+            "a missing half should drop out, not leave its separator: {subs:?}"
+        );
+        assert!(
+            subs.contains(&None),
+            "a tree with neither should render no second line at all: {subs:?}"
+        );
+        assert!(
+            !subs
+                .iter()
+                .flatten()
+                .any(|s| s.contains(" \u{b7} ") && s.split(" \u{b7} ").any(str::is_empty)),
+            "a separator was painted with nothing on one side of it: {subs:?}"
+        );
+    }
+
+    fn tree(id: &str, repo: &str, branch: &str) -> opencode_client::ChatMeta {
+        opencode_client::ChatMeta {
+            id: id.to_owned(),
+            repo: repo.to_owned(),
+            title: id.to_owned(),
+            branch: branch.to_owned(),
+            base: String::new(),
+            status: "stopped".to_owned(),
+            model: None,
+            last_active: 1_788_177_600.0,
+        }
     }
 
     /// The two halves keep their own vocabulary down to the empty state. A

@@ -72,6 +72,10 @@ pub(crate) fn path_for(name: &str) -> Option<&'static str> {
         "pause" => "M9 5v14M15 5v14",
         // Four strokes crossing at their midpoints: the "this was generated"
         // mark, at a size where a literal star would be a blob.
+        // The mockups' 2x2 disclosure glyph, rescaled from their 16-unit grid
+        // to this file's 24-unit one. Nothing here was close: `archive` is a
+        // box with a lid, `package` a cube, `list` three rules.
+        "grid" => "M3.5 3.5h6.5v6.5H3.5zM14 3.5h6.5v6.5H14zM3.5 14h6.5v6.5H3.5zM14 14h6.5v6.5H14z",
         "sparkle" => "M12 3v6M12 15v6M3 12h6M15 12h6M6.5 6.5 9 9M15 15l2.5 2.5M17.5 6.5 15 9M9 15l-2.5 2.5",
         "archive" => "M3 5h18v4H3zM5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M9.5 13h5",
         // The desktop nav's collapse control: a pane with its leading column
