@@ -21,11 +21,15 @@
 use dioxus::prelude::*;
 
 mod home;
+mod inspector;
 mod sidebar;
+
+use std::fmt::Write as _;
 
 use crate::icons::Icon;
 use crate::nav::{self, Destination, Plane};
 use crate::shell::render_destination;
+use crate::state::{AppCtx, ConnState};
 
 /// The smallest the window may be dragged to, in logical points.
 ///
@@ -180,6 +184,9 @@ const NAV_KEY: &str = r"
   document.addEventListener('keydown', (e) => {
     if (e.key !== '/') return;
     if (!e.metaKey && !e.ctrlKey) return;
+    // LOAD-BEARING, not defensive. `INSP_KEY` below is this chord with
+    // Option added, so without this line the one press would toggle both
+    // panels and the reader would never see the inspector move on its own.
     if (e.altKey) return;
     e.preventDefault();
     dioxus.send('toggle');
@@ -187,7 +194,44 @@ const NAV_KEY: &str = r"
 })();
 ";
 
-/// Wire ⌘/ to the nav's own open signal.
+/// Cmd-Option-slash shows and hides the inspector. Ctrl+Alt+/ elsewhere.
+///
+/// The nav's chord with Option added, because the two panels are the same
+/// gesture on opposite sides of the window and goose's own
+/// `CommandOrControl+/` is already spent on the left one. `NAV_KEY`'s
+/// `altKey` guard is what keeps the two apart, and its comment now says so.
+///
+/// JS rather than a Rust `onkeydown`, for `REFRESH_KEY`'s reason. BOTH
+/// characters are matched because on macOS Option+/ produces a division sign,
+/// so the event's `key` is not a slash at all once Option is down.
+const INSP_KEY: &str = r"
+(() => {
+  if (window.__inspKeyWired) return;
+  window.__inspKeyWired = true;
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== '/' && e.key !== '÷') return;
+    if (!e.metaKey && !e.ctrlKey) return;
+    if (!e.altKey) return;
+    e.preventDefault();
+    dioxus.send('toggle-insp');
+  });
+})();
+";
+
+/// Wire the inspector chord to its own open signal.
+fn use_insp_key(mut open: Signal<bool>) {
+    use_effect(move || {
+        let mut eval = document::eval(INSP_KEY);
+        spawn(async move {
+            while eval.recv::<String>().await.is_ok() {
+                let now = *open.peek();
+                open.set(!now);
+            }
+        });
+    });
+}
+
+/// Wire the nav chord to the nav's own open signal.
 fn use_nav_key(mut nav_open: Signal<bool>) {
     use_effect(move || {
         let mut eval = document::eval(NAV_KEY);
@@ -278,12 +322,260 @@ const fn new_label(plane: Plane) -> &'static str {
     }
 }
 
+/// What the inspector control says it will do.
+///
+/// "Inspector" and deliberately NOT "details": `nav::Destination`'s `Detail`
+/// is already this shell's word for the CONTENT column and its `Crumb` is what
+/// the band's title is drawn from, so "Show details" would name two different
+/// columns in one window.
+const fn insp_toggle_label(open: bool) -> &'static str {
+    if open {
+        "Hide inspector"
+    } else {
+        "Show inspector"
+    }
+}
+
 const fn nav_toggle_label(open: bool) -> &'static str {
     if open {
         "Hide sidebar"
     } else {
         "Show sidebar"
     }
+}
+
+/// THE CONNECTION THAT BELONGS TO THIS HALF.
+///
+/// `home::Home` already switches on exactly this and the band did not, so the
+/// band spent the whole of the code plane naming the chat server.
+/// `docs/gallery-states.json`'s `desktop-code-list` is the proof: a green dot
+/// and "goose-mock 1.47.0" over a pane whose every row comes from the other
+/// wire. It is the worst kind of wrong a status indicator can be — confidently
+/// green about a thing nobody asked.
+///
+/// One function, because the pill, the band's counts and the plane switch's
+/// counts all have to answer the same question and three copies of a `match`
+/// is three chances for two of them to disagree.
+pub(crate) fn conn_of(ctx: &AppCtx, plane: Plane) -> ConnState {
+    match plane {
+        Plane::Chat => (ctx.conn)(),
+        Plane::Code => (ctx.code_conn)(),
+    }
+}
+
+/// The server this half is configured against, host and port only.
+fn plane_host(ctx: &AppCtx, plane: Plane) -> Option<String> {
+    let settings = ctx.settings.peek();
+    home::host_of(match plane {
+        Plane::Chat => &settings.server_url,
+        Plane::Code => &settings.code_server_url,
+    })
+}
+
+/// The connection, as the mockups draw it: a dot, a word, and the host in mono.
+///
+/// NOT `views::ConnBadge`, and `assets/main.css` is not edited for it: that
+/// component is the phone's and reads `ctx.conn` outright, which is right on a
+/// phone where there is one connection on screen at a time. It keeps the
+/// `conn-badge` class, so `.pane .topbar > .conn-badge` goes on hiding every
+/// pane's copy and `docs/audit.js` goes on finding this one.
+#[component]
+pub(crate) fn PlaneConn(plane: Plane) -> Element {
+    let ctx = crate::state::use_app_ctx();
+    let (class, label) = match conn_of(&ctx, plane) {
+        ConnState::Disconnected => ("dot off", "offline".to_owned()),
+        ConnState::Connecting => ("dot busy", "connecting\u{2026}".to_owned()),
+        ConnState::Connected { agent } => ("dot on", agent),
+        ConnState::Failed(_) => ("dot err", "error".to_owned()),
+    };
+    rsx! {
+        span { class: "conn-badge",
+            span { class: "{class}" }
+            span { class: "conn-label", "{label}" }
+            if let Some(host) = plane_host(&ctx, plane) {
+                code { class: "conn-host", "{host}" }
+            }
+        }
+    }
+}
+
+/// What the window's bar says it has open: a parent, a leaf, and a qualifier.
+///
+/// The mockups' crumb is `goose server / **All conversations**` followed by a
+/// line of counts. The band rendered only the middle of that, and only when
+/// something was open — six of thirteen captured states had a plane badge, a
+/// comment node, and a drag strip.
+pub(crate) struct CrumbParts {
+    /// `None` on a destination's own root, where the parent and the leaf would
+    /// be the same word.
+    pub parent: Option<&'static str>,
+    pub leaf: String,
+    /// Beside the leaf: the crumb's own subtitle where there is one, the
+    /// half's counts on its home screen, nothing otherwise.
+    pub after: Option<String>,
+}
+
+/// What the plane's home screen is called — the mockups' own leaf words, in
+/// the vocabulary each half already uses everywhere else.
+const fn home_leaf(plane: Plane) -> &'static str {
+    match plane {
+        Plane::Chat => "All conversations",
+        Plane::Code => "Working trees",
+    }
+}
+
+/// A free function beside the table rather than rsx inside `AppShell`, for
+/// `sidebar::chat_rows`' reason: `AppShell` calls `dioxus::desktop::window()`
+/// and cannot be mounted in a test.
+///
+/// TOTAL, and that is a change rather than a tidy-up. The band used to render
+/// a title only when something was OPEN, so six of thirteen captured states
+/// put a plane badge, a comment node and a drag strip in the window's bar and
+/// nothing else. Every screen has a name; the band says it now.
+///
+/// The consequence is that `.chrome-title` is always present, so
+/// `assets/desktop.css`'s `:has(.chrome-title)` suppression of the pane's own
+/// heading became unconditional — which is what the mockups draw, where no
+/// screen has a pane header at all.
+pub(crate) fn crumb_parts(
+    dest: &'static Destination,
+    plane: Plane,
+    on_home: bool,
+    crumb: Option<crate::nav::Crumb>,
+    after: Option<String>,
+) -> CrumbParts {
+    if let Some(crumb) = crumb {
+        return CrumbParts {
+            // NOT WHEN THEY ARE THE SAME WORD. Settings is its own detail and
+            // its crumb's title is "Settings", so a parent taken blindly from
+            // the table made the band read "Settings / Settings" — which is a
+            // stutter rather than a path, the same defect the third arm below
+            // avoids by answering `None`.
+            parent: (crumb.title != dest.label).then_some(dest.label),
+            leaf: crumb.title,
+            after: crumb.subtitle,
+        };
+    }
+    if on_home {
+        return CrumbParts {
+            parent: Some(dest.label),
+            leaf: home_leaf(plane).to_owned(),
+            after,
+        };
+    }
+    // A destination's own root — the Recipes grid, the Skills grid. Naming it
+    // twice either side of a slash is not a path, it is a stutter.
+    CrumbParts {
+        parent: None,
+        leaf: dest.label.to_owned(),
+        after: None,
+    }
+}
+
+/// The half's standing counts, or `None` when the half is not connected.
+///
+/// The gate is `home::standing`'s rule in its own words — "saying 12
+/// conversations over a dead socket is the kind of confident wrongness that
+/// makes a reader stop trusting the whole screen" — and it matters more here
+/// than there. On the desktop the code half is not connected until something
+/// mounts `views::code::CodeSessionsView`, and the band is on screen the
+/// entire time.
+pub(crate) fn band_after(ctx: &AppCtx, plane: Plane) -> Option<String> {
+    if !conn_of(ctx, plane).is_connected() {
+        return None;
+    }
+    match plane {
+        Plane::Chat => {
+            let total = (ctx.sessions)().len();
+            let streaming = (ctx.running_sessions)().len();
+            let waiting: std::collections::HashSet<String> = (ctx.permission)()
+                .iter()
+                .map(|p| p.session_id.clone())
+                .collect();
+            let mut out = if total == 1 {
+                "1 conversation".to_owned()
+            } else {
+                format!("{total} conversations")
+            };
+            if streaming > 0 {
+                let _ = write!(out, " \u{b7} {streaming} streaming");
+            }
+            // Said either way round, because "nothing waiting on you" is the
+            // answer to the question the reader is actually asking and an
+            // absent clause is not an answer.
+            if waiting.is_empty() {
+                out.push_str(" \u{b7} nothing waiting on you");
+            } else {
+                let _ = write!(out, " \u{b7} {} waiting on you", waiting.len());
+            }
+            Some(out)
+        }
+        Plane::Code => {
+            let chats = (ctx.code_chats)();
+            let running = chats.iter().filter(|c| c.is_running()).count();
+            let repos = {
+                let mut names: Vec<&str> = chats
+                    .iter()
+                    .map(|c| c.repo.as_str())
+                    .filter(|r| !r.trim().is_empty())
+                    .collect();
+                names.sort_unstable();
+                names.dedup();
+                names.len()
+            };
+            let waiting: std::collections::HashSet<String> = (ctx.code_permissions)()
+                .iter()
+                .map(|(chat, _)| chat.clone())
+                .collect();
+            let trees = if chats.len() == 1 {
+                "1 working tree".to_owned()
+            } else {
+                format!("{} working trees", chats.len())
+            };
+            let mut out = format!("{trees} across {repos} repos");
+            if !waiting.is_empty() {
+                let _ = write!(out, " \u{b7} {} waiting on you", waiting.len());
+            }
+            if running > 0 {
+                let _ = write!(out, " \u{b7} {running} running");
+            }
+            Some(out)
+        }
+    }
+}
+
+/// How much is in a half, or `None` when the half has not answered.
+///
+/// The gate is not decoration. The desktop never mounts
+/// `views::code::CodeSessionsView` while it is on the Code half's home — the
+/// pane renders `home::Home` instead — so `ctx.code_chats` is empty until
+/// something connects. An ungated count paints a confident `0` beside "Code"
+/// for a server nobody has asked.
+pub(crate) fn seg_count(ctx: &AppCtx, plane: Plane) -> Option<usize> {
+    conn_of(ctx, plane).is_connected().then(|| match plane {
+        Plane::Chat => (ctx.sessions)().len(),
+        Plane::Code => (ctx.code_chats)().len(),
+    })
+}
+
+/// The half's standing fact, under the list.
+///
+/// The mockups' footer is an avatar, a name and a line, and only the line has
+/// a source: `Settings` is `server_url` / `secret_key` / `working_dir` /
+/// `code_server_url` / `code_password`, and neither wire carries a user.
+///
+/// It says what the band says on the home screen, from the same expression,
+/// and that is the point rather than a duplication — the band's counts are
+/// replaced by the open thing's name the moment you open one, and this is the
+/// number that stays put.
+fn standing_line(ctx: &AppCtx, plane: Plane) -> Option<String> {
+    let n = seg_count(ctx, plane)?;
+    Some(match plane {
+        Plane::Chat if n == 1 => "1 conversation kept".to_owned(),
+        Plane::Chat => format!("{n} conversations kept"),
+        Plane::Code if n == 1 => "1 working tree".to_owned(),
+        Plane::Code => format!("{n} working trees"),
+    })
 }
 
 /// Wire Escape to the cancel that is already on screen.
@@ -396,6 +688,7 @@ pub(crate) fn AppShell() -> Element {
     use_arrival_refresh(dest);
     use_refresh_key();
     use_nav_key(nav_open);
+    use_insp_key(ctx.inspector_open);
     use_dismiss_key();
     // The chrome strip is only real while the traffic lights are on screen;
     // fullscreen takes them away. Read off the window rather than guessed at —
@@ -452,6 +745,14 @@ pub(crate) fn AppShell() -> Element {
     // Settings is deliberately not home for either half — it belongs to
     // neither plane, its detail is unconditional, and it takes the first arm.
     let on_home = detail.is_none() && dest.id == nav::primary(plane).id;
+    // WHAT THE INSPECTOR IS INSPECTING, and it is not `on_home` inverted:
+    // Settings, Recipes and Skills all produce a `detail` while belonging to
+    // NEITHER plane, and each plane's own signals (`ctx.chat`,
+    // `ctx.code_chat`) keep their last value after you leave — so an inspector
+    // keyed on `detail` alone would confidently describe a conversation nobody
+    // is looking at.
+    let on_subject = dest.plane == Some(plane) && detail.is_some();
+    let insp_open = ctx.inspector_open;
 
     // The half's library, computed once: the disclosure needs to know whether
     // it has anything before it decides to exist, and then needs the rows.
@@ -486,6 +787,7 @@ pub(crate) fn AppShell() -> Element {
             // no business there; here it sits with `data-detail` and
             // `data-nav`, set the same way, by the same render.
             "data-fullscreen": if fullscreen() { "true" } else { "false" },
+            "data-insp": if insp_open() { "open" } else { "closed" },
 
             // THE WINDOW'S OWN BAR, full width, above the columns.
             //
@@ -559,12 +861,19 @@ pub(crate) fn AppShell() -> Element {
                 // the same argument that put the connection badge here.
                 span { class: "plane-badge", "{plane.label()}" }
 
-                if let Some(crumb) = crumb {
+                {
+                    let crumb = crumb_parts(dest, plane, on_home, crumb, band_after(&ctx, plane));
+                    rsx! {
                     div { class: "chrome-title",
-                        h1 { class: "chrome-heading", "{crumb.title}" }
-                        if let Some(subtitle) = crumb.subtitle {
-                            span { class: "chrome-sub", "{subtitle}" }
+                        if let Some(parent) = crumb.parent {
+                            span { class: "chrome-parent", "{parent}" }
+                            span { class: "chrome-sep", "/" }
                         }
+                        h1 { class: "chrome-heading", "{crumb.leaf}" }
+                        if let Some(after) = crumb.after {
+                            span { class: "chrome-sub", "{after}" }
+                        }
+                    }
                     }
                 }
 
@@ -616,7 +925,19 @@ pub(crate) fn AppShell() -> Element {
                 // Rendered directly rather than passed through a prop:
                 // `ConnBadge` reads `ctx.conn` and nothing else, so the shell
                 // can ask for it as it stands.
-                crate::views::ConnBadge {}
+                PlaneConn { plane }
+
+                button {
+                    class: "insp-toggle",
+                    title: insp_toggle_label(insp_open()),
+                    "aria-label": insp_toggle_label(insp_open()),
+                    "aria-expanded": if insp_open() { "true" } else { "false" },
+                    onclick: move |_| {
+                        let now = *insp_open.peek();
+                        insp_open.clone().set(!now);
+                    },
+                    Icon { name: "inspector" }
+                }
             }
 
             div { class: "shell-body",
@@ -685,6 +1006,12 @@ pub(crate) fn AppShell() -> Element {
                                 onclick: move |_| (nav::primary(half).go)(&ctx),
                                 Icon { name: half.icon() }
                                 "{half.label()}"
+                                // HOW MUCH IS IN THE OTHER HALF, which is the
+                                // only thing this control can say about the
+                                // side you are not looking at.
+                                if let Some(n) = seg_count(&ctx, half) {
+                                    span { class: "plane-seg-count", "{n}" }
+                                }
                             }
                         }
                     }
@@ -736,6 +1063,7 @@ pub(crate) fn AppShell() -> Element {
                                 library_open.set(!now);
                             },
                             Icon { name: "chevron-right" }
+                            span { class: "nav-library-icon", Icon { name: "grid" } }
                             span { class: "nav-library-label", "Library" }
                             span { class: "nav-library-count", "{library.len()}" }
                         }
@@ -763,6 +1091,11 @@ pub(crate) fn AppShell() -> Element {
                     // it under a plane would hide the code gateway's fields
                     // behind the chat half.
                     div { class: "nav-footer",
+                        // The one line of the mockups' `.ident` that has a
+                        // source. See `standing_line`.
+                        if let Some(line) = standing_line(&ctx, plane) {
+                            p { class: "nav-standing", "{line}" }
+                        }
                         for dest in nav::plane_free() {
                             {render_destination(&ctx, dest)}
                         }
@@ -807,6 +1140,15 @@ pub(crate) fn AppShell() -> Element {
                 }
             }
 
+            // THE THIRD COLUMN. Rendered unconditionally and hidden by the
+            // sheet, not by Rust: `data-insp` on `.shell` above is the one
+            // fact, and `assets/desktop.css` decides both whether the column
+            // has a width and whether the window is wide enough for it. That
+            // is this shell's standing rule — width decides only how many
+            // columns, entirely inside the stylesheet, so nothing in Rust ever
+            // listens to a DOM resize.
+            inspector::Inspector { plane, on_subject }
+
             }
         }
     }
@@ -848,6 +1190,8 @@ mod tests {
     use dioxus::prelude::*;
 
     use super::MIN_INNER;
+    use super::{band_after, conn_of, crumb_parts, seg_count, standing_line};
+    use crate::nav::Plane;
     use crate::nav::{Destination, DESTINATIONS};
     use crate::state::{AppCtx, ConnState};
 
@@ -1495,7 +1839,7 @@ mod tests {
         let sheet = include_str!("../../../assets/desktop.css");
 
         assert!(
-            chrome_band().contains("crate::views::ConnBadge {}"),
+            chrome_band().contains("PlaneConn { plane }"),
             "the window's bar no longer renders the connection badge, so \
              `.pane .topbar > .conn-badge` below now hides the only one there is"
         );
@@ -1525,12 +1869,208 @@ mod tests {
         // which is the failure the attribute made possible and this test was
         // written for.
         assert!(
-            chrome_band().contains("if let Some(crumb) = crumb {"),
+            chrome_band().contains("crumb_parts(dest, plane, on_home, crumb,"),
             "the window's bar no longer renders `.chrome-title` conditionally, \
              so `:has(.chrome-title)` either never matches — and every screen \
              paints two titles — or always does, and the screens the bar does \
              not name paint none"
         );
+    }
+
+    /// THE BAND REPORTS THE HALF IT IS OVER, and it did not.
+    ///
+    /// `docs/gallery-states.json`'s `desktop-code-list` was captured showing a
+    /// green dot and "goose-mock 1.47.0" — the CHAT server's agent string —
+    /// across the top of a pane whose every row comes from the other wire.
+    /// `views::ConnBadge` reads `ctx.conn` outright, which is right on a phone
+    /// and wrong in a window with a plane switch in it.
+    ///
+    /// REPRODUCED: point `conn_of`'s `Code` arm at `(ctx.conn)()` — the state
+    /// this shipped in — and this fails on the second assertion.
+    #[test]
+    fn the_band_reports_the_half_it_is_over() {
+        let (chat, code) = crate::testkit::with_ctx(
+            |ctx| {
+                let mut conn = ctx.conn;
+                conn.set(ConnState::Connected {
+                    agent: "goose 1.47.0".to_owned(),
+                });
+                // The code gateway is not answering, which is the ordinary
+                // case on the desktop until something dials it.
+                let mut code = ctx.code_conn;
+                code.set(ConnState::Disconnected);
+            },
+            |ctx| (conn_of(ctx, Plane::Chat), conn_of(ctx, Plane::Code)),
+        );
+        assert!(
+            chat.is_connected(),
+            "the chat half's own connection was lost"
+        );
+        assert!(
+            !code.is_connected(),
+            "the band reported the chat server's connection over the code \
+             plane — a green dot for a socket nobody has opened, which is the \
+             worst thing a status indicator can be"
+        );
+    }
+
+    /// A COUNT IS ONLY OFFERED BY A HALF THAT ANSWERED.
+    ///
+    /// `home::standing`'s rule — "saying 12 conversations over a dead socket
+    /// is the kind of confident wrongness that makes a reader stop trusting
+    /// the whole screen" — applied to the band and the switch. It matters more
+    /// here: the code half is not connected until something dials it, and the
+    /// band is on screen the entire time, so an ungated count paints a
+    /// confident `0` beside "Code" at every launch.
+    ///
+    /// REPRODUCED: drop the `is_connected()` gate from either function and the
+    /// matching assertion fails.
+    #[test]
+    fn a_count_is_only_offered_by_a_half_that_answered() {
+        fn seeded(ctx: &AppCtx) {
+            let mut sessions = ctx.sessions;
+            sessions.set(vec![session("s1"), session("s2")]);
+        }
+        fn seeded_and_up(ctx: &AppCtx) {
+            seeded(ctx);
+            let mut conn = ctx.conn;
+            conn.set(ConnState::Connected {
+                agent: "goose".to_owned(),
+            });
+        }
+        let offline = crate::testkit::with_ctx(seeded, |ctx| {
+            (
+                seg_count(ctx, Plane::Chat),
+                band_after(ctx, Plane::Chat),
+                standing_line(ctx, Plane::Chat),
+            )
+        });
+        assert_eq!(offline.0, None, "a count over a socket nobody opened");
+        assert_eq!(offline.1, None);
+        assert_eq!(offline.2, None);
+
+        let online = crate::testkit::with_ctx(seeded_and_up, |ctx| {
+            (
+                seg_count(ctx, Plane::Chat),
+                band_after(ctx, Plane::Chat),
+                standing_line(ctx, Plane::Chat),
+            )
+        });
+        assert_eq!(online.0, Some(2));
+        let after = online.1.unwrap_or_default();
+        assert!(after.starts_with("2 conversations"), "{after}");
+        assert!(
+            after.contains("nothing waiting on you"),
+            "the band should answer the question rather than leave the clause \
+             out when the answer is none: {after}"
+        );
+        assert_eq!(online.2.as_deref(), Some("2 conversations kept"));
+    }
+
+    /// THE CRUMB NAMES THE THING INSIDE THE THING IT IS IN, and never itself
+    /// twice.
+    ///
+    /// Three arms and each is a different shape. An open detail is
+    /// `parent / leaf`; a home screen is `parent / the half's own word`; a
+    /// destination's own root is the leaf alone, because "Recipes / Recipes"
+    /// is a stutter rather than a path. The fourth case is the one this
+    /// shipped wrong: Settings is reachable as a detail AND is its own
+    /// destination, so its crumb title and its label are the same string.
+    ///
+    /// REPRODUCED: write the first arm as an unconditional
+    /// `parent: Some(dest.label)` — the state this shipped in — and the
+    /// Settings assertion fails with "Settings / Settings".
+    #[test]
+    fn the_crumb_names_the_thing_inside_the_thing_it_is_in() {
+        let chats = crate::nav::DESTINATIONS
+            .iter()
+            .find(|d| d.id == "chats")
+            .unwrap_or(&crate::nav::DESTINATIONS[0]);
+
+        let open = crumb_parts(
+            chats,
+            Plane::Chat,
+            false,
+            Some(crate::nav::Crumb {
+                title: "A conversation".to_owned(),
+                subtitle: None,
+            }),
+            None,
+        );
+        assert_eq!(open.parent, Some("Chats"));
+        assert_eq!(open.leaf, "A conversation");
+
+        let home = crumb_parts(chats, Plane::Chat, true, None, Some("2 threads".to_owned()));
+        assert_eq!(home.parent, Some("Chats"));
+        assert_eq!(home.leaf, "All conversations");
+        assert_eq!(home.after.as_deref(), Some("2 threads"));
+
+        let root = crumb_parts(chats, Plane::Chat, false, None, None);
+        assert_eq!(
+            root.parent, None,
+            "a destination's own root named itself either side of a slash"
+        );
+        assert_eq!(root.leaf, "Chats");
+
+        let itself = crumb_parts(
+            chats,
+            Plane::Chat,
+            false,
+            Some(crate::nav::Crumb {
+                title: "Chats".to_owned(),
+                subtitle: None,
+            }),
+            None,
+        );
+        assert_eq!(
+            itself.parent, None,
+            "the band read `Chats / Chats`, which is a stutter and not a path"
+        );
+    }
+
+    /// The two halves say different things, in their own vocabulary.
+    #[test]
+    fn each_half_counts_in_its_own_words() {
+        let code = crate::testkit::with_ctx(
+            |ctx| {
+                let mut conn = ctx.code_conn;
+                conn.set(ConnState::Connected {
+                    agent: "opencode".to_owned(),
+                });
+                let mut chats = ctx.code_chats;
+                chats.set(vec![tree("c1", "one"), tree("c2", "two")]);
+            },
+            |ctx| band_after(ctx, Plane::Code).unwrap_or_default(),
+        );
+        assert!(code.contains("2 working trees"), "{code}");
+        assert!(code.contains("2 repos"), "{code}");
+        assert!(
+            !code.contains("conversation"),
+            "the code half borrowed the chat half's noun: {code}"
+        );
+    }
+
+    fn session(id: &str) -> goose_acp_client::SessionInfo {
+        goose_acp_client::SessionInfo {
+            session_id: id.to_owned(),
+            cwd: None,
+            title: Some(id.to_owned()),
+            updated_at: None,
+            meta: None,
+        }
+    }
+
+    fn tree(id: &str, repo: &str) -> opencode_client::ChatMeta {
+        opencode_client::ChatMeta {
+            id: id.to_owned(),
+            repo: repo.to_owned(),
+            title: id.to_owned(),
+            branch: String::new(),
+            base: String::new(),
+            status: "stopped".to_owned(),
+            model: None,
+            last_active: 0.0,
+        }
     }
 
     /// THE WINDOW HAS MORE THAN ONE SURFACE IN IT.

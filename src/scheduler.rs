@@ -1255,6 +1255,7 @@ pub(crate) mod tests {
             attach_reading: use_signal(Vec::new),
             tab: use_signal(|| Tab::Home),
             drawer_open: use_signal(|| false),
+            inspector_open: use_signal(|| true),
             code_screen: use_signal(|| crate::code::CodeScreen::List),
             code_client: use_signal(|| None),
             code_conn: use_signal(|| crate::state::ConnState::Disconnected),

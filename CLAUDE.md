@@ -8,7 +8,10 @@ worn a second way (see the two-shells paragraph at the end).
 - `src/` — the Dioxus app (`state.rs` holds connection lifecycle + transcript folding)
 - `crates/goose-acp-client/` — UI-independent ACP protocol library (tokio + tungstenite + rustls)
 - `crates/opencode-client/` — the other backend: the code-agent manager and the per-chat `OpenCode` servers behind it (reqwest + rustls)
-- `crates/mock-goose-server/` — protocol-faithful fake server for testing without an API key
+- `crates/mock-goose-server/` — protocol-faithful fake goose, for testing without an API key
+- `crates/mock-opencode-server/` — the same for the other backend: the
+  code-agent manager and the per-chat `OpenCode` servers behind it, so the
+  whole Code plane runs with no container engine and no paid key
 - `scripts/check-server.sh` — verifies a goose server is in the shape the app needs
 - `docs/iphone-setup.md` — end-to-end iPhone deployment walkthrough
 
@@ -18,9 +21,30 @@ Common commands:
 cargo clippy --workspace --all-targets -- -D warnings   # the CI lint gate
 cargo test --workspace               # all tests
 cargo fmt --all -- --check           # formatting gate
-cargo run -p mock-goose-server       # fake server on :3285 (secret "mock-secret")
+cargo run -p mock-goose-server       # fake goose on :3285 (secret "mock-secret")
+cargo run -p mock-opencode-server    # fake code agents on :4399 ("mock-code-secret")
 dx serve --desktop                   # the desktop shell (the phone's is iOS/Android only)
 ```
+
+**Testing the whole app locally.** Start both fakes, then serve with the
+`GOOSE_DEV_*` seeds so a rebuild does not mean retyping five fields. They are
+read by `dev_seed!` in `src/state.rs` and expand to nothing in a release build,
+so a development endpoint cannot ride along into one:
+
+```bash
+GOOSE_DEV_SERVER_URL=http://127.0.0.1:3285 \
+GOOSE_DEV_SECRET_KEY=mock-secret \
+GOOSE_DEV_WORKING_DIR=$PWD \
+GOOSE_DEV_CODE_URL=http://127.0.0.1:4399 \
+GOOSE_DEV_CODE_PASSWORD=mock-code-secret \
+  dx serve --desktop
+```
+
+The fields arrive filled; press **Save & Connect** once per launch, because the
+app deliberately starts disconnected. `MOCK_FIXTURES=empty` on either fake
+gives the connected-and-empty state every empty-list message is written for,
+and the code fake takes `slow`, `ask`, `fail` and `notool` as prompt keywords
+the way the goose one takes `slow` and `notool`.
 
 Lint policy: `[workspace.lints]` in the root `Cargo.toml` turns on clippy's
 pedantic, nursery and cargo groups plus restriction picks (`unwrap_used`,
@@ -62,7 +86,7 @@ one `docs/gallery-states.json`, so a capture takes **both logs in one
 invocation**: `scripts/capture-gallery.py /tmp/applog.txt /tmp/desktop.log`.
 
 `docs/style-gallery.html` renders every phone state in a 402x874 frame and
-every desktop state in the 1180x820 window `src/main.rs` opens, each against
+every desktop state in the 1440x860 window `src/main.rs` opens, each against
 the sheets that shell actually ships: open it in a browser after a CSS change
 and all of them are visible at once, with no build and no device. It is
 **generated** from the running app by `scripts/capture-gallery.py` — never
@@ -73,22 +97,42 @@ narrows the run to that width) are the checks that read it. See the end of
 `docs/design.md` for how to re-capture.
 
 Two shells, chosen by `target_os` in `src/shell/`: `mobile.rs` is today's
-phone (swipe trays, pull-to-refresh, drawer over the page), `desktop.rs` is a
-pinned nav plus a list and a detail pane with row actions always on the row.
+phone (swipe trays, pull-to-refresh, drawer over the page), and
+`src/shell/desktop/` is **three columns** — a sidebar holding the plane's own
+session list, a content column, and an inspector. It splits at the top into a
+**Chat** half and a **Code** half (`nav::Plane`), chosen by the segmented
+control at the top of the sidebar; the two share no data and no vocabulary.
 Platform decides affordances; width decides only how many columns, entirely
 inside `assets/desktop.css` — so nothing in Rust listens to a **DOM** resize,
 which is the one that costs a synchronous XHR per frame. There is exactly one
 Rust resize listener in the tree and it is not that: `use_fullscreen` in
-`src/shell/desktop.rs` takes a `tao` `Resized` as a trigger and reads the
+`src/shell/desktop/mod.rs` takes a `tao` `Resized` as a trigger and reads the
 window's own fullscreen flag back off it, because tao publishes no fullscreen
-event. It decides nothing about columns. The
-desktop's window chrome is inside the app: one band across the top holding the
-traffic lights' reservation, the nav toggle, the name of whatever the detail
-column has open, and the connection — and `assets/desktop.css` takes that same
-heading back out of the pane, so there is one title per window rather than one
-per column. The name travels as data on `nav::Destination` (`Detail`'s
-`Crumb`), because Dioxus has no portal. The desktop section at the end of
-`docs/design.md` is the whole story.
+event. It decides nothing about columns.
+
+The desktop's window chrome is inside the app: one band across the top holding
+the traffic lights' reservation, the nav toggle, the plane badge, a crumb
+naming whatever is open with the half's counts beside it, the plane's own
+connection, and the inspector toggle. `crumb_parts` is TOTAL — every screen
+has a name — so `assets/desktop.css`'s `:has(.chrome-title)` takes that
+heading back out of the pane unconditionally and there is one title per
+window. The name travels as data on `nav::Destination` (`Detail`'s `Crumb`),
+because Dioxus has no portal.
+
+**The desktop has a type scale of its own**, declared on `.app > .shell` in
+`assets/desktop.css`: the mockups' ladder, body 13px on 1.45 against the
+phone's 16 on 24, with a 10px floor. It is all `rem`, so the root is still the
+reader's. Two traps are written up there and both are load-bearing: a custom
+property declared on `:root` substitutes AT `:root`, so `body { font-size:
+var(--text-md) }` and `--text-code` never see a shell override and the shell
+restates both.
+
+**Nothing may display a number no server sends.** Dollar figures, latency
+percentiles, container counts, queue depth, per-turn durations and the user's
+own name are all absent by decision, each recorded where it would have gone.
+`src/shell/desktop/inspector.rs` has the fullest version of that list.
+
+The desktop section at the end of `docs/design.md` is the whole story.
 
 The toolchain is pinned in `rust-toolchain.toml` and rustup honours it
 automatically, so a local `cargo clippy` sees exactly the lints CI sees.

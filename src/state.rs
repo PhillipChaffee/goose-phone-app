@@ -372,6 +372,37 @@ pub(crate) struct AppCtx {
     /// The navigation drawer. It replaced a bottom tab bar, which cost 100px
     /// of every screen to show two destinations.
     pub drawer_open: Signal<bool>,
+
+    /// WHETHER THE WINDOW'S RIGHT-HAND INSPECTOR IS SHOWING.
+    ///
+    /// FS-BACKED, unlike `settings` and `code_cache`: `use_persistent` builds
+    /// over `SessionStorage`, which on every non-wasm target this app builds
+    /// for is an in-memory `HashMap` — the trap written up further down this
+    /// file — so a flag stored through it is forgotten by the next launch and
+    /// nothing says so. `crate::ask_journal::Backing` is `LocalStorage`, and
+    /// `the_journals_storage_backing_really_reaches_the_disk` is the existing
+    /// proof that it writes a file.
+    ///
+    /// ON `AppCtx` AND NOT LOCAL TO `AppShell`, which is where `nav_open` and
+    /// `library_open` correctly live. Those two are deliberately not persisted
+    /// and so owe no test; this one is, and `AppShell` cannot be mounted — it
+    /// calls `dioxus::desktop::window()`. A persisted flag no test can reach
+    /// is a flag that silently stops persisting.
+    ///
+    /// DEFAULT OPEN. The nav's opposite rule is not a precedent against it:
+    /// that comment argues a remembered-shut NAV opens one day into a window
+    /// with no navigation in it, and losing the inspector loses commentary,
+    /// not the ability to get anywhere.
+    #[cfg_attr(
+        any(target_os = "ios", target_os = "android"),
+        expect(
+            dead_code,
+            reason = "the inspector is the desktop shell's until the phone \
+                      grows a third column, at which point this expectation \
+                      fails and takes itself out"
+        )
+    )]
+    pub inspector_open: Signal<bool>,
     pub code_screen: Signal<crate::code::CodeScreen>,
     pub code_client: Signal<Option<opencode_client::CodeClient>>,
     pub code_conn: Signal<ConnState>,
@@ -521,6 +552,12 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
     // either. That is a separate bug with separate consequences (a saved
     // secret would start being written to disk), so it is deliberately NOT
     // fixed in this change.
+    // The same fs-backed store the journal uses, and for the same reason —
+    // see the field's own note.
+    let inspector_open = dioxus_sdk_storage::use_synced_storage::<crate::ask_journal::Backing, bool>(
+        "inspector_open".to_owned(),
+        || true,
+    );
     let lost_asks = dioxus_sdk_storage::use_synced_storage::<
         crate::ask_journal::Backing,
         Vec<crate::ask_journal::AskRecord>,
@@ -551,6 +588,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         running_sessions: use_signal(HashSet::new),
         permission: use_signal(Vec::new),
         lost_asks,
+        inspector_open,
         usage: use_signal(|| None),
         config_options: use_signal(Vec::new),
         chat_draft: use_signal(String::new),

@@ -494,10 +494,54 @@ fn render_lost_asks(ctx: &AppCtx, session_id: Option<&str>) -> Element {
 /// collapsed to a single summary the reader can open — unless something in it
 /// failed or is still going, in which case it stays open, because that is
 /// exactly when you want to see it.
+/// WHO IS SPEAKING, and it is desktop-only by a const rather than a `cfg`.
+///
+/// The mockups head every turn with an attribution row — `YOU`, and `goose` in
+/// the accent — and the phone has never had one, because on a phone the user's
+/// turn is a right-aligned bubble and the alignment IS the attribution. The
+/// desktop de-inverts that bubble into a left-aligned card (see
+/// `assets/desktop.css`), so alignment stops saying anything and something has
+/// to.
+///
+/// `Shell::CURRENT` is a `const`, so the phone binary compiles this branch out
+/// and its markup is byte-identical — which is the promise this whole
+/// restructure is under. It is also why this is not `::before` content, which
+/// was the first design: `docs/audit.js`'s contrast walk keys on real text
+/// nodes (`childNodes` of type 3), so a name painted by a pseudo-element is a
+/// name no gate can measure. `src/views/` keeps its zero `cfg(target_os)`.
+const fn attributed() -> bool {
+    matches!(crate::shell::Shell::CURRENT, crate::shell::Shell::Desktop)
+}
+
+/// Which side of the conversation an item belongs to.
+const fn speaker(item: &ChatItem) -> &'static str {
+    match item {
+        ChatItem::User { .. } => "you",
+        _ => "goose",
+    }
+}
+
 pub(crate) fn render_transcript(items: &[ChatItem], marks: &[(usize, i64)]) -> Element {
     let mut out: Vec<Element> = Vec::new();
+    let mut said: Option<&'static str> = None;
     let mut i = 0;
     while i < items.len() {
+        // At every CHANGE of speaker, not at every item: a turn is a run of
+        // items from one side, and heading each of six tool cards with the
+        // same word would be six times the noise for none of the information.
+        if attributed() {
+            let who = speaker(&items[i]);
+            if said != Some(who) {
+                said = Some(who);
+                out.push(rsx! {
+                    div { key: "who-{i}", class: "who-line",
+                        span { class: if who == "you" { "who-name" } else { "who-name goose" },
+                            "{who}"
+                        }
+                    }
+                });
+            }
+        }
         for (at, secs) in marks.iter().filter(|(at, _)| *at == i) {
             let label = clock_label(*secs);
             out.push(rsx! {
@@ -652,7 +696,7 @@ pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
 /// class name still carries the raw value, so the colour rules keep working
 /// on both. Anything unrecognised is tidied rather than dropped: a backend
 /// that grows a new state shows that state instead of nothing.
-fn tool_status_label(status: &str) -> String {
+pub(crate) fn tool_status_label(status: &str) -> String {
     match status {
         "pending" => "Queued".to_owned(),
         "in_progress" | "running" => "Running".to_owned(),
@@ -711,7 +755,7 @@ fn tool_icon(kind: &str) -> &'static str {
 ///
 /// Returns `None` below the threshold, so the chip does not render at all
 /// rather than rendering empty.
-fn crowding(usage: Option<Usage>) -> Option<u128> {
+pub(crate) fn crowding(usage: Option<Usage>) -> Option<u128> {
     const SPEAK_UP_AT: u128 = 75;
     let (used, limit) = usage?;
     if limit == 0 {

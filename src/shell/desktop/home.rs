@@ -26,6 +26,7 @@
 //! intended outcome rather than an unfinished one. What is here is measured
 //! from `AppCtx` and nothing else.
 
+use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 
 use crate::icons::Icon;
@@ -91,6 +92,11 @@ pub(crate) const fn compose_placeholder(plane: Plane) -> &'static str {
 pub(crate) struct Tile {
     pub value: String,
     pub label: &'static str,
+    /// The mockup's second line. `None` where there is no SECOND fact — a
+    /// blank sub-line is a data slot pretending to be data.
+    pub sub: Option<String>,
+    /// Something is awake. The accent's one use in this block.
+    pub live: bool,
     /// Amber when it is a number the reader has to act on. Exactly one tile
     /// can be, and it is the one counting questions the agents are blocked on
     /// — the same fact `sidebar::Mark::Waiting` paints on a row.
@@ -100,8 +106,17 @@ pub(crate) struct Tile {
 /// The Code half's counts, from `AppCtx` and nothing else.
 pub(crate) fn code_tiles(ctx: &AppCtx) -> Vec<Tile> {
     let chats = (ctx.code_chats)();
-    let running = chats.iter().filter(|c| c.is_running()).count();
-    let waiting = (ctx.code_permissions)().len();
+    let awake = chats.iter().filter(|c| c.is_running()).count();
+    let asleep = chats.len().saturating_sub(awake);
+    // TREES, NOT ASKS, and that is a correction. `code_permissions` is a FIFO
+    // of asks tagged by chat, so two questions parked in one container read as
+    // two trees waiting on you — while the board three inches below paints one
+    // amber row. The tile and the rows have to agree.
+    let waiting = (ctx.code_permissions)()
+        .iter()
+        .map(|(chat, _)| chat.clone())
+        .collect::<std::collections::HashSet<String>>()
+        .len();
     let repos = {
         let mut names: Vec<&str> = chats
             .iter()
@@ -112,28 +127,327 @@ pub(crate) fn code_tiles(ctx: &AppCtx) -> Vec<Tile> {
         names.dedup();
         names.len()
     };
+    let allowed = (ctx.code_repos)().len();
     vec![
         Tile {
             value: chats.len().to_string(),
             label: "working trees",
+            sub: None,
             urgent: false,
+            live: false,
         },
         Tile {
             value: waiting.to_string(),
             label: "waiting on you",
+            sub: None,
             urgent: waiting > 0,
+            live: false,
         },
+        // "AWAKE", NOT "RUNNING NOW", and it is a correction rather than a
+        // rewording. `ChatMeta.status` is the CONTAINER's lifecycle —
+        // `running | stopped | absent` — and not a turn's; `code::status_label`
+        // reads the same field and calls that state "idle" when no turn is in
+        // flight. Nothing on the manager's index says whether an agent is
+        // mid-turn, so a tile headed "running now" was over-claiming, directly
+        // above rows that would have had to say "idle".
         Tile {
-            value: running.to_string(),
-            label: "running now",
+            value: awake.to_string(),
+            label: "awake",
+            sub: (asleep > 0).then(|| format!("{asleep} asleep")),
             urgent: false,
+            live: awake > 0,
         },
         Tile {
             value: repos.to_string(),
             label: "repos",
+            sub: (allowed > 0).then(|| format!("{allowed} allowed")),
             urgent: false,
+            live: false,
         },
     ]
+}
+
+/// What a working tree is doing, in the one word a board has room for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TreeState {
+    /// An ask is parked in it. Outranks awake, for `sidebar::Mark`'s reason.
+    Waiting,
+    Awake,
+    Asleep,
+}
+
+impl TreeState {
+    pub(crate) const fn class(self) -> &'static str {
+        match self {
+            Self::Waiting => "tree waiting",
+            Self::Awake => "tree awake",
+            Self::Asleep => "tree",
+        }
+    }
+
+    /// The same words the tiles above use, deliberately: a board that headed a
+    /// tile "awake" over a row reading "running" would be the app disagreeing
+    /// with itself in one column.
+    pub(crate) const fn word(self) -> &'static str {
+        match self {
+            Self::Waiting => "waiting on you",
+            Self::Awake => "awake",
+            Self::Asleep => "asleep",
+        }
+    }
+}
+
+/// One working tree on the board.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Tree {
+    pub id: String,
+    pub title: String,
+    pub branch: Option<String>,
+    /// `ChatMeta.base` is empty for every chat made before the base picker
+    /// existed, which is a default rather than a migration — so an empty one
+    /// renders no line instead of the word "from".
+    pub base: Option<String>,
+    /// The ask that is parked in it, or nothing. The mockup's own content here
+    /// is the live shell command, which no index on this wire carries.
+    pub say: Option<String>,
+    pub state: TreeState,
+    pub age: Option<String>,
+}
+
+/// A repo, and the trees cut from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RepoGroup {
+    pub repo: String,
+    /// Only when every tree in the group was cut from the same ref. Two bases
+    /// in one repo is a fact about the trees, not about the repo, so the
+    /// heading says nothing rather than picking one.
+    pub base: Option<String>,
+    pub awake: usize,
+    pub waiting: usize,
+    pub trees: Vec<Tree>,
+}
+
+/// THE CODE HALF'S BOARD: per-repo groups of working trees.
+///
+/// `now` is a parameter for `sidebar::band_of`'s reason — a function that read
+/// the clock could only be checked by a test that also read it.
+pub(crate) fn code_board(ctx: &AppCtx, now: i64) -> Vec<RepoGroup> {
+    // The FRONT of each chat's queue, which is what `views::code` already does
+    // with the same list: a board row is not the place to work through a
+    // backlog, it is the place to say there is one.
+    let asks = (ctx.code_permissions)();
+
+    let mut chats = (ctx.code_chats)();
+    // Newest first, `sidebar::code_rows`' own comparator.
+    chats.sort_by(|a, b| b.last_active.total_cmp(&a.last_active));
+
+    let mut groups: Vec<RepoGroup> = Vec::new();
+    for meta in &chats {
+        let repo = meta.repo.trim();
+        // The manager can send a chat with no repo at all — the field is
+        // `serde(default)`. Bucketed under a name rather than dropped, because
+        // a tree missing from the board is worse than one filed oddly.
+        let repo = if repo.is_empty() { "no repo" } else { repo };
+        let ask = asks.iter().find(|(chat, _)| chat == &meta.id);
+        let state = if ask.is_some() {
+            TreeState::Waiting
+        } else if meta.is_running() {
+            TreeState::Awake
+        } else {
+            TreeState::Asleep
+        };
+        let tree = Tree {
+            id: meta.id.clone(),
+            title: if meta.title.trim().is_empty() {
+                meta.id.clone()
+            } else {
+                meta.title.clone()
+            },
+            branch: (!meta.branch.trim().is_empty()).then(|| meta.branch.clone()),
+            base: (!meta.base.trim().is_empty()).then(|| format!("from {}", meta.base)),
+            say: ask
+                .map(|(_, p)| p.title.trim().to_owned())
+                .filter(|t| !t.is_empty()),
+            state,
+            // Guarded against a stamp in the FUTURE, which is a clock skew
+            // between this machine and the manager and would otherwise render
+            // as "in 3 hours". `now` is an `i64` of seconds and `last_active`
+            // an `f64` of the same; the cast is scoped to this one comparison
+            // and is exact for any epoch second this century.
+            age: {
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "an epoch second is ~2^31, three orders of \
+                              magnitude below where f64 stops representing \
+                              integers exactly"
+                )]
+                let now = now as f64;
+                (meta.last_active > 0.0 && meta.last_active <= now)
+                    .then(|| crate::state::relative_time_secs(meta.last_active))
+            },
+        };
+        if let Some(group) = groups.iter_mut().find(|g| g.repo == repo) {
+            group.trees.push(tree);
+        } else {
+            groups.push(RepoGroup {
+                repo: repo.to_owned(),
+                base: None,
+                awake: 0,
+                waiting: 0,
+                trees: vec![tree],
+            });
+        }
+    }
+    for group in &mut groups {
+        group.awake = group
+            .trees
+            .iter()
+            .filter(|t| t.state == TreeState::Awake)
+            .count();
+        group.waiting = group
+            .trees
+            .iter()
+            .filter(|t| t.state == TreeState::Waiting)
+            .count();
+        // One base or none — see the field.
+        let mut bases: Vec<&str> = group
+            .trees
+            .iter()
+            .filter_map(|t| t.base.as_deref())
+            .collect();
+        bases.sort_unstable();
+        bases.dedup();
+        group.base = match bases.as_slice() {
+            [one] if group.trees.iter().all(|t| t.base.is_some()) => Some((*one).to_owned()),
+            _ => None,
+        };
+    }
+    groups
+}
+
+/// The chat home's three-sentence lede.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Lede {
+    /// A statement about what the plane IS, true by construction and needing
+    /// no source. The mockup's own first sentence, verbatim.
+    pub opening: &'static str,
+    pub before: String,
+    /// The host, which the mockup sets in bold.
+    pub host: Option<String>,
+    pub after: String,
+}
+
+/// The lede, or `None` over a dead socket.
+///
+/// `None` rather than a disconnected variant, because `standing` already says
+/// that sentence and saying it twice in two voices is worse than saying it
+/// once — the component falls back to `.home-standing`.
+///
+/// TWO CLAUSES OF THE MOCKUP'S ARE DROPPED and both for the same reason. "one
+/// still streaming SINCE 09:14" needs a start time: `running_sessions` is a
+/// bare `HashSet<String>` with no stamp anywhere near it, and
+/// `SessionInfo.updated_at` is when the session last CHANGED, not when the
+/// current turn began. "When a thread needs to change files, hand it across to
+/// Code" describes a feature that does not exist — grepped, there is no
+/// hand-across in `src/` — and a lede that instructs the reader to do a thing
+/// the app cannot do is worse than one clause shorter.
+pub(crate) fn lede(ctx: &AppCtx, connected: bool) -> Option<Lede> {
+    if !connected {
+        return None;
+    }
+    let count = (ctx.sessions)().len();
+    let host = host_of(&ctx.settings.peek().server_url);
+    let running = (ctx.running_sessions)().len();
+    let waiting = (ctx.permission)()
+        .iter()
+        .map(|p| p.session_id.clone())
+        .collect::<std::collections::HashSet<String>>()
+        .len();
+
+    let head = match count {
+        0 => "No conversations yet".to_owned(),
+        1 => "One conversation".to_owned(),
+        n => format!("{n} conversations"),
+    };
+    let before = if host.is_some() {
+        format!("{head} with the goose server on ")
+    } else {
+        format!("{head} with the goose server")
+    };
+    let tail = match (running, waiting) {
+        (0, 0) => " \u{2014} nothing running, and none of them waiting on you.".to_owned(),
+        (0, w) => format!(" \u{2014} nothing running, and {w} waiting on you."),
+        (r, 0) => format!(" \u{2014} {r} still streaming, and none of them waiting on you."),
+        (r, w) => format!(" \u{2014} {r} still streaming, and {w} waiting on you."),
+    };
+    Some(Lede {
+        opening: "Nothing on this side touches a repo.",
+        before,
+        host,
+        after: tail,
+    })
+}
+
+/// The scheduled recipe worth naming, and how many others there are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Sched {
+    pub name: String,
+    pub what: String,
+    pub more: usize,
+}
+
+/// NOT "Next on this side", and that is the one deviation from the mockup in
+/// this block.
+///
+/// `ScheduledJob` carries `cron`, `last_run` and `job_start_time` and NO
+/// next-run field; goose's `schedules/list` does not compute one, and this app
+/// cannot — `hour_now` above records that there is no timezone source anywhere
+/// in the tree, so a cron expression cannot be turned into a wall-clock "next
+/// at 09:30" that would be right for the reader. What IS real is the cadence,
+/// which `cron::summary` already says in a sentence, and a run happening right
+/// now, which `job_start_time` dates.
+///
+/// A running job outranks the server's order because it is the only fact on
+/// this row that is about this moment.
+pub(crate) fn sched_line(ctx: &AppCtx, now: i64) -> Option<Sched> {
+    let jobs = (ctx.scheduler.list)().items;
+    let live = jobs.iter().filter(|j| !j.paused).count();
+    let job = jobs
+        .iter()
+        .find(|j| j.currently_running)
+        .or_else(|| jobs.iter().find(|j| !j.paused))?;
+    Some(Sched {
+        name: crate::scheduler::title_for(&job.id),
+        what: if job.currently_running {
+            crate::scheduler::running_for(job.job_start_time.as_deref(), now)
+        } else {
+            crate::cron::summary(&job.cron)
+        },
+        more: live.saturating_sub(1),
+    })
+}
+
+/// The hairline at the bottom of the chat column.
+///
+/// Sentence one is the mockup's and needs no source: it is a statement about
+/// what this half is. Sentence two is its "⌘2 for Code and its six working
+/// trees" with the keycap taken out and the count kept — the desktop wires
+/// three chords and ⌘2 is not one of them, so the keycap would be a promise
+/// nothing keeps. The count is gated on the code plane having answered: until
+/// this window has been to the Code half once, `code_chats` is empty for want
+/// of a fetch rather than for want of trees, and "Code has 0 working trees"
+/// would be a wrong number rather than an empty one.
+pub(crate) fn footnote(ctx: &AppCtx) -> (&'static str, Option<String>) {
+    let second = (ctx.code_conn)()
+        .is_connected()
+        .then(|| match (ctx.code_chats)().len() {
+            1 => "Code has 1 working tree.".to_owned(),
+            n => format!("Code has {n} working trees."),
+        });
+    (
+        "Chat talks only to the goose server \u{2014} no containers, no branches, no diffs.",
+        second,
+    )
 }
 
 /// WHAT THE READER WAS LAST DOING, offered back.
@@ -432,6 +746,37 @@ fn hour_now() -> u32 {
     u32::try_from((secs / 3_600) % 24).unwrap_or(0)
 }
 
+/// DIAL THE CODE GATEWAY ON ARRIVAL.
+///
+/// Its own component with nothing to render, because MOUNTING is the trigger
+/// and a `use_effect` on `Home` could not be. `Home` is one component for both
+/// halves, so switching plane changes a PROP rather than remounting — and a
+/// `use_effect` does not re-run for a prop, only for a signal it read. Worse,
+/// the first draft read `plane` before it read `code_conn` and returned early
+/// on the chat half, so it subscribed to nothing at all and could never re-run
+/// for any reason. Measured: the Code plane sat at "Not connected" with the
+/// gateway answering, and the mock server's log had not one request in it.
+///
+/// `use_hook` and not `use_effect`, which is `views::code::CodeSessionsView`'s
+/// own shape for the same job, down to the two guards: nothing to do if a
+/// client already exists, and nothing to dial if no gateway is configured.
+#[component]
+fn CodeDial() -> Element {
+    let ctx = crate::state::use_app_ctx();
+    use_hook(|| {
+        if ctx.code_client.peek().is_none()
+            && !ctx.settings.peek().code_server_url.trim().is_empty()
+        {
+            spawn_forever(async move {
+                if crate::code::code_connect(&ctx).await {
+                    crate::code::start_code_poll(&ctx);
+                }
+            });
+        }
+    });
+    rsx! {}
+}
+
 /// The plane's home screen.
 ///
 /// Its own component rather than rsx inside `AppShell`, for `SidebarList`'s
@@ -523,8 +868,34 @@ pub(crate) fn Home(plane: Plane) -> Element {
     rsx! {
         main { class: "scroll home",
             div { class: "home-inner",
-                h1 { class: "home-greeting", "{part_of_day(hour_now())}." }
-                p { class: "home-standing", "{standing(plane, connected, count)}" }
+                // NO GREETING ON THE CODE HALF. The mockup has none — that
+                // side opens on a board, because what a working tree is doing
+                // is the question, and `hour_now` is UTC and says so.
+                if plane == Plane::Chat {
+                    h1 { class: "home-greeting", "{part_of_day(hour_now())}." }
+                }
+                // THE LEDE, three clauses of it, in the reading face — and the
+                // CHAT half's only. It counts `ctx.sessions` and names the
+                // goose server, so on the code plane it read "No conversations
+                // yet with the goose server on 127.0.0.1:3285" over a board of
+                // five working trees: the wrong half's facts, confidently. The
+                // code half has no lede in the mockups either, because its
+                // board is the answer to the same question.
+                if let Some(lede) = lede(&ctx, connected).filter(|_| plane == Plane::Chat) {
+                    p { class: "home-lede",
+                        "{lede.opening} {lede.before}"
+                        if let Some(host) = lede.host.clone() {
+                            b { class: "home-lede-host", "{host}" }
+                        }
+                        "{lede.after}"
+                    }
+                } else if !connected {
+                    // Connected, the code half says nothing here: the tiles and
+                    // the board below are the standing line, and a sentence
+                    // over them would be the count said twice. Disconnected,
+                    // both halves owe the reader the reason.
+                    p { class: "home-standing", "{standing(plane, connected, count)}" }
+                }
 
                 // THE COMPOSER IS THE NEW-SESSION AFFORDANCE, which is why the
                 // sidebar's New button hides while this is on screen. The
@@ -709,17 +1080,148 @@ pub(crate) fn Home(plane: Plane) -> Element {
                 }
 
                 // THE CODE HALF'S COUNTS. Chat has no equivalent worth a tile:
-                // a conversation count is already the line under the greeting,
-                // and everything else the mockup tiles there is spend and
-                // latency, which have no source.
+                // a conversation count is already the lede's first clause, and
+                // everything else the mockup tiles there is spend and latency,
+                // which have no source.
+                // THE CODE HALF HAS TO DIAL ITSELF, and nothing on the
+                // desktop ever did: `views::code::CodeSessionsView` is the
+                // only thing in the app that calls `code_connect`, and this
+                // shell renders `Home` where that view would be. So the board,
+                // the sidebar's tree list and every tile read an empty
+                // `code_chats` forever, with the standing line correctly
+                // reporting a socket nobody had tried to open.
+                if plane == Plane::Code {
+                    CodeDial {}
+                }
+
                 if plane == Plane::Code {
                     div { class: "home-tiles",
                         for tile in code_tiles(&ctx) {
                             div {
                                 key: "{tile.label}",
-                                class: if tile.urgent { "home-tile urgent" } else { "home-tile" },
+                                class: if tile.urgent {
+                                    "home-tile urgent"
+                                } else if tile.live {
+                                    "home-tile live"
+                                } else {
+                                    "home-tile"
+                                },
                                 div { class: "home-tile-value", "{tile.value}" }
                                 div { class: "home-tile-label", "{tile.label}" }
+                                if let Some(sub) = tile.sub.clone() {
+                                    div { class: "home-tile-sub", "{sub}" }
+                                }
+                            }
+                        }
+                    }
+
+                    // THE BOARD: what is actually in each repo. Every child of
+                    // a row is a span — the mockup puts an "Answer" button on
+                    // three of its six rows, and a button inside a button makes
+                    // the parser hoist the inner one, which re-parents
+                    // everything after it. That shape produced 1600 audit
+                    // findings the one time it shipped here. The whole row is
+                    // the target and it opens the chat, where the permission
+                    // modal offers the same two answers with the ask beside
+                    // them.
+                    for group in code_board(&ctx, crate::state::now_secs()) {
+                        div { key: "{group.repo}", class: "repo-group",
+                            div { class: "repo-head",
+                                Icon { name: "repo" }
+                                span { class: "repo-head-name", "{group.repo}" }
+                                span { class: "repo-head-base",
+                                    if let Some(base) = group.base.clone() {
+                                        "{base} \u{b7} {group.trees.len()} trees"
+                                    } else {
+                                        "{group.trees.len()} trees"
+                                    }
+                                }
+                                span { class: "repo-head-facts",
+                                    if group.waiting > 0 {
+                                        span { class: "warn", "{group.waiting} waiting" }
+                                    }
+                                    if group.awake > 0 {
+                                        span { class: "live", "{group.awake} awake" }
+                                    }
+                                }
+                            }
+                            for tree in group.trees {
+                                button {
+                                    key: "{tree.id}",
+                                    class: tree.state.class(),
+                                    title: "{tree.title}",
+                                    // Enter the plane first — `open_code_chat`
+                                    // sets `code_screen` and not `tab`, and
+                                    // `nav::current` reads the tab first. The
+                                    // bug `sidebar.rs` writes up at length.
+                                    onclick: {
+                                        let id = tree.id.clone();
+                                        move |_| {
+                                            (crate::nav::primary(Plane::Code).go)(&ctx);
+                                            if let Some(meta) =
+                                                (ctx.code_chats)().iter().find(|c| c.id == id)
+                                            {
+                                                crate::code::open_code_chat(&ctx, meta.clone());
+                                            }
+                                        }
+                                    },
+                                    span {
+                                        class: "tree-mark",
+                                        "aria-label": tree.state.word(),
+                                    }
+                                    span { class: "tree-text",
+                                        span { class: "tree-title", "{tree.title}" }
+                                        if let Some(say) = tree.say.clone() {
+                                            span { class: "tree-say q", "{say}" }
+                                        }
+                                    }
+                                    span { class: "tree-branch",
+                                        if let Some(branch) = tree.branch.clone() {
+                                            span { class: "tree-branch-name", "{branch}" }
+                                        }
+                                        if let Some(base) = tree.base.clone() {
+                                            span { class: "tree-branch-base", "{base}" }
+                                        }
+                                    }
+                                    span { class: "tree-state", {tree.state.word()} }
+                                    if let Some(age) = tree.age.clone() {
+                                        span { class: "tree-age", "{age}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // THE TWO BLOCKS THAT CLOSE THE CHAT COLUMN. Without them the
+                // page simply stops after its last card; the mockups end with
+                // a dashed schedule row pushed to the bottom and a hairline
+                // footnote under it, which is what gives the column an edge.
+                if plane == Plane::Chat {
+                    if let Some(sched) = sched_line(&ctx, crate::state::now_secs()) {
+                        button {
+                            class: "home-sched",
+                            title: "Open the scheduler",
+                            onclick: move |_| {
+                                let mut tab = ctx.tab;
+                                tab.set(crate::state::Tab::Scheduler);
+                            },
+                            Icon { name: "clock" }
+                            span { class: "home-sched-name", "{sched.name}" }
+                            span { class: "home-sched-what", "{sched.what}" }
+                            if sched.more > 0 {
+                                span { class: "home-sched-more", "+{sched.more} more" }
+                            }
+                        }
+                    }
+                    {
+                        let (first, second) = footnote(&ctx);
+                        rsx! {
+                            p { class: "home-footnote",
+                                "{first}"
+                                if let Some(second) = second {
+                                    " {second}"
+                                }
                             }
                         }
                     }
@@ -737,8 +1239,8 @@ pub(crate) fn Home(plane: Plane) -> Element {
 )]
 mod tests {
     use super::{
-        code_tiles, compose_chips, compose_placeholder, part_of_day, recent_for, standing, Home,
-        RecentState,
+        code_board, code_tiles, compose_chips, compose_placeholder, footnote, lede, part_of_day,
+        recent_for, sched_line, standing, Home, RecentState, TreeState,
     };
     use crate::nav::Plane;
     use crate::views::press::Pressable;
@@ -861,7 +1363,18 @@ mod tests {
                 .unwrap_or_default()
         };
         assert_eq!(by("working trees"), "3");
-        assert_eq!(by("running now"), "1");
+        // "awake" and not "running now": `ChatMeta.status` is the container's
+        // lifecycle and not a turn's, and `code::status_label` calls the same
+        // state "idle". The tile was over-claiming — see `code_tiles`.
+        assert_eq!(by("awake"), "1");
+        assert_eq!(
+            tiles
+                .iter()
+                .find(|t| t.label == "awake")
+                .and_then(|t| t.sub.clone()),
+            Some("2 asleep".to_owned()),
+            "the tile's second line should account for the trees that are not awake"
+        );
         assert_eq!(by("repos"), "2", "two trees in one repo counted twice");
         assert_eq!(by("waiting on you"), "0");
         assert_eq!(
@@ -1086,6 +1599,265 @@ mod tests {
             "_meta": { "messageCount": turns, "lastMessageSnippet": snippet },
         }))
         .expect("a session row this test wrote")
+    }
+
+    /// THE BOARD GROUPS BY REPO, and a question outranks a running container.
+    ///
+    /// The mockup's board is per-repo groups of working trees, which is the
+    /// shape a fleet has: a tree belongs to a repo and you look for it there.
+    /// `TreeState`'s precedence is `sidebar::Mark`'s, deliberately — one tree
+    /// shows a mark in the sidebar and a word on the board, and the two
+    /// disagreeing about it in one window would be worse than either being
+    /// wrong.
+    ///
+    /// REPRODUCED: swap the `Waiting`/`Awake` arms in `code_board` and the
+    /// third assertion fails; drop the grouping and the first two do.
+    #[test]
+    fn the_board_groups_by_repo_and_a_question_outranks_a_container() {
+        let groups = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    meta("c1", "goose-phone-app", "running", 300.0),
+                    meta("c2", "goose-phone-app", "stopped", 200.0),
+                    meta("c3", "personal-ai-setup", "running", 100.0),
+                ]);
+                // c1's container is up AND it is asking. The ask wins.
+                let mut perms = ctx.code_permissions;
+                perms.set(vec![(
+                    "c1".to_owned(),
+                    opencode_client::CodePermission {
+                        title: "Run cargo clippy?".to_owned(),
+                        ..opencode_client::CodePermission::default()
+                    },
+                )]);
+            },
+            |ctx| code_board(ctx, 2_000_000_000),
+        );
+        assert_eq!(groups.len(), 2, "two repos, two groups");
+        assert_eq!(groups[0].repo, "goose-phone-app");
+        assert_eq!(groups[0].trees.len(), 2);
+        assert_eq!(
+            groups[0].trees[0].state,
+            TreeState::Waiting,
+            "a tree whose container is up AND which is blocked on the reader \
+             read as merely awake — the one state that is about THEM"
+        );
+        assert_eq!(groups[0].waiting, 1);
+        assert_eq!(
+            groups[0].awake, 0,
+            "the waiting tree is not also counted awake"
+        );
+        assert_eq!(groups[1].awake, 1);
+        assert_eq!(
+            groups[0].trees[0].say.as_deref(),
+            Some("Run cargo clippy?"),
+            "the row should carry the question it is blocked on"
+        );
+    }
+
+    /// A repo heading names a base only when every tree in it shares one.
+    ///
+    /// Two bases in one repo is a fact about the trees and not about the repo,
+    /// so the heading says nothing rather than picking one of them.
+    #[test]
+    fn a_repo_heading_claims_a_base_only_when_they_all_share_it() {
+        let same = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    based("c1", "repo", "main"),
+                    based("c2", "repo", "main"),
+                ]);
+            },
+            |ctx| code_board(ctx, 2_000_000_000),
+        );
+        assert_eq!(same[0].base.as_deref(), Some("from main"));
+
+        let mixed = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    based("c1", "repo", "main"),
+                    based("c2", "repo", "release"),
+                ]);
+            },
+            |ctx| code_board(ctx, 2_000_000_000),
+        );
+        assert_eq!(
+            mixed[0].base, None,
+            "the heading picked one of two bases and presented it as the repo's"
+        );
+    }
+
+    /// A tree the manager sent with no repo is filed rather than dropped.
+    ///
+    /// `ChatMeta.repo` is `serde(default)`, so an empty one is reachable, and
+    /// a working tree missing from the board is worse than one filed oddly.
+    #[test]
+    fn a_tree_with_no_repo_still_appears() {
+        let groups = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![meta("c1", "  ", "stopped", 1.0)]);
+            },
+            |ctx| code_board(ctx, 2_000_000_000),
+        );
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].repo, "no repo");
+        assert_eq!(groups[0].trees.len(), 1);
+    }
+
+    /// THE LEDE SAYS NOTHING OVER A DEAD SOCKET, and never says "since".
+    ///
+    /// The mockup's third clause is "one still streaming since 09:14", and
+    /// there is no source for the "since": `running_sessions` is a bare
+    /// `HashSet<String>` with no stamp near it, and `updated_at` is when the
+    /// session last CHANGED rather than when the turn began.
+    ///
+    /// REPRODUCED: drop the `connected` guard and the first assertion fails
+    /// with a count over a socket nobody opened.
+    #[test]
+    fn the_lede_is_silent_when_there_is_nothing_to_report() {
+        let offline = crate::testkit::with_ctx(
+            |ctx| {
+                let mut sessions = ctx.sessions;
+                sessions.set(vec![bare("s1"), bare("s2")]);
+            },
+            |ctx| lede(ctx, false),
+        );
+        assert!(offline.is_none(), "the lede counted over a dead socket");
+
+        let online = crate::testkit::with_ctx(
+            |ctx| {
+                let mut sessions = ctx.sessions;
+                sessions.set(vec![bare("s1"), bare("s2")]);
+                let mut settings = ctx.settings;
+                settings.write().server_url = "http://tail-mini:3285".to_owned();
+                let mut running = ctx.running_sessions;
+                running.write().insert("s1".to_owned());
+            },
+            |ctx| lede(ctx, true),
+        );
+        let lede = online.expect("connected, so there is a lede");
+        assert_eq!(lede.host.as_deref(), Some("tail-mini:3285"));
+        assert!(lede.before.contains("2 conversations"), "{}", lede.before);
+        assert!(lede.after.contains("1 still streaming"), "{}", lede.after);
+        assert!(
+            !lede.after.contains("since"),
+            "the lede claimed to know when a turn started, which nothing \
+             records: {}",
+            lede.after
+        );
+    }
+
+    /// A RUNNING JOB OUTRANKS THE SERVER'S ORDER, because it is the only fact
+    /// on that row about this moment. And the row never claims a next-run
+    /// time: `ScheduledJob` has no such field and this app has no timezone to
+    /// turn a cron expression into one.
+    #[test]
+    fn the_schedule_row_prefers_the_job_that_is_running() {
+        let sched = crate::testkit::with_ctx(
+            |ctx| {
+                let mut list = ctx.scheduler.list;
+                list.write().items = vec![job("first", false), job("second", true)];
+            },
+            |ctx| sched_line(ctx, 2_000_000_000),
+        );
+        let sched = sched.expect("two live jobs, so there is a row");
+        assert!(
+            sched.name.to_lowercase().contains("second"),
+            "the row named a queued job while another was running: {}",
+            sched.name
+        );
+        assert_eq!(sched.more, 1, "the other live job should be counted");
+        assert!(
+            !sched.what.contains("next"),
+            "the row claimed a next-run time, which goose does not compute and \
+             this app has no timezone to derive: {}",
+            sched.what
+        );
+    }
+
+    /// Nothing scheduled means no row, by `no_starters_means_no_section`'s
+    /// rule.
+    #[test]
+    fn nothing_scheduled_means_no_row() {
+        let sched = crate::testkit::with_ctx(|_| {}, |ctx| sched_line(ctx, 2_000_000_000));
+        assert!(sched.is_none());
+    }
+
+    /// THE FOOTNOTE COUNTS THE OTHER HALF ONLY ONCE IT HAS ANSWERED.
+    ///
+    /// Until this window has been to the Code half, `code_chats` is empty for
+    /// want of a fetch rather than for want of trees — so "Code has 0 working
+    /// trees" would be a wrong number rather than an empty one.
+    ///
+    /// REPRODUCED: drop the `is_connected()` gate and the first assertion
+    /// fails.
+    #[test]
+    fn the_footnote_counts_the_other_half_only_once_it_has_answered() {
+        let (first, second) = crate::testkit::with_ctx(|_| {}, footnote);
+        assert!(!first.is_empty());
+        assert_eq!(
+            second, None,
+            "the footnote reported the code half's tree count over a socket \
+             nothing has dialled"
+        );
+
+        let (_, second) = crate::testkit::with_ctx(
+            |ctx| {
+                let mut conn = ctx.code_conn;
+                conn.set(crate::state::ConnState::Connected {
+                    agent: "opencode".to_owned(),
+                });
+                let mut chats = ctx.code_chats;
+                chats.set(vec![meta("c1", "r", "stopped", 1.0)]);
+            },
+            footnote,
+        );
+        assert_eq!(second.as_deref(), Some("Code has 1 working tree."));
+    }
+
+    fn meta(id: &str, repo: &str, status: &str, last: f64) -> opencode_client::ChatMeta {
+        opencode_client::ChatMeta {
+            id: id.to_owned(),
+            repo: repo.to_owned(),
+            title: id.to_owned(),
+            branch: String::new(),
+            base: String::new(),
+            status: status.to_owned(),
+            model: None,
+            last_active: last,
+        }
+    }
+
+    fn based(id: &str, repo: &str, base: &str) -> opencode_client::ChatMeta {
+        opencode_client::ChatMeta {
+            base: base.to_owned(),
+            ..meta(id, repo, "stopped", 1.0)
+        }
+    }
+
+    fn bare(id: &str) -> goose_acp_client::SessionInfo {
+        goose_acp_client::SessionInfo {
+            session_id: id.to_owned(),
+            cwd: None,
+            title: Some(id.to_owned()),
+            updated_at: None,
+            meta: None,
+        }
+    }
+
+    fn job(id: &str, running: bool) -> goose_acp_client::ScheduledJob {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "source": "/x.yaml",
+            "cron": "0 30 9 * * *",
+            "currentlyRunning": running,
+            "paused": false,
+        }))
+        .expect("a scheduled job this test wrote")
     }
 
     /// The starters are named from the server's lists, capped, and recipes

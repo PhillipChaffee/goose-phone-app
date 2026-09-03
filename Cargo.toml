@@ -2,6 +2,7 @@
 members = [
     "crates/goose-acp-client",
     "crates/mock-goose-server",
+    "crates/mock-opencode-server",
     "crates/opencode-client",
 ]
 

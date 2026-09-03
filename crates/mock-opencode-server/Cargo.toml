@@ -1,0 +1,21 @@
+[package]
+name = "mock-opencode-server"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Protocol-faithful mock of the code-agent manager and the OpenCode servers behind it, for testing the app without containers or an API key"
+license = "MIT"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
+serde_json = "1"
+
+# The other side of the wire, so a test can prove the two agree on a path and a
+# field name rather than each agreeing with itself. `mock-goose-server` takes
+# `goose-acp-client` for the same reason.
+[dev-dependencies]
+opencode-client = { path = "../opencode-client" }
+tokio = { version = "1", features = ["full"] }
+
+[lints]
+workspace = true

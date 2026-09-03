@@ -1295,25 +1295,33 @@ desktop app, not the phone.** Nothing about how a control behaves changes with
 width. goose's own desktop app takes the same position — its single width
 threshold collapses the sidebar and changes nothing else.
 
-**The columns, and where the numbers come from.** Nav 212, list 330, and a
-content column no narrower than 360, which is this file's own floor (rule 14's
-note: 320 is a defensive width rather than a device) and the width
-`docs/measure-composer.js` is gated at. The breakpoints are their sums rather
-than round numbers:
+**The columns, and where the numbers come from.** Sidebar 268, inspector 344 —
+both read out of the mockups' own CSS (`grid-template-columns: 268px
+minmax(0,1fr) 344px`) — and a content column no narrower than 360, which is
+this file's own floor (rule 14's note: 320 is a defensive width rather than a
+device) and the width `docs/measure-composer.js` is gated at. The breakpoints
+are their sums rather than round numbers:
 
-| width      | columns                                              |
-|------------|------------------------------------------------------|
-| ≥ 902      | nav 212 · list 330 · detail                          |
-| 572 – 901  | nav 212 · list **or** detail                         |
-| < 572      | nav narrows to a 72px icon rail · list or detail     |
+| width      | columns                                                    |
+|------------|------------------------------------------------------------|
+| ≥ 972      | sidebar 268 · content · inspector 344                      |
+| 704 – 971  | content · inspector, with the sidebar floating over it     |
+| 628 – 971  | sidebar 268 · content                                      |
+| < 628      | content, with the sidebar floating over it                 |
 
-Below 902 the list and the detail share a column and whichever has something
-in it wins — which is the arrangement goose's desktop app is in at every
-width. The rail keeps every destination on screen and one click away; the
-labels stay in the DOM at zero size, so each button keeps its name, and
-`title` gives the pointer a copy of it. The nav *column* is 212 and 72; the
-card inside it is that minus 8 points of breathing room on each side, so the
-panel itself is 196 and the rail's icons sit in 56.
+The window opens at **1440x860** and that is arithmetic rather than deference:
+268 + 344 is 612 of chrome, so at the 1180 this used to open at the content
+column would have been 568 — under the 640 `--measure` the pane is built
+around, and the inspector would have shipped having quietly narrowed the thing
+it comments on. 860 rather than the mockups' 900 because a 1440x900 display has
+about 875 of usable height once the menu bar is out.
+
+There is no icon rail. It worked while the sidebar held seven destination
+labels and cannot survive it holding a session list — 14px of content box is
+not a session title — so below the two-column width the sidebar floats over the
+content at its full 268 instead. The sidebar *column* is 268; the card inside
+it is that minus 8 points of breathing room on each side, so the panel itself
+is 252.
 
 **The nav is a floating card, and it collapses.** It is inset from the window
 by 8 points on three sides, rounded at `--radius-xl` and outlined — the phone's

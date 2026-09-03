@@ -273,23 +273,29 @@ const coverage = (states) => {
         + ' this grid has never rendered it in a window');
     }
   }
-  // AND BOTH ANSWERS TO "IS ANYTHING OPEN", because the band is two different
-  // arrangements and each has checks that only see one of them. TITLE-DOUBLED
-  // and TITLE-OUTBID are both guarded on the band carrying a title, so a
-  // gallery in which nothing is ever open runs neither of them and says so
-  // nowhere; a gallery in which everything is open never renders the band as
-  // the lights, the toggle and a drag strip, which is what it is for most of
-  // the time somebody is looking at it. Measured on the shipping gallery: 7 of
-  // the 14 carry a `.chrome-title` and 7 do not.
-  const open = desktop.filter((state) => state.body.includes('chrome-title')).length;
-  if (!open) {
-    gaps.push('no desktop state has anything open in its detail column, so the window'
-      + " bar's title, the pane's suppressed copy of it and the squeeze between them"
-      + ' are all unmeasured');
-  }
-  if (open === desktop.length) {
-    gaps.push('every desktop state has something open, so the band with an empty detail'
-      + ' column — where the title is absent rather than short — is unmeasured');
+  // AND EVERY STATE MUST CARRY A TITLE, which is the opposite of what this
+  // asked for until the band became total.
+  //
+  // It used to demand BOTH answers to "is anything open", because the band was
+  // two arrangements: a title when a detail column had something in it, and
+  // the lights, the toggle and a drag strip when it did not. Six of thirteen
+  // states were the second kind — an empty middle in the one strip that is on
+  // screen at every width.
+  //
+  // `crumb_parts` (src/shell/desktop/mod.rs) is total now: an open detail, a
+  // home screen and a destination's own root all produce a crumb, so the band
+  // names something on every screen and `assets/desktop.css`'s
+  // `:has(.chrome-title)` suppression of the pane's own heading is
+  // unconditional. The old check cannot pass any longer — it asks for a state
+  // the shell no longer has — and the useful question inverts with it: a state
+  // WITHOUT a title is now the defect, because it means a screen the window
+  // cannot name.
+  const untitled = desktop.filter((state) => !state.body.includes('chrome-title'));
+  if (untitled.length) {
+    gaps.push(`${untitled.length} desktop state(s) render no .chrome-title `
+      + `(${untitled.map((s) => s.key).join(', ')}) — the band is total now, so a`
+      + " state with no title is a screen the window cannot name AND one whose pane"
+      + ' heading is hidden by `:has(.chrome-title)` without anything replacing it');
   }
   return gaps;
 };
@@ -453,7 +459,15 @@ const FONTS = [
 //   curl -H 'User-Agent: <a Chrome UA>' \
 //     'https://fonts.googleapis.com/css2?family=Noto+Sans+Math&text=%E2%8B%AF'
 // — and follow the src: url() it answers with.
-const LEFTOVERS = {
+//
+// A LIST, and the second entry is what made it one. The desktop's inspector
+// prints a keyboard legend, so ⌘ (U+2318) and ⌥ (U+2325) are on screen — and
+// no single free family carries all three of the glyphs this app puts outside
+// the Latin subsets. Measured, by regenerating and running: Noto Sans Math has
+// ⋯ and neither key; Noto Sans Symbols 2 has both keys and not ⋯. So there are
+// two faces, both named after each of the three above, and a glyph that
+// reaches past BOTH still fails the run.
+const LEFTOVERS = [{
   family: 'Audit Leftovers',
   file: 'noto-sans-math-U22EF.woff2',
   standsFor: 'whatever the host would have chosen',
@@ -462,8 +476,16 @@ const LEFTOVERS = {
   // San Francisco's numbers, which are also SF Mono's; the serif is 95/24 and
   // the two points of difference reach exactly one character on one screen.
   metrics: { ascent: 97, descent: 21, lineGap: 0 },
-};
-for (const font of [...FONTS, LEFTOVERS]) {
+}, {
+  // ⌘ and ⌥, for `inspector::CHORDS`. Same overrides, same reason.
+  //   curl -H '<a Chrome UA>' \
+  //     'https://fonts.googleapis.com/css2?family=Noto+Sans+Symbols+2&text=%E2%8C%98%E2%8C%A5'
+  family: 'Audit Leftovers Keys',
+  file: 'noto-sans-symbols2-keys.woff2',
+  standsFor: 'whatever the host would have chosen',
+  metrics: { ascent: 97, descent: 21, lineGap: 0 },
+}];
+for (const font of [...FONTS, ...LEFTOVERS]) {
   const file = path.join(FONT_DIR, font.file);
   if (!fs.existsSync(file) || fs.statSync(file).size === 0) {
     console.error(`${file} is missing or empty — without it this would measure the host's fonts and disagree with CI`);
@@ -503,8 +525,8 @@ const face = (font) => {
 // catch because the browser would report a legitimate match.
 // Single-quoted so the same string is legal both in a stylesheet and in a
 // double-quoted style="" attribute, which is where the glyph guard puts it.
-const STACK = (font) => `'${font.family}', '${LEFTOVERS.family}'`;
-const FONT_CSS = [...FONTS, LEFTOVERS].map(face).join('\n')
+const STACK = (font) => [font, ...LEFTOVERS].map((f) => `'${f.family}'`).join(', ');
+const FONT_CSS = [...FONTS, ...LEFTOVERS].map(face).join('\n')
   // Last sheet in the document, so this beats assets/main.css's :root on
   // order at equal specificity — the same way the app's own later sheets do.
   + `\n:root{${FONTS.map((font) => `${font.token}:${STACK(font)};`).join('')}}`;
@@ -546,7 +568,7 @@ const FONT_CSS = [...FONTS, LEFTOVERS].map(face).join('\n')
 // reads a pixel — the contrast walk reads computed colours, not a raster.
 const LAUNCH = { args: ['--font-render-hinting=none'] };
 
-const PINNED = [...FONTS, LEFTOVERS].map((font) => font.family);
+const PINNED = [...FONTS, ...LEFTOVERS].map((font) => font.family);
 const familyLeaks = (pinned) => [...new Set([...document.querySelectorAll('*')]
   .filter((el) => {
     const cs = getComputedStyle(el);
@@ -682,36 +704,43 @@ const SIZES = [
 // SIDES, plus the floor, plus the size the app actually opens at, plus the one
 // width where the list column stops growing.
 //
-//   480x560   MIN_INNER (src/shell/desktop.rs) — the floor
+//   480x560   MIN_INNER (src/shell/desktop/mod.rs) — the floor
 //             `with_min_inner_size` refuses to let the window past. 560 is the
 //             nav's own intrinsic height, which is the first thing to give.
-//   571x700   the last pixel of the icon rail — `@media (max-width: 571px)`
-//   572x700   the first pixel of the 212pt nav. The PAIR is what makes this a
+//   627x700   the last pixel before the sidebar floats
+//   628x700   OVERLAY = NAV + CONTENT_MIN. The PAIR is what makes this a
 //             straddle rather than a sample: a breakpoint is exactly the place
 //             where one number renders one layout and the next renders
 //             another, and only both sides can say the two agree.
-//   901x760   the last pixel of two columns — `@media (max-width: 901px)`
-//   902x760   the first pixel of three, and also where
-//             `@media (min-width: 902px)` starts hiding the detail pane's
-//             `.conn-badge`, so two rules turn here.
-//   1180x820  `with_inner_size` in src/main.rs — the window everyone opens.
+//   703x760   the last pixel with no inspector in any shell state
+//   704x760   the first pixel at which a SHUT sidebar leaves room for one, so
+//             this pair only means anything because DESKTOP_STATES already
+//             walks nav-closed — a run that did not would never render it.
+//   971x800   the last pixel of two columns
+//   972x800   NAV + CONTENT_MIN + INSP: the first pixel of three.
+//   1440x860  `with_inner_size` in src/main.rs — the window everyone opens.
 //             THE REFERENCE: where CONTRAST runs. Measured on the running app
 //             rather than read off the source (see DESKTOP_SCALES).
-//   1600x1000 past 1533, where `.pane-list`'s `flex: 0 0 clamp(330px, 30%,
-//             460px)` saturates at 460. A third regime neither breakpoint
-//             names, and the one docs/design.md's 1500pt measurements came
-//             out of.
+//   1600x1000 a width past every breakpoint, where the content column is the
+//             only thing still growing.
+//
+// THE 571/572 AND 901/902 PAIRS ARE GONE, and their absence is the point: they
+// straddled the three-column and two-column sums of a shell that had a list
+// column, and both went out with it. A pair that straddles nothing measures
+// one layout twice and reports it as agreement.
 //
 // Height travels with width for SIZES' reason. It is not a device height here
 // — there is no such thing — so each is chosen to be plausible and to leave
 // the nav its 560.
 const DESKTOP_SIZES = [
   { width: 480, height: 560 },
-  { width: 571, height: 700 },
-  { width: 572, height: 700 },
-  { width: 901, height: 760 },
-  { width: 902, height: 760 },
-  { width: 1180, height: 820, reference: true },
+  { width: 627, height: 700 },
+  { width: 628, height: 700 },
+  { width: 703, height: 760 },
+  { width: 704, height: 760 },
+  { width: 971, height: 800 },
+  { width: 972, height: 800 },
+  { width: 1440, height: 860, reference: true },
   { width: 1600, height: 1000 },
 ];
 
@@ -1935,7 +1964,7 @@ const compareFonts = async (states) => {
     const leaked = [];
     for (const [i, font] of FONTS.entries()) {
       for (const used of await platformFonts(page, `#f${i}`)) {
-        if (!used.isCustomFont) leaked.push(`${font.token} (${font.file} then ${LEFTOVERS.file}) fell through to the host's ${used.familyName} for ${used.glyphCount} glyph${used.glyphCount > 1 ? 's' : ''}`);
+        if (!used.isCustomFont) leaked.push(`${font.token} (${font.file} then ${LEFTOVERS.map((f) => f.file).join(' then ')}) fell through to the host's ${used.familyName} for ${used.glyphCount} glyph${used.glyphCount > 1 ? 's' : ''}`);
       }
     }
     await page.close();
