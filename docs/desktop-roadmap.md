@@ -40,6 +40,39 @@ established it beside it. **The vendored-crate citations were not re-read** — 
 pinned by `Cargo.lock` and nothing in that lockfile moved — so treat a
 `~/.cargo/registry` line number as being as old as the pass that took it.
 
+**A fourth pass, at `b098918`, and its finding is about this document's method
+rather than about the desktop.** The paragraph above ends "every in-repo
+`file:line` below was re-resolved by grep", and by `b098918` that sentence was
+false of most of them: the shell has been rebuilt twice since `d716047` — #40
+turned `src/shell/desktop.rs` into the directory `src/shell/desktop/`, and #157
+cut `assets/desktop.css` into fifteen files under `assets/desktop/` — so a
+citation into either one names a path that does not exist. **A stale citation
+inside a paragraph that promises fresh citations is worse than no citation**,
+because the reader stops checking. So this pass fixes the guarantee as well as
+the numbers, and the guarantee is now narrower on purpose:
+
+- **Re-resolved at `b098918`, and correct as you read them:** everything in
+  *Why not three crates*, *The fifth layer*, the two capability tables, the
+  *Sequencing* table's evidence column, and Stages 0, 2 and 5. Those are the
+  citations that make a claim about the tree as it stands.
+- **NOT re-resolved, and deliberately left where they are:** the citations in
+  *Code organisation* above the **LANDED** paragraph, which describe the tree
+  *before* `3dade08`. They are a record of a commit, not a pointer into HEAD,
+  and updating them would be inventing history. They are now marked as such at
+  each use.
+- **Still not re-read:** the `~/.cargo/registry` lines, for the reason above.
+
+Six substantive corrections fell out, and none of them is a line number: `ls
+crates/` was missing `mock-opencode-server` (in two places), `src/views/` is
+23,533 lines across 13 modules and not 8,158 across 12, `docs/gallery-states.json`
+holds 62 states and not 63, the desktop audit grid is 26 states × 9 window sizes
+and not 28 × 7, `.github/workflows/ci.yml`'s iOS job is at `:171` and not the
+`:131` the last pass corrected it to, and `src/main.rs` no longer has the lines
+the menu-bar row cites at all. **Every one of those was a count or a list, not
+an offset** — which is the standing lesson: a line number in this document rots
+in days and is checkable in seconds, while a count reads as settled and is
+checkable by nobody. Grep for the symbol; treat the number as a hint.
+
 ## The impossible list
 
 The earlier survey named eleven capabilities as not-applicable because Electron
@@ -52,7 +85,7 @@ local `goose serve` lifecycle, telemetry, and the announcement modal.
 **Eight of the eleven are reachable and four of those are already paid for.**
 `dioxus-desktop-0.7.10/src/lib.rs:43-49` re-exports `muda` and declares
 `pub mod trayicon` under gates this repository already writes by hand
-(`src/shell/mod.rs:30-38`), `hooks.rs` exposes `use_tray_menu_event_handler`
+(`src/shell/mod.rs:35-43`), `hooks.rs` exposes `use_tray_menu_event_handler`
 (:60), `use_tray_icon_event_handler` (:78), `use_muda_event_handler` (:44) and
 `use_global_shortcut` (:114), and the shipped binary carries a
 `GlobalHotKeyManager` construction on the un-`cfg`'d path through `App::new`
@@ -275,14 +308,18 @@ pub mod trayicon;
 Upstream made platform the target, not the feature. So the eight
 `#[cfg(all(feature = "desktop", not(any(target_os = "ios", target_os = "android"))))]`
 sites in this repo (`src/main.rs:74`, `:127`, `:144`, `:155`;
-`src/shell/mod.rs:41`; `src/shell/desktop.rs:51`, `:517`, `:573`) are carrying a
+`src/shell/mod.rs:41`; `src/shell/desktop.rs:51`, `:517`, `:573` — **all eight
+resolved against `3dade08^`**, the tree before this stage landed, and not
+against HEAD: that file has been the directory `src/shell/desktop/` since #40)
+are carrying a
 predicate that is implied by the other half. Replacing the two feature bodies
 with two target-conditional `[dependencies]` tables collapses all eight to a
 single `not(any(ios, android))` and makes the guarantee *stronger*, because it
 stops depending on remembering `--no-default-features --features mobile` at
 `.github/workflows/ci.yml:127-128`. That is the first commit: a manifest edit,
 eight `cfg`s halved, and roughly 25 lines of now-false prose deleted
-(`src/main.rs:63-72`, `src/shell/desktop.rs:45-51`). No files move.
+(`src/main.rs:63-72`, `src/shell/desktop.rs:45-51`, the same pre-`3dade08`
+tree). No files move.
 
 **This was built, and it corrected the plan.** All four gates pass on the edited
 manifest — `cargo check`, `cargo test --workspace`, `cargo clippy --workspace
@@ -310,9 +347,15 @@ fallback recorded here — enable both features unconditionally — is not neede
 and is strictly worse, since it would leave `dioxus::desktop` nameable on iOS.
 
 **LANDED.** Everything above this paragraph is the plan as it was written; read
-it in the past tense. The file:line citations are pre-change and now stale —
-`ci.yml:127-128` is one line, `ci.yml:131`, and carries no flags. Two things
-the plan did not anticipate, both measured on the shipped manifest:
+it in the past tense, and read its file:line citations as pointers into
+`3dade08^` rather than into HEAD — they are pre-change by construction and are
+left that way deliberately, because a citation corrected to today's tree would
+claim the plan was written against a tree that did not yet exist. Two of them
+name `src/shell/desktop.rs`, which #40 turned into `src/shell/desktop/`, and
+the one number this paragraph used to correct has itself moved twice: the iOS
+job was `ci.yml:127-128` when the plan was written, `:131` when it landed, and
+is `.github/workflows/ci.yml:171` today — still one line, still no flags. Two
+things the plan did not anticipate, both measured on the shipped manifest:
 
 - **The marker feature is enabled on phones too**, so `feature = "desktop"` is
   TRUE in an iOS build and the name says the opposite of what it means. Before
@@ -338,16 +381,23 @@ the plan did not anticipate, both measured on the shipped manifest:
 The separate-tree proposal's two headline benefits — killing the feature pair
 and getting a scope where `unsafe_code` can differ — are both collectable
 without moving a file. Against that, there is a concrete breakage.
-`src/shell/desktop.rs:900` is:
+`src/shell/desktop/mod.rs:2651` is:
 
 ```rust
-let dispatch = include_str!("../viewport.rs");
+let dispatch = include_str!("../../viewport.rs");
 ```
+
+One `../` deeper than when this was written, because #40 turned
+`src/shell/desktop.rs` into the directory `src/shell/desktop/`. The mechanism
+did not change and the argument below is unaffected — but note what the move
+cost: `include_str!` resolves relative to the file, so every one of these
+climbs a level when its own file is nested, and nothing but the compiler
+notices. That is the argument for them, not against.
 
 That is a cross-layer source scan: the desktop shell's test reads
 `viewport.rs`'s **source** to prove every `DESTINATIONS` id has a
-`refresh_named` arm. Its twin at `src/viewport.rs:528` walks
-`CARGO_MANIFEST_DIR/src/views` on disk (`:521`) and greps for
+`refresh_named` arm. Its twin at `src/viewport.rs:544` walks
+`CARGO_MANIFEST_DIR/src/views` on disk (`:537`) and greps for
 `include_str!("viewport.rs")`. Split the tree and the first becomes
 `include_str!("../../goose-ui/src/viewport.rs")` — a cross-crate source include
 cargo does not track for rebuilds, which breaks under vendoring, and which the
@@ -355,24 +405,46 @@ sibling crate is free to invalidate. Both guard a `match` whose fallthrough is
 `_ => {}` (`viewport.rs:461`), and the codebase's own note at `viewport.rs:454`
 says what an unclaimed name is: "a pull that spins and fetches nothing". These are exactly
 the class of check a long capability list needs more of, and a crate boundary is
-where they stop working. `src/css.rs:20-27` and `:59-97` would take the same
-damage — **nine** `include_str!`s reaching up out of a shared crate into
-`assets/`, two more than when this was written, because the desktop shell
-brought `assets/desktop/` and `assets/platform/macos.css` with it. Add a
-`pub(crate)`→`pub` sweep across ~22,300 lines of `src/`, on a repo whose
+where they stop working.
+
+**Added since this was written, and it sharpens the point rather than
+softening it:** `src/selfscan.rs` exists because the *same-file* form of this
+scan fails open. `include_str!("mod.rs")` from inside `mod.rs` pulls in that
+file's own `mod tests`, so the assertion supplies its own needle — measured on
+this tree with `use_fullscreen`, its call site and the `data-fullscreen`
+attribute all deleted and the suite reporting `231 passed; 0 failed`. Every
+same-file scan now goes through `selfscan::code_of`, which cuts the test module
+off and asserts what it returns holds none. The cross-layer scan quoted above
+never had that hole — `viewport.rs` is not the file the test is written in — and
+it is the one a crate boundary would break.
+
+`src/css.rs:19-27`, `:58-65` and `:111-128` would take the same
+damage — **thirty-eight** `include_str!`s reaching up out of a shared crate into
+`assets/`, twenty-nine more than when this was written, because #157 cut
+`assets/desktop.css` into the fifteen region files under `assets/desktop/` and
+`src/css.rs` names each of them twice: once in the shipping `concat!` and once
+in the `cfg(test)` `SHELL_PARTS` table that lets a test address a region by
+name. Add a
+`pub(crate)`→`pub` sweep across ~54,400 lines of `src/`, on a repo whose
 `src/main.rs:9-11` is explicitly laid out to keep concurrent branches out of
 each other's hunks, and it is three commits and a wrecked `git blame` in
 exchange for something one manifest already provides.
 
 ### The fifth layer
 
-`src/views/` is **8,158 lines across 12 modules with zero `cfg(target_os)` and
-zero `cfg(feature)`** — re-counted at `d716047` with `wc -l src/views/*.rs` and
-`grep -rn 'cfg(target_os\|cfg(feature)' src/views/`, which finds nothing; the
+`src/views/` is **23,533 lines across 13 modules with zero `cfg(target_os)` and
+zero `cfg(feature)`** — re-counted at `b098918` with `wc -l src/views/*.rs` and
+`grep -rn 'cfg(target_os\|cfg(feature)' src/views/`, whose one hit is a comment
+in `chat.rs` saying the invariant holds; the
 only `cfg` in any of them is `cfg(test)`. (It read 7,722 across 13 when this was
-written. The invariant is what matters and it held across the whole desktop
-stage, which touched eight of these files; the two numbers are a size, and a
-size drifts.) That invariant is the asset the whole arrangement rests on, and
+written and 8,158 across 12 at `d716047`. The invariant is what matters and it
+has held across the whole desktop rebuild — the three-column restructure, the
+home screens and the inspector — and it held under the one change that could
+most easily have broken it: `views::chat` needed desktop-only speaker
+attribution and took it from `Shell::CURRENT`, a `const`, rather than from a
+`cfg`. `views::settings` took its second such decision the same way, and takes
+`Shell` as an argument so both arms are testable. The two numbers are a size,
+and a size drifts.) That invariant is the asset the whole arrangement rests on, and
 sixty capabilities is exactly the pressure that would break it. The answer is a
 layer they can land in that is not `views/` and not `shell/`:
 
@@ -386,7 +458,7 @@ src/
   platform/      NEW — the fifth layer, gated by Surface, not Shell.
     mod.rs         enum Surface { MacOs, Windows, Linux, Ios, Android } with
                    Surface::CURRENT as a cfg!-derived VALUE and the per-target
-                   `const _: () = assert!` guards from shell/mod.rs:80-83
+                   `const _: () = assert!` guards from shell/mod.rs:84-87
                    (still there, still those lines), for
                    the reason stated there: the list is a list, so the failure
                    mode is a target quietly missing from it.
@@ -398,7 +470,7 @@ src/
     windowing.rs   new_window (desktop_context.rs:141), toggle_maximized (:169).
     launcher.rs    Frameless always-on-top overlay. Gated on the AppCtx
                    question below.
-    macos.rs       integrate_titlebar (moved from main.rs:125), dock control,
+    macos.rs       integrate_titlebar (moved from main.rs:152), dock control,
                    vibrancy. All safe fns; no unsafe.
     ios.rs         Share sheet, haptics. The mobile arms of the same table —
     android.rs     which is why this is `platform/` and not `desktop/`.
@@ -407,7 +479,7 @@ src/
 ```
 
 Each module in `platform/` carries **one** `#[cfg(not(any(target_os = "ios",
-target_os = "android")))]` — the same shape `shell/mod.rs:30-38` already uses.
+target_os = "android")))]` — the same shape `shell/mod.rs:35-43` already uses.
 Sixty capabilities is sixty single gates, linear, not combinatorial. And the
 gate is backstopped by the compiler: naming `dioxus::desktop::muda` on iOS is a
 hard error from `dioxus-desktop/src/lib.rs:44` even if the module gate is
@@ -443,8 +515,8 @@ shipping binary and only the call site is missing.
 |---|---|---|---|
 | Tray / menu-bar icon with menu and click handling | reachable, already paid | `dioxus::desktop::trayicon::{init_tray_icon, default_tray_icon}` (`trayicon.rs:28`, `:50`), events via `use_tray_menu_event_handler` (`hooks.rs:60`). `App::new` already calls `set_tray_icon_receiver()`. Safe throughout; `TrayIcon::ns_status_item()` (`tray-icon-0.21.3/src/lib.rs:476`) is a safe `pub fn` if needed | small |
 | Global hotkey (quick-launcher chord) | reachable, already paid | `use_global_shortcut` (`hooks.rs:114`); a tray menu plus one `use_global_shortcut` call compiled clean on the first try, and the only two diagnostics in the whole attempt were `redundant clone` and `redundant closure`. The `GlobalHotKeyManager` construction is on the un-`cfg`'d path in `App::new` and its Carbon imports are in the linked binary — not observed at runtime. macOS uses Carbon `RegisterEventHotKey`, so no TCC prompt | trivial code |
-| Menu bar (replace, not adopt) | already shipping | `src/main.rs:84-86` never calls `with_menu`, so `MenuBuilderState::Unset` resolves to `default_menu_bar()` (`config.rs:45-52`) and Window+Edit menus with ⌘C/⌘V/⌘W/⌘Q are on screen now. Replacing it is `Config::with_menu` | small |
-| Frameless, always-on-top overlay window | reachable | `tao` safe builders: `with_decorations(false)` (`window.rs:493`), `with_always_on_top` (:516), `with_transparent` (:482), `with_visible_on_all_workspaces` (:589). The repo already uses this API at `src/main.rs:79-83` | small |
+| Menu bar (replace, not adopt) | already shipping | `src/main.rs` never calls `with_menu` anywhere (`grep -n with_menu src/main.rs` is empty — the `Config` is built at `:111-113` and carries only `with_window`), so `MenuBuilderState::Unset` resolves to `default_menu_bar()` (`config.rs:45-52`) and Window+Edit menus with ⌘C/⌘V/⌘W/⌘Q are on screen now. Replacing it is `Config::with_menu` | small |
+| Frameless, always-on-top overlay window | reachable | `tao` safe builders: `with_decorations(false)` (`window.rs:493`), `with_always_on_top` (:516), `with_transparent` (:482), `with_visible_on_all_workspaces` (:589). The repo already uses this API at `src/main.rs:93-110` | small |
 | Window vibrancy | reachable, no unsafe, **compiled** | One line enabling `objc2-app-kit`'s `NSVisualEffectView` feature (measured: 44 → 45 features, 599 → 599 packages, two lines of `Cargo.lock`), then `NSVisualEffectView::new`/`setMaterial`/`setBlendingMode`/`setState` + `addSubview`, all of which pass `-D warnings` with `unsafe_code = "forbid"` and link. Side cost: the feature union recompiles `tao`, `wry`, `muda`, `rfd`, `tray-icon` and `dioxus-desktop`. **The real cost is still CSS**: `assets/main.css` surfaces are opaque tokens, so this means desktop-only tokens and a deliberate gallery re-capture | medium (CSS, not objc) |
 | Window level / collection behaviour (true floating panel) | reachable, no unsafe, **compiled** | `NSWindow::setLevel` (:1327), `setCollectionBehavior` (:1446) via `sharedApplication(mtm).keyWindow()`. Both compiled and linked under `-F unsafe_code`; the `ns_window()` pointer route does not compile and cannot be excepted | trivial |
 | Dock: activation policy, visibility, badge, hide/show | reachable | All safe `fn` on tao's `EventLoopWindowTargetExtMacOS` (`platform/macos.rs:397`, `:403`, `:406`, `:387`, `:389`). A tao-event path, so no synchronous-XHR cost | trivial |
@@ -453,8 +525,8 @@ shipping binary and only the call site is missing.
 | Native context menus (right-click) | **blocked by our lint policy** | `muda`'s `unsafe fn show_context_menu_for_nsview` (`lib.rs:445`); no safe macOS sibling. Also needs `with_disable_context_menu(false)` — the release build currently suppresses WebKit's own (`config.rs:117`) | small, after the seam |
 | Prevent Sleep | reachable on paper, **not compiled** | `performActivityWithOptions_reason_usingBlock` (`NSProcessInfo.rs:272`) is `pub fn`; `endActivity` (:267) is `pub unsafe fn`, so only the block form is available. Holds for a block's duration, so: a parked thread on a channel, not a `use_effect`. Unlike vibrancy this was never built — it needs `objc2-foundation` as a *direct* dependency with `block2`+`NSString` named, and an `RcBlock::new` argument, neither of which was priced | small, unverified |
 | Multiple windows / session in a new window | mechanism reachable, **gated** | `DesktopService::new_window` (`desktop_context.rs:141`) is routed end-to-end already. The deliverable is gated on the shared-state question below. See Sequencing | trivial + a large prerequisite |
-| Double-click titlebar to zoom | reachable | `toggle_maximized()` (`desktop_context.rs:169`) as `ondoubleclick` on the drag strip that already carries `onmousedown -> drag_window()` at `src/shell/desktop.rs:521-527`. One DOM event, inside the rule | trivial |
-| Mouse back button | reachable, **still unverified end to end** | Not via tao — `platform_impl/macos/view.rs:962-970` collapses every non-left/right button to `MouseButton::Middle`, and wry's WKWebView covers tao's content view anyway (the finding already recorded at `src/main.rs:106-114`). Via the DOM: `MouseButton::Fourth` from `button: 3` (`dioxus-html/src/input_data.rs:22`, `:42`). WebKit *trunk* maps `buttonNumber` 3 to `MouseButton::Back` and forwards it unfiltered, but trunk is not the WKWebView macOS 26 loads and nothing was run: no click, no synthetic event, no logger. Settle it with a `CGEventCreateMouseEvent(…, kCGEventOtherMouseDown, …, 3)` posted at the running app (costs one Accessibility grant), or with a mouse that reports `buttonNumber` 3 | trivial code, gated on one measurement |
+| Double-click titlebar to zoom | reachable | `toggle_maximized()` (`desktop_context.rs:169`) as `ondoubleclick` on the drag strip that already carries `onmousedown -> drag_window()` at `src/shell/desktop/mod.rs:900-910`. One DOM event, inside the rule | trivial |
+| Mouse back button | reachable, **still unverified end to end** | Not via tao — `platform_impl/macos/view.rs:962-970` collapses every non-left/right button to `MouseButton::Middle`, and wry's WKWebView covers tao's content view anyway (the finding already recorded at `src/main.rs:130-142`). Via the DOM: `MouseButton::Fourth` from `button: 3` (`dioxus-html/src/input_data.rs:22`, `:42`). WebKit *trunk* maps `buttonNumber` 3 to `MouseButton::Back` and forwards it unfiltered, but trunk is not the WKWebView macOS 26 loads and nothing was run: no click, no synthetic event, no logger. Settle it with a `CGEventCreateMouseEvent(…, kCGEventOtherMouseDown, …, 3)` posted at the running app (costs one Accessibility grant), or with a mouse that reports `buttonNumber` 3 | trivial code, gated on one measurement |
 | Native notifications | needs a new dep, macOS only, **and a signing step** | `notify-rust` 4.18.0, now vendored and run. **Not** `notify-rust = "4.18"` — that resolves to the `NSUserNotificationCenter` backend, which `usernoted` denies as a legacy client on macOS 26 while `show()` still returns `Ok`. The line is `notify-rust = { version = "4.18", default-features = false, features = ["preview-macos-un"] }` under `[target.'cfg(target_os = "macos")'.dependencies]` — 12 lockfile entries instead of 38, of which two compile here. Wired into the `spawn_forever` tail of `send_prompt` in `src/state.rs` (the arm that reads `"end_turn" \| "cancelled" => {}`), gated on `Window::is_focused()` (`tao-0.34.8/src/window.rs:877`, safe), plus a one-time **async** `request_auth()` at mount; workspace clippy and the iOS check both pass. The plist work below is already done for this one key (`CFBundleIdentifier = com.goosemobile.app`); what is unsettled is signing — `dx`'s bundle is linker-signed with `Info.plist=not bound`, and whether that bundle can raise a notification was never tested. iOS half is impossible (see The impossible list) | medium |
 | Auto-update | non-goal | Struck 2026-08-26: the client assumes a server elsewhere and is installed by hand | — |
 
@@ -463,7 +535,7 @@ shipping binary and only the call site is missing.
 | Capability | Status | What it needs | Cost |
 |---|---|---|---|
 | Native file / directory picker (local machine) | reachable | `rfd` 0.17.2 is already compiled in — it is what backs `<input type=file>` (`dioxus-desktop-0.7.10/Cargo.toml:244`). **But not as one line.** rfd has no iOS backend (`backend.rs:31` gates `mod macos` on `target_os = "macos"`; no `ios` module), so a plain `[dependencies]` entry breaks `cargo check --target aarch64-apple-ios`. And rfd's `default` is `["xdg-portal", "wayland"]` while only `xdg-portal` and `pollster` are enabled today (verified by `cargo tree -e features -i rfd`), so a bare version line unions `wayland` in and adds three crates to the lockfile. Correct form: `rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }` under `[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]` | small |
-| Working-directory picker for a path on the **server** | reachable, server-dependent | `tools/call` → the `developer` extension's `tree` tool, then `session/working-dir/update`. Today the working dir is a raw text field validated only by `starts_with('/')` (`src/state.rs:1394`). **Risk worth pricing:** this depends on `developer` being enabled with `unprefixed_tools` on a machine the client does not control, and when it is not, the feature degrades silently rather than failing loudly. `tools/list` is the honest runtime probe | small, with a caveat |
+| Working-directory picker for a path on the **server** | reachable, server-dependent | `tools/call` → the `developer` extension's `tree` tool, then `session/working-dir/update`. Today the working dir is a raw text field validated only by `starts_with('/')` (`src/state.rs:1432`). **Risk worth pricing:** this depends on `developer` being enabled with `unprefixed_tools` on a machine the client does not control, and when it is not, the feature degrades silently rather than failing loudly. `tools/list` is the honest runtime probe | small, with a caveat |
 | Drag-and-drop a local file onto the transcript | reachable, macOS only | dioxus already installs wry's drag-drop handler and replaces the DOM event's file list with real `PathBuf`s (`webview.rs:152-186`). **Architectural catch:** HTML only fires `drop` if `dragover` is `preventDefault`ed, and `dragover` is a ~60Hz stream — so it must be a JS-owned listener (`document::eval`, same pattern as the picker script `src/viewport.rs:383` runs out of `attach::picker_js`); only the single `drop` may be Rust | small |
 | `.goosehints` editor | reachable | `tools/call` with `shell` to read and `write` to write. **This is a one-way security decision, not a small feature**: a UI driving an unpermissioned `shell` tool is arbitrary remote command execution reachable from a phone. Decide it deliberately | trivial code, one-way decision |
 | Session export to a file | reachable | `session/export` already returns a markdown string and we already classify the method (`error.rs:188`); the file half is `rfd`'s `save_file`, target-gated as above. On iOS the correct affordance is a share sheet, and the cheap route there is a JS-owned Blob + `<a download>` rather than `UIActivityViewController` | small |
@@ -502,7 +574,7 @@ a standing chore.
 | Capability | Status | What it needs | Cost |
 |---|---|---|---|
 | Elicitation (answering a mid-turn form) | **reachable, and today's behaviour is wrong** | Not a missing feature — a declined capability. `client.rs:181-185` sends no `elicitation` flag and no `recipeParameterRequests`, and `answer_agent_request` replies `-32601 "method not supported by this client"` to everything but `session/request_permission` (`client.rs:525-560`, the `-32601` at `:559`). A recipe with parameters fails against us today. The plumbing exists: `AcpEvent::Permission` already carries a `request_id` and `respond_permission` already replies over `Cmd::Respond` | small code, one-way |
-| `session/steer` (type a follow-up mid-turn) | reachable | One method. `expectedRunId` arrives as `_meta.goose.activeRunId` on the `session/update` notification we already receive — `src/state.rs:694-702` already destructures it and only reads `usage_update`. **`activeRunId` appears nowhere in this repo today** (verified by grep across `src/` and `crates/`), so the mock's `turn.rs` must start stamping it | small |
+| `session/steer` (type a follow-up mid-turn) | reachable | One method. `expectedRunId` arrives as `_meta.goose.activeRunId` on the `session/update` notification we already receive — `src/state.rs:730-740` already destructures it and only reads `usage_update`. **`activeRunId` appears nowhere in this repo today** (verified by grep across `src/` and `crates/`), so the mock's `turn.rs` must start stamping it | small |
 | Slash-command + @-mention autocomplete | reachable | Two list reads, no capability negotiation. Cheapest real feature in the missing 92 | trivial |
 | `diagnostics/get` | reachable | One method, response is deliberately opaque on the wire, so it renders as preformatted text — zero DTO modelling | trivial |
 | Session extensions list/remove | reachable | Closes a one-sided pair: we can `add` but a user cannot see or detach what they attached | trivial |
@@ -514,7 +586,7 @@ a standing chore.
 | Config store + prompt templates (8 methods) | reachable | `config/upsert` is already sent, so the write half exists; `config/read` is its inverse. **The prompt-template editor is the server-side answer to what the earlier survey filed as ".goosehints: Electron-only"** — four calls over a `{name, defaultContent, userContent, isCustomized}` record and a textarea | small + one screen |
 | Edit-and-resend (fork / truncate) | reachable | Three methods across two namespaces; `session/fork` is base-ACP, not goose-namespace, and the mock has no fork | medium |
 | Server-side dictation | reachable | Ship 2 of 10 (`transcribe`, `config`); the model-management 8 live on the server. Capture is JS-owned MediaRecorder. **The cost is not the methods** — it is `NSMicrophoneUsageDescription` in the plist and mic-permission behaviour under WKWebView on a physical iPhone | medium, device-gated |
-| Local inference management (11 methods) | reachable, declined on scope, **and gated at compile time on the server** | The download runs entirely inside goose (`custom_dispatch.rs:863-867`); the phone only starts a job and polls a snapshot, and `reconnect_loop` (`src/state.rs:837-871`) already absorbs the drop. So the earlier "the phone can't hold a multi-GB download" objection is a category error. New constraint, read from goose's source and not yet observed on a wire: `local-inference` is a **Cargo feature** of the `goose` crate — in `goose-cli`'s defaults, absent from the `portable-default` musl release build — and the not-enabled arm returns `-32602`, which `goose/mod.rs:142` does *not* convert to `AcpError::Unsupported`. This row would need its own capability probe rather than riding the soft-degrade. Declined because the control belongs where the disk is, not because it is hard | small effort |
+| Local inference management (11 methods) | reachable, declined on scope, **and gated at compile time on the server** | The download runs entirely inside goose (`custom_dispatch.rs:863-867`); the phone only starts a job and polls a snapshot, and `reconnect_loop` (`src/state.rs:875`) already absorbs the drop. So the earlier "the phone can't hold a multi-GB download" objection is a category error. New constraint, read from goose's source and not yet observed on a wire: `local-inference` is a **Cargo feature** of the `goose` crate — in `goose-cli`'s defaults, absent from the `portable-default` musl release build — and the not-enabled arm returns `-32602`, which `goose/mod.rs:142` does *not* convert to `AcpError::Unsupported`. This row would need its own capability probe rather than riding the soft-degrade. Declined because the control belongs where the disk is, not because it is hard | small effort |
 | Provider administration (19 methods) | declined on scope | Eighteen independent wrappers with no ordering constraint — the most parallelisable item in the whole set, and rating it "large" misfiles a product decision as a cost. The nineteenth is not a wrapper: on goose main, `providers/config/authenticate` runs an interactive OAuth device flow, pushes a notification `forward_notification` (`client.rs:567`) currently drops at its `_ => {}` (`client.rs:594`), outlives the 30s `MUTATE_TIMEOUT` (`goose/mod.rs:100,104`), and opens a browser and writes the clipboard **on the server host** — which for a Tailscale client is not the reader's machine. Price it separately. Declined because a remote client talks to a server that is already configured, and because `providers/config/save` means typing an API key into a phone. The read-only 3-method slice ("why is this model unavailable") is trivial and defensible alone | medium effort, declined |
 | Skills authoring (5 methods) | declined | Already a recorded decision (`crates/goose-acp-client/src/goose/skills.rs:1-20`), and the reason still holds: goose Desktop's own Add Skill button ships `hidden` with `title="Coming soon"` | — |
 | MCP-UI "apps" | declined on design | Declaring `mcpHostCapabilities` is a promise to render arbitrary server-supplied HTML. **The security half of the old reasoning does not survive**: the app already injects server-derived HTML via `dangerous_inner_html` at seven sites, so a separate-scheme opaque-origin iframe would be *more* isolated than what ships. The reason that survives is the design system — extension markup does not obey our tokens, our tiered rounding or Dynamic Type, and it cannot be gallery-captured | very large |
@@ -531,11 +603,20 @@ the type rather than writing it.
 
 ### Shell and desktop UI
 
+**This section is about what the shell can DO, and nothing in it is about what
+the shell LOOKS like.** That distinction has teeth now: the look is being
+rebuilt against the mockups under
+[#148](https://github.com/PhillipChaffee/goose-phone-app/issues/148) — 13 epics
+and ~77 units, every value re-measured — so any sentence here that reads as a
+judgement about the desktop's appearance, its tokens or its stylesheet is
+**superseded by that tree rather than by this document**, whatever its date.
+What survives is the capability question, which #148 does not touch.
+
 | Capability | Status | What it needs | Cost |
 |---|---|---|---|
-| Desktop gallery axis | **SHIPPED** (`f214b54`, `ece4857`, `d716047`) | Was: "the gallery covers the phone shell only and nothing in `assets/desktop/` is audited", with two named blockers. Both are gone. `scripts/capture-gallery.py` now takes several logs in one invocation, and the dump key carries `shell::DUMP_PREFIX` (`src/app.rs`), so a desktop `chats` is `desktop-chats` and cannot overwrite the phone's. `docs/audit.js` walks a second grid: 28 desktop states × 2 themes × 7 window sizes × 1 text size × 3 shell states. Read *What the desktop axis covers* at the end of `docs/design.md`, not this row | — |
+| Desktop gallery axis | **SHIPPED** (`f214b54`, `ece4857`, `d716047`) | Was: "the gallery covers the phone shell only and nothing in `assets/desktop/` is audited", with two named blockers. Both are gone. `scripts/capture-gallery.py` now takes several logs in one invocation, and the dump key carries `shell::DUMP_PREFIX` (`src/app.rs`), so a desktop `chats` is `desktop-chats` and cannot overwrite the phone's. `docs/audit.js` walks a second grid whose shape is stated by the run itself — `node docs/audit.js both` prints states × themes × window sizes × text sizes × shell states in its verdict line, and every one of those five factors has moved since this row was written, so the number is not restated here. Read *What the desktop axis covers* at the end of `docs/design.md`, not this row | — |
 | ⌘R as a real menu item | reachable | The debt is logged under *Refresh is arrival, plus a chord* in `docs/design.md`'s desktop section, deferred because "a menu accelerator *consumes* the key on macOS, so it would have to replace the JS listener rather than sit beside it". A binding table makes that one row changing `Js(REFRESH_KEY)` → `Accel("CmdOrCtrl+R")`, with a duplicate-chord test guarding the swap | trivial |
-| Fix the last ambient `Shell::CURRENT` reads | cleanup | Six call sites in three files, re-checked at `d716047`: `src/views/mod.rs:68`, `:72` (`SwipeDelete`, which is why that pair used to be counted as one), `src/views/chrome.rs:281`, `:318`, `:322`, `src/views/scheduler.rs:83`. These are the last places a view reads the ambient shell instead of taking it, and it is why `SwipeDelete`'s mobile arm is verified by nothing | trivial |
+| Fix the last ambient `Shell::CURRENT` reads | cleanup | **Eight** call sites in five files, re-counted at `b098918` with `grep -rn 'Shell::CURRENT' src/views/`: `src/views/mod.rs:74`, `:78` (`SwipeDelete`, which is why that pair used to be counted as one), `src/views/chrome.rs:281`, `:318`, `:322`, `src/views/scheduler.rs:83`, `src/views/chat.rs:513`, `src/views/settings.rs:283`. It was six at `d716047` and the two new ones are the desktop rebuild's, both deliberate: `chat.rs` selects the speaker attribution and `settings.rs` selects the word for the machine Tailscale runs on (#145). They are the last places a view reads the ambient shell instead of taking it — and `settings.rs` shows what that costs and what it does not, because `tailscale_host` TAKES a `Shell` and the view passes the const, so both arms are asserted and the ambient read is one line for Stage 1 to rewrite. `chat.rs:513` and `SwipeDelete`'s mobile arm are the ones a host `cargo test` cannot reach at all | trivial |
 
 **On the accelerator question, which had a real answer nobody found.** Adopting
 a richer menu bar does *not* force the three `document::eval` chords off.
@@ -562,13 +643,13 @@ with it.
 | stage | state at `d716047` | how that was established |
 |---|---|---|
 | 0 — the manifest commit | **DONE** (`3dade08`) | `Cargo.toml` carries the three-line marker `[features]`, two target-conditional `[dependencies]` tables, and `.github/workflows/ci.yml` runs `cargo check --package goose-mobile --target aarch64-apple-ios` as one line with no flags |
-| 1 — the ambient `Shell::CURRENT` reads | **UNTOUCHED** | `grep -rn 'Shell::CURRENT' src/` still finds all six view-side call sites; only `src/shell/`'s own uses are legitimate |
-| 2 — the desktop gallery axis | **DONE** (`f214b54`, then `ece4857` and `d716047` fixing what an adversarial pass found in it) | `docs/gallery-states.json` holds 63 keyed states, 14 of them `desktop-`; `node docs/audit.js both` prints a second grid in its verdict line |
+| 1 — the ambient `Shell::CURRENT` reads | **UNTOUCHED, and grown** | `grep -rn 'Shell::CURRENT' src/views/` finds eight call sites where `d716047` had six; only `src/shell/`'s own uses are legitimate. See the row in the table above for what the two new ones are |
+| 2 — the desktop gallery axis | **DONE** (`f214b54`, then `ece4857` and `d716047` fixing what an adversarial pass found in it) | `docs/gallery-states.json` holds 62 keyed states, 13 of them `desktop-` (`python3 -c "import json;d=json.load(open('docs/gallery-states.json'));print(len(d),sum(k.startswith('desktop-') for k in d))"`); `node docs/audit.js both` prints a second grid in its verdict line |
 | 3 — the protocol backlog | **UNTOUCHED** | `git diff --stat 772c788..HEAD -- crates/goose-acp-client/src/client crates/goose-acp-client/src/goose` is empty: not one line of the wrapper layer has moved since this document was written |
 | 4 — `src/platform/` and `Action` | **UNTOUCHED** | neither `src/platform/` nor `src/action.rs` exists (`ls src/`) |
 | 5 — shared state | **UNTOUCHED** | `AppCtx` is still built by the one `use_app_ctx_provider` in `src/state.rs`, and `grep -rn new_window src/` finds nothing — no second window exists to share with |
 | 6 — bundling and entitlements | **UNTOUCHED** | `[bundle]` in `Dioxus.toml` is still `identifier` and `publisher` and nothing else; there is no plist hook and no post-build step in `scripts/` |
-| 7 — `crates/goose-native/` | **UNTOUCHED, and correctly so** | `ls crates/` is `goose-acp-client`, `mock-goose-server`, `opencode-client`. Nothing that needs `unsafe` has arrived |
+| 7 — `crates/goose-native/` | **UNTOUCHED, and correctly so** | `ls crates/` is `goose-acp-client`, `mock-goose-server`, `mock-opencode-server`, `opencode-client` — four, not the three this row claimed until `b098918`; the code plane brought its own fake. Nothing that needs `unsafe` has arrived |
 
 **Stage 0 — the manifest commit. DONE (`3dade08`).** Reduce `[features]` to the
 `dx`-autodetect marker (not delete it — see above), add two target dependency
@@ -586,17 +667,20 @@ check emitted a `dead_code` warning under `ci.yml`'s workspace-wide
 `use_fullscreen_class` mechanism from `src/viewport.rs`, because the
 `innerHeight >= screen.height - 2` inference behind it never once matched a
 real fullscreen window. Fullscreen is now read off `tao` in
-`src/shell/desktop.rs::use_fullscreen`. **Neither `FULLSCREEN_CLASS` nor
+`src/shell/desktop/mod.rs:275`'s `use_fullscreen`. **Neither `FULLSCREEN_CLASS` nor
 `use_fullscreen_class` exists in the tree** (`grep -rn FULLSCREEN_CLASS src/`
 finds nothing), so do not go looking for the warning this paragraph used to
 predict.
 
 **Stage 1 — the ambient `Shell::CURRENT` reads. UNTOUCHED.** Do this before
 anything is built on top, because every new capability that takes a `Shell`
-parameter inherits the pattern. *Compresses trivially.* Six call sites in three
-files, listed with their current line numbers in the Shell-and-desktop-UI table
-above — the stage was called "five" because `views/mod.rs:68` and `:72` are one
-component's two reads.
+parameter inherits the pattern. *Compresses trivially.* Eight call sites in five
+files at `b098918`, listed with their current line numbers in the
+Shell-and-desktop-UI table above — the stage was called "five" when it was six,
+because `views/mod.rs:74` and `:78` are one component's two reads. **It grew
+while it waited, which is an argument for doing it rather than against**: two
+views needed a desktop answer before this stage existed and each had to invent
+its own way of asking.
 
 **Stage 2 — the desktop gallery axis. DONE (`f214b54`), and it did go first
 among the UI work.** What it was: `scripts/capture-gallery.py` drove one booted
@@ -609,8 +693,9 @@ logs in one invocation**, which is how both shells write into one store without
 either deleting the other's states.
 
 What shipped, so this row is not read as still owed: a second grid in
-`docs/audit.js` (28 desktop states × 2 themes × 7 window sizes × 1 text size ×
-3 shell states, straddling every breakpoint from both sides), desktop
+`docs/audit.js` (a desktop grid of states × themes × window sizes × shell
+states, straddling every breakpoint from both sides — the run states its own
+shape and this document does not restate it), desktop
 stylesheets linked **per state** rather than from a directory scan, and a
 `desktop-` prefix on the dump key (`shell::DUMP_PREFIX`) so the two sets cannot
 collide. Two follow-ups landed on top of it in the same day, both of the same
@@ -638,7 +723,7 @@ zero-`cfg(target_os)` invariant in `views/` is today a convention that has never
 been tested — still true at `d716047`, and the desktop stage did not weaken it:
 it touched eight of the twelve view modules and added no `cfg` to any of them.
 **Write the source-scanning test — in the shape of
-`viewport.rs:519-536` — before `src/platform/` exists**, or the first capability
+`viewport.rs:535-570` — before `src/platform/` exists**, or the first capability
 that is 60% native and 40% view will put its 40% behind a `cfg` in a view and
 nothing will say so. Then the safe, self-contained capabilities fan out: tray,
 hotkey, dock control, vibrancy, overlay window, menu bar. *Compresses well
@@ -646,12 +731,14 @@ once the layer and its test exist.*
 
 **Stage 5 — shared state. NOT COMPRESSIBLE, and it is the flagship
 serialising item.** `AppCtx` is roughly 50 `Signal` fields built by `use_signal`
-inside one component scope (`src/state.rs:296-502`, constructed `:504-599`), so
+inside one component scope (`src/state.rs:296-533`, 48 `Signal` fields,
+constructed `:535-637`), so
 the generational-box owner is window A's root scope: window B reading them
 panics the moment A closes, and `WindowCloseBehaviour::WindowHides` preserves
 the footgun rather than fixing it — A can then never truly close. This is one
-function in the one file all seventeen live worktrees already merge into, whose
-own comment at `:489-501` names it as the merge hazard, and splitting it across
+function in the one file every live worktree already merges into (`git worktree
+list` reports 34 at `b098918`, against the seventeen this was written at), whose
+own comment at `:520-532` names it as the merge hazard, and splitting it across
 agents produces nothing but conflicts.
 
 One clarification that shrinks it. *Sharing the WebSocket does not require
@@ -686,7 +773,8 @@ binary and the A/B had a confound, so "this stage owes notifications a
 
 **Stage 7 — `crates/goose-native/`, only when the first capability that
 genuinely needs `unsafe` arrives. UNTOUCHED, and correctly so — `ls crates/`
-is `goose-acp-client`, `mock-goose-server`, `opencode-client`.** Given the
+is `goose-acp-client`, `mock-goose-server`, `mock-opencode-server`,
+`opencode-client`, and not one of the four writes `unsafe`.** Given the
 correction above, that is later
 than anyone expected: vibrancy and window level demonstrably do not need it —
 both compiled and linked inside `goose-mobile` under `-F unsafe_code` — and
@@ -740,7 +828,16 @@ This document is mostly about a desktop shell, and the phone is the product. So:
 design system and nothing here re-renders it. Vibrancy is the one item that
 touches tokens, and the correct form is desktop-only tokens plus a deliberate
 gallery re-capture — which is precisely why Stage 2 comes before Stage 4 and not
-after. If a capability cannot be built without changing a token the phone reads,
+after.
+
+That prescription has since been executed at scale by something other than a
+capability: **#148's desktop-v1 campaign owns the desktop-only tokens now**, in
+`assets/desktop/00-tokens.css`, under a rule that exactly one PR may write that
+file. A capability arriving mid-campaign and declaring a token of its own would
+be the silent-cancel this document's Stage 5 warns about, one layer down — two
+branches setting the same rendered value, merging without a conflict marker. So
+while #148 is open, read "desktop-only tokens" as *ask the token PR*, not as
+*add a declaration*. If a capability cannot be built without changing a token the phone reads,
 that is a signal to reconsider the capability, not the token.
 
 That constraint has since been met once and the way it was met is the pattern

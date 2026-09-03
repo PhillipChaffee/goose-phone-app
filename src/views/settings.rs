@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 use goose_acp_client::{probe, ProbeOutcome};
 
 use crate::nav::Crumb;
+use crate::shell::Shell;
 use crate::state::{
     disconnect, establish, refresh_sessions, show_toast, use_app_ctx, ConnState, Screen, Settings,
 };
@@ -18,6 +19,38 @@ use crate::views::Confirm;
 /// end up calling the same screen two different things.
 pub(crate) fn crumb() -> Crumb {
     Crumb::plain("Settings")
+}
+
+/// The machine the Tailscale client has to be running on, named as the reader
+/// would name it.
+///
+/// This screen is shared by both shells and the sentence it sits in is about
+/// hardware, so a single spelling is wrong on one of them: the desktop opens a
+/// 1440x860 window (`src/main.rs`) and told the reader it was a phone. Not a
+/// cosmetic point — this is the one screen a reader arrives at *because* the
+/// connection is not working, and being told to check an app on a device they
+/// are not holding is advice that cannot be followed.
+///
+/// TAKES THE SHELL, and does not read `Shell::CURRENT` itself, which is the
+/// rule `views::chrome`'s own test module states and the reason for it:
+/// `cargo test` runs on a host, where `CURRENT` is always `Shell::Desktop`, so
+/// a phone assertion against an ambient read would be an assertion about the
+/// desktop arm passing under a phone's name. `views::chat::attributed` picks
+/// the desktop *structure* the other way and can only be checked against the
+/// captured markup; a string has somewhere better to be checked.
+///
+/// The call site passes the `const`, so this is still selected at compile time
+/// with no `cfg` and no branch in the binary, and `src/views/` keeps its zero
+/// `cfg(target_os)`.
+///
+/// "computer" and not "Mac": `Shell::Desktop` is every target that is not iOS
+/// or Android (`src/shell/mod.rs`), so naming the hardware would just be a
+/// different wrong answer on Linux and Windows.
+const fn tailscale_host(shell: Shell) -> &'static str {
+    match shell {
+        Shell::Mobile => "this phone",
+        Shell::Desktop => "this computer",
+    }
 }
 
 #[component]
@@ -247,7 +280,7 @@ pub fn SettingsView() -> Element {
                     }
                 }
                 p { "Connects to a remote goose AI agent over its ACP WebSocket API." }
-                p { "Reach a private server from anywhere with the Tailscale app enabled on this phone." }
+                p { "Reach a private server from anywhere with the Tailscale app enabled on {tailscale_host(Shell::CURRENT)}." }
             }
         }
 
@@ -312,7 +345,7 @@ mod tests {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::net::TcpListener;
 
-    use super::crumb;
+    use super::{crumb, Shell};
     use crate::state::{AppCtx, ConnState, Screen, Settings};
     use crate::testkit::render_seeded;
     use crate::views::sessions::pressing::{every_element, taps_that, Mounted};
@@ -561,6 +594,37 @@ mod tests {
     /// The screen is named once, and the header is what shows the name. On the
     /// desktop the window's bar reads the same expression, so a header that
     /// went its own way would put two different names on one screen.
+    /// The Tailscale hint names a device, and this screen is shared, so it has
+    /// to name the device the reader is actually holding.
+    ///
+    /// Both arms asserted here rather than through the render, because only one
+    /// of them can ever be rendered in a `cargo test`: the host build is
+    /// `Shell::Desktop`, so a render-only check would leave the phone's
+    /// wording — the one that shipped, and the one `assets/main.css` states
+    /// nothing about — verified by nothing at all. The render half below is
+    /// then the other question: that the screen consumes the function rather
+    /// than carrying a second, frozen copy of the sentence.
+    #[test]
+    fn the_tailscale_hint_names_the_machine_the_reader_is_holding() {
+        assert_eq!(super::tailscale_host(Shell::Mobile), "this phone");
+        assert_eq!(super::tailscale_host(Shell::Desktop), "this computer");
+
+        let html = render_seeded(a_saved_server, settings_view);
+        assert!(
+            html.contains(&format!(
+                "Tailscale app enabled on {}.",
+                super::tailscale_host(Shell::CURRENT)
+            )),
+            "the hint is not the one this shell selects, so the sentence has \
+             been frozen somewhere the shell cannot reach it: {html}"
+        );
+        assert!(
+            !html.contains("this phone"),
+            "a 1440x860 window is telling the reader they are holding a \
+             phone: {html}"
+        );
+    }
+
     #[test]
     fn the_screen_is_named_once() {
         assert_eq!(crumb().title, "Settings");

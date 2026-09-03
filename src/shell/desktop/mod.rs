@@ -1575,19 +1575,22 @@ mod tests {
     /// `contains` cannot tell any of them apart.
     ///
     /// It ends at `section { class: "pane`, and the choice of terminator is
-    /// the whole care here. It used to end at `if let Some(root) = dest.root`
-    /// — the line that guards the list column — which is a line the coming
-    /// restructure DELETES: the list moves into the sidebar and the content
-    /// area stops being conditional. Deleting it would have taken three tests
-    /// red at once with a message about a slice that ran to the end of the
-    /// file, naming no feature and pointing at nothing.
+    /// the whole care here — a care that has since been collected, which is
+    /// why this reads in the past tense. It used to end at
+    /// `if let Some(root) = dest.root` — the line that guarded the list column
+    /// — and the three-column restructure (#40) deleted exactly that line:
+    /// the list moved into the sidebar and the content area stopped being
+    /// conditional. Ending there would have taken three tests red at once with
+    /// a message about a slice that ran to the end of the file, naming no
+    /// feature and pointing at nothing.
     ///
-    /// `section { class: "pane` survives that, because it is a prefix of both
-    /// what follows the sidebar today (`pane pane-list`) and what follows it
-    /// afterwards (`pane pane-main`). It is also not `chrome_band`'s
-    /// terminator, which `div { class: "shell-body",` already is — two slices
-    /// sharing an end anchor is two slices that cannot both be right once
-    /// anything moves between them.
+    /// `section { class: "pane` survived it, because it is a prefix of what
+    /// followed the sidebar before (`pane pane-list`) AND of what follows it
+    /// now (`pane pane-main`, the only pane left — `.pane-list` and
+    /// `.pane-detail` were both deleted with the middle column). It is also
+    /// not `chrome_band`'s terminator, which `div { class: "shell-body",`
+    /// already is — two slices sharing an end anchor is two slices that
+    /// cannot both be right once anything moves between them.
     fn nav_card() -> String {
         let code = shell_code();
         block(
@@ -1610,9 +1613,16 @@ mod tests {
     /// as long as the strings appeared anywhere in the render.
     ///
     /// So this names things that live AFTER the sidebar and requires them to
-    /// be outside it. It is the check that lets the terminator be changed
-    /// again — as the restructure will change it — without anyone having to
-    /// re-derive by hand what the slice now covers.
+    /// be outside it. It is the check that let the terminator be changed
+    /// through the restructure — and that will let it be changed again —
+    /// without anyone having to re-derive by hand what the slice now covers.
+    ///
+    /// `pane-detail` in the list below is a class this shell no longer emits
+    /// anywhere: the restructure replaced `.pane-list`/`.pane-detail` with the
+    /// single `.pane-main`. Its assertion is therefore vacuous today and is
+    /// kept as a name that must not come back INSIDE the sidebar rather than
+    /// as a live boundary check — the live ones are `pane-empty`,
+    /// `shell-chrome` and `conn-badge`, all three of which the shell renders.
     #[test]
     fn the_sidebar_slice_stops_at_the_sidebar() {
         let card = nav_card();
