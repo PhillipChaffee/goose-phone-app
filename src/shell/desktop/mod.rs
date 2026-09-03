@@ -446,7 +446,12 @@ pub(crate) fn crumb_parts(
 ) -> CrumbParts {
     if let Some(crumb) = crumb {
         return CrumbParts {
-            parent: Some(dest.label),
+            // NOT WHEN THEY ARE THE SAME WORD. Settings is its own detail and
+            // its crumb's title is "Settings", so a parent taken blindly from
+            // the table made the band read "Settings / Settings" — which is a
+            // stutter rather than a path, the same defect the third arm below
+            // avoids by answering `None`.
+            parent: (crumb.title != dest.label).then_some(dest.label),
             leaf: crumb.title,
             after: crumb.subtitle,
         };

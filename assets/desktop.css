@@ -841,6 +841,7 @@
 /* The count is the whole reason the row can stay shut: it says how much is
  * behind it without opening it. */
 .nav-library-count {
+  flex: 0 0 auto;
   /* CHANGE: mono, per the mockup and per this sheet's own mono rule. The
      shipped block's `flex: 0 0 auto` and colour are kept. */
   font-family: var(--font-mono);
@@ -969,6 +970,18 @@
  * note in `sidebar.rs`. A button cannot legally hold the two action buttons,
  * and an HTML parser meeting that hoists them out and unravels the tree. */
 .nav-row {
+  /* THE SHIPPED BLOCK, put back. These eight were lost in the pass that added
+     `position: relative` below, and the sidebar's rows spent an afternoon
+     running out through the side of their own card — no width, so no box for
+     `.nav-row-title`'s ellipsis to be computed against. */
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
   /* ADD one declaration to the shipped block: the actions below measure
      against this. Without it they measure against `.pane`, which is the
      positioned ancestor, and land in the content column. */
@@ -1067,6 +1080,7 @@
  * pointer only — a row tabbed to would swap nothing in and the buttons behind
  * it would be invisible but focusable, which is worse than absent. */
 .nav-row-actions {
+  flex: 0 0 auto;
   /* OUT OF FLOW, which is what lets the age move.
    *
    * They used to take the age's box, which is how the shipped sheet kept its
@@ -1183,6 +1197,7 @@
 }
 
 .nav-row-age {
+  padding-top: 1px;
   /* CHANGE: it now sits at the end of the meta line rather than beside the
      title, so it is pushed rather than placed. `padding-top: 1px` goes — it
      existed to drop the age onto the title's baseline and there is no title
@@ -2049,6 +2064,10 @@
  * rather than each on its own idea of the bar's middle. */
 /* ── the crumb, in the window's bar ── */
 .chrome-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-top: var(--chrome-pad);
+  overflow: hidden;
   /* The mockup's `.band-mid` puts 9px between the badge and the crumb; the
      band's own `gap: 4px` supplies four of them. */
   margin-left: 0.3125rem;
@@ -2104,6 +2123,11 @@
  * 1.2px of a 65px deficit, which is a cut title by any measurement and a check
  * that has to be given a tolerance to hide it. */
 .chrome-sub {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   /* ADD this one declaration to the shipped block; nothing else in it changes.
      The mockup's `.after` is `padding-left:9px`, and `.chrome-title` no longer
      has a gap to supply it. */
@@ -2143,6 +2167,7 @@
  * cap and ellipsis from assets/main.css. */
 /* ── the connection, as the mockups' pill ── */
 .shell-chrome > .conn-badge {
+  padding-right: 12px;
   flex: 0 0 auto;
   /* 24px, not the 32 this shipped with. The mockup's pill is a slim lozenge
      (`padding:3px 10px 3px 8px`) and a 32px-tall `border-radius: 999px` is a
