@@ -909,7 +909,28 @@ pub(crate) fn Home(plane: Plane) -> Element {
                         class: "input",
                         placeholder: compose_placeholder(plane),
                         value: "{draft}",
-                        rows: 3,
+                        // TWO, AND NOT THREE, AND NOT ONE.
+                        //
+                        // Three made the resting composer a 148px slab with
+                        // two empty lines under the placeholder, against the
+                        // mockups' 100px — measured, `.home-compose` was
+                        // 640x148 where `.launch.calm` is 712x100, with the
+                        // 17/18/15 field padding identical on both sides and
+                        // only the line count different. It is 48px of the
+                        // 110px by which this column ran off the bottom of the
+                        // window.
+                        //
+                        // One would be the mockups' own number and cannot
+                        // ship: nothing in this app grows a textarea. There is
+                        // no `field-sizing`, no `scrollHeight` read and no
+                        // resize hook anywhere in `src/`, and
+                        // `assets/main.css`'s `max-height` only CAPS a field
+                        // that grows by this attribute. At one row a second
+                        // line of a prompt would scroll inside a box the
+                        // height of a single line, which is worse than the
+                        // slab. Two is the smallest count that still shows the
+                        // reader the line they just wrapped.
+                        rows: 2,
                         oninput: move |e| draft.set(e.value()),
                         onkeydown: move |e: Event<KeyboardData>| {
                             if e.key() == Key::Enter && !e.modifiers().contains(Modifiers::SHIFT) {
@@ -2188,5 +2209,92 @@ mod tests {
             "the home composer is driven by the chat's draft rather than its \
              own, so it lights up over text the reader cannot see"
         );
+    }
+
+    /// THE RESTING COMPOSER IS TWO LINES TALL, and it is pinned because
+    /// nothing else in the repo can see it.
+    ///
+    /// `rows` is the only thing that sets a textarea's height here — there is
+    /// no auto-grow in this app — so this one attribute is 22px of the column,
+    /// and `docs/audit.js` cannot notice it changing: the audit measures the
+    /// markup in `docs/gallery-states.json`, which still holds the `rows="3"`
+    /// this screen shipped with, and reports Clean either way.
+    ///
+    /// Measured against the captured `desktop-chats` at 1440x860 with the
+    /// attribute patched to 2: `.home-compose` 712x148 -> 712x126, and
+    /// `.home-inner` 815px -> 792px inside an 808px pane — which is the
+    /// difference between the footnote being on the screen and being 19px
+    /// below it.
+    #[test]
+    fn the_home_composer_rests_at_two_lines() {
+        let html = crate::testkit::render(|| rsx! { Home { plane: Plane::Chat } });
+        assert!(
+            html.contains("rows=2"),
+            "the home composer is not two rows tall. Three is 148px at rest \
+             against the mockups' 100, and one cannot ship: nothing in this \
+             app grows a textarea, so a second line would scroll inside a \
+             box one line high. Markup: {}",
+            &html[..html.len().min(600)]
+        );
+    }
+
+    /// THE TWO HOME SCREENS TAKE TWO DIFFERENT MEASURES, and they may not be
+    /// told apart by which file sorts first.
+    ///
+    /// `--measure` is declared on `.pane-main` (`80-measure.css`) and
+    /// `--gutter` substitutes there, so both overrides have to be written on
+    /// that element — which means both match the SAME `.pane-main` whenever a
+    /// home screen is up. Written the obvious way they would be two rules at
+    /// equal specificity resolved by `40-` sorting before `97-`: a cascade
+    /// decided by a filename, which no gate in this repo measures and which
+    /// #76 is about to make worse by putting a second class on the element
+    /// `:has(.home)` already matches.
+    ///
+    /// So they are made mutually exclusive instead, and this is the assertion
+    /// that keeps them that way. It is not a style check — delete the `:not()`
+    /// and the code home silently takes the chat home's 712px column, 64px
+    /// narrower than the board was derived for, with nothing failing and the
+    /// audit still Clean.
+    #[test]
+    fn the_two_home_screens_cannot_take_each_others_measure() {
+        let chat = sheet("40-home-chat.css");
+        let code = sheet("97-home-code.css");
+
+        assert!(
+            chat.contains(".pane-main:has(.home):not(:has(.home-tiles)) {\n  --measure: 44.5rem;"),
+            "the chat home's measure is not 44.5rem on `.pane-main`, excluding \
+             the code half. 44.5rem is 712px at this shell's 16px root, which \
+             is the mockups' own column, and it must be set on `.pane-main` \
+             because that is where `--gutter` substitutes it"
+        );
+        assert!(
+            code.contains(".pane-main:has(.home-tiles) {\n  --measure: 48.5rem;"),
+            "the code home's measure is not 48.5rem on `.pane-main`. 48.5rem \
+             is 776px, the mockups' board inside a 26px gutter"
+        );
+        // The needle carries the newline and the two-space indent a DECLARATION
+        // has, so the write-up of this trap in the same file — which quotes the
+        // dead value inside backticks — cannot satisfy the check that the value
+        // is gone.
+        assert!(
+            !code.contains("\n  --measure: 64rem;"),
+            "`.home.home-code` has its `--measure: 64rem` back. That rule is a \
+             no-op wherever it is emitted: a custom property in another \
+             property's value substitutes at the element that DECLARES it, and \
+             `--gutter` is declared on `.pane-main`"
+        );
+    }
+
+    /// One region file of `assets/desktop/`, by name.
+    ///
+    /// Through `SHELL_PARTS` rather than `include_str!` here, so a file this
+    /// lane edits but `src/css.rs` has stopped concatenating cannot pass: the
+    /// sheet that ships is the one the assertions above are about.
+    fn sheet(name: &str) -> &'static str {
+        crate::css::SHELL_PARTS
+            .iter()
+            .find(|&&(file, _)| file == name)
+            .map(|&(_, body)| body)
+            .expect("no such region file in `SHELL_PARTS`")
     }
 }

@@ -9,6 +9,45 @@
  * `--gutter` are defined on `.pane-main` (section 6) and every screen in the
  * column already reads them; a home screen that ran edge to edge would be the
  * one place text was set at 1500px on a wide window. */
+
+/* …AND THE HOME'S MEASURE IS WIDER THAN THE FORM'S.
+ *
+ * `80-measure.css` sets `--measure: 40rem` for the column, which is a measure
+ * for PROSE and for a settings form. This screen is neither: it is a composer,
+ * a grid of cards and two-line rows, and at 640px the quotation on the first
+ * `.recent` wrapped to two lines and the whole column ran 110px past the pane
+ * (measured on the captured `desktop-chats` at 1440x860: `.home-inner`
+ * 362,64 640x906.2 inside `.pane-main` 268,52 828x808).
+ *
+ * 44.5rem = 712px at the 16px root this shell has, which is the mockup's own
+ * `.land.calm` column to the pixel, and leaves (828 - 712) / 2 = 58px each
+ * side — `.land.calm{padding:36px 58px 0}`. Measured after: 362,64 640x906.2
+ * becomes 326,64 712x…, gutter 58.
+ *
+ * IT MUST BE SET HERE AND NOT ON `.home`. `--gutter: max(var(--edge), (100% -
+ * var(--measure)) / 2)` is declared on `.pane-main`, and a custom property in
+ * another property's value substitutes AT THE ELEMENT THAT DECLARES IT — so
+ * `--measure` written on the `main` inside would be read by nothing. This is
+ * the same trap `00-tokens.css` records three times for the type scale.
+ *
+ * `:not(:has(.home-tiles))` IS HOW THE CODE HALF IS KEPT OUT, and it is a
+ * deliberate replacement for source order. `.home` is on the `main` of BOTH
+ * halves, so `:has(.home)` matches the code home too, and #76 will put
+ * `.home-code` on that same element — two rules at equal specificity, resolved
+ * only by `40-` sorting before `97-`. Cascade by filename is a dependency
+ * nothing in the repo can see, so the two rules are made mutually exclusive
+ * instead: `.home-tiles` is emitted by `src/shell/desktop/home.rs` under
+ * `if plane == Plane::Code` and nowhere else, so it is the code half, and
+ * `97-home-code.css` claims exactly that element. Order no longer decides.
+ *
+ * #136 IS THE ONE THAT CAN STILL BEAT THIS. `.shell[data-nav="closed"]
+ * .pane-main` is (0,3,0) against this rule's (0,3,0) — a tie, resolved by
+ * source order across files again. If that issue lands, it must exclude the
+ * home screens by name rather than rely on where its file sorts. */
+.pane-main:has(.home):not(:has(.home-tiles)) {
+  --measure: 44.5rem;
+}
+
 .home {
   display: flex;
   justify-content: center;
@@ -30,8 +69,27 @@
   /* Down from the top rather than centred in the column. Centred looks right
    * at one window height and wrong at every other, and the composer is what
    * the eye should land on — putting it in the middle of a 1000px window puts
-   * it below the fold of an 800px one. */
-  padding: 12vh 0 48px;
+   * it below the fold of an 800px one.
+   *
+   * 36px, NOT 12vh, and the comment above is the reason it was 12vh for as
+   * long as it was: it argues against CENTRING the block and says nothing
+   * about how far down the top should be. A viewport unit does not answer that
+   * question either — at the 860px window `src/main.rs` opens, 12vh is 103.2px
+   * of nothing above a greeting, and it grows on a taller window, which is
+   * centring by another name. The mockup's `.land.calm{padding:36px 58px 0}`
+   * is a fixed offset and this is it.
+   *
+   * Measured on the captured `desktop-chats` at 1440x860: `.home-inner` was
+   * 906.2px tall in an 808px pane — 110px of it, including the whole footnote,
+   * below the fold. The top offset gives back 67.2 of that and the bottom
+   * 28 more.
+   *
+   * 20px at the bottom, down from 48, and it is the mockup's number wearing a
+   * different hat: `.land.calm` ends in 0 and its `.footnote` carries
+   * `padding:16px 0 20px`, so the column's last 20px of air belongs to the
+   * footnote there. Put on the container instead, because the code half has no
+   * footnote and would otherwise end flush against the pane. */
+  padding: 36px 0 20px;
 }
 
 .home-greeting {
@@ -88,7 +146,18 @@
   gap: 0;
   padding: 0;
   overflow: hidden;
-  border: 1px solid var(--border-secondary);
+  /* `--shell-line`, not `--border-secondary`, and it makes the app draw ONE
+   * edge for one control instead of two. In dark this composer was #3b414a
+   * while the app's own transcript composer, the same object one screen away,
+   * was #2f343b — and the mockups draw `.launch` and `.composer` with a single
+   * line — `.launch.calm` takes their own line colour, rgb(44,49,56), which
+   * this shell already declares verbatim as `--shell-line: #2c3138`.
+   *
+   * Dark only, and that is a property of the token rather than a caveat here:
+   * `--shell-line` is `var(--border-secondary)` in the base block, so light
+   * paints #cbd1d6 before and after. Non-text and decorative, so no 3:1 is
+   * owed; #2c3138 is 1.19:1 on the fill below, which is what a hairline is. */
+  border: 1px solid var(--shell-line);
   /* 16px. `.launch.calm{border-radius:16px}` and --radius-xl are the same
    * number, which is also design.md's tier for a container that holds other
    * things. */
@@ -98,9 +167,25 @@
    * and wrong in light, where --surface-raise resolves to main.css's
    * --bg-tertiary (#e3e6ea) and the placeholder — `.input::placeholder` is
    * --text-secondary, #6f6f6f — measures 4.01:1 on it, under the 4.5 it owes.
-   * On --surface-card the same placeholder is 4.64:1 light and 7.85:1 dark.
+   * On --surface-card the same placeholder is 4.64:1 light and 5.95:1 dark.
    * The floor wins over the picture; the 1px edge is what separates the
-   * control, as it does in the mockups. */
+   * control, as it does in the mockups.
+   *
+   * STILL THE CARD RUNG, and now with the second half of the price written
+   * down. The open question is whether dark alone should take the mockups'
+   * `--surface-raise` #24282e — a 6/7/8 step off the canvas (1.09:1) against
+   * this rung's 3/3/3 (1.04:1) — since the light objection above does not
+   * reach dark. Measured, it costs the seam: `--shell-line-soft` is #242830,
+   * which is 1.00:1 on #24282e and 1.05:1 on this fill. The mockups' own
+   * composer therefore has NO visible seam, and this shell's two-zone
+   * geometry — the whole reason `padding` and `gap` are zero above — is that
+   * line. Taking the raise would mean either losing it or paying for it with
+   * `--border-primary` #2f343b, which is 1.18:1 on the raise and BRIGHTER than
+   * the composer's own #2c3138 outer edge: the inversion the border fix five
+   * declarations up exists to end.
+   *
+   * Left as it ships, because it is on the campaign's decision list rather
+   * than its patch list and this is the measurement it was missing. */
   background: var(--surface-card);
 }
 
@@ -144,13 +229,24 @@
   padding: 7px 10px 8px;
   /* THE FULL-BLEED HAIRLINE, and it is the seam this section exists for.
    * `.launch .bar{border-top:1px solid their --line-soft}` — SOFTER than the
-   * composer's own outer edge, which is --border-secondary: a line inside a
-   * control separates two zones of one object, and drawing it at the same
-   * strength as the object's boundary makes it read as two stacked objects.
-   * --border-primary is #2f343b dark / #e3e6ea light against the outer
-   * #3b414a / #cbd1d6. Non-text and decorative — it divides, it does not
-   * signal — so no 3:1 is owed. */
-  border-top: 1px solid var(--border-primary);
+   * composer's own outer edge: a line inside a control separates two zones of
+   * one object, and drawing it at the same strength as the object's boundary
+   * makes it read as two stacked objects. Non-text and decorative — it
+   * divides, it does not signal — so no 3:1 is owed.
+   *
+   * `--shell-line-soft`, AND IT HAD TO MOVE WHEN THE OUTER EDGE DID. The rule
+   * above is a two-tier order, not two independent values: with the composer's
+   * boundary brought down to `--shell-line` #2c3138 (1.19:1 on the fill), the
+   * old `--border-primary` #2f343b measures 1.24:1 — the seam BRIGHTER than
+   * the edge it is supposed to sit under, which reads as two stacked objects,
+   * which is the failure this paragraph names. #242830 is 1.05:1 and the order
+   * holds. It is the mockups' own value for `.launch .bar`'s top border,
+   * rgb(36,40,48), and `00-tokens.css` declares it once for four consumers
+   * rather than letting four files each write the literal — this is one of the
+   * four it names. Light is untouched in both tiers: `--shell-line-soft` is
+   * `var(--border-primary)` #e3e6ea in the base block and only dark overrides
+   * it. */
+  border-top: 1px solid var(--shell-line-soft);
 }
 
 /* THE HOME COMPOSER'S SEND, and it is `assets/main.css`'s `.send` with two
@@ -171,6 +267,37 @@
   background: var(--accent-fill);
   color: var(--accent-ink);
   font-size: var(--text-md);
+}
+
+/* …AND AT REST IT IS AN OUTLINE, not the same circle at 35% opacity.
+ *
+ * `assets/main.css` gives every `.send` `opacity: 0.35` while it is disabled,
+ * and the home screen's is disabled for as long as the draft is empty — which
+ * is the entire time a home screen is at rest. Measured on the captured
+ * `desktop-chats`: `background rgb(19, 187, 175)` at `opacity 0.35`. So the
+ * paragraph above, which spends the accent on exactly one control because
+ * "used on one it is an instruction", was writing that instruction in a
+ * grey-teal ghost, and the mockups' own `.launch .send` is at opacity 1 over
+ * the same empty placeholder field.
+ *
+ * An outline rather than the mockups' literal state, and the difference is
+ * that the app's button is genuinely disabled where a picture's is not: a
+ * solid accent circle that does nothing when pressed is worse than a dim one,
+ * because the reader presses it. This is the same two-tier language
+ * `.home-starter` already draws one section down — an outline is a thing that
+ * could become, a fill is a thing that is — and the first keystroke fills it.
+ *
+ * `--accent`, not `--accent-fill`: this is now ink and an edge rather than a
+ * background, so it takes the rung composed for contrast. #13bbaf is 6.49:1 on
+ * the composer's dark fill and #0b6b64 is 5.87:1 on its light one, both far
+ * past the 3:1 a non-text control owes. `box-shadow` and not `border`, because
+ * `.send` is `width: 32px` with `box-sizing` unset here and a real border
+ * would make it 34 and break the pointer floor the size was chosen for. */
+.home-compose-row .send:disabled {
+  opacity: 1;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--accent);
 }
 
 /* THE ACCENT'S ONE JOB on this screen: the control that starts the work.
@@ -274,8 +401,17 @@
 .recent {
   display: grid;
   grid-template-columns: 14px minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 0 10px;
+  /* CENTRE, not `start`, and it is the trailing column that makes it matter.
+   * `.recent-facts` is one 20px line beside a two-line text block, so pinned
+   * to the top it sat level with the title and left the row's centre line
+   * empty — measured 916,488 in a content box running 483..540. The mockup's
+   * `.crow` is `align-items: center` and its `.rt` measures 862,397 in a
+   * 383..424 box, i.e. centred. The dot is centred by the same word, which is
+   * what lets its `margin-top` go. */
+  align-items: center;
+  /* 12px, `.crow{gap:12px}`. It was 10, which is not a tier this sheet has and
+   * put the dot 2px closer to the title than the reference does. */
+  gap: 0 12px;
   width: 100%;
   margin-bottom: 7px;
   padding: 11px 14px;
@@ -297,13 +433,39 @@
 /* The dot is `sidebar::Mark`'s three states said in the same three colours, so
  * a conversation that is streaming looks the same in both columns of the
  * window. Idle is a filled fleck rather than a ring: the ring means "an agent
- * is doing something", and a finished conversation is not. */
+ * is doing something", and a finished conversation is not.
+ *
+ * AND A SMALLER ONE, which is the other half of that sentence and was missing.
+ * 5px, `.dot.none{width:5px;height:5px}`, against the 8px the two ACTIVE
+ * states keep below — the mockup draws its idle dot at 5 and its running ring
+ * at 8, so size carries the distinction as well as fill. At 8px of mid-grey
+ * every resting conversation was flying a marker as large as the one that is
+ * actually streaming, which is nine rows shouting in a column where one thing
+ * is happening.
+ *
+ * `justify-self: center` rather than a margin, because the two sizes have to
+ * share one 14px column and land on the same axis: measured on the mockup, the
+ * 8px ring sits at x=344 and the 5px fleck at x=346 in a column spanning
+ * 341..355, both centred on 348.
+ *
+ * `--text-secondary`, up from `--text-tertiary`, and it is `.mark.idle`'s
+ * arithmetic run again on this element: tertiary is #606c7a, 2.91:1 on the
+ * dark card, and #a7b0b9, 2.03:1 on the light one — a non-text indicator owes
+ * 3:1 and it failed in both themes. Secondary is 5.95:1 dark and 4.64:1 light.
+ * The mockups' own `.dot.none` is #31373f, about 1.2:1, and is one more place
+ * the floor outranks the picture. */
 .recent-dot {
+  width: 5px;
+  height: 5px;
+  justify-self: center;
+  border-radius: var(--radius-full);
+  background: var(--text-secondary);
+}
+
+.recent.running .recent-dot,
+.recent.waiting .recent-dot {
   width: 8px;
   height: 8px;
-  margin-top: 5px;
-  border-radius: var(--radius-full);
-  background: var(--text-tertiary);
 }
 
 .recent.running .recent-dot {
@@ -348,21 +510,38 @@
   overflow: hidden;
   color: var(--text-secondary);
   font-family: var(--font-serif);
-  font-size: var(--text-xs);
-  /* --lh-sm, NOT --lh-md, and the re-scale is what forces it. At 11.5px on the
-   * new 22px --lh-md this quote would be a ratio of 1.91 — two clamped lines
+  /* 12.5px, `--text-sm`, and the rung below it was a slip rather than a
+   * decision — the paragraph after this one argues about the LINE-HEIGHT and
+   * says nothing about the size. `.crow .q` is 12.5px, and `--text-sm` is
+   * exactly 12.5px, which is what the sibling `.recent-title` already takes.
+   * At `--text-xs` this sentence was the smallest string on a row whose other
+   * two are labels the app wrote, so the row's voice ordering was inverted: it
+   * is the only real conversation content anywhere on the screen. The title
+   * stays apart from it on weight (550 against 400) and ink (primary against
+   * secondary), which is how the mockup separates them too — its own gap is
+   * half a point, 13 against 12.5, and this shell has no rung between.
+   *
+   * IT COSTS NOTHING IN HEIGHT. The clamp is two lines either way, and
+   * `--lh-sm` is 18px at both sizes, so a two-line row measures 81px before
+   * and after — the size moved, the layout did not. */
+  font-size: var(--text-sm);
+  /* --lh-sm, NOT --lh-md, and the re-scale is what forces it. At 12.5px on the
+   * new 22px --lh-md this quote would be a ratio of 1.76 — two clamped lines
    * with more air between them than either has ink. `.crow .q` is 12.5px on
-   * `line-height:1.5`; --lh-sm gives 1.57, which is the closest rung and still
+   * `line-height:1.5`; --lh-sm gives 1.44, which is the closest rung and still
    * looser than the chrome around it, which is what a serif quotation wants. */
   line-height: var(--lh-sm);
 }
 
+/* `padding-top` GONE, and it is the same edit as `align-items: center` above
+ * rather than a second one. The 2px was a nudge that only made sense while the
+ * grid pinned this column to the top of the row; centred, it is 2px of
+ * asymmetry with nothing above it to line up with. */
 .recent-facts {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-top: 2px;
 }
 
 /* Mono, by `.nav-row-age`'s rule: a turn count and an age are values you
@@ -447,18 +626,38 @@
   text-transform: uppercase;
 }
 
+/* TWO UP, and the 220 above it is fallout from widening the measure rather
+ * than a number that was ever chosen. `.starts{grid-template-columns:1fr 1fr}`
+ * is a flat two, and at the 640px column this sheet used to have,
+ * `minmax(220px, 1fr)` gave two as well — 316px cards. At the 712px column the
+ * measure rule at the top of this file now sets, the same expression fits a
+ * third, so the widening quietly cut the cards to 232px and left four starters
+ * as three and an orphan.
+ *
+ * 300 rather than the mockups' literal `1fr 1fr`, because the pane is 828px on
+ * one of the nine window sizes `docs/audit.js` walks and 220px on another: a
+ * hard two-column grid at the 480x560 cell would be two 100px cards. `minmax`
+ * keeps the collapse. At 712 with a 7px gap it computes (712 - 7) / 2 = 352.5,
+ * which is `.start`'s measured width to the tenth; the third column would need
+ * 3 x 300 + 14 = 914. */
 .home-starter-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  /* `.starts{gap:7px}`. */
+  gap: 7px;
 }
 
 .home-starter {
   display: flex;
   align-items: center;
-  gap: 10px;
+  /* 11px, `.start{gap:11px}`. */
+  gap: 11px;
   min-height: 56px;
-  padding: 8px 12px;
+  /* 10px 13px, `.start{padding:10px 13px}`, which takes the card from 56px
+   * tall to the mockup's 58. It was 8px 12px — a pair this sheet uses nowhere
+   * else, 2px and 1px under the reference, and the sort of drift that reads as
+   * "slightly cramped" without ever being nameable. */
+  padding: 10px 13px;
   /* DASHED, and it is the one place in this sheet that is. The mockups draw a
    * two-tier language on the home screen and the tiers are one border-style
    * apart: a solid faintly-filled card is a thing that EXISTS (a conversation
@@ -468,6 +667,14 @@
    * check further down reads this file as text and a mockup token named in a
    * comment would look like a token this sheet spends.) */
   border: 1px dashed var(--shell-line);
+  /* 12px AND NOT THE MOCKUPS' 11, deliberately, and this is the one place the
+   * home screen declines a measured number. `.start` and `.st-t` round to 11px
+   * while `.crow` — a card of the same tier, in the same column, eight rows
+   * up — rounds to 12; the mockups are 1px inconsistent with themselves here.
+   * design.md's tiered rounding is a real rule and `--radius-lg` is this app's
+   * tier for a card, so the choice is between matching the reference on two
+   * elements and disagreeing with it on a third, or having one radius for
+   * cards. REJECTED: an 11px literal on `.home-starter` and `.home-tile`. */
   border-radius: var(--radius-lg);
   background: transparent;
   color: var(--text-primary);
@@ -553,11 +760,18 @@
 
 .home-tile {
   display: flex;
-    flex-direction: column;
-    padding: 12px;
-    border: 1px solid var(--shell-line);
-    border-radius: var(--radius-lg);
-    background: var(--surface-card);
+  flex-direction: column;
+  /* `.st-t{padding:9px 12px 10px}` — asymmetric, and it is the numeral that
+   * makes it so: `.home-tile-value` is 21px on a 24px line and sits closer to
+   * the top of its box than the 10px label does to the bottom of it, so equal
+   * padding reads bottom-heavy. It was a flat 12px. */
+  padding: 9px 12px 10px;
+  border: 1px solid var(--shell-line);
+  /* `--radius-lg`, for `.home-starter`'s reason four rules up: the mockups
+   * round this at 11 and `.crow` at 12, and this app has one radius for a
+   * card. */
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
 }
 
 /* The one tile that means "do something", in the colour this app already
@@ -606,7 +820,13 @@
   font-size: var(--text-3xs);
   line-height: var(--lh-xs);
   font-weight: 700;
-  letter-spacing: 0.09em;
+  /* .08em, WHICH IS THE NUMBER THE PARAGRAPH ABOVE ALREADY QUOTES. It shipped
+   * at .09 — 0.9px against `.st-t .l`'s 0.76px — so the rule and its own
+   * citation disagreed, which is worse than either value being wrong: a reader
+   * checking this against the mockup would have found the answer written down
+   * and not applied. .09em is right one rule below, on `.home-section`, where
+   * the mockups' `.lsec-h .ttl` really does set it. */
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 

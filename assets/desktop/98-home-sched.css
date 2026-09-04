@@ -21,7 +21,15 @@
     margin-top: 32px;
     padding: 8px 12px;
     border: 1px dashed var(--shell-line);
-    border-radius: var(--radius-md);
+    /* 10px, `.schedrow{border-radius:10px}`, written as a literal because this
+     * shell's tiers are 8 (`--radius-md`) and 12 (`--radius-lg`) and the row is
+     * neither: it is one line of 12px text in a 35px box, half the height of
+     * the `.home-starter` cards above it, so `--radius-lg` would curve a strip.
+     * `--radius-md` was the nearer tier and it was 2px flatter than the
+     * reference. Unlike `.home-starter`'s radius four files up, there is no
+     * competing card at another value to be consistent WITH — this element has
+     * no siblings. */
+    border-radius: 10px;
     background: transparent;
     color: var(--text-secondary);
     font: inherit;
