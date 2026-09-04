@@ -108,9 +108,30 @@ pub(crate) fn path_for(name: &str) -> Option<&'static str> {
         // a logo and this app draws none; a repo is a book everywhere else in
         // the tooling, and the shape survives at 12px.
         "repo" => "M6 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a2 2 0 0 1 0-4h12",
-        // Two commits and the cut between them — the base-branch pill. Same
-        // circle idiom as "pull-request" above, so the two read as a family.
-        "git-branch" => "M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9",
+        // Three nodes and a merge: the base-branch pill on the phone, and the
+        // mark the mockups put on the Code plane in all three of the places
+        // they name it (#130 — the seg control, the band badge, the branch
+        // chip). It was two nodes and a quarter-circle, which is not the same
+        // mark: a branch that never comes back is a fork, and what the mockups
+        // draw is a line leaving the trunk AND rejoining it.
+        //
+        // The mockups' own path, rescaled from their 16-unit grid to this
+        // file's 24 by multiplying every coordinate by 1.5 — nothing here is
+        // redrawn by eye. `22-nav-disclosure.html` has it as
+        // `<circle cx=4 cy=3.5 r=1.7> <circle cx=4 cy=12.5 r=1.7>
+        //  <circle cx=12 cy=3.5 r=1.7>` plus
+        // `M4 5.2v5.6M12 5.2v1.2c0 2-1.6 2.4-3.4 2.7C7 9.9 5.6 10.3 5.6 12`.
+        //
+        // The circles keep "pull-request"'s idiom — one arc pair and a close,
+        // so both marks are still one stroked path and read as a family — but
+        // NOT its radius. 1.7 rescales to 2.55, and that is the radius the
+        // merge curve is drawn for: it ends at (8.4, 18), which is 2.51 units
+        // from the bottom node's centre, i.e. on that circle's edge. At r=3 the
+        // curve would stop inside the node instead of touching it.
+        "git-branch" => "M6 7.8a2.55 2.55 0 1 0 0-5.1 2.55 2.55 0 0 0 0 5.1zM6 7.8v8.4\
+                         M6 21.3a2.55 2.55 0 1 0 0-5.1 2.55 2.55 0 0 0 0 5.1z\
+                         M18 7.8a2.55 2.55 0 1 0 0-5.1 2.55 2.55 0 0 0 0 5.1z\
+                         M18 7.8v1.8c0 3-2.4 3.6-5.1 4.05C10.5 14.85 8.4 15.45 8.4 18",
         // Appended for the recipes/skills/scheduler/extensions screens, in
         // the order they were needed rather than sorted into the set above —
         // a re-sort is a diff over every line for the sake of alphabetical
