@@ -76,6 +76,20 @@ pub(crate) struct Settings {
 ///   dx build --platform ios
 /// ```
 ///
+/// Against a real brain rather than the mocks, add `GOOSE_DEV_FINGERPRINT`:
+/// a `goose serve` holding its own TLS is self-signed, and without the pin the
+/// client falls back to chain verification and refuses the certificate.
+///
+/// `option_env!` is read by the COMPILER, not at run time. Cargo does track it
+/// — rustc records env dependencies in its dep-info, so changing a seed does
+/// rebuild this crate, and no `build.rs` is needed to make that happen
+/// (measured, because the opposite is an easy thing to assume). What it cannot
+/// do is reach a `dx serve` that was started without the variables set: the
+/// value is baked from the environment of the process that BUILDS, so an
+/// already-running server keeps handing out whatever it was launched with.
+/// Every field arriving empty means the build ran without the seeds, not that
+/// the app ignored them.
+///
 /// A release build expands to an empty string no matter what was set, so a
 /// development endpoint cannot ride along into one.
 macro_rules! dev_seed {
@@ -96,7 +110,13 @@ impl Default for Settings {
         Self {
             server_url: dev_seed!("GOOSE_DEV_SERVER_URL"),
             secret_key: dev_seed!("GOOSE_DEV_SECRET_KEY"),
-            fingerprint: String::new(),
+            // Seeded like the rest, and it has to be: a `goose serve` that
+            // holds its own TLS presents a SELF-SIGNED certificate, so an empty
+            // fingerprint is not "no pinning, carry on" — `parse_fingerprint`
+            // returns `Ok(None)`, the client falls back to ordinary chain
+            // verification, and the connection fails. Every other field could
+            // be seeded and the run would still not reach a real brain.
+            fingerprint: dev_seed!("GOOSE_DEV_FINGERPRINT"),
             working_dir: dev_seed!("GOOSE_DEV_WORKING_DIR"),
             code_server_url: dev_seed!("GOOSE_DEV_CODE_URL"),
             code_password: dev_seed!("GOOSE_DEV_CODE_PASSWORD"),
