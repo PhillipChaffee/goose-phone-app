@@ -17,6 +17,25 @@
 //! it is the one a reader can catch you out on fastest: the mockups promise
 //! ten chords and this shell binds four. A legend that lists a chord nothing
 //! listens for is worse than a wrong number, because the reader presses it.
+//!
+//! AND ONE SECTION DROPPED FOR THE OPPOSITE REASON — not because there was no
+//! source, but because there was, and a third rendering of it is not fidelity.
+//! The chat home's `Conversations` block (`today · 3 · 41 turns`, `this week ·
+//! 12 · 148 turns`) is buildable: `SessionInfo::message_count()` reads
+//! `_meta.messageCount` and is already rendered per row at `sidebar.rs:243` and
+//! `home.rs:562`, and `sidebar.rs`'s `band_of_stamp` already bands the same
+//! list into Today / Yesterday / Earlier. But the count of that list is
+//! already in the window band beside the crumb (`mod.rs`, `"{n} conversations
+//! kept"`) and the banding is already in the sidebar — so an aggregate here
+//! would be the third place on one screen restating one list, in a column
+//! whose whole argument is that it says things nothing else does. Written down
+//! here rather than left as an absence, because every other dropped section in
+//! this file is, and a drop nobody recorded reads as an oversight.
+//!
+//! Its third row, `handed to Code · 2 threads`, is a hard drop of the ordinary
+//! kind: nothing links a goose session to a code chat — `grep -rn
+//! 'handoff\|hand_to_code' src/` finds nothing — so it is a figure no server
+//! sends.
 
 use dioxus::prelude::*;
 
@@ -35,23 +54,51 @@ pub(crate) struct Fact {
     pub accent: bool,
 }
 
-/// WHERE THE CHAT HALF IS TALKING TO.
+/// WHERE A HALF IS TALKING TO — ONE FUNCTION FOR BOTH PLANES.
 ///
-/// Three rows. The mockup's other two — `round trip p50 12 ms · p99 31 ms` and
-/// `tailnet tag:phone → tag:server` — have no source: `AcpClient` records no
-/// per-request timing, and nothing in this app reads Tailscale ACL tags. It
-/// knows a URL and a secret.
-pub(crate) fn chat_facts(ctx: &AppCtx) -> Vec<Fact> {
-    let mut out = Vec::new();
-    if let Some(host) = super::home::host_of(&ctx.settings.peek().server_url) {
-        out.push(Fact {
-            key: "host".to_owned(),
-            value: host,
-            mono: true,
-            accent: true,
-        });
-    }
-    if let ConnState::Connected { agent } = (ctx.conn)() {
+/// The Code half had no such block at all: `facts` was `Plane::Code =>
+/// Vec::new()`, so the code endpoint appeared nowhere in the window, on any
+/// screen, while the chat half printed `host` on every screen it has. On the
+/// Code home that made the whole 344px column one grey sentence telling a
+/// connected reader to "Connect, then open something."
+///
+/// One function rather than two, for `mod.rs::conn_of`'s reason written down
+/// there: the two blocks answer the same question, and two copies of it is two
+/// chances for one to be left behind. `conn_of` is what this calls, so the
+/// block and the band's own pill cannot disagree about which wire is up.
+///
+/// Three rows each. The mockups' other rows have no source and are not here:
+/// chat's `round trip p50 12 ms · p99 31 ms` and `tailnet tag:phone →
+/// tag:server` (no per-request timing is recorded, and nothing reads Tailscale
+/// ACL tags), and code's `queue 0` beside the host, `image rust 1.89 · node 22`
+/// and `runners busy 2 of 4` — the manager reports an active count, which is
+/// already the `agent` row, and nothing else on that list.
+pub(crate) fn plane_facts(ctx: &AppCtx, plane: Plane) -> Vec<Fact> {
+    // Scoped, so the settings borrow ends before `conn_of` reads a signal.
+    let host = {
+        let settings = ctx.settings.peek();
+        super::home::host_of(match plane {
+            Plane::Chat => &settings.server_url,
+            Plane::Code => &settings.code_server_url,
+        })
+    };
+
+    // NO HOST, NO BLOCK. The transport row below exists to say what the host
+    // row means, so without one it explains nothing — and a heading over a
+    // single sentence about a URL nobody has entered is what would take the
+    // empty state ("Connect, then open something") off both planes for good.
+    // A `Connected` state implies a URL was used, so this cannot hide one.
+    let Some(host) = host else {
+        return Vec::new();
+    };
+
+    let mut out = vec![Fact {
+        key: "host".to_owned(),
+        value: host,
+        mono: true,
+        accent: true,
+    }];
+    if let ConnState::Connected { agent } = super::conn_of(ctx, plane) {
         out.push(Fact {
             key: "agent".to_owned(),
             value: agent,
@@ -61,15 +108,34 @@ pub(crate) fn chat_facts(ctx: &AppCtx) -> Vec<Fact> {
     }
     // A CONSTANT, and legitimately one: it is a fact about this client rather
     // than a figure from a server. `goose-acp-client` is ACP over a tungstenite
-    // WebSocket and cannot be anything else. It stays because it is the row
-    // that tells the reader what the host row above it means.
+    // WebSocket and `opencode-client` is a reqwest REST client with an SSE
+    // stream at `/event`; neither can be anything else. It stays because it is
+    // the row that tells the reader what the host row above it means.
     out.push(Fact {
         key: "transport".to_owned(),
-        value: "ACP over WebSocket".to_owned(),
+        value: match plane {
+            Plane::Chat => "ACP over WebSocket",
+            Plane::Code => "REST + SSE over HTTP",
+        }
+        .to_owned(),
         mono: false,
         accent: false,
     });
     out
+}
+
+/// What that block is called on each half.
+///
+/// The mockup's heading is "Code plane", which names this pane rather than the
+/// thing at the other end of the wire; the chat half's "goose server" names the
+/// server. `code agents` is the name `src/code.rs` already gives it in the
+/// connection state it reports — "code agents (N active)" — so the heading and
+/// the row under it use one word for one thing.
+const fn plane_title(plane: Plane) -> &'static str {
+    match plane {
+        Plane::Chat => "goose server",
+        Plane::Code => "code agents",
+    }
 }
 
 /// WHAT THE OPEN CONVERSATION IS RUNNING ON — the server's own config options,
@@ -438,10 +504,7 @@ fn Facts(title: String, facts: Vec<Fact>) -> Element {
 pub(crate) fn Inspector(plane: Plane, on_subject: bool) -> Element {
     let ctx = crate::state::use_app_ctx();
 
-    let facts = match plane {
-        Plane::Chat => chat_facts(&ctx),
-        Plane::Code => Vec::new(),
-    };
+    let facts = plane_facts(&ctx, plane);
     let session = if on_subject && plane == Plane::Chat {
         session_facts(&ctx)
     } else {
@@ -497,7 +560,7 @@ pub(crate) fn Inspector(plane: Plane, on_subject: bool) -> Element {
                 }
 
                 if !facts.is_empty() {
-                    Facts { title: "goose server", facts }
+                    Facts { title: plane_title(plane), facts }
                 }
                 if !tree.is_empty() {
                     Facts { title: "Working tree", facts: tree }
@@ -678,7 +741,7 @@ pub(crate) fn Inspector(plane: Plane, on_subject: bool) -> Element {
 )]
 mod tests {
     use super::{
-        chat_facts, code_facts, context_meter, diff_bars, extension_chips, session_facts,
+        code_facts, context_meter, diff_bars, extension_chips, plane_facts, session_facts,
         tool_timeline, touched_files, Chord, Inspector, CHORDS,
     };
     use crate::nav::Plane;
@@ -823,7 +886,7 @@ mod tests {
                     agent: "goose 1.47.0".to_owned(),
                 });
             },
-            chat_facts,
+            |ctx| plane_facts(ctx, Plane::Chat),
         );
         let by = |k: &str| {
             facts
@@ -846,14 +909,120 @@ mod tests {
         }
     }
 
-    /// A disconnected client names no agent — it has not been told one.
+    /// A disconnected client names no agent — it has not been told one. The
+    /// URL is set, so the block exists and the absence is the agent row's.
     #[test]
     fn an_unopened_socket_names_no_agent() {
-        let facts = crate::testkit::with_ctx(|_| {}, chat_facts);
+        let facts = crate::testkit::with_ctx(
+            |ctx| {
+                let mut settings = ctx.settings;
+                settings.write().server_url = "https://tail-mini.ts.net:3285/acp".to_owned();
+            },
+            |ctx| plane_facts(ctx, Plane::Chat),
+        );
+        assert!(!facts.is_empty(), "a URL was set, so there is a block");
         assert!(
             facts.iter().all(|f| f.key != "agent"),
             "an agent was named over a socket nobody has opened"
         );
+    }
+
+    /// THE CODE HALF SAYS WHERE IT IS TALKING TO, on every screen it has.
+    ///
+    /// It said nothing anywhere: `facts` was `Plane::Code => Vec::new()`, so
+    /// the code endpoint appeared in no part of the window, and the Code home
+    /// was 344px of "Nothing to inspect yet. Connect, then open something."
+    /// shown to a reader who was connected. The chat half prints `host` on
+    /// every screen it has.
+    ///
+    /// Held against the OTHER plane's settings as well, because the failure
+    /// this replaces is a column confidently describing the wrong wire —
+    /// `mod.rs::conn_of` exists for the same reason, and this calls it.
+    ///
+    /// REPRODUCED: point the `Code` arm of either `match` in `plane_facts` at
+    /// the chat settings and the host assertion fails naming the goose host.
+    #[test]
+    fn the_code_half_says_where_it_is_talking_to() {
+        let facts = crate::testkit::with_ctx(
+            |ctx| {
+                let mut settings = ctx.settings;
+                let mut write = settings.write();
+                write.server_url = "https://goose.ts.net:3285/acp".to_owned();
+                write.code_server_url = "https://code.ts.net:4399".to_owned();
+                drop(write);
+                let mut conn = ctx.code_conn;
+                conn.set(ConnState::Connected {
+                    agent: "code agents (2 active)".to_owned(),
+                });
+            },
+            |ctx| plane_facts(ctx, Plane::Code),
+        );
+        let by = |k: &str| {
+            facts
+                .iter()
+                .find(|f| f.key == k)
+                .map(|f| f.value.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(by("host"), "code.ts.net:4399", "the code half named");
+        assert_eq!(by("agent"), "code agents (2 active)");
+        assert_eq!(by("transport"), "REST + SSE over HTTP");
+        for fact in &facts {
+            assert!(
+                !fact.value.contains("queue")
+                    && !fact.value.contains("runners")
+                    && !fact.value.contains("image"),
+                "a row is quoting the mockup's queue depth, runner count or \
+                 container image, none of which the manager reports: {} = {}",
+                fact.key,
+                fact.value
+            );
+        }
+    }
+
+    /// THE CODE HOME IS NO LONGER ONE GREY SENTENCE, rendered.
+    ///
+    /// `desktop-code-list` in `docs/gallery-states.json` is the whole of what
+    /// this column used to be on that screen: `<p class="insp-empty">Nothing to
+    /// inspect yet. Connect, then open something.</p>`, shown to a reader who
+    /// is connected, in 344px.
+    #[test]
+    fn the_code_home_names_its_endpoint_instead_of_telling_you_to_connect() {
+        let html = crate::testkit::render_settled(
+            |ctx| {
+                let mut settings = ctx.settings;
+                settings.write().code_server_url = "https://code.ts.net:4399".to_owned();
+                let mut conn = ctx.code_conn;
+                conn.set(ConnState::Connected {
+                    agent: "code agents (2 active)".to_owned(),
+                });
+            },
+            || rsx! { Inspector { plane: Plane::Code, on_subject: false } },
+        );
+        assert!(
+            !html.contains("insp-empty"),
+            "a connected reader is still being told to connect: {html}"
+        );
+        assert!(html.contains("code agents"), "{html}");
+        assert!(html.contains("code.ts.net:4399"), "{html}");
+        assert!(
+            !html.contains("goose server"),
+            "the code half is flying the other wire's heading: {html}"
+        );
+    }
+
+    /// NO URL, NO BLOCK — which is what keeps the empty state reachable.
+    ///
+    /// The transport row exists to say what the host row means, so on its own
+    /// it is a heading over a sentence about a server nobody has named. Drop
+    /// this guard and `insp-empty` becomes unreachable on both planes and the
+    /// rule styling it becomes dead.
+    #[test]
+    fn an_unconfigured_half_gets_no_block_at_all() {
+        for plane in [Plane::Chat, Plane::Code] {
+            let facts = crate::testkit::with_ctx(|_| {}, |ctx| plane_facts(ctx, plane));
+            assert!(facts.is_empty(), "{plane:?}: {facts:?}");
+        }
     }
 
     /// The session block is the server's OWN option list, all of it — not the
