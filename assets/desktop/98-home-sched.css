@@ -18,7 +18,20 @@
     gap: 9px;
     width: 100%;
     min-height: 2rem;
-    margin-top: 32px;
+    /* `auto`, not a number, and it is `.land .schedrow{margin-top:auto}` ported
+     * rather than approximated. The row is the last thing before the closing
+     * hairline, so on a tall window it belongs on the column's bottom edge —
+     * that is what gives the column an edge at all — and on a short one it
+     * belongs immediately under the cards, because a fixed gap there is 32px
+     * of nothing pushing the footnote off the screen.
+     *
+     * It only means something because `.home-inner` is now `min-height: 100%`
+     * (`40-home-chat.css`): an auto margin distributes SLACK, and a box that
+     * sizes to its content has none. Measured at 1440x860 with the row present:
+     * the column is 860px in a 764px content box with the fixed margin and
+     * 828px with this one, and at 1600x1000 the row lands on the bottom edge
+     * instead of 32px under the last card with 140px of blank beneath it. */
+    margin-top: auto;
     padding: 8px 12px;
     border: 1px dashed var(--shell-line);
     /* 10px, `.schedrow{border-radius:10px}`, written as a literal because this
@@ -95,6 +108,15 @@
     font-size: 12px;
 }
 
-.home-footnote .d {
-  color: var(--text-tertiary);
-}
+/* `.home-footnote .d` IS DELETED RATHER THAN LEFT DEAD.
+ *
+ * It styled the mockups' `<span class="d">·</span>`, the dimmed middot between
+ * the footnote's two sentences, and nothing in `src/` has ever emitted a
+ * `class="d"`. The separator now ships — as a character in the string, see
+ * `src/shell/desktop/home.rs` — and it is deliberately NOT dimmed: the rule's
+ * value was `--text-tertiary`, which `40-home-chat.css` measures at 2.03:1 on
+ * the light card and 2.91:1 on the dark one and refuses for the identical
+ * element eight rules up (`.home-chip + .home-chip::before`), because a
+ * separator is a non-text indicator and owes 3:1. `.home-footnote` is already
+ * `--text-secondary`, so the middot inherits the rung this sheet has already
+ * decided it should have and there is nothing left for a class to carry. */

@@ -633,6 +633,38 @@ pub(crate) fn starters_for(ctx: &AppCtx) -> Vec<Starter> {
     out
 }
 
+/// WHAT THE "WAYS TO START" HEADING SAYS ON ITS TRAILING EDGE.
+///
+/// `.home-section` is a two-item row — the name of the section on one side,
+/// what it holds on the other — and this one shipped with the second item
+/// missing, so the two headings on the chat home were asymmetric: one carried
+/// a value and one carried nothing. The mockups' own is
+/// `<span class="meta">recipes &amp; skills</span>`.
+///
+/// DERIVED FROM THE CARDS ON SCREEN rather than pasted from the mockup, and
+/// the difference shows up on a real server. `starters_for` caps at four with
+/// recipes first, so a server with nine recipes and three skills draws four
+/// recipe cards — and a heading reading "recipes & skills" over four recipes
+/// names a kind the reader cannot see. This says what is actually in the grid
+/// underneath it, which is the same rule as the count beside "Pick up where
+/// you left off": a section's meta is a fact about that section.
+///
+/// `None` for an empty list, which the caller never asks about — the section
+/// does not render at all without starters. It is `Option` anyway rather than
+/// an empty string, because an empty `span` inside a `space-between` row is
+/// not nothing: it is a flex item, and it would hold the heading over on the
+/// left while looking like a heading that had lost its value.
+pub(crate) fn starter_kinds(starters: &[Starter]) -> Option<&'static str> {
+    let recipes = starters.iter().any(|s| s.kind == "recipe");
+    let skills = starters.iter().any(|s| s.kind == "skill");
+    match (recipes, skills) {
+        (true, true) => Some("recipes & skills"),
+        (true, false) => Some("recipes"),
+        (false, true) => Some("skills"),
+        (false, false) => None,
+    }
+}
+
 /// The first line of a description, trimmed, or `None` if there is not one.
 ///
 /// A recipe's description is free text the author wrote and some of them run
@@ -824,10 +856,34 @@ pub(crate) fn Home(plane: Plane) -> Element {
     // make it over, including one that arrives after this screen is already up
     // — which on the desktop is the common case, because the home screen is
     // what the window opens on.
+    //
+    // THE SCHEDULER IS ON THIS LIST NOW, and it was the last block on the
+    // screen that was code nobody could reach. `sched_line` reads
+    // `ctx.scheduler.list`, and the only writer of that signal is
+    // `scheduler::ensure_loaded`, called from exactly one place in `src/` —
+    // `views::scheduler`'s own mount. So the dashed row at the bottom of this
+    // column appeared only once the reader had been to Library -> Scheduler in
+    // that process, which is precisely the click the row exists to save. It is
+    // the same defect the paragraph above records for "Ways to start", one
+    // block further down the page, and it survived that fix because the fix
+    // listed the signals it knew about rather than the ones this screen reads.
+    //
+    // THE SIGNAL IS READ BEFORE THE PROP, and that is load-bearing rather than
+    // tidy. A `use_effect` subscribes to what it actually READS, and `plane`
+    // is a prop: `plane == Plane::Chat && (ctx.conn)()…` short-circuits on the
+    // code half, so on a window that opened there the closure subscribed to
+    // NOTHING and could never run again — including after the reader switched
+    // to Chat, because `Home` is one component for both halves and a prop
+    // change is not a signal change. `CodeDial` below carries the same lesson
+    // in its own words, measured: "it subscribed to nothing at all and could
+    // never re-run for any reason". Reading `conn` unconditionally is what
+    // keeps the connection arriving under an already-open screen a trigger.
     use_effect(move || {
-        if plane == Plane::Chat && (ctx.conn)().is_connected() {
+        let connected = (ctx.conn)().is_connected();
+        if plane == Plane::Chat && connected {
             crate::recipes::refresh(&ctx);
             crate::skills::ensure_loaded(&ctx);
+            crate::scheduler::ensure_loaded(&ctx);
             let ctx = ctx;
             spawn(async move { crate::extensions::refresh(&ctx).await });
         }
@@ -1068,7 +1124,12 @@ pub(crate) fn Home(plane: Plane) -> Element {
                 // own list rather than invented.
                 if plane == Plane::Chat && !starters.is_empty() {
                     div { class: "home-starters",
-                        h2 { class: "home-section", "Ways to start" }
+                        h2 { class: "home-section",
+                            "Ways to start"
+                            if let Some(kinds) = starter_kinds(&starters) {
+                                span { class: "home-section-meta", "{kinds}" }
+                            }
+                        }
                         div { class: "home-starter-grid",
                             for starter in starters {
                                 button {
@@ -1242,9 +1303,52 @@ pub(crate) fn Home(plane: Plane) -> Element {
                         let (first, second) = footnote(&ctx);
                         rsx! {
                             p { class: "home-footnote",
+                                // THE GLYPH THE SHEET HAS ALWAYS RESERVED ROOM
+                                // FOR. `.home-footnote` is a flex row with
+                                // `gap: 9px` and a `.home-footnote > .icon`
+                                // rule beside it, both taken from the mockups'
+                                // `.footnote`, and neither had anything to lay
+                                // out: this paragraph emitted two strings and
+                                // no icon, so the rule was dead and the note
+                                // began flush against the hairline above it.
+                                //
+                                // THE CHAT PLANE'S OWN MARK, and not the
+                                // mockups' generic info circle, because
+                                // `src/icons.rs` has no info glyph and adding
+                                // one is another lane's file. "message" is
+                                // what `nav::Plane::Chat` already flies in the
+                                // sidebar's segmented control, and this
+                                // sentence is about what the Chat plane IS —
+                                // so the substitution says something true
+                                // rather than something generic. Swap it if a
+                                // circled `i` ever lands.
+                                Icon { name: "message" }
                                 "{first}"
                                 if let Some(second) = second {
-                                    " {second}"
+                                    // A MIDDOT, and it is the separator the
+                                    // mockups draw between these two
+                                    // sentences: without it the footnote reads
+                                    // as one run-on pair, "…no diffs. Code has
+                                    // 2 working trees."
+                                    //
+                                    // A character in the string rather than
+                                    // the mockups' `<span class="d">`, and
+                                    // that span is now deleted from the sheet
+                                    // rather than left dead. Its whole job was
+                                    // to dim the glyph to a third tier, and
+                                    // this sheet has already refused that once
+                                    // for the identical element: the note on
+                                    // `.home-chip + .home-chip::before` in
+                                    // `40-home-chat.css` measures
+                                    // `--text-tertiary` at 2.03:1 light and
+                                    // 2.91:1 dark and takes `--text-secondary`
+                                    // instead, because a separator is a
+                                    // non-text indicator and owes 3:1. The
+                                    // footnote is already set in
+                                    // `--text-secondary`, so an undimmed
+                                    // middot IS that decision, and it needs no
+                                    // markup to carry it.
+                                    " \u{b7} {second}"
                                 }
                             }
                         }
@@ -1264,7 +1368,7 @@ pub(crate) fn Home(plane: Plane) -> Element {
 mod tests {
     use super::{
         code_board, code_tiles, compose_chips, compose_placeholder, footnote, lede, part_of_day,
-        recent_for, sched_line, standing, Home, RecentState, TreeState,
+        recent_for, sched_line, standing, starter_kinds, Home, RecentState, Starter, TreeState,
     };
     use crate::nav::Plane;
     use crate::views::press::Pressable;
@@ -2282,6 +2386,221 @@ mod tests {
              no-op wherever it is emitted: a custom property in another \
              property's value substitutes at the element that DECLARES it, and \
              `--gutter` is declared on `.pane-main`"
+        );
+    }
+
+    /// THIS SCREEN ASKS FOR THE SCHEDULER, and until now it did not.
+    ///
+    /// The dashed row at the foot of this column reads `ctx.scheduler.list`,
+    /// and the only writer of that signal was `views::scheduler`'s own mount —
+    /// so the block rendered nothing until the reader had been to
+    /// Library -> Scheduler in that process, which is the click it exists to
+    /// save.
+    ///
+    /// ASSERTED ON THE CALL SITE, and that is a limitation stated rather than
+    /// hidden. The fetch itself needs a live `AcpClient`, which arrives from a
+    /// loopback goose in `serverkit::Harness` — and that harness mounts its own
+    /// probe component rather than a caller's, so there is no way in this tree
+    /// to mount `Home` in front of a server and count the request. What CAN be
+    /// checked is that the mount effect names the scheduler at all, which is
+    /// the thing that was missing and the thing a future edit to this list
+    /// would drop. `code_of` strips the comments, so the paragraph beside the
+    /// effect explaining this cannot satisfy it.
+    #[test]
+    fn the_chat_home_fetches_every_list_it_draws() {
+        let code = crate::selfscan::code_of("home.rs", include_str!("home.rs"));
+        for fetch in [
+            "recipes::refresh",
+            "skills::ensure_loaded",
+            "scheduler::ensure_loaded",
+            "extensions::refresh",
+        ] {
+            assert!(
+                code.contains(fetch),
+                "the chat home's mount effect does not call `{fetch}`, so the \
+                 block that reads its signal renders only for a reader who has \
+                 already been to the Library screen that fetches it"
+            );
+        }
+    }
+
+    /// …AND THE EFFECT ACTUALLY FIRES on a connected chat home.
+    ///
+    /// The source check above says the fetches are written down; this says the
+    /// closure they are written in runs. Nothing observable comes back —
+    /// `refresh` peeks `ctx.client`, which is `None` without a loopback goose —
+    /// so what is asserted is the guard: over a live connection this screen
+    /// draws the lede, which is the same `connected` the effect branches on.
+    /// `render_settled` rather than `render`, because an effect has not run
+    /// when the first pass ends.
+    #[test]
+    fn a_connected_chat_home_runs_its_mount_fetch() {
+        let html = crate::testkit::render_settled(
+            |ctx| {
+                let mut conn = ctx.conn;
+                conn.set(crate::state::ConnState::Connected {
+                    agent: "goose".to_owned(),
+                });
+            },
+            || rsx! { Home { plane: Plane::Chat } },
+        );
+        assert!(
+            html.contains("home-lede"),
+            "the connected home did not render its lede, so the effect's own \
+             guard was false and nothing in it ran: {}",
+            &html[..html.len().min(400)]
+        );
+        assert!(
+            !html.contains("home-standing"),
+            "the connected home is still showing the disconnected sentence"
+        );
+    }
+
+    /// …AND IT SUBSCRIBES TO THE CONNECTION WHICHEVER HALF IS ON SCREEN.
+    ///
+    /// `use_effect` re-runs for the signals it READ. `plane` is a prop, so
+    /// `plane == Plane::Chat && (ctx.conn)()…` short-circuits on the code half
+    /// and subscribes to nothing at all — the closure can then never run again
+    /// for any reason, including the reader switching to Chat, because `Home`
+    /// is one component for both halves and a prop change is not a signal
+    /// change. `CodeDial` two hundred lines up carries the same lesson, and it
+    /// was measured there: the Code plane sat at "Not connected" with the
+    /// gateway answering and not one request in the server's log.
+    #[test]
+    fn the_mount_fetch_reads_the_connection_before_it_reads_the_prop() {
+        let code = crate::selfscan::code_of("home.rs", include_str!("home.rs"));
+        let effect = code
+            .split("use_effect(move || {")
+            .nth(1)
+            .expect("the chat home still has a mount effect");
+        let conn = effect
+            .find("ctx.conn")
+            .expect("the effect still reads conn");
+        let prop = effect
+            .find("plane == Plane::Chat")
+            .expect("the effect is still scoped to the chat half");
+        assert!(
+            conn < prop,
+            "the mount effect tests the `plane` prop before it reads `conn`, \
+             so on the code half it short-circuits, subscribes to no signal at \
+             all and can never re-run — including after the reader switches to \
+             Chat"
+        );
+    }
+
+    /// A starter of one kind, for the heading's meta.
+    fn starter_of(kind: &'static str) -> Starter {
+        Starter {
+            name: "whatever".to_owned(),
+            description: None,
+            kind,
+            icon: "book",
+            tab: crate::state::Tab::Recipes,
+        }
+    }
+
+    /// THE HEADING NAMES WHAT IS UNDER IT, and only that.
+    ///
+    /// The mockup's meta is the literal string "recipes & skills", and pasting
+    /// it would be wrong on a real server: `starters_for` caps at four with
+    /// recipes first, so nine recipes and three skills draw four recipe cards
+    /// under a heading naming a kind that is not on the screen.
+    #[test]
+    fn the_ways_to_start_heading_says_which_kinds_are_in_it() {
+        assert_eq!(
+            starter_kinds(&[starter_of("recipe"), starter_of("skill")]),
+            Some("recipes & skills")
+        );
+        assert_eq!(
+            starter_kinds(&[starter_of("recipe")]),
+            Some("recipes"),
+            "a grid of recipes is headed as though it held skills too"
+        );
+        assert_eq!(
+            starter_kinds(&[starter_of("skill")]),
+            Some("skills"),
+            "a grid of skills is headed as though it held recipes too"
+        );
+        assert_eq!(
+            starter_kinds(&[]),
+            None,
+            "an empty grid still writes a meta, which in a `space-between` row \
+             is a flex item — a heading holding itself over to the left with a \
+             value that is not there"
+        );
+    }
+
+    /// THE HEADING RENDERS ITS META, which is the half a unit test cannot see.
+    ///
+    /// `starter_kinds` being right is not the same as the `h2` carrying it:
+    /// this section shipped for months with `h2 { "Ways to start" }` and no
+    /// child at all, beside a "Pick up where you left off" that had one.
+    #[test]
+    fn the_ways_to_start_heading_carries_its_meta_into_the_markup() {
+        let html = crate::testkit::render_seeded(
+            |ctx| {
+                let mut list = ctx.recipes.list;
+                list.write().items = vec![recipe("Morning brief")];
+            },
+            || rsx! { Home { plane: Plane::Chat } },
+        );
+        assert!(
+            html.contains("Ways to start"),
+            "the starter section did not render at all, so what follows proves \
+             nothing: {}",
+            &html[..html.len().min(400)]
+        );
+        assert!(
+            html.contains(r#"<span class="home-section-meta">recipes</span>"#),
+            "the \"Ways to start\" heading has no meta, so the two section \
+             headings on this screen are asymmetric — one carries a value and \
+             one carries nothing: {html}"
+        );
+    }
+
+    /// THE FOOTNOTE IS LED BY A GLYPH AND SEPARATED BY A MIDDOT.
+    ///
+    /// Both are the mockups' and neither was emitted, which made
+    /// `.home-footnote > .icon` and the row's `gap: 9px` dead rules and left
+    /// the two sentences reading as one run-on pair.
+    #[test]
+    fn the_footnote_is_led_by_a_glyph() {
+        let html = crate::testkit::render(|| rsx! { Home { plane: Plane::Chat } });
+        let note = html
+            .split(r#"<p class="home-footnote">"#)
+            .nth(1)
+            .expect("the chat home renders a footnote");
+        assert!(
+            note.starts_with("<svg class=\"icon\""),
+            "the footnote does not open with a glyph, so the sheet's own \
+             `.home-footnote > .icon` rule and its 9px gap lay out nothing: {}",
+            &note[..note.len().min(200)]
+        );
+    }
+
+    /// …AND THE MIDDOT ONLY APPEARS WHEN THERE IS A SECOND SENTENCE.
+    ///
+    /// `footnote`'s second string is gated on the code plane having answered,
+    /// so a window that has never been to the Code half gets one sentence —
+    /// and a separator with nothing after it would be a dangling middot.
+    #[test]
+    fn the_footnote_separates_two_sentences_and_never_dangles() {
+        let (first, second) = crate::testkit::with_ctx(|_| {}, footnote);
+        assert!(
+            second.is_none(),
+            "the disconnected fixture already has a second sentence, so the \
+             half of this test about one sentence proves nothing"
+        );
+        assert!(
+            !first.contains('\u{b7}'),
+            "the first sentence carries the separator itself, so a window that \
+             has not been to the Code half shows a middot with nothing after it"
+        );
+
+        let html = crate::testkit::render(|| rsx! { Home { plane: Plane::Chat } });
+        assert!(
+            !html.contains(&format!("{first} \u{b7}")),
+            "a middot rendered with no second sentence behind it"
         );
     }
 

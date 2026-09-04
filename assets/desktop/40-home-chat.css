@@ -66,6 +66,19 @@
   max-width: var(--measure);
   display: flex;
   flex-direction: column;
+  /* AS TALL AS THE COLUMN, AT LEAST, and it is what makes the scheduled row's
+   * `margin-top: auto` mean anything (`98-home-sched.css`). The mockups' own
+   * `.land .schedrow{margin-top:auto}` works because `.land` fills a
+   * fixed-height grid cell; this box sizes to its content, so an auto margin
+   * in it had no slack to eat and the row was laid out on a fixed 32px gap
+   * instead.
+   *
+   * `min-height` and NOT `align-items: stretch` on the parent, which is the
+   * trap the paragraph above `.home` writes up: stretch sizes this item to the
+   * CONTAINER, and content taller than that overflows the item rather than
+   * scrolling the pane — measured at 480x560 as 45px of spill over twelve
+   * cells. A minimum sets the floor and leaves the box free to grow. */
+  min-height: 100%;
   /* Down from the top rather than centred in the column. Centred looks right
    * at one window height and wrong at every other, and the composer is what
    * the eye should land on — putting it in the middle of a 1000px window puts
