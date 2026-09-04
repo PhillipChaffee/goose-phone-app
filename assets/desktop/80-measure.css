@@ -35,7 +35,32 @@
  * `max()` is what makes this a cap and not a layout: below 40rem + two edges
  * every one of these resolves to `--edge` and NOTHING moves, which is the
  * whole of the two-column and one-column tiers. Nothing here is inside a
- * breakpoint for exactly that reason. */
+ * breakpoint for exactly that reason.
+ *
+ * THE MOCKUP DOES IT THE OTHER WAY AND THE ANSWER IS STILL THIS ONE. Settled,
+ * with the measurement, so it is not re-litigated: 22-nav-disclosure's
+ * `.thread` is `padding: 20px 30px 6px` and its first `.who-line` is "298,66
+ * 768x16" — content starting 30px inside the column's own edge and running 768
+ * wide. This pane is `padding: 12px 94px 8px` with the same row at "362,128
+ * 640x16": 94px in, 128px narrower.
+ *
+ * Declined, and the paragraph above is the reason rather than a preference. A
+ * capped column pinned left leaves 600pt of nothing on one side, which reads
+ * as a layout that failed rather than one that chose; centring splits the
+ * slack. The 40rem itself is not a taste either — it is derived from goose's
+ * own desktop app three paragraphs up, and the mockups' 768 is a number from a
+ * 1096px column, not a measure anybody argued for. Taking the mockup here
+ * would also have to take the header with it (`.topbar` shares this gutter for
+ * the reason stated above), so it is one decision covering two rules and not
+ * one number.
+ *
+ * WHAT DID FOLLOW FROM RE-READING IT: the attribution row spans this measure
+ * already, 640px of it, which is the mockups' arrangement scaled — 22's `.tm`
+ * sits at the THREAD's content edge (x=1066 of a column ending at 1096), not
+ * at the column's. So there was never a pane-spanning row to build; the row
+ * has one edge because the trailing slot is empty, and it is empty because the
+ * wire carries no per-turn time. `95-transcript.css` records that drop where
+ * the slot is. */
 
 .pane-main {
   --measure: 40rem;
@@ -53,9 +78,13 @@
   padding-right: var(--gutter);
 }
 
-/* `.composer` is a bordered, shadowed card rather than a padded region, so it
- * takes the gutter as margin — the card itself has to be the measure wide, or
- * the send arrow stays 580pt from the chips it shares a bar with. */
+/* `.composer` is a bordered card rather than a padded region, so it takes the
+ * gutter as margin — the card itself has to be the measure wide, or the send
+ * arrow stays 580pt from the chips it shares a bar with.
+ *
+ * "bordered, shadowed" is what this said until `95-transcript.css` §11 rebuilt
+ * the card from the mockups and took the shadow off. The margin is unaffected
+ * and the reason for it is unchanged; only the description was stale. */
 .pane-main .composer {
   margin-left: var(--gutter);
   margin-right: var(--gutter);

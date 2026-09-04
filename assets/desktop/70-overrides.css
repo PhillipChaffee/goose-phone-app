@@ -42,13 +42,73 @@
  *
  * `background` stays. It is the same colour as the pane, so it paints nothing
  * — but `.topbar` inherits the phone's glass (`backdrop-filter` and a
- * translucent tint), and an opaque fill is what overrides it. */
+ * translucent tint), and an opaque fill is what overrides it.
+ *
+ * THE STAIR-STEP THIS 4rem WAS DERIVED FROM NO LONGER EXISTS, and the height
+ * is kept anyway — knowingly, which is the point of writing it down.
+ *
+ * "The bars are siblings across a 1pt divider" was true of the two-pane shell
+ * this rule was written for. Swept just now across all thirteen captured
+ * desktop states at 1440x860: every one renders exactly ONE `.topbar`, in
+ * `.pane-main`. The sidebar is `.navcard` and has no header of this kind, and
+ * `65-responsive.css` introduces none at any width. So the height is now
+ * derived from `.icon-btn`'s 44px alone, and nothing is left for it to line up
+ * with.
+ *
+ * Two more numbers from the same sweep, because the case for taking the bar
+ * out is stronger than the catalogue had it. The mockups have no pane header
+ * on any screen: 22's `.main` starts its thread 20px under a 46px band, where
+ * this pane starts its first `.who-line` 84px under a 34px one. Of the six
+ * states where the bar is 4rem, FIVE hold nothing but the chevron —
+ * `.topbar-actions` is `display: none` because the screen has no controls, and
+ * the heading is already taken by the window band. Only `desktop-chat` and
+ * `desktop-chat-menu` have anything else in there.
+ *
+ * It stays because the two things in it are real: the chevron closes what is
+ * open while the list stays on screen, and the New/More buttons are that
+ * screen's own controls. Removing the bar removes them, which is a decision
+ * about content and not one this sheet can take.
+ *
+ * WHAT AN OVERRULE COSTS, so the next reader does not have to re-derive it:
+ * `min-height: 3rem` here would take the five chevron-only bars to 52px once
+ * the rule below has brought the chevron to 32, and would be a NO-OP on the
+ * chat pane, because `.topbar > .icon-btn` — the two action buttons — is still
+ * a 44px box around a 13px glyph and would hold the bar open at 64. Those two
+ * buttons are the icons epic's, not this file's. Sizing them is the first move
+ * either way. */
 .topbar {
   position: static;
   min-height: 4rem;
   padding: 10px var(--edge);
   border-bottom: 0;
   background: var(--bg-primary);
+}
+
+/* THE BACK CHEVRON WAS THE HEAVIEST MARK IN THE WINDOW.
+ *
+ * Measured: `.icon-btn.back` renders a 28px glyph in a 44px circle in six of
+ * the thirteen captured desktop states, roughly twice the ink of anything else
+ * on screen, sitting 30px below a 16px sidebar toggle — so the least important
+ * control in the window was the loudest. main.css gives it `--icon-lg`
+ * (`clamp(28px, 1.75rem, 34px)`) and says why: "a whole navigation gesture on
+ * one thin glyph, so it gets the size to look deliberate". That is a phone
+ * argument — there the chevron is one of four things on the screen.
+ *
+ * `--icon-md` and a 2rem box, which is the band's own 32px/13px button, so the
+ * two chevrons in a window read as one family. The largest glyph anywhere in
+ * 22-nav-disclosure is `.gear svg` at 15px.
+ *
+ * The selector rather than pulling `--icon-lg` down on `.app > .shell`: that
+ * token's declaration is in `00-tokens.css`, which is closed, and this is the
+ * only user of it the shell renders — a re-scale there would be a blanket
+ * answer to a question with one asker. `main.css:851` is the phone's and
+ * stays. `width`/`min-height` and not `height`, because `.icon-btn` uses
+ * `min-height` on purpose (`.icon-btn.action` inherits the rule and is a
+ * labelled button). */
+.app > .shell .topbar > .icon-btn.back {
+  width: 2rem;
+  min-height: 2rem;
+  font-size: var(--icon-md);
 }
 
 /* Out of flow, centred and reserving room for controls at both ends — all
