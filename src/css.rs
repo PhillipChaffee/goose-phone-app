@@ -572,7 +572,11 @@ mod tests {
                 [
                     ("--text-primary", "#e9ecef"),
                     ("--text-secondary", "#98a1ac"),
-                    ("--ink-faint", "#98a1ac"),
+                    // NOT `--text-secondary`'s value, and the difference is the
+                    // whole point of the rung. Pinning both here is what would
+                    // have caught the first cut, where the two were one colour
+                    // and every rule spending the faint rung was a silent no-op.
+                    ("--ink-faint", "#828b96"),
                     ("--text-warning", "#f0b429"),
                     ("--bg-warning", "#f0b429"),
                     ("--text-success", "#68d391"),
@@ -603,6 +607,38 @@ mod tests {
                 );
             }
         }
+
+        // THE FAINT RUNG IS A RUNG, not a second name for the dim one.
+        //
+        // The pins above cannot catch this on their own: a change that moved
+        // BOTH tokens to one value would update both pins and pass. That is
+        // not hypothetical — it is what shipped first. `--text-secondary`
+        // landed on #98a1ac and `--ink-faint` was declared
+        // `var(--text-secondary)`, so the two were one colour, the mockups'
+        // four-tier ladder rendered as two, and every rule spending the faint
+        // rung was a no-op that `docs/audit.js` reported as Clean, because a
+        // string in the right colour is in the right colour whichever token
+        // named it.
+        //
+        // Only dark. Light aliases them on purpose — #828b96 measures 3.45:1
+        // on white, so a light window needs a DARKER faint rung, and nothing in
+        // the mockups says what it should be because they have no light mode.
+        let value = |block: &[(String, String)], prop: &str| {
+            block
+                .iter()
+                .find(|(name, _)| name == prop)
+                .map(|(_, v)| v.clone())
+        };
+        assert_ne!(
+            value(&dark, "--ink-faint"),
+            value(&dark, "--text-secondary"),
+            "the dark block of {FILE} gives `--ink-faint` and `--text-secondary` \
+             the same value, so the third ink tier does not exist and every rule \
+             that spends it paints the rung above it. Give the faint rung its \
+             own value or delete it — a token whose only effect is to be \
+             renamed is worse than no token, because the rules that read it \
+             look considered."
+        );
     }
 
     /// THE FADE AND THE PADDING ARE ONE NUMBER, and for as long as there was no
