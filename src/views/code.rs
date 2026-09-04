@@ -211,8 +211,13 @@ fn chat_ask(queue: &[(String, CodePermission)], chat_id: &str) -> Option<(CodePe
 /// for it would wake every sleeping tree; the commit and ahead counts have no
 /// endpoint at all — `ChatMeta` is id/repo/title/branch/base/status/model/
 /// `last_active` and nothing else. Both are one container-free GitHub call
-/// away on the manager's side, filed upstream and linked from the two issues.
-/// Until that lands the row says the number it has and no others.
+/// away on the manager's side — `compare/<base>...<branch>` answers
+/// `ahead_by`, `behind_by`, `total_commits` and the summed `+/-` in a single
+/// request that wakes nothing, and `pull_to_wire` already receives
+/// `commits`/`additions`/`deletions`/`changed_files` from GitHub and drops
+/// them. Filed as `PhillipChaffee/personal-ai-setup#28` and `#29`. Until one
+/// of those lands the row says the number it has and no others, because a
+/// plausible one is worse than none.
 fn render_code_row(
     ctx: &AppCtx,
     meta: &ChatMeta,

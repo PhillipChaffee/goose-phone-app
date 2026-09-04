@@ -124,6 +124,21 @@ pub struct BranchRef {
 }
 
 /// One chat from the manager's metadata index.
+///
+/// **What a board row wants and this does not have** (this repo's #82, filed
+/// upstream as `PhillipChaffee/personal-ai-setup#29`). No commit count, no
+/// ahead-count, no behind-count, no diffstat, no merge state. This struct is
+/// the whole of `Chat.to_wire` in `scripts/vps/code-agent-manager.py` minus
+/// the manager's own bookkeeping, and the manager keeps none of those either
+/// — it holds no clone; the working tree is inside the chat's container.
+///
+/// The absence is a server gap and not a decoding one, so nothing is added
+/// here speculatively. One `GET /repos/<slug>/compare/<base>...<branch>` on
+/// the manager's side answers all of them at once, container-free and within
+/// the documented PAT's `Contents: read`; the app's only diffstat today is
+/// `CodeClient::diff`, which is proxied to the container and therefore wakes
+/// it, so a list cannot be filled from it without starting every container on
+/// the board.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct ChatMeta {
     pub id: String,
@@ -251,6 +266,19 @@ pub enum Checks {
 /// chat's** branch (`agent/<chat-id>`) and no others, which is what makes a
 /// count on a chip meaningful — a repo's other pull requests have nothing to
 /// do with this conversation.
+///
+/// **Four numbers that are not here and should be** (this repo's #81 and #82,
+/// filed upstream as `PhillipChaffee/personal-ai-setup#28`). GitHub's pull
+/// request DETAIL form carries `commits`, `additions`, `deletions` and
+/// `changed_files`; the LIST form carries none of them, which is why the
+/// manager's `chat_pulls` fetches the detail form per pull already — for
+/// `mergeable`. So the manager receives all four on every call and
+/// `pull_to_wire` builds its dict without them. They are not decoded here
+/// because nothing sends them: a `#[serde(default)]` `u32` would read `0` for
+/// "the manager did not say", and a zero on a screen is a claim like any
+/// other. When the manager sends them they want to be `Option<u32>` for
+/// `mergeable`'s reason — GitHub omits them on any path that did not fetch a
+/// detail form, and "not fetched" is not "no changes".
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 #[serde(default)]
 pub struct PullRequest {

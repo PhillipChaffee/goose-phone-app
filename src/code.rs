@@ -1986,7 +1986,8 @@ const fn sweep_due(swept: u64, now: u64) -> bool {
 /// The first row is why the sweep does not ride the poll, and 23% for a
 /// status dot is still more than it is worth. **The fix is one aggregate
 /// route on the manager**, the shape `/api/permissions` already has, which
-/// would make the whole table one call — filed upstream and linked from #84.
+/// would make the whole table one call — filed upstream as
+/// `PhillipChaffee/personal-ai-setup#29` and linked from #84.
 pub(crate) fn refresh_plane_pulls(ctx: &AppCtx) {
     let mut pulls = ctx.code_pulls;
     let Some(client) = ctx.code_client.peek().clone() else {
@@ -2499,9 +2500,7 @@ mod tests {
             number: 29,
             ..pull(PullState::Closed, false, None, Checks::Passing)
         };
-        state
-            .by_chat
-            .insert("c2".to_owned(), vec![newest.clone(), older]);
+        state.by_chat.insert("c2".to_owned(), vec![newest, older]);
         assert_eq!(
             state.plane_pull("c2").map(|p| p.number),
             Some(30),
