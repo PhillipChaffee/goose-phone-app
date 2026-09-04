@@ -10,6 +10,17 @@
     border-color: transparent;
     }
 
+  /* THE BAND'S LEFT CELL GOES WITH THE COLUMN. `50-band.css` draws a hairline
+   * at x=267 across the band because the sidebar draws one under it; below
+   * this width the sidebar is an overlay ON the content rather than a column
+   * beside it, so the line in the band would be the top of nothing — a 45px
+   * stroke ending in mid-air over a pane that runs under it. The badge that
+   * the same cell positions is already `display: none` here, four rules down,
+   * so its margin needs no equivalent. */
+  .shell[data-nav="open"] .shell-chrome::before {
+    display: none;
+  }
+
   .navpane {
     position: absolute;
     z-index: 3;
@@ -17,18 +28,27 @@
     bottom: 0;
     left: 0;
     /* The column stops reserving width — that is what makes the content take
-     * the whole window — while the CARD keeps its own, which is what makes it
+     * the whole window — while the PANEL keeps its own, which is what makes it
      * an overlay rather than a squeeze. The collapse rules above still work
      * unchanged because they animate `flex-basis` and `width`, and both are
-     * still the properties being set here. */
-    width: calc(var(--nav-w) + var(--shell-gap));
+     * still the properties being set here.
+     *
+     * `--nav-w` flat, where this said `--nav-w + --shell-gap`: the 8px was the
+     * gutter the card floated in, and there is no gutter now. An overlay 8px
+     * wider than the panel inside it would be 8px of `--nav-fill` past the
+     * panel's own hairline. */
+    width: var(--nav-w);
   }
 
   /* A shadow, and it is the one place in this sheet that uses one instead of a
    * border. docs/design.md's rule is that depth is for things that are ABOVE
    * the page rather than on it, and this is the only element in the desktop
-   * shell that ever is. */
-  .shell[data-nav="open"] .navcard {
+   * shell that ever is.
+   *
+   * ON `.navpane`, where it was on `.navcard`. The card was the element with
+   * the fill; the column is now, and a `box-shadow` on a transparent box casts
+   * a shadow off an edge nothing paints. */
+  .shell[data-nav="open"] .navpane {
     box-shadow: 0 8px 32px rgb(0 0 0 / 24%);
   }
 

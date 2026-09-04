@@ -1,52 +1,108 @@
-/* The nav is a COLUMN and a CARD, and they are two elements because they have
- * two jobs.
+/* THE SIDEBAR IS A FLUSH PANEL WITH ONE HAIRLINE ON ITS RIGHT, and that is an
+ * overrule of the argument this file used to make. The argument is worth
+ * stating before it is set aside, because it was not a mistake:
  *
- * This is the column. It owns the width, it owns the collapse, and it clips —
- * so when it animates to nothing the card inside slides out of view at the
- * width it has always had. The alternative, one element that shrinks, reflows
- * its own contents the whole way: "Session History" rewraps to four lines and
- * back again over 200ms, which is a lot of motion to say "gone". */
+ *   the phone's grammar is "chrome floats, content scrolls under it"
+ *   (docs/design.md's first rule), the reference's own sidebar is described as
+ *   "a rounded outlined card floating on it with breathing room"
+ *   (AppLayout.tsx), and --radius-xl is this app's tier for a container that
+ *   holds other things. So the column carried an 8px gutter and the panel
+ *   inside it was a 16px-radius card with a 1px border on all four sides.
+ *
+ * THE OWNER OVERRULED IT, in these words: "the app still has a line around the
+ * whole box… the vertical line goes all the way through the top… there's a
+ * bunch of lines that just aren't in the mockup." The reason the argument does
+ * not survive the move is scale: a floating card reads as a widget, and a
+ * widget 268pt wide and 808pt tall on a 1440pt window is not a widget, it is a
+ * column pretending to be one. The phone's drawer floats because it is ON TOP
+ * of the page; this is BESIDE it.
+ *
+ * And the card's own border was separating nothing. Measured on
+ * `desktop-chats` at 1440x860 dark before this change: `.shell` background
+ * rgb(24,26,30) and `.navcard` background rgb(24,26,30) — the same value — so
+ * the 1px rgb(44,49,56) outline was a decoration drawn on a field of its own
+ * colour, with the real colour step 8px further right where `.pane-main`'s
+ * rgb(30,33,38) began. Two edges for one boundary.
+ *
+ * The app already did it the flush way on the other side: `.insp` is
+ * `background: var(--surface-panel); border-left: 1px solid var(--shell-line)`
+ * in `90-inspector.css`, and measured 1096,52 344x808 with a left border and
+ * no radius. The two columns are symmetric now.
+ *
+ * THE SAME ARGUMENT IS STATED A SECOND TIME AND THAT COPY IS NOW STALE:
+ * `00-tokens.css`, on `.app > .shell { background: var(--surface-panel) }`,
+ * still reads "the card's radius and hairline survive inside it, because the
+ * floating panel is this app's own language". They do not; this file is where
+ * that decision lives and it has been overruled. That comment could not be
+ * corrected in the same commit because `00-tokens.css` is frozen to one lane
+ * for the width of this campaign — reported on the issue rather than edited,
+ * which is the rule. `--shell-gap` is likewise declared there and, as of this
+ * change, spent by nothing.
+ *
+ * The COLUMN and the CARD stay two elements, because the reason for that was
+ * never the card's painting. This is the column: it owns the width, it owns
+ * the collapse, and it clips — so when it animates to nothing the panel inside
+ * slides out of view at the width it has always had. The alternative, one
+ * element that shrinks, reflows its own contents the whole way: "Session
+ * History" rewraps to four lines and back again over 200ms, which is a lot of
+ * motion to say "gone". */
 .navpane {
   flex: 0 0 var(--nav-w);
   width: var(--nav-w);
   display: flex;
   min-height: 0;
-  padding: var(--shell-gap);
   overflow: hidden;
+  /* The fill and the hairline move OFF the card and onto the column, which is
+   * what makes the panel full-bleed: it now runs from the band's own
+   * border-bottom to the bottom of the window with nothing around it, and the
+   * one edge it has is the one at x=267 that the band draws the top of. */
+  background: var(--nav-fill);
+  border-right: 1px solid var(--shell-line);
   /* The phone's own drawer curve (`.drawer`, assets/main.css), so the two
-   * shells open the same panel at the same speed. */
+   * shells open the same panel at the same speed. `padding` is off this list
+   * because the column no longer has any; `border-right-width` is on it
+   * because it does — without it the hairline vanishes on frame one of a
+   * 200ms slide and the panel spends the whole close with no right edge. */
   transition:
     flex-basis 200ms cubic-bezier(0.32, 0.72, 0, 1),
     width 200ms cubic-bezier(0.32, 0.72, 0, 1),
-    padding 200ms cubic-bezier(0.32, 0.72, 0, 1);
+    border-right-width 200ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-/* And this is the card: a rounded, outlined panel floating on the page with
- * room around it, which is the phone's grammar ("chrome floats, content
- * scrolls under it") arriving on the desktop, and the reference's own
- * description of the same panel — "the sidebar is a rounded outlined card
- * floating on it with breathing room" (AppLayout.tsx).
- *
- * --radius-xl, because docs/design.md's tier for "containers that hold other
- * things" is 16px and this holds every destination in the app.
+/* And this is the panel's contents: no fill, no border, no radius, and a width
+ * that does not change while the column closes.
  *
  * A FIXED width, not `100%`: the column's width is what animates, and a
- * percentage of an animating box is a box that reflows for 200ms. */
+ * percentage of an animating box is a box that reflows for 200ms. Minus the
+ * 1px the border-right now takes out of the column's content box — with
+ * `box-sizing: border-box` (assets/main.css) `--nav-w` is the OUTER width, so
+ * a panel of `--nav-w` inside it would be clipped by exactly the hairline.
+ *
+ * PADDING 12px 8px 0, and the 8 is a compromise with a lane boundary rather
+ * than a measurement. The mockups inset `.plane-switch`, `.newbtn`, the
+ * library row and the search field 12px and the session list 8px, i.e. four of
+ * the five children carry their own inset and the list carries a smaller one.
+ * Those five rules live in `20-plane-switch.css` and `30-sidebar-list.css`,
+ * which this wave's sidebar lane owns; moving the inset onto them from here
+ * would be two lanes writing one declaration. So the panel keeps one padding
+ * for all five at the list's own 8px — the children land at x=8 where the
+ * mockups put four of them at 12, against x=17 before this change. The 4px is
+ * recorded here so the sidebar lane can finish it in a file it owns.
+ *
+ * The bottom is 0 so the footer can reach the window's edge; see `.nav-footer`
+ * in `50-band.css`, which now carries the panel's bottom inset itself. The
+ * card's 16px corners used to make that illegal — content flush to the bottom
+ * edge sat in the curve — and with no corners there is no curve. */
 .navcard {
   flex: 0 0 auto;
-  width: calc(var(--nav-w) - 2 * var(--shell-gap));
+  width: calc(var(--nav-w) - 1px);
   display: flex;
   flex-direction: column;
   min-height: 0;
-  /* Plain padding again. The card used to hold the traffic lights clear of its
-   * own wordmark; the bar above it does that now, so this is just a card. */
-  padding: 12px 8px;
-  background: var(--nav-fill);
-  border: 1px solid var(--shell-line);
-  border-radius: var(--radius-xl);
-  /* Instant on the way in, deferred on the way out: the card has to be gone
+  padding: 12px 8px 0;
+  /* Instant on the way in, deferred on the way out: the panel has to be gone
    * from the tab order once it is off screen, but taking it out at the START
-   * of the slide would make the panel disappear rather than leave. */
+   * of the slide would make the column disappear rather than leave. */
   visibility: visible;
   transition: visibility 0s;
 }
@@ -54,12 +110,15 @@
 .shell[data-nav="closed"] .navpane {
   flex-basis: 0;
   width: 0;
-  padding-left: 0;
-  padding-right: 0;
+  /* AND THE HAIRLINE GOES WITH IT. `border-right` is outside the width that
+   * animates — a border-box element cannot be narrower than its own borders —
+   * so without this a shut sidebar leaves a 1px vertical rule down the left
+   * edge of the window with nothing on either side of it, which is precisely
+   * the class of stray line this change exists to remove. */
+  border-right-width: 0;
 }
 
 .shell[data-nav="closed"] .navcard {
   visibility: hidden;
   transition: visibility 0s 200ms;
 }
-
