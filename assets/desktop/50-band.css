@@ -1,3 +1,57 @@
+/* ── the band's left cell ───────────────────────────────────────────────
+ *
+ * ONE VERTICAL RULE FROM THE TOP OF THE WINDOW TO THE BOTTOM, which is the
+ * user's "the vertical line goes all the way through the top".
+ *
+ * The mockups build it in two pieces that meet: `.band-left` is a 268px grid
+ * cell with `border-right: 1px solid` #242830 at box 0,0 268x45, and directly
+ * under it `.side` carries `border-right: 1px solid` #2c3138 at box 0,46
+ * 268x854 — soft in the band, full strength below it, one line at x=267 from
+ * y=0 to y=900. `10-sidebar-frame.css` now draws the lower half. This is the
+ * upper half.
+ *
+ * A PSEUDO-ELEMENT AND NOT A WRAPPER, and that is a constraint rather than a
+ * preference. The mockups' cell is a grid column, and the app's band is a flex
+ * row with no 268px item in it; the shape that matches is a `.chrome-left` div
+ * wrapping the traffic slot and the toggle, and it is markup. New markup means
+ * a new class, and `every_class_the_desktop_shell_renders_is_in_the_captured_
+ * store` (src/shell/desktop/mod.rs) refuses a class no captured state contains
+ * — correctly, because docs/gallery-states.json is a photograph of the app and
+ * only an operator with a running window may retake it. So the line is painted
+ * rather than boxed. It is the same pixel either way; what a wrapper would add
+ * on top is a border the box tree maintains for itself, and that is the version
+ * to build the day the store is retaken.
+ *
+ * `--shell-line-soft` is #242830 in dark, which is the mockup's band value
+ * exactly, and `--border-primary` in light for the reason `00-tokens.css`
+ * gives at its declaration.
+ *
+ * ONLY WITH THE SIDEBAR OPEN. With the column shut there is nothing under the
+ * line for it to be the top of, and a 268px cell drawn over a band whose next
+ * control sits at x=86 divides the toggle from itself. `65-responsive.css`
+ * takes it out again below 628, where the sidebar stops being a column and
+ * becomes an overlay. */
+.shell-chrome {
+  position: relative;
+}
+
+.shell[data-nav="open"] .shell-chrome::before {
+  content: "";
+  position: absolute;
+  /* 267, not 268: `.navpane` is `box-sizing: border-box` at `--nav-w`, so its
+   * own border-right paints the column 267..268 and the band's line has to be
+   * the same pixel or the two are a staircase. */
+  left: calc(var(--nav-w) - 1px);
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--shell-line-soft);
+  /* The band is what the window is dragged by (`.window-drag`, below). A
+   * decoration that swallowed a press would be a 1px dead stripe in the drag
+   * region. */
+  pointer-events: none;
+}
+
 /* ── the plane badge, in the window's bar ───────────────────────────────
  *
  * Which half the window is in, said in the one strip that is present at every
@@ -31,6 +85,12 @@
   margin-top: var(--chrome-pad);
   height: 32px;
   margin-left: 8px;
+  /* THE MID CELL STARTS AFTER THE LEFT ONE. Measured before this change: the
+   * app's crumb began at x=187, inside the sidebar's own column width, against
+   * the mockups' 284 — the badge is the first thing in `.band-mid` and
+   * `.band-mid` begins where `.band-left` ends.
+   *
+   * See the rule below, which is where the arithmetic is. */
   /* 2px 6px 2px 5px in the mockups; 8px either side here, because at 10px the
    * word is 4 characters and a 5px inset makes the fill look like a mistake. */
   padding: 0 8px;
@@ -51,6 +111,70 @@
   white-space: nowrap;
 }
 
+/* THE MID CELL'S OWN LEFT EDGE, derived from the band's constants and not
+ * typed — the same idiom `.shell-chrome > .conn-badge`'s top margin uses ("(32
+ * - 24) / 2, so the pill still centres on the toggle's line").
+ *
+ * The left cell is `--nav-w` wide and everything in it is laid out by the flex
+ * row: 6px of the band's own padding-left, `--traffic-w` of reserved room for
+ * the traffic lights, a 4px gap, the 32px toggle, a 4px gap. So what the badge
+ * has to add to reach the cell's right edge is `--nav-w - 46px - --traffic-w`,
+ * and the mockup's `.band-mid` starts 16px past that edge (its badge is at
+ * x=284 against a cell ending at 268).
+ *
+ * It reads --traffic-w so it holds on every platform and in both window
+ * states: macOS gives 76 and the badge lands at 284; fullscreen and every
+ * non-macOS build give 0 and it lands at 284 there too, because the 76 comes
+ * out of both sides of the same sum.
+ *
+ * NAV OPEN ONLY, for the hairline's reason: with the column shut there is no
+ * left cell, and 162px of margin would be a hole in the middle of a band whose
+ * whole content is four controls. Shut, the badge keeps its 8px and follows
+ * the toggle — which is what mockup 30-collapse-left draws.
+ *
+ * AND AT THREE COLUMNS ONLY, which is measured rather than chosen. The
+ * hairline is the sidebar's own edge and is right wherever the sidebar is a
+ * column, i.e. from 628 up; this indent is a different claim — that the band
+ * can afford to spend `--nav-w` of itself on a 32px toggle — and at 628 it
+ * cannot. `node docs/audit.js both` with this rule unscoped reported 8
+ * TITLE-OUTBID findings, all at 628x700, all of the form "span.conn-badge
+ * holds 110px it could give back while the band's title is cut to 61px": 284
+ * of indent plus a 48px badge out of a 628px window leaves 291 for the title,
+ * the 96px drag strip, the pill and the inspector toggle. 972 is the width at
+ * which the third column appears and is the breakpoint `55-panes.css` already
+ * turns the pill's host on, for the same sentence — "the band is too tight to
+ * spend 90px on an address". Below it the crumb starts where it always did and
+ * the line still marks the column's edge; they simply do not line up, which is
+ * a smaller wrong than a 61px title. */
+@media (min-width: 972px) {
+  .shell[data-nav="open"] .shell-chrome > .plane-badge {
+    margin-left: calc(var(--nav-w) + 16px - 46px - var(--traffic-w));
+  }
+}
+
+/* THE FOOTER'S RULE SPANS THE COLUMN, and it could not while the card existed.
+ *
+ * Measured before this change on `desktop-chats` at 1440x860: `.nav-footer` box
+ * 17,772 234x67 — a 234px line inside a 268px column, stopping 17px short at
+ * each end with panel of exactly its own colour on both sides of it. That is
+ * one of the "bunch of lines that just aren't in the mockup": the mockups'
+ * `.ident` is box 0,842 267x58, its rule spanning the panel's whole width and
+ * its block flush to the bottom of the window.
+ *
+ * The negative margin is the whole of the fix and it is exact rather than
+ * approximate, which is what the card made impossible: `.navcard` is now at
+ * x=0 with an 8px inset and no border of its own, so -8 reaches the panel's
+ * left edge and its right edge lands on `.navpane`'s hairline at 267. The
+ * earlier prescription for this (`margin: 8px -9px 0`) was written for the
+ * card, whose 1px border sat outside its padding; with the card gone the 9 is
+ * an overshoot and 8 is the number.
+ *
+ * AND THE BOTTOM INSET MOVES HERE. `.navcard` used to carry 12px of padding
+ * below this block — 20px of dead column between the last row and the window's
+ * edge — and it could not simply be dropped, because the card's bottom corners
+ * were 16px of radius and content flush to the edge sat inside the curve. No
+ * card, no curve: the panel's bottom padding is 0 and this block owns the last
+ * 10px, which is the mockup's own `.ident { padding: 10px 12px }`. */
 .nav-footer {
   flex: 0 0 auto;
   display: flex;
@@ -59,8 +183,8 @@
   /* A rule rather than a gap. The footer is a different KIND of thing from the
    * list above it, and 8px of nothing says "the list ended" less clearly than
    * a line does — the same argument `.drawer-group` makes one level up. */
-  margin-top: 8px;
-  padding-top: 8px;
+  margin: 8px -8px 0;
+  padding: 8px 8px 10px;
   border-top: 1px solid var(--shell-line);
 }
 
