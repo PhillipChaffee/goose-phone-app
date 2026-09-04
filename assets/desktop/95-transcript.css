@@ -1,3 +1,10 @@
+/* ── 10. the transcript ─────────────────────────────────────────────────
+ *
+ * The phone's conversation, worn a second way. `src/views/chat.rs` is shared,
+ * so every number below is a desktop-only override and the phone's rendering
+ * of the same markup is untouched — that is the promise this file is under.
+ * The mockup being measured against is `22-nav-disclosure.html`. */
+
 .pane-main .scroll.chat > .bubble.user {
   align-self: stretch;
   width: auto;
@@ -9,15 +16,47 @@
   color: var(--text-primary);
 }
 
+/* WHAT YOU SAID: the loudest edge in the transcript, and the reading rung.
+ *
+ * `--bg-secondary` AND NOT `--surface-raise`, though the two are the same
+ * colour here and the mockups' value is what is wanted. `.user{background:
+ * their --surface}` is rgb(36,40,46) = #24282e, which `--surface-raise` names
+ * in dark — but in light that token resolves to `--bg-tertiary` #e3e6ea and
+ * four strings on this card fall through the floor there: `.tool-title`
+ * (--text-secondary #6f6f6f) 4.01:1, and the three status words 4.07:1
+ * (success), 4.42:1 (warning) and 4.49:1 (danger), against the 4.5 body text
+ * owes. `--bg-secondary` is `var(--surface-raise)` in the shell's dark block
+ * and main.css's #f4f6f7 in light, so ONE declaration delivers the mockup's
+ * exact value in dark and leaves light exactly where it is today. The rejected
+ * value is recorded rather than half-taken: this is the same trap
+ * `40-home-chat.css` writes up over `.home-compose`'s fill.
+ *
+ * Measured, dark: the card was #212429 at 1.04:1 against the canvas — three
+ * units off it — and is now #24282e at 1.09:1, which is the six the mockup
+ * draws. --text-primary on it is 12.49:1.
+ *
+ * THE STRONG EDGE, and it is half of a two-tier the app did not have. 22
+ * reserves rgb(44,49,56) for `.user` and `.diff` and gives `.tool`, `.out` and
+ * `.think` the softer rgb(36,40,48); this app painted all five #2f343b. The
+ * two values are `--shell-line` and `--shell-line-soft` exactly, so the tier
+ * is two tokens rather than two literals. Against the canvas: 1.23:1 here,
+ * 1.09:1 on the tool card below — where before they were both 1.29:1 and the
+ * hierarchy was flat.
+ *
+ * 13.5px, `--text-turn`, and the line-height comes OFF. `.user{font-size:
+ * 13.5px}` on the mockups' 1.45 is 19.575px; the shell declares that unitless
+ * 1.45 on `.app > .shell`, so `inherit` lands on 19.575 exactly and any
+ * `--lh-*` rung would miss it. `00-tokens.css`'s note on the rung says this in
+ * full and names this rule as one of the two that has to spend it. */
 .pane-main .scroll.chat > .bubble.user > .bubble-text {
   padding: 0.6875rem 0.875rem;
-  background: var(--surface-card);
-  border: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--shell-line);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-family: var(--font-sans);
-  font-size: var(--text-sm);
-  line-height: var(--lh-sm);
+  font-size: var(--text-turn);
+  line-height: inherit;
 }
 
 .pane-main .scroll.chat > .bubble.user .attach-file {
@@ -61,13 +100,17 @@
   margin-bottom: 0.625rem;
 }
 
+/* THE SOFT SIDE OF THE TIER. 22 gives `.think` and `.out` the same
+ * rgb(36,40,48) it gives `.tool`, and reserves the stronger line for what the
+ * reader wrote. See the note over `.bubble-text` for the whole argument; this
+ * and the two rules below are the rest of its spend. */
 .pane-main .scroll.chat > .thought > summary {
   display: inline-flex;
   align-items: center;
   gap: 0.4375rem;
   min-height: 2rem;
   padding: 0 0.625rem;
-  border: 1px solid var(--border-primary);
+  border: 1px solid var(--shell-line-soft);
   border-radius: var(--radius-md);
   color: var(--text-secondary);
   font-style: normal;
@@ -83,12 +126,45 @@
 .pane-main .scroll.chat > .thought > .md {
   margin-top: 0.5rem;
   padding-left: 0.625rem;
-  border-left: 1px solid var(--border-primary);
+  border-left: 1px solid var(--shell-line-soft);
 }
 
+/* WHAT THE AGENT DID: the same fill as the turn above it, the soft edge, and
+ * the mockups' tighter corner.
+ *
+ * `.tool{border-radius:9px;border:1px solid their --line-soft;background:
+ * their --surface}` — 22-nav-disclosure. The fill and the edge are the two
+ * tokens the `.bubble-text` note above derives; only the radius is a literal,
+ * and it is one because the rounding ladder has `--radius-md` at 8px and
+ * `--radius-lg` at 12px and nothing between, and `00-tokens.css` is closed to
+ * a new rung. 12px was the shipped value: a run of tool cards read as a stack
+ * of soft boxes rounder than the mockup's and outlined as strongly as the
+ * message above them.
+ *
+ * The card's separation is now its FILL and not its line — #24282e against a
+ * #1e2126 canvas is 1.09:1, and the #242830 edge on top of it is 1.09:1 too,
+ * so the line closes the shape rather than drawing it. That is what 22 does,
+ * and it is why the border going softer does not cost the card its edges. */
 .pane-main .scroll.chat .tool {
   margin-top: 0;
-  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  border-color: var(--shell-line-soft);
+  border-radius: 9px;
+}
+
+.pane-main .scroll.chat .tool > .tool-output {
+  border-top-color: var(--shell-line-soft);
+}
+
+/* AND THE SLAB'S CORNERS FOLLOW THE CARD'S. `main.css:2017` is
+ * `border-radius: 0 0 11px 11px` and says why in the rule above it — "11px
+ * inside a 12px border", docs/design.md rule 4's concentric radius. The card
+ * is 9px here, so the slab is 8, and without this line a 9px card would close
+ * on an 11px slab: 2px of the card's own fill showing through each bottom
+ * corner. It is `overflow: hidden`, so it would clip rather than spill — which
+ * is why nothing would have reported it. */
+.pane-main .scroll.chat .tool > .tool-output pre {
+  border-radius: 0 0 8px 8px;
 }
 
 .pane-main .scroll.chat .tool + .tool {
@@ -100,12 +176,44 @@
   padding: 0.4375rem 0.6875rem;
 }
 
-.pane-main .scroll.chat .tool-head > .tool-icon {
-  display: none;
-}
-
-.pane-main .scroll.chat .tool[data-kind] > .tool-head::before {
-  content: attr(data-kind);
+/* THE KIND TOKEN, ON A REAL ELEMENT — and the rule it replaces was dead twice
+ * over.
+ *
+ * `.tool .nm{font-family:their --mono;font-size:11.5px;color:their --accent;
+ * min-width:38px}` — 22-nav-disclosure, rendered as `read`, `edit`, `shell`.
+ * It is the leading, fixed-width identifier on every tool row in the mockups
+ * and it is what makes a column of tool calls scannable.
+ *
+ * What shipped was `.tool-head > .tool-icon { display: none }` plus
+ * `.tool[data-kind] > .tool-head::before { content: attr(data-kind) }`, so the
+ * desktop had neither the phone's glyph nor the mockups' word: a 38px accent
+ * column, reserved and permanently empty, with the path starting 38px inside a
+ * card that had nothing in the gutter.
+ *
+ * The catalogued fix was "emit `data-kind` on the `.tool` div; no CSS change
+ * needed". IT WOULD NOT HAVE WORKED, and the second fault is the interesting
+ * one: `attr()` resolves against the ORIGINATING element of the pseudo — the
+ * element `::before` hangs off — not against whichever element the selector's
+ * attribute test matched. The pseudo here is on `.tool-head`; the attribute
+ * would have been on `.tool`. Measured in this repo's own Chromium
+ * (151.0.7922.34) with the attribute present on the card:
+ * `getComputedStyle(head, '::before').content` is `""` and the box is 38x0 —
+ * the same empty column, now with an attribute in the DOM to make it look
+ * fixed. A screenshot is what caught it; no gate in the repo could have.
+ *
+ * So `src/views/chat.rs` emits `span.tool-kind` instead, and that is the
+ * better answer for a second reason this file already states over `.who-name`:
+ * `docs/audit.js`'s contrast walk keys on real text nodes, so a word painted
+ * by a pseudo-element is a word no gate can measure. This one is accent on the
+ * card — 6.17:1 dark, 5.87:1 light — and now the walk can say so.
+ *
+ * THE GLYPH COMES BACK WHERE THERE IS NO WORD. The blanket `display: none` on
+ * `.tool-icon` is gone: `chat.rs` renders the icon exactly when it has no kind
+ * to name, so the row always carries one leading mark and never two. The
+ * desktop is no longer a step worse than the phone at saying what a tool did.
+ *
+ * 2.375rem is 38px and `--text-xs` is 11.5px, both the mockup's exactly. */
+.pane-main .scroll.chat .tool-kind {
   flex: 0 0 auto;
   min-width: 2.375rem;
   color: var(--accent);
@@ -128,6 +236,58 @@
 .pane-main .scroll.chat .tool.status-running {
   background: var(--tool-live-fill);
   border-color: var(--tool-live-line);
+}
+
+/* A LIVE CARD MOVES. It is the only spinner in the mockup bodies and the only
+ * one in this window.
+ *
+ * `.ring{width:11px;height:11px;border-radius:50%;border:2px solid
+ * their --accent;border-right-color:transparent;border-bottom-color:
+ * transparent}` — 22-nav-disclosure, in the live shell row of all six mockups.
+ * The tint half of that pair already shipped (the rule directly above), so a
+ * running tool was a static tinted card with the word "Running" on it: a stuck
+ * tool and a working one looked identical, and the three-dot `.typing`
+ * indicator at the foot of the transcript says the TURN is alive, not which
+ * tool is.
+ *
+ * A pseudo-element and not markup, which is the one place this file prefers
+ * one: it carries no text, so the contrast walk has nothing to measure either
+ * way, and a pseudo keeps it desktop-only without a second const in
+ * `src/views/chat.rs`. It lands after `.tool-status`, so the row reads
+ * "Running ◜" — the mockups put the ring before their status word, and here
+ * the word is the flex item that is already pinned to the trailing edge.
+ *
+ * Non-text and decorative, so 3:1 is what it owes and not 4.5: `--accent` on
+ * `--tool-live-fill` is 5.91:1 dark and 5.87:1 light.
+ *
+ * REDUCED MOTION STOPS IT SPINNING AND NOT SHOWING. An arc of accent that does
+ * not turn is still the one mark a settled card does not have, so the state
+ * survives the preference — which is the point of honouring it here rather
+ * than hiding the element. */
+.pane-main .scroll.chat .tool.status-in_progress > .tool-head::after,
+.pane-main .scroll.chat .tool.status-running > .tool-head::after {
+  content: "";
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--accent);
+  border-right-color: transparent;
+  border-bottom-color: transparent;
+  border-radius: 50%;
+  animation: tool-ring 700ms linear infinite;
+}
+
+@keyframes tool-ring {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pane-main .scroll.chat .tool.status-in_progress > .tool-head::after,
+  .pane-main .scroll.chat .tool.status-running > .tool-head::after {
+    animation: none;
+  }
 }
 
 .pane-main .scroll.chat .tool > .tool-output > summary {
@@ -194,10 +354,15 @@
   color: var(--text-secondary);
 }
 
-/* The agent's name is the accent's one use in the transcript, which is what
- * makes the two sides scannable now that neither is aligned to an edge.
- * 6.73:1 dark and 6.36:1 light on the canvas. */
+/* The agent's name in the accent, which is what makes the two sides scannable
+ * now that neither is aligned to an edge. 6.73:1 dark and 6.36:1 light on the
+ * canvas.
+ *
+ * It used to say "the accent's one use in the transcript" and that is no
+ * longer true: `.tool-kind` above and the live ring take it too, and both are
+ * the mockups' own spend rather than an addition — 22 paints `.who-line .nm`
+ * for goose, `.tool .nm` and `.ring` in the accent and nothing else in the
+ * thread. */
 .pane-main .scroll.chat > .who-line .who-name.goose {
   color: var(--accent);
 }
-

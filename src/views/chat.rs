@@ -668,14 +668,55 @@ pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
             ..
         } => {
             let icon = tool_icon(kind);
+            // Desktop-only, the same way the speaker attribution above is — so
+            // the phone's tool card is byte-identical to what it was.
+            let word = tool_kind_word(crate::shell::Shell::CURRENT, kind);
             let has_output = !output.is_empty();
             rsx! {
                 div { key: "{index}", class: "tool status-{status}",
                     div { class: "tool-head",
-                        span { class: "tool-icon", Icon { name: "{icon}" } }
+                        // One leading mark, never two and never none. The word
+                        // when there is one, the phone's glyph when there is
+                        // not — see `tool_kind_word`.
+                        if let Some(word) = word {
+                            span { class: "tool-kind", "{word}" }
+                        } else {
+                            span { class: "tool-icon", Icon { name: "{icon}" } }
+                        }
                         span { class: "tool-title", "{title}" }
                         span { class: "tool-status", "{tool_status_label(status)}" }
                     }
+                    // WHERE THE INLINE DIFF CARD WOULD GO, and it is not built
+                    // because the data to build it never reaches this file.
+                    //
+                    // The mockups render an edit as its own card — a header
+                    // carrying the path and a `+12 −3` count over a `<pre>`
+                    // whose lines are `.hunk` / `.add` / `.del` / `.ctx`. Two
+                    // of those three need the OLD side of the edit and this
+                    // client does not keep it: `content_text` in
+                    // `crates/goose-acp-client/src/types/mod.rs` turns a
+                    // `{"type":"diff"}` block into the literal string
+                    // `"[diff: " + path + "]"` followed by `newText`, into the
+                    // same flat `String` every other content type goes into,
+                    // and `oldText` is read nowhere in `crates/` or `src/`. So
+                    // by the time an edit is a `ChatItem::Tool` there are no
+                    // +/− lines to colour and no counts to add up; the path is
+                    // recoverable only by parsing that sentinel back out of
+                    // prose the server did not promise.
+                    //
+                    // Which makes this the second kind of drop, not the first:
+                    // the data EXISTS on the wire and is discarded one crate
+                    // away. Building the card is a change to
+                    // `goose-acp-client` — carry `oldText` onto a structured
+                    // variant — and then to this file. Faking it from what is
+                    // here would mean a diff card that cannot show a deletion,
+                    // which is the half of a diff people open one for.
+                    //
+                    // The app already owns a real diff renderer, on the Diff
+                    // screen (`.scroll.diff` / `.diff-code`, reached through
+                    // `load_code_diff` in `views/code.rs`). Nothing puts one in
+                    // the transcript, so today an edit is this disclosure with
+                    // `[diff: src/scheduler.rs]` at the top of it.
                     if has_output {
                         details { class: "tool-output",
                             summary { "Output" }
@@ -709,6 +750,57 @@ pub(crate) fn tool_status_label(status: &str) -> String {
             }
             words
         }
+    }
+}
+
+/// THE KIND, AS A WORD — the desktop's leading token on a tool row, and
+/// desktop-only for the same reason the speaker attribution above it is.
+///
+/// The mockups head every tool row with a fixed-width accent name — `read`,
+/// `edit`, `shell` — and it is what makes a column of tool calls scannable:
+/// a card reading "src/scheduler.rs · Done" does not say whether the file was
+/// read or rewritten. The phone has a glyph in that slot and the desktop had
+/// neither, because `assets/desktop/95-transcript.css` hid the glyph and the
+/// rule meant to replace it read an attribute nothing emits. That sheet has
+/// the rest of the story, including why the catalogued fix (`data-kind` on the
+/// card, `content: attr()` on the head) could not have worked.
+///
+/// `None` IS A REAL ANSWER and not a fallback. `ChatItem::Tool.kind` is the
+/// ACP `ToolCallUpdate.kind` or `OpenCode`'s equivalent, and both can send a
+/// kind this app has no word for — `other`, `switch_mode`, the empty string
+/// when the field is absent. Naming one of those in an accent column is worse
+/// than the glyph: it is chrome saying nothing in the loudest colour on the
+/// page, at whatever width the server chose. So the closed set gets a word and
+/// everything else keeps the glyph [`tool_icon`] already picks, and the row
+/// carries exactly one leading mark either way.
+///
+/// `shell` and not `execute`: the mockups' vocabulary for the same thing, and
+/// the same translation [`tool_status_label`] already does for `in_progress`.
+/// Backend enum names are not UI copy. The class still carries the raw status,
+/// so nothing that keys on the wire's own words is affected.
+///
+/// THE SHELL ARRIVES AS A PARAMETER, which is `src/shell/mod.rs`'s own rule
+/// for anything keyed off it: "the host runs the desktop arm, so every rule
+/// keyed off the shell has to take it as a PARAMETER rather than read
+/// `Shell::CURRENT` — otherwise the mobile assertions silently assert about
+/// desktop and pass". [`attributed`] above predates that rule and is a `const`
+/// the compiler folds; this is the newer shape, and it is the only way the
+/// phone's arm of this decision is checkable at all from a `cargo test` that
+/// builds the desktop one.
+fn tool_kind_word(shell: crate::shell::Shell, kind: &str) -> Option<&'static str> {
+    if matches!(shell, crate::shell::Shell::Mobile) {
+        return None;
+    }
+    match kind {
+        "execute" => Some("shell"),
+        "read" => Some("read"),
+        "edit" => Some("edit"),
+        "delete" => Some("delete"),
+        "move" => Some("move"),
+        "search" => Some("search"),
+        "fetch" => Some("fetch"),
+        "think" => Some("think"),
+        _ => None,
     }
 }
 
@@ -918,10 +1010,11 @@ fn permission_label(name: Option<&str>, option_id: &str) -> String {
 mod tests {
     use super::{
         clock_label, crowding, format_tokens, goose_setting_rows, is_mode_chip, mode_choices,
-        permission_button_class, permission_label, tool_icon, tool_run_summary, tool_status_label,
-        ConfigOption,
+        permission_button_class, permission_label, tool_icon, tool_kind_word, tool_run_summary,
+        tool_status_label, ConfigOption,
     };
     use crate::ask_journal::{AskRecord, AskState, LostCause};
+    use crate::shell::Shell;
     use crate::state::{ChatItem, ChatState};
     use crate::testkit::{render, render_seeded};
     use dioxus::prelude::*;
@@ -1228,6 +1321,73 @@ mod tests {
         assert_eq!(tool_icon("think"), "think");
         assert_eq!(tool_icon("screenshot"), "wrench");
         assert_eq!(tool_icon(""), "wrench");
+    }
+
+    /// The word beside the glyph's slot, and the two halves have to agree:
+    /// every kind [`tool_icon`] knows a glyph for is a kind this names, and
+    /// the fallback is `None` rather than a word — because `None` is what puts
+    /// the glyph back.
+    ///
+    /// The one that would rot silently is the `execute`/`shell` pair. It is
+    /// the only entry whose word is not its key, so an arm added later by
+    /// copying its neighbour would give the mockups' shell row the backend's
+    /// enum name and nothing would say so.
+    #[test]
+    fn a_tool_kind_has_a_word_only_when_the_word_says_something() {
+        let desk = |kind| tool_kind_word(Shell::Desktop, kind);
+        assert_eq!(desk("execute"), Some("shell"));
+        assert_eq!(desk("read"), Some("read"));
+        assert_eq!(desk("edit"), Some("edit"));
+        assert_eq!(desk("delete"), Some("delete"));
+        assert_eq!(desk("move"), Some("move"));
+        assert_eq!(desk("search"), Some("search"));
+        assert_eq!(desk("fetch"), Some("fetch"));
+        assert_eq!(desk("think"), Some("think"));
+        // A kind this app has no word for keeps the wrench rather than
+        // shouting the wire's own vocabulary in the accent colour.
+        assert_eq!(desk("screenshot"), None);
+        assert_eq!(desk("switch_mode"), None);
+        assert_eq!(desk("other"), None);
+        assert_eq!(desk(""), None);
+
+        // THE PHONE'S ARM, which is the branch a `cargo test` on this host can
+        // reach no other way — `Shell::CURRENT` is `Desktop` here, and
+        // `render_item` renders whichever mark this returns. `None` for every
+        // kind is the whole statement that the phone's tool card did not
+        // change: it keeps the glyph, in the slot it has always been in.
+        for kind in [
+            "execute",
+            "read",
+            "edit",
+            "delete",
+            "move",
+            "search",
+            "fetch",
+            "think",
+            "screenshot",
+            "",
+        ] {
+            assert_eq!(
+                tool_kind_word(Shell::Mobile, kind),
+                None,
+                "the phone's `{kind}` card gained the desktop's kind word, so \
+                 a shared view has stopped rendering the same markup on the \
+                 phone that it always did"
+            );
+        }
+
+        // Both functions are total over the same set, which is the invariant
+        // that keeps a row from carrying two leading marks or none.
+        for kind in [
+            "execute", "read", "edit", "delete", "move", "search", "fetch", "think",
+        ] {
+            assert_ne!(
+                tool_icon(kind),
+                "wrench",
+                "`{kind}` has a word but falls through to the wrench, so a \
+                 desktop row and a phone row disagree about what it did"
+            );
+        }
     }
 
     /// The measured regression this rule exists for: a real ACP server sent
@@ -1592,6 +1752,60 @@ mod tests {
             !html.contains("bubble-text"),
             "a message with no words rendered an empty text node, which draws \
              a blank strip under the photo: {html}"
+        );
+    }
+
+    /// EXACTLY ONE LEADING MARK ON A TOOL ROW, whichever kind arrives.
+    ///
+    /// The desktop's card opens with the mockups' accent word and the phone's
+    /// with a glyph, and the failure this pins is the one that shipped: the
+    /// sheet hid the glyph and the rule meant to replace it produced nothing,
+    /// so the row began with 38px of empty accent column. Two marks is the
+    /// other side of the same fault and is just as invisible — both are
+    /// `<span>`s in a flex row that would simply lay out.
+    ///
+    /// It runs on the desktop shell, which is what `cargo test` builds here;
+    /// the `Shell::Mobile` half of
+    /// `a_tool_kind_has_a_word_only_when_the_word_says_something` is the other
+    /// side, and asserts the branch a phone binary takes.
+    #[test]
+    fn a_tool_row_carries_a_kind_word_or_a_glyph_and_never_both() {
+        let html = render_seeded(
+            |ctx| {
+                let mut chat = ctx.chat;
+                chat.set(ChatState {
+                    session_id: Some("s-1".to_owned()),
+                    items: vec![
+                        tool("a", "cargo test", "execute", "running"),
+                        tool("b", "screenshot", "screenshot", "running"),
+                    ],
+                    ..ChatState::default()
+                });
+            },
+            chat(),
+        );
+        assert!(
+            html.contains("<span class=\"tool-kind\">shell</span>"),
+            "the desktop tool card has no kind token, so a run of tool calls \
+             has nothing to scan down and the 38px accent column the sheet \
+             reserves is empty: {html}"
+        );
+        assert_eq!(
+            html.matches("class=\"tool-kind\"").count(),
+            1,
+            "a kind with no word of its own was given one anyway, which puts \
+             the wire's enum name in the loudest colour on the page: {html}"
+        );
+        assert_eq!(
+            html.matches("class=\"tool-icon\"").count(),
+            1,
+            "the row that has no word did not fall back to the glyph, so the \
+             desktop says less about that tool than the phone does: {html}"
+        );
+        // And the two never land on the same card.
+        assert!(
+            !html.contains("class=\"tool-kind\">shell</span><span class=\"tool-icon\""),
+            "one card carries both marks: {html}"
         );
     }
 
