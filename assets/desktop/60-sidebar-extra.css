@@ -69,14 +69,13 @@
   color: var(--accent);
 }
 
-.nav-library > .icon:first-child {
-  /* SCOPED. The shipped rules are `.nav-library .icon` and
-   * `.nav-library.open .icon`, which now match TWO icons — the chevron and the
-   * grid glyph beside the label — so the grid would rotate 90deg on open too.
-   * Replace both selectors with this one and `.nav-library.open >
-   * .icon:first-child`. */
-  transition: transform 150ms ease;
-}
+/* The scoped `transition` rule that used to sit here is GONE, and its own
+ * comment is why: it described the second half of the fix — "Replace both
+ * selectors with this one and `.nav-library.open > .icon:first-child`" — as an
+ * edit for somebody else to make, and shipped the harmless half meanwhile. Both
+ * halves are now in `30-sidebar-list.css` beside the rule they scope, so this
+ * was a duplicate declaration in a later-sorting file, which is the shape that
+ * makes the next reader guess at which copy is live. */
 
 .nav-library-icon {
   flex: 0 0 auto;
