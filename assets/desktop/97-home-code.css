@@ -1,6 +1,53 @@
+/* ── the code half's measure ────────────────────────────────────────────
+ *
+ * The board is wider than the chat column, because it is a board: five columns
+ * of tree rows against one column of prose. `.board` in 11-home-code.html is
+ * `padding:16px 26px 6px` inside the same 828px pane, so 828 - 52 = 776px of
+ * content and a 26px gutter each side. 48.5rem is 776px at the 16px root this
+ * shell has.
+ *
+ * ON `.pane-main`, for the reason `40-home-chat.css` writes out at length:
+ * `--gutter: max(var(--edge), (100% - var(--measure)) / 2)` is declared on
+ * `.pane-main` and substitutes there, so `--measure` set on the `main` inside
+ * is read by nothing. The rule this replaces proved it — `.home.home-code`
+ * carried `--measure: 64rem` and the pane went on computing its gutter from
+ * 40rem.
+ *
+ * KEYED ON `.home-tiles`, and that is a deliberate refusal of source order.
+ * #76 will put `.home-code` on the `main` that already carries `.home`, which
+ * would give this rule and the chat home's equal specificity on one element
+ * and leave the outcome to `40-` sorting before `97-` — the cascade working by
+ * filename, which nothing in the repo can see and nothing checks. `.home-tiles`
+ * is emitted by `src/shell/desktop/home.rs` under `if plane == Plane::Code`
+ * and nowhere else, so it identifies the same element by something the markup
+ * already says, and the chat home's rule excludes it by name. The two are
+ * mutually exclusive; order decides nothing.
+ *
+ * WHEN #76 LANDS, this becomes `.pane-main:has(.home-code)` and the chat
+ * home's `:not()` becomes `:not(:has(.home-code))` — one edit each, and the
+ * exclusivity has to survive it. */
+.pane-main:has(.home-tiles) {
+  --measure: 48.5rem;
+}
+
+/* THE SEVEN RULES BELOW ARE STILL DEAD, and that is not this file's doing.
+ *
+ * `.home-code`, `.home-board` and `.home-dock` are emitted by nothing:
+ * `src/shell/desktop/home.rs` renders `main { class: "scroll home" }` for both
+ * halves and the code half's composer is the FIRST thing in it, above the
+ * tiles and the board, where the mockup docks it under them. #76 is that
+ * restructure and it is blocked, not skipped —
+ * `every_class_the_desktop_shell_renders_is_in_the_captured_store`
+ * (`src/shell/desktop/mod.rs`) fails on any class name the shell renders and
+ * `docs/gallery-states.json` does not hold, and a capture is operator-only.
+ *
+ * They are left in place rather than deleted because they are directionally
+ * right — the 16px top pad is `.board{padding:16px 26px 6px}`, and the flex
+ * column with an `overflow-y` board over a `flex: 0 0 auto` dock is the
+ * mockup's three-row `.main`. What is corrected here is the one line of them
+ * that was measurably a no-op wherever it was emitted. */
 .home.home-code {
-  --measure: 64rem;
-    display: flex;
+  display: flex;
     flex-direction: column;
     align-items: stretch;
     overflow: hidden;
