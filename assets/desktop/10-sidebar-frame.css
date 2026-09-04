@@ -26,7 +26,7 @@
  *
  * The app already did it the flush way on the other side: `.insp` is
  * `background: var(--surface-panel); border-left: 1px solid var(--shell-line)`
- * in `90-inspector.css`, and measured 1096,52 344x808 with a left border and
+ * in `90-inspector.css`, and measures 1096,34 344x826 with a left border and
  * no radius. The two columns are symmetric now.
  *
  * THE SAME ARGUMENT IS STATED A SECOND TIME AND THAT COPY IS NOW STALE:

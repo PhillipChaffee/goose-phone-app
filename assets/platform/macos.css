@@ -6,49 +6,74 @@
  *
  * `src/main.rs` hides the titlebar on macOS and nowhere else — a Windows or
  * Linux window with no titlebar and no replacement for it is a window with no
- * close button. So `assets/desktop.css` defaults the two chrome numbers to
- * ZERO and this sheet is the only thing that raises them. Without the split
- * the reservation was unconditional: a native-frame platform got its own
- * titlebar AND a 52px strip held empty for traffic lights that are not there.
+ * close button. So `assets/desktop/` defaults the two chrome numbers to the
+ * no-lights arrangement and this sheet is the only thing that changes them.
+ * Without the split the reservation was unconditional: a native-frame platform
+ * got its own titlebar AND a strip held empty for traffic lights that are not
+ * there.
  *
  * WHERE the lights land is macOS's decision and not ours. tao exposes
  * `with_traffic_light_inset` and it is a no-op under wry — tao applies it from
  * the content view's `drawRect:` and wry's WKWebView covers that view, so it
  * never draws. Measured at two different insets, the close button did not
- * move: logical (9, 9) both times, three discs at 20pt centres ending at 63.
- * So both numbers below are measured off a real window rather than requested.
+ * move: logical (9, 9), three discs at 20pt centres ending at 63. So both
+ * numbers below are measured off a real window rather than requested.
  *
  * Deliberately NOT in `assets/features/`, for `ios.css`'s reason: `docs/audit.js`
  * links that whole directory into 402x874 phone frames.
  */
 
 .app > .shell {
-  /* The band kept clear of anything the app puts at the top left, and the band
-   * the window is dragged by. 52 rather than the 23 the lights strictly need,
-   * because a control butted against them reads as a fourth one — goose leaves
-   * the same gap, its lights at y 16 and its first nav row at 78
-   * (ui/desktop/src/components/Layout/AppLayout.tsx). */
-  --chrome-h: 52px;
+  /* 34, AND IT WAS 52. That is an overrule of this sheet's own argument, and
+   * the argument is worth stating before it goes:
+   *
+   *   "52 rather than the 23 the lights strictly need, because a control
+   *   butted against them reads as a fourth one — goose leaves the same gap,
+   *   its lights at y 16 and its first nav row at 78 (AppLayout.tsx)."
+   *
+   * The gap is real; the band was the wrong place to spend it. `--chrome-pad`
+   * is 0 here BECAUSE the row has to centre on the lights, which AppKit paints
+   * at y 9..22.5 — so the row is pinned to 0..32 and every point of band past
+   * 34 falls BELOW it, not around it. Measured on `desktop-chats` at 1440x860
+   * before this change: `.shell-chrome` box 0,0 1440x52 with every visible
+   * child at y0..32, centre 16, against the band's own content-box centre of
+   * 25.5. Nothing above the row, 19px of empty panel under it. That is the
+   * thing the owner saw first, and no amount of `align-items` fixes it while
+   * the lights own the row's y.
+   *
+   * 34 = the 32pt control the row is made of, plus the 1px hairline the band
+   * carries at its bottom edge, plus 1. `--chrome-h` is spent on `flex: 0 0`
+   * with `box-sizing: border-box` (`00-tokens.css`), so the content box is 33
+   * and the 32px row sits 0..32 inside it with the border under it. The
+   * mockups' band is 46 with 11.5 clear each side of a 22px chip; ours cannot
+   * be, because our controls are 32 — `docs/audit.js`'s tap-target floor — and
+   * a 32px row centred in 46 would be 7 points below the lights.
+   *
+   * It has exactly two other consumers and both track it: `65-responsive.css`
+   * puts the narrow-window sidebar overlay at `top: var(--chrome-h)`, and
+   * `50-band.css` hangs the band's left-cell hairline off the band's own box.
+   * Neither needs a second edit. */
+  --chrome-h: 34px;
   /* Where the lights END plus breathing room. The toggle beside them and the
    * header indent when the nav is shut are both derived from this one number
    * rather than guessed twice. */
   --traffic-w: 76px;
   /* Zero, so a 32pt control's centre lands at 16 — which is where AppKit's
-   * close button already is (measured: the disc spans logical 9..22.5). The
-   * bar is 52 tall for spacing, so centring in it would sit the toggle ten
-   * points below the lights it is meant to line up with. */
+   * close button already is (measured: the disc spans logical 9..22.5). This
+   * is the token's whole reason for existing, and it is unchanged by the
+   * height above: the row's y is the lights' y, and the band is now sized to
+   * the row instead of the row being pushed around inside the band. */
   --chrome-pad: 0px;
 }
 
 /* FULLSCREEN TAKES THE LIGHTS WITH IT, so their slot has to go too.
  *
  * In fullscreen macOS hides the traffic lights entirely (they return on hover
- * near the top edge, in an overlay AppKit draws over the content). Holding 52
- * points and a 76-point indent for controls that are not on screen is 52
- * points of nothing at the top of a window someone just asked to be as large
- * as possible.
+ * near the top edge, in an overlay AppKit draws over the content). Holding 76
+ * points of indent for controls that are not on screen is 76 points of nothing
+ * at the top left of a window someone just asked to be as large as possible.
  *
- * Read off the window, not inferred from it. `src/shell/desktop.rs`
+ * Read off the window, not inferred from it. `src/shell/desktop/mod.rs`
  * `use_fullscreen` asks tao on a `Resized` and writes the attribute in the
  * render, beside `data-detail` and `data-nav`. It replaced a JS test of
  * `innerHeight >= screen.height - 2` that NEVER FIRED in a real fullscreen
@@ -60,8 +85,19 @@
  * route. */
 .app > .shell[data-fullscreen="true"] {
   /* The bar stays — it holds the toggle on every platform — but the room the
-   * lights needed goes back to the layout, and with the lights gone the
-   * toggle centres in the bar like it does everywhere else. */
+   * lights needed goes back to the layout. */
   --traffic-w: 0px;
-  --chrome-pad: 10px;
+  /* RE-DERIVED WITH THE HEIGHT, and this is the load-bearing half of that
+   * edit. This said 10px, which was `(52 - 32) / 2` — centring a 32pt row in
+   * the 51px content box of a 52px band, right for as long as the band was 52.
+   * Against a 33px content box it is a 32px control starting at y=10 and
+   * ending at 42, nine points past the bottom of the band that contains it.
+   *
+   * Measured rather than reasoned: `--chrome-h: 34px` with this left at 10px
+   * makes `node docs/audit.js both` report 468 findings, every one of them in
+   * a `fullscreen` cell. At 1px it reports Clean. 1 is `(34 - 32) / 2` rounded
+   * to the pixel the layout can actually use — the content box is 33 and the
+   * row is 32, so the one spare point goes above it and the row sits flush to
+   * the hairline, which is where the lights would have put it. */
+  --chrome-pad: 1px;
 }
