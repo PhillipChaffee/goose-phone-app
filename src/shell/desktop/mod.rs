@@ -411,7 +411,8 @@ pub(crate) struct CrumbParts {
     pub parent: Option<&'static str>,
     pub leaf: String,
     /// Beside the leaf: the crumb's own subtitle where there is one, the
-    /// half's counts on its home screen, nothing otherwise.
+    /// half's counts on its home screen and behind a shut sidebar, nothing
+    /// otherwise.
     pub after: Option<String>,
 }
 
@@ -421,6 +422,39 @@ const fn home_leaf(plane: Plane) -> &'static str {
     match plane {
         Plane::Chat => "All conversations",
         Plane::Code => "Working trees",
+    }
+}
+
+/// WHAT THE HALF'S HOME IS INSIDE — the thing you are connected to, not the
+/// row in the nav table that got you there.
+///
+/// The home arm used to answer `dest.label`, which is the badge's own word one
+/// character apart: the Code band read `CODE  Code / Working trees`, saying
+/// "Code" twice, 10px from itself, once as a chip and once as a path segment.
+/// Chat read `CHAT  Chats / All conversations`, a near-repeat rather than a
+/// path. The detail arm has guarded against exactly this since the
+/// `Settings / Settings` stutter — `(crumb.title != dest.label)` — and the home
+/// arm had no equivalent guard against the badge beside it.
+///
+/// The mockups' own words, and they are deliberate rather than incidental:
+/// 10-home-chat is `<span>goose server</span> / <b>All conversations</b>` and
+/// 11-home-code is `<span>code plane</span> / <b>Working trees</b>`. Neither
+/// names the destination; both name what the half IS. 11 says "code plane"
+/// rather than "Code" for this issue's reason in the mockup's own hand — the
+/// badge beside it already says Code.
+///
+/// NOT A CLAIM ABOUT STATE, which is what keeps it inside `CLAUDE.md`'s rule.
+/// It is a static description of the half, not a fact read off a wire: the
+/// connection's own name, version and host are the pill's, three inches to the
+/// right, and they stay there. Saying "goose server" over a dead socket is
+/// saying what this screen lists, not that anything answered.
+///
+/// Data rather than a branch inside the component, following [`home_leaf`]
+/// above and [`new_label`]: a rule taken as a value is a rule a test can hold.
+const fn home_parent(plane: Plane) -> &'static str {
+    match plane {
+        Plane::Chat => "goose server",
+        Plane::Code => "code plane",
     }
 }
 
@@ -441,6 +475,7 @@ pub(crate) fn crumb_parts(
     dest: &'static Destination,
     plane: Plane,
     on_home: bool,
+    nav_open: bool,
     crumb: Option<crate::nav::Crumb>,
     after: Option<String>,
 ) -> CrumbParts {
@@ -453,12 +488,42 @@ pub(crate) fn crumb_parts(
             // avoids by answering `None`.
             parent: (crumb.title != dest.label).then_some(dest.label),
             leaf: crumb.title,
-            after: crumb.subtitle,
+            // AND THE COUNTS TAKE THE SLOT WHEN THE OPEN THING HAS NOTHING TO
+            // SAY AND THE SIDEBAR IS SHUT.
+            //
+            // The half's counts otherwise live in two places, and shutting the
+            // sidebar takes both away: `.plane-seg-count` is inside the column
+            // that just closed, and the band only ever passed `after` on the
+            // home screen. So with a chat open and the sidebar collapsed —
+            // which is the arrangement the mockups' 30-collapse-left and
+            // 32-collapse-both are drawn for, and the arrangement `docs/audit.js`
+            // walks in two of its four shell cells — nothing on screen said how
+            // many conversations the half had or that any were waiting on you.
+            // The string was already computed by `band_after`; only the slot was
+            // contested.
+            //
+            // ONLY WHEN THE CRUMB HAS NO SUBTITLE OF ITS OWN, and that is a
+            // priority rather than a hedge. `.chrome-sub` says what qualifies
+            // the thing that is open; where the open thing qualifies itself —
+            // "paused", "Global", "developer" — that is the more specific
+            // answer and it keeps the slot. Where it says nothing, the half's
+            // standing counts are the next most useful qualifier and they are
+            // otherwise nowhere.
+            //
+            // WHAT THIS IS NOT: the mockups put a second element in the
+            // collapsed band — `.backb`, a glyph, a chevron, the word
+            // "Sessions" and a bold count — beside the crumb rather than in it.
+            // That is new markup and a new class, which
+            // `every_class_the_desktop_shell_renders_is_in_the_captured_store`
+            // refuses until `docs/gallery-states.json` is retaken by an
+            // operator. This is the same fact in the slot that already exists;
+            // the second element is what to build when the store is retaken.
+            after: crumb.subtitle.or(if nav_open { None } else { after }),
         };
     }
     if on_home {
         return CrumbParts {
-            parent: Some(dest.label),
+            parent: Some(home_parent(plane)),
             leaf: home_leaf(plane).to_owned(),
             after,
         };
@@ -862,7 +927,14 @@ pub(crate) fn AppShell() -> Element {
                 span { class: "plane-badge", "{plane.label()}" }
 
                 {
-                    let crumb = crumb_parts(dest, plane, on_home, crumb, band_after(&ctx, plane));
+                    let crumb = crumb_parts(
+                        dest,
+                        plane,
+                        on_home,
+                        nav_open(),
+                        crumb,
+                        band_after(&ctx, plane),
+                    );
                     rsx! {
                     div { class: "chrome-title",
                         if let Some(parent) = crumb.parent {
@@ -2191,12 +2263,26 @@ mod tests {
         // bar's title and the pane's suppression can no longer drift apart —
         // which is the failure the attribute made possible and this test was
         // written for.
+        let band = chrome_band();
         assert!(
-            chrome_band().contains("crumb_parts(dest, plane, on_home, crumb,"),
+            band.contains("crumb_parts(") && band.contains("band_after(&ctx, plane)"),
             "the window's bar no longer renders `.chrome-title` conditionally, \
              so `:has(.chrome-title)` either never matches — and every screen \
              paints two titles — or always does, and the screens the bar does \
              not name paint none"
+        );
+        // AND IT IS TOLD WHETHER THE SIDEBAR IS SHUT, which is the whole of
+        // the half's counts reaching a collapsed window: `crumb_parts` gives
+        // the sub slot to `band_after` only when the column that otherwise
+        // carries the count is closed. Passing a constant here would be a
+        // silent no-op — the string would still be computed, the slot would
+        // still be filled on the home screen, and the one arrangement this
+        // exists for would go on saying nothing.
+        assert!(
+            band.contains("nav_open(),"),
+            "the band no longer passes the sidebar's state to `crumb_parts`, \
+             so a shut sidebar takes the half's counts off screen with it and \
+             nothing puts them back"
         );
     }
 
@@ -2314,6 +2400,7 @@ mod tests {
             chats,
             Plane::Chat,
             false,
+            true,
             Some(crate::nav::Crumb {
                 title: "A conversation".to_owned(),
                 subtitle: None,
@@ -2323,12 +2410,18 @@ mod tests {
         assert_eq!(open.parent, Some("Chats"));
         assert_eq!(open.leaf, "A conversation");
 
-        let home = crumb_parts(chats, Plane::Chat, true, None, Some("2 threads".to_owned()));
-        assert_eq!(home.parent, Some("Chats"));
+        let home = crumb_parts(
+            chats,
+            Plane::Chat,
+            true,
+            true,
+            None,
+            Some("2 threads".to_owned()),
+        );
         assert_eq!(home.leaf, "All conversations");
         assert_eq!(home.after.as_deref(), Some("2 threads"));
 
-        let root = crumb_parts(chats, Plane::Chat, false, None, None);
+        let root = crumb_parts(chats, Plane::Chat, false, true, None, None);
         assert_eq!(
             root.parent, None,
             "a destination's own root named itself either side of a slash"
@@ -2339,6 +2432,7 @@ mod tests {
             chats,
             Plane::Chat,
             false,
+            true,
             Some(crate::nav::Crumb {
                 title: "Chats".to_owned(),
                 subtitle: None,
@@ -2348,6 +2442,111 @@ mod tests {
         assert_eq!(
             itself.parent, None,
             "the band read `Chats / Chats`, which is a stutter and not a path"
+        );
+    }
+
+    /// A HOME SCREEN'S CRUMB NAMES THE HALF, NOT THE ROW THAT GOT YOU THERE.
+    ///
+    /// The home arm answered `dest.label`, which is the plane badge's own word
+    /// one character apart, so the Code band read `CODE  Code / Working trees`
+    /// — the same word twice, 10px from itself. The detail arm has guarded
+    /// against precisely this since the `Settings / Settings` stutter and the
+    /// home arm had no equivalent guard against the badge.
+    ///
+    /// Held against the badge rather than against a literal, so the day
+    /// `Plane::label` changes this fails instead of quietly re-creating the
+    /// repeat it exists to remove.
+    ///
+    /// REPRODUCED: put `Some(dest.label)` back in the home arm and the second
+    /// assertion of each pair fails naming the pair.
+    #[test]
+    fn a_home_crumb_does_not_repeat_the_plane_badge_beside_it() {
+        for plane in Plane::ALL {
+            let dest = crate::nav::primary(plane);
+            let home = crumb_parts(dest, plane, true, true, None, None);
+            let parent = home.parent.unwrap_or_default();
+            assert!(
+                !parent.is_empty(),
+                "{plane:?}'s home crumb has no parent at all, so the band shows \
+                 a leaf with nothing to place it in"
+            );
+            let badge = plane.label();
+            assert!(
+                !parent.eq_ignore_ascii_case(badge)
+                    && !parent.eq_ignore_ascii_case(&format!("{badge}s")),
+                "{plane:?}'s home band reads `{badge}  {parent} / {}` — the \
+                 badge's own word, repeated as the crumb's parent 10px away. \
+                 The parent names what the half IS (the mockups' \"goose \
+                 server\" and \"code plane\"); the badge already names which \
+                 half it is",
+                home.leaf
+            );
+        }
+    }
+
+    /// WITH THE SIDEBAR SHUT, THE HALF'S COUNTS COME BACK INTO THE BAND.
+    ///
+    /// They otherwise live in two places and shutting the column takes both:
+    /// `.plane-seg-count` is inside the sidebar, and the band passed `after`
+    /// on the home screen only. So a chat open behind a collapsed sidebar —
+    /// the arrangement mockups 30 and 32 are drawn for, and two of the four
+    /// shell cells `docs/audit.js` walks — said nothing at all about how much
+    /// the half held or whether any of it was waiting on you.
+    ///
+    /// AND THE OPEN THING'S OWN SUBTITLE STILL WINS, which is the half of this
+    /// that is a priority rather than a feature: "paused" qualifies the
+    /// schedule you opened, and the half's counts do not.
+    ///
+    /// REPRODUCED, both ways: drop the `nav_open` term and the first assertion
+    /// fails (the counts never arrive); take `crumb.subtitle.or(...)` to
+    /// `Some(counts)` unconditionally and the third fails, because the
+    /// schedule's own "paused" has been replaced by a count.
+    #[test]
+    fn a_shut_sidebar_puts_the_halfs_counts_back_in_the_band() {
+        let chats = crate::nav::primary(Plane::Chat);
+        let counts = || Some("12 conversations \u{b7} nothing waiting on you".to_owned());
+        let bare = || {
+            Some(crate::nav::Crumb {
+                title: "A conversation".to_owned(),
+                subtitle: None,
+            })
+        };
+
+        let shut = crumb_parts(chats, Plane::Chat, false, false, bare(), counts());
+        assert_eq!(
+            shut.after,
+            counts(),
+            "with the sidebar shut and a chat open, the band says nothing about \
+             the half — and `.plane-seg-count`, the only other place that says \
+             it, is inside the column that just closed"
+        );
+
+        let open = crumb_parts(chats, Plane::Chat, false, true, bare(), counts());
+        assert_eq!(
+            open.after, None,
+            "with the sidebar OPEN the counts are already on screen in the \
+             plane switch, so the band saying them again is one fact in two \
+             places three inches apart"
+        );
+
+        let titled = crumb_parts(
+            chats,
+            Plane::Chat,
+            false,
+            false,
+            Some(crate::nav::Crumb {
+                title: "Nightly digest".to_owned(),
+                subtitle: Some("paused".to_owned()),
+            }),
+            counts(),
+        );
+        assert_eq!(
+            titled.after.as_deref(),
+            Some("paused"),
+            "the open thing's own subtitle was replaced by the half's counts. \
+             `.chrome-sub` says what qualifies what is open; where the open \
+             thing qualifies itself that is the more specific answer and it \
+             keeps the slot"
         );
     }
 
