@@ -30,10 +30,35 @@
   padding: 0.6875rem 0.875rem 0.4375rem;
 }
 
+/* ── THE COLUMN'S OWN LEADING IS A RATIO, NOT A TOKEN ──────────────────
+ *
+ * Seven rules in this file say `line-height: 1.45` and this is the argument
+ * for all of them, written once. The shell's type scale has two flat leading
+ * tokens — `--lh-sm` 18px and `--lh-xs` 16px — spread across four font sizes,
+ * and the mockups have one ratio: `body{font-size:13px;line-height:1.45}`,
+ * with every small box in the inspector inheriting it. At `--text-2xs`
+ * (10.5px) the flat 18 is 1.71, which is where the column's 10% of extra air
+ * comes from; at `--text-xs` (11.5px) the flat 16 is 1.39, which is the one
+ * place it runs tight.
+ *
+ * THE TOKENS DO NOT MOVE, and `00-tokens.css` says why: `--lh-sm`'s 18 is
+ * arithmetic elsewhere — `padding-top: max(0px, calc((32px - var(--lh-sm)) /
+ * 2))` resolves to 7 only at 18 — so a token edit would silently re-lay a
+ * rule in another region file. A ratio written on the seven rules that want
+ * it reaches exactly those seven.
+ *
+ * Measured against the mockups, dark, in the shipped 344px column:
+ * `.insp-sec` 36 -> 33.2 against `.sec-h` 33; `.insp-chip` h24 -> h21.2
+ * against `.xchip` 21; `.insp-key` 28x22 -> 28x19.2 against `.short .k`
+ * 28x19.2; `.insp-key-row` 28 -> 25.2 against `.short` 25.2; and once in the
+ * other direction, `.insp-kv-row` 24 -> 24.7 against `.kv .r` 26.
+ *
+ * `.insp-sec`'s `min-height: 2rem` stays: at 1.45 the header computes to
+ * 33.2px and the 32 was never binding. */
 .insp-sec-title {
   color: var(--text-secondary);
   font-size: var(--text-2xs);
-  line-height: var(--lh-sm);
+  line-height: 1.45;
   font-weight: 650;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -44,7 +69,7 @@
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  line-height: var(--lh-sm);
+  line-height: 1.45;
   font-variant-numeric: tabular-nums;
 }
 
@@ -82,15 +107,29 @@
   padding: 0.25rem 0;
   color: var(--text-secondary);
   font-size: var(--text-xs);
-  line-height: var(--lh-xs);
+  line-height: 1.45;
 }
 
+/* ── THE DETAIL RUNG, SPENT ────────────────────────────────────────────
+ *
+ * `--insp-detail` is declared and measured in `00-tokens.css` and this is one
+ * of the five rules it exists for; the others are `.insp-chip`, `.insp-key`,
+ * `.insp-file-path` and `.insp-meter-value`. All five said
+ * `color: var(--text-primary)`, which made every mono detail in the right
+ * column exactly as bright as a heading — and the key/value pair depends on
+ * the gap: the mockups' key is #98a1ac against a #c3cad2 value, and at the
+ * top rung the value jumps past where it should sit and the pair collapses.
+ *
+ * #c3cad2 is 10.54:1 on the dark panel and 8.95:1 on the raised chip, so this
+ * is a deliberate rung and not a contrast concession. Light keeps
+ * `--text-primary` — the token aliases it there — because #c3cad2 on light's
+ * panel is 1.3:1 and the mockups draw no light inspector to copy. */
 .insp-kv-value {
   margin-left: auto;
   max-width: 11.25rem;
-  color: var(--text-primary);
+  color: var(--insp-detail);
   font-size: var(--text-2xs);
-  line-height: var(--lh-xs);
+  line-height: 1.45;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -112,6 +151,36 @@
   padding: 0.125rem 0.875rem 0.25rem;
 }
 
+/* A CONTROL TAKES THE RAISE RUNG, and a chip and a keycap are controls. The
+ * argument is `00-tokens.css`'s own, at the dark remap: main.css spends
+ * `--bg-secondary` on controls as well as cards, "the mockups draw the same
+ * distinction: their card is rgba(255,255,255,.013) and their controls are
+ * --surface with a hairline", and these two landed on the card side of that
+ * line. Dark: #212429 -> #24282e, which is the mockups' `.xchip` and
+ * `.short .k` fill exactly, and 1.18:1 against the panel where the card wash
+ * was 1.10:1.
+ *
+ * WHAT LIGHT DOES WITH IT, because it is not the same edit there and nothing
+ * else in the repo would say so. Light's `--surface-raise` is `--bg-tertiary`
+ * #e3e6ea, DARKER than the #f4f6f7 panel — the asymmetry `00-tokens.css`
+ * records as unfixed, because light has no headroom above #ffffff to raise
+ * into. Two consequences, both measured. The pill separates slightly better
+ * than before (1.15:1 against the panel, where `--card-on-panel` white gave
+ * 1.08:1), and it loses its edge: light's `--border-primary` is #e3e6ea too,
+ * the same byte as the fill, so the border is 1.00:1 and the fill is the
+ * whole separation. #109 says leave the chip's border alone and it stays
+ * `--border-primary`; the note is here because the reason it was safe to
+ * leave changed underneath it.
+ *
+ * THE `off` INK OVERRIDE IS GONE, and both halves of that are decided:
+ * the mockups have no such rule — their `.xchip.off` changes the DOT and
+ * nothing else, and the ink shift only ever existed because nothing drew the
+ * dot — and on the raise rung in light it measures 4.01:1 at 10.5px against
+ * the 4.5:1 `docs/audit.js` holds. MEASURED, not reasoned: put the rule back
+ * and `node docs/audit.js light` reports 22 findings, all of them
+ * "CONTRAST 4.01:1 (need 4.5) span.insp-chip.off @10.5px", one per captured
+ * desktop state. The state is carried by the dot instead: a filled disc
+ * against a ring, which is a shape difference and not a colour one. */
 .insp-chip {
   display: inline-flex;
   align-items: center;
@@ -119,13 +188,27 @@
   padding: 0.125rem 0.5625rem 0.125rem 0.4375rem;
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-full);
-  background: var(--surface-card);
-  color: var(--text-primary);
+  background: var(--surface-raise);
+  color: var(--insp-detail);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  line-height: var(--lh-sm);
+  line-height: 1.45;
 }
 
+/* THE ONE MARK IN THE COLUMN THAT KEEPS THE LIVE ACCENT, and #111 asked for
+ * the dimmed one. Rejected, with the number: `--accent-dim` #0e7a73 measures
+ * 3.00:1 on the card #212429 — which is what `00-tokens.css` weighed it at,
+ * exactly on `30-sidebar-list.css`'s "a non-text indicator owes 3:1" floor —
+ * but the rule above has just moved this dot off the card and onto the raise
+ * rung #24282e, where the same fill is **2.86:1**, under the floor. The
+ * mockups are under it too: their `.xchip i` is #0e7a73 on their own #24282e
+ * chip.
+ *
+ * And this dot now carries the whole on/off signal, since the `off` ink
+ * override went with it, so it is the one mark here that may not sit at the
+ * line. `--accent` #13bbaf is 6.17:1 on the raised chip. The seen-file tick
+ * below takes the dimmed rung as #111 asks, because it sits on the panel
+ * (3.36:1) rather than inside a control. */
 .insp-chip > i {
   flex: 0 0 auto;
   width: 0.3125rem;
@@ -134,22 +217,31 @@
   background: var(--accent);
 }
 
-.insp-chip.off {
-  color: var(--text-secondary);
-}
-
 .insp-chip.off > i {
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--text-secondary);
 }
 
+/* ── THE COLUMN'S THREE RADII ARE ITS OWN ──────────────────────────────
+ *
+ * `--radius-sm/-lg` are main.css's 4/8/12 ladder, composed for a phone where
+ * the smallest rounded thing is a chip you can hit with a thumb. The mockups'
+ * inspector runs 5, 7 and 11 — this rule 12 -> 11, `.insp-file` 4 -> 7 and
+ * `.insp-key` 4 -> 5 — and the one a reader sees is the file row, whose pill
+ * is visibly squarer than the mockup's at 4.
+ *
+ * Literals rather than tokens, because these are three numbers in one column
+ * and not a new rung of the app's ladder; `.insp-file-tick { width: 0.875rem
+ * }` is the same call already made in this file. `--radius-*` belong to
+ * main.css and the phone and are not touched. The `.insp-tag` 4 and the two
+ * `--radius-full` pills already agree with the mockups and are left alone. */
 .insp-card {
   display: block;
   width: calc(100% - 1.5rem);
   margin: 0.125rem 0.75rem 0.25rem;
   padding: 0.625rem 0.75rem;
   border: 1px solid var(--border-primary);
-  border-radius: var(--radius-lg);
+  border-radius: 0.6875rem;
   background: var(--surface-card);
   color: inherit;
   font: inherit;
@@ -229,7 +321,7 @@
   gap: 0.5rem;
   align-items: center;
   padding: 0.375rem;
-  border-radius: var(--radius-sm);
+  border-radius: 0.4375rem;
 }
 
 .insp-file-tick {
@@ -245,10 +337,28 @@
   line-height: 1;
 }
 
+/* A SPENT MARK TAKES THE DIMMED RUNG, which is the mockups' `.tick.seen`
+ * #0e7a73 against the vivid #13bbaf they keep for a live accent — a list of
+ * read files glowed at full saturation. `--accent-dim` on the panel is
+ * 3.36:1, over the 3:1 a non-text indicator owes, and this mark is on the
+ * panel rather than inside a control: `.insp-file` paints no fill.
+ *
+ * THE GLYPH NEEDS ITS OWN INK AND `00-tokens.css` PREDICTED IT: "Anything
+ * that puts a GLYPH on this fill needs its own value — #e9ecef on #0e7a73 is
+ * 4.37:1 and does not clear 4.5." That is this rule, now that the check is
+ * drawn. `--accent-ink` is #0c1a19 in dark and measures 3.44:1 on #0e7a73;
+ * the mockups' own #04211f is 3.26:1; white is 5.19:1 and clears.
+ *
+ * A literal, and it is the one place in this file that earns one:
+ * `--accent-dim` resolves to #0e7a73 in BOTH themes — light declares it
+ * `var(--accent-fill)` and light's accent fill is that colour — so the
+ * surface under this glyph is theme-invariant and a token that switched with
+ * the theme would be answering a question this fill does not ask. In light
+ * `--accent-ink` is already #ffffff, so light does not move. */
 .insp-file-tick.seen {
-  border-color: var(--accent-fill);
-  background: var(--accent-fill);
-  color: var(--accent-ink);
+  border-color: var(--accent-dim);
+  background: var(--accent-dim);
+  color: #ffffff;
 }
 
 /* THE FILE ROW'S TWO STRINGS SIT A RUNG UP FROM THE REST OF THE PANEL, and
@@ -259,7 +369,7 @@
  * unaffected — both strings keep the ink they had. */
 .insp-file-path {
   min-width: 0;
-  color: var(--text-primary);
+  color: var(--insp-detail);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: var(--lh-xs);
@@ -426,7 +536,7 @@
 
 .insp-meter-value {
   margin-left: auto;
-  color: var(--text-primary);
+  color: var(--insp-detail);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   line-height: var(--lh-xs);
@@ -447,6 +557,13 @@
   background: var(--accent);
 }
 
+/* NO LOCAL OVERRIDE HERE, deliberately. #111 measured this fill as a pale
+ * #ffd966 against the mockups' amber #f0b429 and proposed writing the amber
+ * on this rule; by the time it was written `00-tokens.css` had already
+ * remapped `--text-warning` to #f0b429 in both dark bodies, with this
+ * element on its spend list. Rendered on the shipped sheet: rgb(240,180,41).
+ * A second answer here would be one more literal for a value one token
+ * already carries — the failure `--shell-line-soft`'s comment is about. */
 .insp-track > i.warn {
   background: var(--text-warning);
 }
@@ -456,6 +573,26 @@
   border-top: 1px solid var(--shell-line);
 }
 
+/* THE ONE HEADING IN THIS COLUMN THAT WAS NOT A HEADING. `.insp-keys-title`
+ * had no rule anywhere — not in this sheet, not in main.css — so "Keys"
+ * inherited the shell's 13px body and rendered as the biggest, heaviest,
+ * brightest string in the inspector, outranking the six 10.5px tracked
+ * uppercase titles above it and sitting 0.2px off the first keycap row.
+ *
+ * `.insp-sec-title`'s declarations, because it IS one: same size, weight,
+ * tracking, case and ink. The padding is the gap `.insp-sec` gives the others
+ * and this block had nowhere to put — the mockups' `.shorts .sec-h` carries
+ * `padding: 0 0 6px`. */
+.insp-keys-title {
+  padding-bottom: 0.375rem;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.45;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
 .insp-key-row {
   display: flex;
   align-items: center;
@@ -463,20 +600,26 @@
   padding: 0.1875rem 0;
   color: var(--text-secondary);
   font-size: var(--text-xs);
-  line-height: var(--lh-sm);
+  line-height: 1.45;
 }
 
+/* The keycap is the other control that took the card wash — see `.insp-chip`
+ * above for the whole argument. Its EDGE moves too, and only its: the
+ * mockups' `.short .k` is bordered with their hard `--line` #2c3138, which
+ * this shell declares as `--shell-line`, where the chip beside it is
+ * bordered with the soft one. A cap outlined more loudly than its own fill
+ * wants reads drawn rather than pressed. */
 .insp-key {
   flex: 0 0 auto;
   min-width: 1.75rem;
   padding: 0.0625rem 0.375rem;
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-sm);
-  background: var(--surface-card);
-  color: var(--text-primary);
+  border: 1px solid var(--shell-line);
+  border-radius: 0.3125rem;
+  background: var(--surface-raise);
+  color: var(--insp-detail);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  line-height: var(--lh-sm);
+  line-height: 1.45;
   text-align: center;
 }
 
