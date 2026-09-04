@@ -1755,6 +1755,90 @@ mod tests {
         );
     }
 
+    /// THE TRANSCRIPT'S TOP FADE AND ITS TOP PADDING ARE ONE NUMBER.
+    ///
+    /// `assets/desktop/95-transcript.css` dissolves this scroller under the
+    /// window band with a mask, and the mask is positioned on the BOX rather
+    /// than on the content — so the only thing that keeps the ramp off the
+    /// first attribution row at rest is the scroller padding above it being at
+    /// least as long as the ramp. Held apart in three declarations, because
+    /// `WKWebView` needs the `-webkit-` copy of the mask. Change one and the
+    /// sheet still parses, the layout is still legal, and the first `YOU` in
+    /// every conversation is painted at partial alpha for good; `docs/audit.js`
+    /// cannot see it, because its contrast walk reads `color` and `opacity`
+    /// and a mask sets neither.
+    ///
+    /// `30-sidebar-list.css` has the same pair at the other end of its list
+    /// and `src/css.rs` pins it there. This one is pinned HERE because this
+    /// file is where the transcript is built and the pair is the transcript's;
+    /// the mockup it comes from pads 20 and ramps 26, so copying it faithfully
+    /// is the failure, not the fix.
+    #[test]
+    fn the_transcripts_fade_lands_on_the_padding_it_is_measured_from() {
+        const FILE: &str = "95-transcript.css";
+        // The leading newline anchors this to the start of a rule, so it
+        // cannot match `.pane-main .scroll.chat > .who-line` or a mention of
+        // the selector inside a comment.
+        const SELECTOR: &str = "\n.pane-main .scroll.chat {";
+
+        let sheet = crate::css::SHELL_PARTS
+            .iter()
+            .find(|&&(name, _)| name == FILE)
+            .map(|&(_, body)| body)
+            .unwrap_or_default();
+        assert!(
+            !sheet.is_empty(),
+            "no `{FILE}` in `SHELL_PARTS` — the transcript's region file has \
+             been renamed or split, and this test now checks nothing"
+        );
+
+        let block = sheet
+            .find(SELECTOR)
+            .and_then(|at| sheet.get(at + SELECTOR.len()..))
+            .and_then(|rest| rest.split('}').next())
+            .unwrap_or_default();
+        assert!(
+            !block.is_empty(),
+            "no `{SELECTOR}` rule in {FILE}: the transcript scroller is styled \
+             somewhere else now, or under another name"
+        );
+
+        let padding = block
+            .find("padding-top:")
+            .and_then(|at| block.get(at + "padding-top:".len()..))
+            .and_then(|rest| rest.split(';').next())
+            .unwrap_or_default()
+            .trim();
+        let fades: Vec<&str> = block
+            .match_indices("#000 ")
+            .filter_map(|(at, needle)| {
+                block
+                    .get(at + needle.len()..)
+                    .and_then(|rest| rest.split(')').next())
+            })
+            .collect();
+
+        assert_eq!(
+            fades.len(),
+            2,
+            "`.pane-main .scroll.chat` should carry the fade twice — \
+             `mask-image` and the `-webkit-` copy WKWebView needs — and it \
+             carries {}. One of the two is gone, so the transcript fades on \
+             one engine only.",
+            fades.len()
+        );
+        for fade in &fades {
+            assert_eq!(
+                *fade, padding,
+                "the ramp is {fade} and the scroller pads {padding}. They are \
+                 one number: the gradient is a LENGTH precisely so that at \
+                 scroll-top it lands on padding rather than on the first \
+                 speaker's name, and a ramp that outruns the padding fades \
+                 that name permanently with nothing to report it."
+            );
+        }
+    }
+
     /// EXACTLY ONE LEADING MARK ON A TOOL ROW, whichever kind arrives.
     ///
     /// The desktop's card opens with the mockups' accent word and the phone's

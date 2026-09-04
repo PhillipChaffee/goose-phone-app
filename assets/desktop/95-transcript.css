@@ -5,6 +5,49 @@
  * of the same markup is untouched — that is the promise this file is under.
  * The mockup being measured against is `22-nav-disclosure.html`. */
 
+/* THE SCROLLER FADES UNDER THE BAND, and it was the one that did not.
+ *
+ * `.thread{-webkit-mask-image:linear-gradient(transparent 0,#000 26px);
+ * mask-image:linear-gradient(transparent 0,#000 26px)}` — 22-nav-disclosure.
+ * Both of this column's siblings already ship theirs and cite the same source:
+ * `.nav-sessions` in `30-sidebar-list.css` and `.insp-scroll` in
+ * `90-inspector.css`. Measured before this rule, `.scroll.chat` was `mask:
+ * none`, so scrolled-up content stopped dead at a hard horizontal edge under
+ * the pane header while the two columns beside it dissolved.
+ *
+ * BOTH PROPERTIES, because this sheet ships inside WKWebView — the same note
+ * `30-sidebar-list.css` carries over its own copy.
+ *
+ * THE RAMP AND THE PADDING ARE ONE NUMBER, and the mockup gives two. 22 pads
+ * `.thread` 20px and ramps 26, which paints its own first attribution row at
+ * 77% alpha at rest — a mask is positioned on the BOX, not on the content, so
+ * the only way the ramp lands on nothing while scrolled to the top is for the
+ * padding above the first row to be at least as long as the ramp. Scrolled
+ * down, the whole ramp falls on content, which is the point of it.
+ *
+ * SO THE PADDING WINS AND THE RAMP COMES DOWN TO IT: 1.25rem, the mockup's own
+ * 20px, and a ramp 6px shorter than its. The other way round — 26 for both —
+ * would put the first row 6px FURTHER below the window band, and how far below
+ * the band this transcript starts is the subject of its own finding in this
+ * epic. Six pixels of gradient length is imperceptible; six pixels of offset is
+ * the thing that was filed. Measured at 1440x860: the first `.who-line` goes
+ * from 76px under the band to 84px, where the mockup's is 20px under a 46px
+ * band and 26/26 would have made it 90.
+ *
+ * `.nav-sessions` reasons the same way at the other end of its list, and
+ * `src/views/chat.rs` holds this pair equal with a test because nothing else in
+ * the repo can see it: the sheet parses either way, the layout is legal either
+ * way, and `docs/audit.js`'s contrast walk reads `color` and `opacity` — a mask
+ * sets neither.
+ *
+ * It replaces `70-overrides.css`'s blanket `.scroll { padding-top: 12px }` on
+ * this one scroller and leaves the other three alone. */
+.pane-main .scroll.chat {
+  padding-top: 1.25rem;
+  -webkit-mask-image: linear-gradient(transparent 0, #000 1.25rem);
+  mask-image: linear-gradient(transparent 0, #000 1.25rem);
+}
+
 .pane-main .scroll.chat > .bubble.user {
   align-self: stretch;
   width: auto;
@@ -67,9 +110,27 @@
   color: var(--text-secondary);
 }
 
+/* THE ATTRIBUTION ROW. `.who-line{display:flex;align-items:center;gap:8px;
+ * margin-bottom:7px}` — the gap and the margin already matched; `center` is
+ * the one number that did not, and it is inert today because the row holds one
+ * 16px item in a 16px box. It is taken anyway, because the moment anything
+ * occupies the trailing slot `baseline` would hang a mono string off the
+ * name's baseline rather than centring it on the row, and that is the failure
+ * this rule would otherwise be found to have later.
+ *
+ * THE TRAILING SLOT IS A RECORDED DROP. 22 puts `.who-line .tm` there —
+ * `margin-left:auto`, 10.5px mono, a per-turn wall-clock time — and the wire
+ * carries no such thing. `ChatItem` has no timestamp of its own; the only
+ * clock in this transcript is `render_transcript`'s `marks`, which are gap
+ * boundaries between turns and are already spent on `.timemark`. Rendering a
+ * time per turn would mean inventing one. See `src/views/chat.rs` and
+ * `src/shell/desktop/inspector.rs` for the rest of that list.
+ *
+ * NOT AN ALIGNMENT CHANGE — the measure stays centred; see §6 in
+ * `80-measure.css`, which now carries that decision in full. */
 .pane-main .scroll.chat > .who-line {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.5rem;
   margin: 1.25rem 0 0.4375rem;
 }
@@ -344,9 +405,22 @@
  * these two colours are strings `docs/audit.js` can measure. The first draft
  * of this painted them with `content: attr(data-who)`, which the gate is
  * structurally blind to: its walk keys on child text nodes. */
+/* 11px AND NOT 10.5. `.who-line .nm{font-size:11px;font-weight:650;
+ * letter-spacing:.07em;text-transform:uppercase}` — measured, this row was
+ * 10.5px on 0.735px of tracking against the mockup's 11px on 0.77px, and the
+ * tracking follows for free because it is already `0.07em`.
+ *
+ * A LITERAL, and it is the one rung this ladder cannot supply: `--text-2xs` is
+ * 10.5px and `--text-xs` is 11.5px, the mockups' two most-used sizes, and 11
+ * is exactly between them. `00-tokens.css` is closed to a new rung, so the
+ * choice is a half-point either way or the mockup's own number written down.
+ * 0.6875rem is 11px at the reader's root and scales with it like everything
+ * else in this sheet.
+ *
+ * Ink unchanged and re-measured on the canvas: 6.17:1 dark, 5.02:1 light. */
 .pane-main .scroll.chat > .who-line .who-name {
   font-family: var(--font-sans);
-  font-size: var(--text-2xs);
+  font-size: 0.6875rem;
   font-weight: 650;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -362,7 +436,127 @@
  * longer true: `.tool-kind` above and the live ring take it too, and both are
  * the mockups' own spend rather than an addition — 22 paints `.who-line .nm`
  * for goose, `.tool .nm` and `.ring` in the accent and nothing else in the
- * thread. */
+ * thread. The composer's send below is the fourth, at the foot of the
+ * column. */
 .pane-main .scroll.chat > .who-line .who-name.goose {
   color: var(--accent);
 }
+
+/* ── 11. the composer at the foot of a conversation ─────────────────────
+ *
+ * The other composer in this window was rebuilt from the mockups when the
+ * chat home landed (`40-home-chat.css` §`.home-compose`, with the mockup CSS
+ * quoted line by line); this one was never touched, so it was still
+ * `assets/main.css`'s phone card. Measured side by side: the home screen's is
+ * a 16px-radius flat box with a hairline between what you type and the
+ * controls, and opening a conversation replaced it with a 24px-radius shadowed
+ * outline the same colour as the page behind it, with three grey pills
+ * floating 6px under the text on the card's own background and no seam. Two
+ * composers, one window, one action.
+ *
+ * `.composer{margin:9px 26px 16px;border:1px solid their --line;
+ * border-radius:14px;background:their --surface;overflow:hidden}` with
+ * `.composer .field{padding:12px 14px 10px;font-size:13.5px}` and
+ * `.composer .bar{padding:7px 10px 8px 12px;border-top:1px solid
+ * their --line-soft}` — 22-nav-disclosure. FIELD ZONE, full-bleed hairline,
+ * CONTROL ZONE, and no shadow: the same three things `40-home-chat.css` sets
+ * out at length over `.home-compose`, which is the model being copied here.
+ *
+ * `--surface-card` AND NOT `--bg-secondary`, which is the opposite of the call
+ * two sections up and is deliberate. The mockups paint `.user`, `.tool` and
+ * `.composer` on one value, and in dark `--bg-secondary` IS that value — but
+ * this control has a twin one click away and the whole complaint is that the
+ * two do not look like the same app. `.home-compose` paints `--surface-card`
+ * and says why: on `--surface-raise` in light the placeholder
+ * (--text-secondary #6f6f6f on #e3e6ea) is 4.01:1, under the 4.5 it owes. On
+ * `--surface-card` it is 4.64:1 light and 5.95:1 dark. So the composer follows
+ * its twin, and what it gives up is three units of fill in dark — recorded
+ * here rather than left to be re-measured as a defect.
+ *
+ * 14px is a literal for the reason the tool card's 9px is: `--radius-lg` is 12
+ * and `--radius-xl` is 16 and the mockup is exactly between them.
+ *
+ * `--shell-line` is the mockup's outer edge to the digit — its rgb(44,49,56)
+ * is #2c3138 — where `.home-compose` took `--border-secondary` (#3b414a). In
+ * LIGHT the two resolve to the same #cbd1d6, so the composers differ in dark
+ * only, and the value here is the measured one. That divergence is the home
+ * lane's to settle, not this one's. */
+.pane-main .composer {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--surface-card);
+  border: 1px solid var(--shell-line);
+  border-radius: 14px;
+  /* "Borders separate, shadows float" — docs/design.md. On the phone this card
+   * floats over the transcript; in a column it is the bottom of a pane, in
+   * normal flow, and the mockup draws `box-shadow:none`. */
+  box-shadow: none;
+}
+
+/* THE FIELD ZONE. `.composer .field{padding:12px 14px 10px;font-size:13.5px}`
+ * — asymmetric, more above than below, because the control zone underneath
+ * supplies the lower half of the box's air.
+ *
+ * 13.5px on 19.575px, which is `--text-turn` with the line-height taken OFF:
+ * `.input` in main.css is `--text-sm`/`--lh-sm`, and the shell re-resolves
+ * that to 12.5 on 18 — half a point under the sidebar labels beside it, in the
+ * one field the reader writes their own words in. `inherit` takes the shell's
+ * unitless 1.45 and lands on the mockup's number exactly; see the rung's own
+ * note in `00-tokens.css`, which names this rule.
+ *
+ * AND THE SIX-LINE CAP IS RE-DERIVED, because it was counted in `--lh-sm`.
+ * main.css caps the field at `min(calc(var(--lh-sm) * 6), 40vh)` and says why:
+ * six lines, then it scrolls. At 18px that is 108px and the line is now
+ * 19.575px, so the cap would have closed the field at five and a half lines
+ * and put the sixth out of sight. The `40vh` ceiling is main.css's other half
+ * of that promise and is kept verbatim. */
+.pane-main .composer .input {
+  padding: 12px 14px 10px;
+  font-size: var(--text-turn);
+  line-height: inherit;
+  max-height: min(calc(var(--text-turn) * 1.45 * 6), 40vh);
+}
+
+/* THE CONTROL ZONE AND THE SEAM. `.composer .bar{padding:7px 10px 8px 12px;
+ * border-top:1px solid their --line-soft}` — tighter than the field above it,
+ * and SOFTER than the composer's own outer edge, which is the distinction
+ * `40-home-chat.css` sets out: a line inside a control separates two zones of
+ * one object, and drawing it at the boundary's strength makes it read as two
+ * stacked objects. `--shell-line-soft` is #242830 dark against the card's own
+ * #2c3138 edge, and `var(--border-primary)` in light against #cbd1d6 — the
+ * same one-rung step in both themes. It is the token `#52` declared for
+ * exactly this, not a fifth literal for one colour.
+ *
+ * `overflow: hidden` on the card above is what makes the hairline meet the
+ * curve instead of running past it. */
+.pane-main .composer .composer-row {
+  padding: 7px 10px 8px 12px;
+  border-top: 1px solid var(--shell-line-soft);
+}
+
+/* THE SEND, and it is the home composer's rule arriving at the control it was
+ * modelled on. `.home-compose-row .send` has been 32px and accent-filled since
+ * the chat home landed; this one was still main.css's 40px `--bg-inverse`
+ * disc, which in dark is #cbd1d6 — 10.48:1 on the canvas, the brightest object
+ * in the window, and in light solid black. Pressing Compose on the home screen
+ * and pressing send in a conversation were the same action in two colours in
+ * one session.
+ *
+ * 32px rather than the mockups' 28: `docs/audit.js` reports SMALL-TAP under 32
+ * in either axis, so the floor wins over the picture — the same trade the home
+ * composer's own note records. `--accent-fill`/`--accent-ink` are a measured
+ * pair: 7.44:1 dark, 5.19:1 light.
+ *
+ * `:not(.stop)` IS LOAD-BEARING. This selector is (0,4,0) against main.css's
+ * `.send.stop` at (0,2,0), so without it the accent would paint over the red
+ * stop button and the one control that cancels a running turn would look
+ * exactly like the one that starts it. */
+.pane-main .composer .send:not(.stop) {
+  width: 32px;
+  height: 32px;
+  background: var(--accent-fill);
+  color: var(--accent-ink);
+  font-size: var(--text-md);
+}
+
