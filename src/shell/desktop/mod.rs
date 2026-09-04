@@ -247,10 +247,10 @@ fn use_nav_key(mut nav_open: Signal<bool>) {
 /// Whether the window is fullscreen, as the window itself reports it.
 ///
 /// `src/main.rs` hides the macOS titlebar, so `assets/platform/macos.css`
-/// reserves a 52pt band with a 76pt indent for the traffic lights. Fullscreen
+/// reserves a 34pt band with a 76pt indent for the traffic lights. Fullscreen
 /// takes those lights away — `AppKit` hides them and re-draws them in an overlay
-/// on hover near the top edge — so the reservation becomes 122pt of nothing at
-/// the top of a window someone has just asked to be as large as possible.
+/// on hover near the top edge — so the indent becomes 76pt of nothing at the
+/// top left of a window someone has just asked to be as large as possible.
 ///
 /// REPORTED, not inferred, and that is the whole change. This was a JS test of
 /// `innerHeight >= screen.height - 2`, on the reasoning that a fullscreen
@@ -2528,7 +2528,7 @@ mod tests {
     /// The chrome reservation is macOS's alone, because `src/main.rs` hides
     /// the titlebar there and nowhere else. Defaulted to zero in the shared
     /// desktop sheet and raised only by the platform sheet — otherwise a
-    /// native-frame build gets its own titlebar AND a 52pt strip held empty
+    /// native-frame build gets its own titlebar AND a 76pt slot held empty
     /// for traffic lights it does not have.
     ///
     /// REPRODUCED, and it is the reason `shell_code()` exists. Delete
@@ -2583,6 +2583,83 @@ mod tests {
             shell.contains("fn use_fullscreen()") && shell.contains(".fullscreen().is_some()"),
             "the flag must be read off the window; inferring it from geometry \
              is what shipped a feature that never engaged"
+        );
+    }
+
+    /// THE BAND'S HEIGHT AND THE ROW'S OFFSET ARE ONE NUMBER TWICE, and until
+    /// this test nothing in the repo held them together.
+    ///
+    /// `--chrome-pad` in the fullscreen block is not a taste, it is
+    /// `(--chrome-h - 32) / 2` — the room left over after the 32pt control the
+    /// band's whole content is. Change one and the other is silently wrong,
+    /// and it is silent in the worst way: the arithmetic still parses, the
+    /// sheet still applies, and the fault only appears in a `fullscreen` frame,
+    /// which is the one shell state a human never renders by accident.
+    ///
+    /// MEASURED, on this tree. Taking `--chrome-h` from 52 to 34 and leaving
+    /// the fullscreen pad at its old `(52 - 32) / 2 = 10px` makes
+    /// `node docs/audit.js both` report **572 findings — 468 FULLSCREEN and 104
+    /// SQUARE** — a 32pt control starting at y=10 in a 33px content box, i.e.
+    /// nine points past the bottom of the band that contains it. At 1px the
+    /// same run is Clean. So the audit CAN see it; what the audit cannot do is
+    /// tell anyone which of the two numbers was the one that moved, and it only
+    /// runs where a browser does.
+    ///
+    /// The 52 -> 34 move also invalidated four comments that quote the band's
+    /// height as prose and two that quote a y-offset derived from it, in three
+    /// files and in Rust. Nothing in the tree can check prose; this at least
+    /// makes the number itself impossible to move quietly, which is the hook a
+    /// reader needs to go and look for the sentences.
+    ///
+    /// Shown to fail: set the fullscreen pad back to 10px and this reports the
+    /// value it found beside the value the height implies.
+    #[test]
+    fn the_fullscreen_pad_is_derived_from_the_band_height() {
+        // COMMENTS FIRST, and that is not tidiness. Both blocks below argue
+        // their number in prose that names the property, so a plain `find`
+        // reads the argument rather than the declaration — measured while
+        // writing this: it returned four lines of the comment above
+        // `--chrome-h`. Only a real declaration has the colon attached.
+        let macos = include_str!("../../../assets/platform/macos.css");
+        let mut bare = String::with_capacity(macos.len());
+        let mut rest = macos;
+        while let Some(open) = rest.find("/*") {
+            bare.push_str(&rest[..open]);
+            let Some(close) = rest[open..].find("*/") else {
+                break;
+            };
+            rest = &rest[open + close + 2..];
+        }
+        bare.push_str(rest);
+        let value = |after: &str, prop: &str| -> Option<String> {
+            let at = bare.find(after)?;
+            let tail = &bare[at..];
+            let start = tail.find(prop)? + prop.len();
+            let end = tail[start..].find(';')? + start;
+            Some(tail[start..end].trim().to_owned())
+        };
+        let height = value(".app > .shell {", "--chrome-h:");
+        assert_eq!(
+            height.as_deref(),
+            Some("34px"),
+            "assets/platform/macos.css gives the band's height as {height:?}. \
+             It is 34 by derivation, not by taste: the row is a 32pt control \
+             pinned to the traffic lights' own y, so every point past 34 falls \
+             BELOW the row rather than around it. If it is meant to move, move \
+             the fullscreen pad below with it and re-read the four comments \
+             that quote the number as prose."
+        );
+        let pad = value(r#"[data-fullscreen="true"] {"#, "--chrome-pad:");
+        assert_eq!(
+            pad.as_deref(),
+            Some("1px"),
+            "the fullscreen block gives `--chrome-pad` as {pad:?}, and the band \
+             above it is {height:?}. The pad is (--chrome-h - 32) / 2 — the room \
+             left after the 32pt control the band holds — and a pad that no \
+             longer matches the height puts that control outside its own band in \
+             every fullscreen frame. Measured on this tree: 34px against a 10px \
+             pad is 572 findings from `node docs/audit.js both`, 468 of them \
+             FULLSCREEN."
         );
     }
 

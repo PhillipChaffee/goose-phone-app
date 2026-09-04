@@ -70,16 +70,17 @@
    * on a 32px box — `.nav-toggle`, `.chrome-title` and `.shell-chrome >
    * .conn-badge` all do. The badge never did: it is an inline span with no
    * height, so it computes 2 + --lh-sm + 2 and pins to y 0. On macOS
-   * (--chrome-h 52, --chrome-pad 0) that puts a 24px badge at 0..24 beside a
-   * 32px toggle at 0..32 — four points high of everything around it, in the one
-   * strip that is on screen in every state.
+   * (--chrome-h 34, --chrome-pad 0) that would put a 24px badge at 0..24 beside
+   * a 32px toggle at 0..32 — four points high of everything around it, in the
+   * one strip that is on screen in every state.
    *
    * The arithmetic --chrome-pad encodes is otherwise still correct and is not
-   * touched: macOS 0 + 32 centres on the traffic lights' own 15.75; elsewhere
-   * 6 + 32 in a 44 band centres on 22; fullscreen macOS 10 + 32 in 52 centres
-   * on 26. It is `align-items: center` everywhere except macOS-not-fullscreen,
-   * said as a token — and the re-scale does not move it, because all four boxes
-   * are pinned at 32px rather than sized by their text. */
+   * touched: macOS 0 + 32 in a 34 band centres on the traffic lights' own
+   * 15.75; elsewhere 6 + 32 in a 44 band centres on 22; fullscreen macOS 1 + 32
+   * in 34 centres on 17. It is `align-items: center` everywhere except
+   * macOS-not-fullscreen, said as a token — and neither the re-scale nor the
+   * band's own drop from 52 to 34 moves it, because all four boxes are pinned
+   * at 32px rather than sized by their text. */
   display: inline-flex;
   align-items: center;
   margin-top: var(--chrome-pad);
@@ -293,10 +294,11 @@
  * 486 with the nav open and 380 with it shut, because it is padded by a gutter
  * computed from the pane's own width).
  *
- * ONE LINE, and that is a constraint rather than a taste. `--chrome-h` is 52px
- * measured off a real macOS window and the toggle beside this is a 32px control
- * centred on the traffic lights at y 16; a two-line group centred on that same
- * 16 starts above the top of the window. So the subtitle sits BESIDE the title
+ * ONE LINE, and that is a constraint rather than a taste. `--chrome-h` is 34px
+ * — the height of this row plus the band's hairline, `assets/platform/macos.css`
+ * has the derivation — and the toggle beside this is a 32px control centred on
+ * the traffic lights at y 16; a two-line group centred on that same 16 starts
+ * above the top of the window. So the subtitle sits BESIDE the title
  * — the same string the pane's `.subtitle` carries, from the same expression —
  * on a baseline with it.
  *
@@ -331,7 +333,7 @@
 
 /* Not the phone's `.title`, and not `--text-lg`. This is a window bar, not a
  * page heading: the reference sets its band title at `text-xs font-medium`,
- * and a 20px heading in a 52px strip beside a 32px icon button reads as a
+ * and a 20px heading in a 34px strip beside a 32px icon button reads as a
  * screen that has lost its layout. `--text-sm` is the rung this app already
  * spends on chrome (`.session-title`). */
 .chrome-heading {
@@ -386,14 +388,57 @@
  * went on reporting it. At 200 the counts absorb effectively all of it — down
  * to nothing, since `min-width: 0` and the ellipsis let this box reach zero —
  * and the name is only ever cut once the counts have already gone. */
+/* AND IT HAD NO INK AND NO SIZE OF ITS OWN, which is three defects in one
+ * omission.
+ *
+ * Measured on `desktop-chats` at 1440x860 dark before this change: this block
+ * declared only flex / min-width / overflow / text-overflow / white-space /
+ * margin-left, so the counts inherited `.app > .shell`'s 13px and body's
+ * `--text-primary` and rendered `13px/18.85px rgb(233,236,239)` beside a
+ * `.chrome-heading` of `12.5px rgb(233,236,239)`. The qualifier was half a
+ * point LARGER than the name it qualifies, the same ink, and 244px against the
+ * heading's 105 — "3 conversations · nothing waiting on you" shouting over
+ * "All conversations". The mockups have it the other way round in all three
+ * files: `.crumb .after` is 12px `--faint` #6a7480 against `.crumb b` at 13px
+ * `--text` #e9ecef, the smallest and faintest string in the band against the
+ * largest and brightest.
+ *
+ * The third symptom is why the leading is not a free choice. `.chrome-title`
+ * is `align-items: baseline`, so the tallest line box in the group sets where
+ * the shared baseline falls: an 18.85px sub beside an 18px heading dragged the
+ * whole crumb 1px down, on the two home screens and the three detail screens
+ * that carry a subtitle and nowhere else. The band's alignment changed with
+ * which screen was open.
+ *
+ * `--lh-xs` (16px) AND NOT `--lh-sm` (18px). The issue prescribes both, in two
+ * findings, and they cannot both ship — one property, one selector.
+ *
+ *   REJECTED: `--lh-sm`, 18px. It is the value in the issue's own Fix, and it
+ *   does not deliver the baseline fix that same issue claims for it: 18px is
+ *   `--lh-sm` exactly, which is `.chrome-heading`'s leading, so the sub's line
+ *   box ties for tallest instead of yielding, and a tie is decided by whatever
+ *   the font metrics do that day rather than by this rule.
+ *
+ *   TAKEN: `--lh-xs`, 16px. `00-tokens.css`'s own comment on that token names
+ *   this element as one of its two intended consumers — "16px. Serves
+ *   --text-xs at 1.39 (`.chrome-sub`, `.composer-chip`)" — so the two
+ *   declarations below are the ones that were meant to be here and never
+ *   landed, not a new opinion. 16 is under 18, the sub stops being the tallest
+ *   box, and the group's baseline returns to the badge's and the pill's.
+ *
+ * `--text-secondary` and not `--ink-faint`: this is a string a reader reads,
+ * and the faint rung is spent on marks and counters. It measures 8.78:1 on the
+ * dark panel and 4.64:1 on the light one at 11.5px, which owes 4.5. */
 .chrome-sub {
   flex: 0 200 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  /* ADD this one declaration to the shipped block; nothing else in it changes.
-     The mockup's `.after` is `padding-left:9px`, and `.chrome-title` no longer
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-secondary);
+  /* The mockup's `.after` is `padding-left:9px`, and `.chrome-title` no longer
      has a gap to supply it. */
   margin-left: 0.5625rem;
 }
@@ -448,9 +493,77 @@
      not typed: (32 - 24) / 2, so the pill still centres on the toggle's line. */
   height: 1.5rem;
   margin-top: calc(var(--chrome-pad) + 0.25rem);
-  margin-right: 0.75rem;
+  /* 6px, where this said 12. The mockup's `.band-right` is `gap: 10px` and the
+     band's own `gap: 4px` supplies four of them, so 6 is what is left to
+     declare. Measured before: the pill ended at x=1386 and the toggle began at
+     1402 — 16px of nothing between two objects the mockup puts 10 apart, at the
+     same time as the toggle was jammed 6px from the window's edge. The band's
+     right end was unbalanced in both directions at once. */
+  margin-right: 0.375rem;
   padding: 0 0.625rem 0 0.5rem;
   gap: 0.375rem;
   border: 1px solid var(--shell-line);
   border-radius: var(--radius-full);
+}
+
+/* THE DOT IS 6px IN THE BAND, and the form is what matters as much as the size.
+ *
+ * `assets/main.css:1152` gives every `.dot` `width: max(8px, 0.5em)`, and its
+ * comment argues the 8px floor for AX5 — "the alternative is an 8px speck
+ * beside 53px text". In this pill the text is 11.5px, so 0.5em is 5.75 and the
+ * floor binds: measured 1163.5,12 8x8 against the mockups' `.conn .dot` at
+ * 1275,19 6x6, a third wider inside a lozenge this sheet has already slimmed
+ * from 32px to 24 for the same kind of reason.
+ *
+ * `max(6px, 0.5em)` and NOT a flat `0.375rem`: the flat form discards main.css's
+ * em relationship and stops scaling at all, which is the one property the 8px
+ * floor was defending. This keeps the relationship and simply lowers the floor
+ * to the mockups' number, which is exactly 0.5em of their own 12px pill. The
+ * desktop has one root and no Dynamic Type (`docs/audit.js`'s DESKTOP_SCALES is
+ * `[16]`), so the em term only ever binds if a future build opts in — and if it
+ * does, this dot grows with the label instead of staying a speck.
+ *
+ * BAND-SCOPED, deliberately. The phone's `.dot` is untouched: it is the same
+ * class in a bar with one other thing in it, at the text size main.css's
+ * comment is about.
+ *
+ * The HUE is not here. `--bg-success` is #68d391 as of the token pass, which is
+ * the mockups' green exactly; a third one-off rule on this dot would be a
+ * second answer to a question already answered. */
+.shell-chrome > .conn-badge .dot {
+  width: max(6px, 0.5em);
+  height: max(6px, 0.5em);
+}
+
+/* THE BAND'S RIGHT GUTTER, which it did not have.
+ *
+ * `.shell-chrome`'s base rule (`00-tokens.css`) is `padding-left: 6px` and no
+ * padding-right at all, so the trailing control was held off the window's edge
+ * only by its own 6px margin: measured `.insp-toggle` box 1402,0 32x32 ending
+ * at 1434 in a 1440 window. The mockups' `.band` is `padding: 0 14px 0 0` and
+ * both `.conn` (22-nav-disclosure) and `.tgl.r` (31-collapse-right) end at
+ * x=1426 — 14 from the edge.
+ *
+ * Restated here rather than edited there: `00-tokens.css` is frozen for the
+ * width of this campaign, and this file sorts after it, so one declaration at
+ * equal specificity is the whole of the change. The left edge needs nothing —
+ * the app's toggle lands at x=86 against the mockup's 85. */
+.shell-chrome {
+  padding-right: 0.875rem;
+}
+
+/* AND THE TRAILING CONTROL GIVES ITS MARGIN BACK, or the gutter above is 20px.
+ *
+ * `.insp-toggle`'s own `margin-right: 0.375rem` lives in `90-inspector.css`,
+ * which sorts after this file and belongs to a different lane. This is not a
+ * later rule beating an earlier one on order — `.shell-chrome > .insp-toggle`
+ * is (0,2,0) against `.insp-toggle`'s (0,1,0), so specificity decides it and
+ * the file order is irrelevant. The selector is the sheet's own idiom for this
+ * control: `90-inspector.css` already writes `.shell-chrome > .insp-toggle` for
+ * its `<704px` rule.
+ *
+ * It is written this way round because the gutter is the BAND's fact — where
+ * the window's trailing edge is — and the toggle's is the inspector's. */
+.shell-chrome > .insp-toggle {
+  margin-right: 0;
 }
