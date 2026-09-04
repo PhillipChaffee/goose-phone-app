@@ -139,12 +139,35 @@
 
 /* The chevron turns rather than swapping glyph: one icon, one state, and no
  * second SVG to keep in step. 90deg and not 180 — it points at the row when
- * shut and down at what it opened when not. */
-.nav-library .icon {
+ * shut and down at what it opened when not.
+ *
+ * SCOPED TO THE FIRST CHILD, because `.nav-library .icon` matches TWO svgs.
+ * The button renders `<svg class="icon">` — the chevron — and then
+ * `<span class="nav-library-icon"><svg class="icon">`, the 2x2 grid, so both
+ * inherited the transition AND the rotation: measured on the captured
+ * `desktop-chat`, the chevron at 28,177 and the grid at 48,177 BOTH computed
+ * `matrix(0, 1, -1, 0, 0, 0)`, and the sweep found the rotated grid in 9 of
+ * the 13 desktop states.
+ *
+ * What that costs is a 150ms quarter-turn of the grid glyph every time the
+ * disclosure opens or shuts. It survived review because the grid's path is
+ * rotationally symmetric about (12,12) — it lands exactly where it started, so
+ * the defect is the spin and not the resting frame, and a screenshot cannot
+ * see it. `docs/audit.js` cannot either: it walks geometry and composited
+ * contrast, and a 90deg rotation of a symmetric mark moves neither.
+ *
+ * `60-sidebar-extra.css` has carried the scoped `transition` half of this fix
+ * since it was written, as a live rule whose own comment describes the
+ * `.open` half as an edit to make — "Replace both selectors with this one and
+ * `.nav-library.open > .icon:first-child`". Nobody made it. That rule is
+ * deleted in the same commit, because with both selectors fixed here it is a
+ * duplicate, and a duplicate declaration in a later-sorting file is how the
+ * next reader learns to distrust which one is live. */
+.nav-library > .icon:first-child {
   transition: transform 150ms ease;
 }
 
-.nav-library.open .icon {
+.nav-library.open > .icon:first-child {
   transform: rotate(90deg);
 }
 
@@ -561,6 +584,27 @@
   width: 32px;
   height: 32px;
   padding: 0;
+  /* PIN THE FONT, which this block never did. It is a `button`, so with no
+   * `font` shorthand the UA resets both family and size: measured with
+   * `.nav-row-actions` forced visible on `desktop-chat`, this control computed
+   * `13.3333px` in **Arial**, and its glyph came out at 13.33x13.33 — bigger
+   * than every other glyph in the sidebar, including the row's own mark and
+   * the Library grid two rows above it, and on none of the shell's rungs
+   * (10 / 10.5 / 11.5 / 12.5 / 15 / 16). Found in 11 of the 13 desktop states.
+   *
+   * `.nav-new` and `.nav-library` both carry the shorthand already, and
+   * `.nav-library`'s own comment records what dropping it costs: "docs/audit.js
+   * refuses to measure a run where any element computes a font this run did not
+   * pin, and that refusal is what caught it". It did not catch this one, and
+   * the reason is worth keeping — `.nav-row-actions` is `display: none` at
+   * rest, so the audit never lays this button out at all. A gate that only sees
+   * the resting state cannot see a control that only exists under the pointer.
+   *
+   * `--icon-md` and not `--text-*`: the only thing in this box is an `.icon`,
+   * which sizes off the font (`assets/main.css` sets `.icon` to `1em`), and
+   * #125 declared that token as the shell's glyph rung. */
+  font: inherit;
+  font-size: var(--icon-md);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-sm);
   background: transparent;
