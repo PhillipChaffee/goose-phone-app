@@ -225,7 +225,23 @@
   padding: 0.75rem 0.5rem 0.25rem;
   color: var(--text-secondary);
   font-size: var(--text-2xs);
-  line-height: var(--lh-sm);
+  /* --lh-xs (16px) and not --lh-sm (18px), and the 2px is the whole of the
+   * band's height error. The mockups' `.grp` is 31.94px tall; this measured
+   * **34.00** on the captured `desktop-chats` at 1440x860 — and the padding is
+   * not what makes the difference. 12+4 here against their 11+5 is 16 either
+   * way; the difference is the line box the heading's own text sits in.
+   *
+   * Their `.grp.time .name` is 11px on **15.95px**, which is 1rem to within
+   * 0.05px, so --lh-xs is that line box already declared. 10.5px in a 16px box
+   * plus 16px of padding is **32.00** against their 31.94 — 0.06px, against
+   * 2.06px before. Both this and `.nav-row-sub` / `.nav-row-age` below move to
+   * the same rung, because #71's own Fix is one mechanism applied twice and
+   * splitting it would leave the meta line 3px tall than the box it is in.
+   *
+   * The issue proposed a bare `line-height: 1.45` (10.5 x 1.45 = 15.23, band
+   * 31.23). Rejected: it is 0.71px further from the mockup than the token is,
+   * and it would be the one line-height in this sheet that is not a rung. */
+  line-height: var(--lh-xs);
   font-weight: 600;
   /* .05em, NOT the plane badge's .09em, and the mockups draw the distinction:
    * `.grp.time .name` is .05em while `.sec-h .ttl` and `.plane-badge` are .09.
@@ -251,7 +267,30 @@
   gap: 4px;
   width: 100%;
   min-height: 44px;
-  padding: 6px 8px;
+  /* 7px, not 6, and a 1px gap under the row — the mockups' `.row` is
+   * `padding: 7px 8px; margin: 0 0 1px` exactly, and both halves are load
+   * bearing in a way that only shows once the meta line below is on its own
+   * rung.
+   *
+   * Measured, on the captured `desktop-chats` at 1440x860 dark:
+   *
+   *              app before   app after   mockup `.row`
+   *   box        251x51.00    251x50.00   251x49.34
+   *   pitch      51.00        51.00       50.34
+   *
+   * The box was 51 for the wrong reason — 6+6 of padding around a meta line
+   * 19px tall where the mockups' is 15.22 — so it landed near the right height
+   * with two errors cancelling. With the meta line corrected the box would
+   * have fallen to 48 and the pitch with it; 7px of padding puts it back at 50
+   * and the 1px margin restores the pitch. The residual 0.66px is the two
+   * line boxes: our title is 18px against their 18.125, and our meta 16
+   * against their 15.22.
+   *
+   * The margin is what the symptom is actually about — "rows sit flush against
+   * each other instead of having a hairline of air between them". Without it,
+   * two selected-looking fills would touch. */
+  margin-bottom: 1px;
+  padding: 7px 8px;
   border-radius: var(--radius-md);
   color: var(--text-primary);
   /* ADD one declaration to the shipped block: the actions below measure
@@ -365,7 +404,10 @@
    * They paint the row's own hover fill so the covered text does not shine
    * through the 2px between the two controls. */
   position: absolute;
-  top: 0.375rem;
+  /* Both insets are the row's own padding, so the actions sit on its content
+   * box rather than in a corner of their own. `top` follows the 6 -> 7 above;
+   * it is the same number said a second time and it goes wrong silently. */
+  top: 0.4375rem;
   right: 0.5rem;
   display: none;
   gap: 0.125rem;
@@ -465,21 +507,24 @@
   white-space: nowrap;
   color: var(--text-secondary);
   font-size: var(--text-xs);
-  line-height: var(--lh-sm);
+  /* --lh-xs with `.nav-band` and `.nav-row-age`: see the arithmetic there. The
+   * meta line is the taller of these two boxes, so both have to move or the
+   * line keeps the 18px one. */
+  line-height: var(--lh-xs);
 }
 
 .nav-row-age {
-  padding-top: 1px;
-  /* CHANGE: it now sits at the end of the meta line rather than beside the
-     title, so it is pushed rather than placed. `padding-top: 1px` goes — it
-     existed to drop the age onto the title's baseline and there is no title
-     beside it any more. Everything else in the shipped block is kept. */
+  /* `padding-top: 1px` IS GONE, and the comment below has been asking for that
+   * since the age moved. It is the last 1px of the meta line's error: 18px of
+   * line box plus 1px of padding is the 19.00 the row measured, against the
+   * mockups' 15.22. The sheet describing an edit it never applied is the same
+   * shape as `.nav-library`'s scoping note, which #128 is about. */
   flex: 0 0 auto;
   margin-left: auto;
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  line-height: var(--lh-sm);
+  line-height: var(--lh-xs);
   font-variant-numeric: tabular-nums;
 }
 
@@ -498,6 +543,36 @@
   height: 8px;
   margin-top: 6px;
   border-radius: var(--radius-full);
+}
+
+/* THE MARK GETS A COLUMN, which is what separates a list from a stack of
+ * buttons — and it is the only half of #63 this lane can reach.
+ *
+ * The mockups' `.row` is `grid-template-columns: 14px 1fr; gap: 8px`, so the
+ * mark is a 14px GUTTER holding an 8px dot rather than an 8px dot with a gap
+ * after it. Every dot in the mockup shares one centre 15px from the row's left
+ * edge whatever its own size — `.dot.run` 8x8 at x=19 and `.dot.none` 5x5 at
+ * x=21 both centre on 23 with the row at 8 — and the text starts 30px in.
+ *
+ * 3px each side of an 8px dot is that 14px column, expressed in the flex row
+ * this list already is. Measured on `desktop-chats` at 1440x860:
+ *
+ *                        before   after   mockup
+ *   text indent          24px     30px    30px
+ *   dot centre from row  12px     15px    15px
+ *
+ * A grid would be the literal port and it is the wrong one here: the row's
+ * second child is a `button` holding the mark AND the text (the actions cannot
+ * live inside it — see `sidebar.rs`), so the 14px column would have to be
+ * declared on `.nav-row-open` and the actions would sit outside it. Three
+ * pixels of margin says the same thing to the same pixel.
+ *
+ * `.mark.idle`'s `transform: scale(0.625)` scales about the centre, so the 5px
+ * fleck stays on the 15px axis — which is the whole reason the sheet sizes a
+ * state with a transform rather than with a smaller box, and any state that
+ * takes a different size later inherits the same guarantee. */
+.nav-row-open > .mark {
+  margin-inline: 3px;
 }
 
 .mark.waiting {
