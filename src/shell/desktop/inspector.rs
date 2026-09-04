@@ -285,12 +285,54 @@ pub(crate) struct Touched {
     pub seen: bool,
 }
 
+/// THE FIVE-BLOCK PROPORTION BAR the mockups draw beside a file's counts, as
+/// the class each of the five takes: `add`, `del` or nothing.
+///
+/// A PROPORTION, NOT A MAGNITUDE, and that is the one decision in it. The
+/// mockups' own row draws three green, one red and ONE EMPTY for `+12 −3`,
+/// which is a size scale: four of five blocks lit because fifteen lines is
+/// "medium". This shell has no such scale and will not invent one — "medium"
+/// is a threshold in lines that neither wire states, and a bar drawn against
+/// an invented scale is the same fault as a figure nobody sent, one step
+/// harder to catch because it prints no digits. So all five blocks are spent
+/// on the split itself and the empty rung keeps one real meaning: a file with
+/// no line changes at all, which is what a rename or a mode change is.
+///
+/// Rounded to the nearest block, then pinned at both ends: a file with one
+/// deletion among two hundred additions keeps one red block rather than
+/// rounding away the only thing that made it interesting.
+fn diff_bars(added: u32, removed: u32) -> [&'static str; 5] {
+    let total = u64::from(added) + u64::from(removed);
+    if total == 0 {
+        return [""; 5];
+    }
+    let scaled = (u64::from(added) * 5 + total / 2) / total;
+    let mut green = usize::try_from(scaled).unwrap_or(5).min(5);
+    if added > 0 && green == 0 {
+        green = 1;
+    }
+    if removed > 0 && green == 5 {
+        green = 4;
+    }
+    let mut out = ["del"; 5];
+    for block in out.iter_mut().take(green) {
+        *block = "add";
+    }
+    out
+}
+
 /// THE MOCKUP'S `Files touched · 2 of 5 viewed`, and both halves are real.
 ///
 /// `FileDiff`'s `file`/`additions`/`deletions` are the rows; "viewed" is
 /// `DiffState.view[path].seen == DiffFile.fingerprint`, which is the same
 /// comparison the review screen itself uses to decide whether a file is still
 /// marked read after the agent changed it again.
+///
+/// WHAT IS NOT ON A ROW: the mockups' `.file.cur` row fill, which marks the
+/// file the reader is on. Nothing records that. `DiffState` (src/code.rs) has
+/// `seen`, `open`, `expanded` and `show_removed` per path and no cursor, and
+/// these rows are `div`s precisely because nothing here opens one — a fill
+/// naming a "current" file would be a state this app does not have.
 pub(crate) fn touched_files(ctx: &AppCtx) -> (Vec<Touched>, usize) {
     let diff = (ctx.code_diff)();
     let files: Vec<Touched> = diff
@@ -514,14 +556,33 @@ pub(crate) fn Inspector(plane: Plane, on_subject: bool) -> Element {
                             // looked pressable and was not would be worse than
                             // one that plainly is not.
                             div { key: "{file.path}", class: "insp-file",
+                                // THE GLYPH THE SHEET WAS WRITTEN FOR. This
+                                // span had no text child, so `.insp-file-tick`'s
+                                // `color`, `font-size` and flex centring styled
+                                // nothing and a read file was a filled square.
+                                // Drawn in both states: unread, the box's own
+                                // `color: transparent` hides it, which is what
+                                // keeps one box rather than two shapes.
                                 span {
                                     class: if file.seen { "insp-file-tick seen" } else { "insp-file-tick" },
                                     "aria-label": if file.seen { "viewed" } else { "not viewed" },
+                                    "\u{2713}"
                                 }
                                 span { class: "insp-file-path", "{file.path}" }
                                 span { class: "insp-file-count",
                                     span { class: "add", "+{file.added}" }
                                     span { class: "del", "\u{2212}{file.removed}" }
+                                    // CLASSLESS, like `.insp-chip > i` and
+                                    // `.insp-track > i` above it: a decorative
+                                    // shape with no name of its own. The two
+                                    // that carry an ink reuse `add`/`del`,
+                                    // which are the names this cell already
+                                    // spends those two inks under.
+                                    i {
+                                        for (n, block) in diff_bars(file.added, file.removed).into_iter().enumerate() {
+                                            i { key: "{n}", class: "{block}" }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -540,6 +601,13 @@ pub(crate) fn Inspector(plane: Plane, on_subject: bool) -> Element {
                             span {
                                 key: "{ext.name}",
                                 class: if ext.on { "insp-chip" } else { "insp-chip off" },
+                                // THE STATUS DOT, and the chip's asymmetric
+                                // 7px/9px padding was built to hold it: with
+                                // no dot every label sat 2px right of centre
+                                // and on/off was carried by text colour alone.
+                                // `.insp-chip > i` and `.insp-chip.off > i`
+                                // have styled this since the sheet was written.
+                                i {}
                                 "{ext.name}"
                             }
                         }
@@ -610,8 +678,8 @@ pub(crate) fn Inspector(plane: Plane, on_subject: bool) -> Element {
 )]
 mod tests {
     use super::{
-        chat_facts, code_facts, context_meter, extension_chips, session_facts, tool_timeline,
-        touched_files, Chord, Inspector, CHORDS,
+        chat_facts, code_facts, context_meter, diff_bars, extension_chips, session_facts,
+        tool_timeline, touched_files, Chord, Inspector, CHORDS,
     };
     use crate::nav::Plane;
     use crate::state::{ChatItem, ConnState};
@@ -878,6 +946,103 @@ mod tests {
         );
         assert_eq!(files[0].added, 12);
         assert_eq!(files[0].removed, 3);
+    }
+
+    /// THE PROPORTION BAR IS A SPLIT AND NEVER A SCALE.
+    ///
+    /// Five blocks, all of them spent on the additions/deletions ratio, so the
+    /// bar states nothing about how big the change is — "big" is a threshold in
+    /// lines that neither wire sends, and this shell does not invent one. The
+    /// empty rung therefore means exactly one thing, and the last case is it.
+    ///
+    /// REPRODUCED: make the bar a magnitude — light `min(5, total / 4)` blocks
+    /// — and the first and last rows collide, because +1/−0 and +200/−0 stop
+    /// being the same picture.
+    #[test]
+    fn the_proportion_bar_is_a_split_and_never_a_scale() {
+        for (added, removed, want) in [
+            (1_u32, 0_u32, ["add", "add", "add", "add", "add"]),
+            (200, 0, ["add", "add", "add", "add", "add"]),
+            (12, 3, ["add", "add", "add", "add", "del"]),
+            (0, 7, ["del", "del", "del", "del", "del"]),
+            (1, 1, ["add", "add", "add", "del", "del"]),
+        ] {
+            assert_eq!(
+                diff_bars(added, removed),
+                want,
+                "+{added} \u{2212}{removed}"
+            );
+        }
+    }
+
+    /// Both ends are pinned, so the one thing that made a file interesting is
+    /// not rounded away: a single deletion among two hundred additions keeps a
+    /// red block, and a single addition among two hundred deletions a green.
+    #[test]
+    fn a_lone_count_is_never_rounded_off_the_bar() {
+        let bars = diff_bars(200, 1);
+        assert_eq!(bars[4], "del", "{bars:?}");
+        assert_eq!(bars[0], "add", "{bars:?}");
+        let bars = diff_bars(1, 200);
+        assert_eq!(bars[0], "add", "{bars:?}");
+        assert_eq!(bars[4], "del", "{bars:?}");
+    }
+
+    /// A FILE WITH NO LINE CHANGES LIGHTS NOTHING, which is the empty rung's
+    /// one real meaning — a rename, or a mode change. Without this the ratio
+    /// divides by zero.
+    #[test]
+    fn a_file_with_no_line_changes_lights_no_block() {
+        assert_eq!(diff_bars(0, 0), ["", "", "", "", ""]);
+    }
+
+    /// THE THREE SHAPES THE SHEET WAS WRITTEN FOR, RENDERED.
+    ///
+    /// `.insp-chip > i`, `.insp-file-tick`'s glyph rules and the bar blocks
+    /// were all styled before anything drew them, which no gate in this repo
+    /// can see: `docs/audit.js` measures the elements it is given, and an
+    /// element that is never emitted is never given to it. This asks the
+    /// markup instead.
+    ///
+    /// REPRODUCED: drop the `i {}` from the chip, the `"\u{2713}"` from the
+    /// tick or the bar loop from the count cell, and one of the three
+    /// assertions names it.
+    #[test]
+    fn the_column_draws_the_shapes_its_own_sheet_styles() {
+        let html = crate::testkit::render_settled(
+            |ctx| {
+                let mut list = ctx.extensions.list;
+                list.write().items = vec![extension("developer", true)];
+            },
+            || rsx! { Inspector { plane: Plane::Chat, on_subject: true } },
+        );
+        assert!(
+            html.contains("<span class=\"insp-chip\"><i></i>developer</span>"),
+            "the extension chip has no status dot, so its 7px/9px padding \
+             leaves the label off-centre and on/off is text colour alone: {html}"
+        );
+
+        let html = crate::testkit::render_settled(
+            |ctx| {
+                let mut diff = ctx.code_diff;
+                diff.set(crate::code::DiffState {
+                    files: vec![diff_file("src/a.rs", 12, 3, 7)],
+                    ..crate::code::DiffState::default()
+                });
+            },
+            || rsx! { Inspector { plane: Plane::Code, on_subject: true } },
+        );
+        assert!(
+            html.contains('\u{2713}'),
+            "the viewed tick is a filled box with no check in it, and the \
+             `color`/`font-size`/centring rules written for the glyph do \
+             nothing: {html}"
+        );
+        assert_eq!(
+            html.matches("<i class=").count(),
+            5,
+            "the file row's proportion bar is not five blocks: {html}"
+        );
     }
 
     /// The timeline is capped and reads oldest-first, so the newest call is at
