@@ -83,8 +83,27 @@
    * at 32px rather than sized by their text. */
   display: inline-flex;
   align-items: center;
-  margin-top: var(--chrome-pad);
-  height: 32px;
+  /* 19px AND A DERIVED MARGIN, where this was a 32px box pinned like the rest.
+   *
+   * Measured before: box 130,0 48.22x32 — a solid accent slab twice the height
+   * of the word inside it, and three-quarters the height of the whole band. The
+   * mockups' is a 62x19 chip that reads as a label. The 32px pin is defended
+   * two paragraphs up ("all four boxes are pinned at 32px rather than sized by
+   * their text"), and that argument is about the CENTRING, which the margin
+   * below preserves exactly — the badge is simply the only one of the four
+   * whose box is painted, so it is the only one the pin costs anything.
+   *
+   * The margin is derived, not typed, and the idiom is quoted verbatim from
+   * `.shell-chrome > .conn-badge` twelve rules down: "(32 - 24) / 2, so the
+   * pill still centres on the toggle's line." Here it is (32 - 19) / 2 = 6.5px
+   * = 0.40625rem, so the chip's centre stays on 16 with the toggle's and the
+   * pill's. The precedent is live rather than argued: the connection pill is
+   * already 24px at y=4 by that same sum, so the 32px pin was broken by one of
+   * the four before this touched it.
+   *
+   * The 8px horizontal padding is separately defended below and stays. */
+  margin-top: calc(var(--chrome-pad) + 0.40625rem);
+  height: 1.1875rem;
   margin-left: 8px;
   /* THE MID CELL STARTS AFTER THE LEFT ONE. Measured before this change: the
    * app's crumb began at x=187, inside the sidebar's own column width, against
@@ -213,7 +232,44 @@
   padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-full);
-  background: transparent;
+  /* THE CONTROL IS AN OBJECT, and it was not one. Measured before this change
+   * on `desktop-chats` at 1440x860 dark: `.nav-toggle` box 86,0 32x32 with
+   * `bg rgba(0,0,0,0)` and all four border colours `rgba(0,0,0,0)` — a
+   * transparent circle holding a 16px line glyph, invisible until hovered. The
+   * mockups draw the two band toggles as the only filled, bordered objects in
+   * the strip: `.toggle` bg rgb(36,40,46), 1px rgb(44,49,56), radius 5px.
+   *
+   * rgb(36,40,46) IS `--surface-raise` (#24282e) exactly, and rgb(44,49,56) IS
+   * `--shell-line` (#2c3138) exactly, so both tokens are the mockups' own
+   * values rather than the nearest rung.
+   *
+   * `--surface-raise` AND NOT `--bg-secondary`, which is the issue's other
+   * prescription. In dark the two are one colour — `00-tokens.css` declares
+   * `--bg-secondary: var(--surface-raise)` — so the choice is invisible there
+   * and decided entirely by light, where `--surface-raise` is `--bg-tertiary`
+   * (#e3e6ea, a rung DARKER than the panel) and `--bg-secondary` is the panel's
+   * own #f4f6f7. A toggle painted `--bg-secondary` in light is a toggle painted
+   * the colour of the band it sits in, which is the defect this rule exists to
+   * remove, restated in the other theme.
+   *
+   * BORDER-COLOR AND NOT AN INSET BOX-SHADOW, which is the same issue's third
+   * prescription (`box-shadow: inset 0 0 0 1px var(--shell-line)`). REJECTED,
+   * and for a reason the issue could not see: the shut state below already
+   * spends the inset shadow, and it does not reset `border-color`. Two
+   * mechanisms on one element means a shut toggle draws its border AND its
+   * inset — two 1px lines, 2px of outline, on the control this whole pass is
+   * about not drawing stray lines around. The border is already reserved in the
+   * geometry (`border: 1px solid transparent`), so using it costs no layout.
+   *
+   * Measured: the chip's fill is 1.18:1 on the dark band and 1.15:1 on the
+   * light one, its border 1.33:1 and 1.42:1, and the glyph 5.66:1 and 4.01:1 on
+   * the chip. A control's edge is not a status indicator and this sheet does
+   * not hold hairlines to 3:1 — `00-tokens.css` records the same position for
+   * `--border-primary` at 1.29:1 against the mockups' own 1.23 — but the glyph
+   * is what has to be seen and it clears the 3:1 an icon owes, twice over in
+   * dark. */
+  background: var(--surface-raise);
+  border-color: var(--shell-line);
   color: var(--text-secondary);
   font-family: inherit;
   font-size: var(--icon-md);
@@ -226,7 +282,23 @@
 }
 
 .nav-toggle:hover {
-  background: var(--bg-secondary);
+  /* AND HOVER HAD TO MOVE UP WITH IT, or it would be a no-op. This said
+   * `background: var(--bg-secondary)`, which in dark is the very value the
+   * resting state now takes — so the fill would have stopped answering the
+   * pointer at the moment the resting state gained one. The issue names this
+   * caveat and it is the load-bearing half of the change.
+   *
+   * Mixed rather than fixed, which is `.drawer-item:hover`'s reason and the
+   * shut variant below already spells out: the two themes put the resting chip
+   * on different rungs, so a literal is a step in one and a smudge in the
+   * other. 16% of the tertiary ink into the resting fill gives #2e333a in dark
+   * (1.16:1 on the chip, 1.37:1 on the band, and clear of the shut state's own
+   * #2a2f36) and #d9dde2 in light (1.09:1 and 1.26:1).
+   *
+   * A small step by construction, because the resting chip is itself a small
+   * step — so the fill is not the whole of hover's answer and never was. The
+   * border goes 1.33 -> 1.69 in dark, and the glyph 5.66 -> 10.73. */
+  background: color-mix(in srgb, var(--text-tertiary) 16%, var(--surface-raise));
   color: var(--text-primary);
   border-color: var(--border-secondary);
 }
@@ -267,9 +339,19 @@
    * Specificity is 0,3,0 against `.nav-toggle:hover`'s 0,2,0, so this wins
    * wherever it is placed — but it is written after the hover rule anyway, and
    * the hover variant below exists because otherwise pointing at a collapsed
-   * toggle would report nothing. */
+   * toggle would report nothing.
+   *
+   * THE OUTLINE IS THE BORDER NOW, not the inset shadow it was. That change is
+   * forced by the resting state above gaining a border of its own: this rule
+   * never reset `border-color`, so an inset shadow here would be painted INSIDE
+   * a border that is already drawn — two 1px lines on one 32px control, which
+   * is the exact fault this pass exists to remove from the window. One
+   * mechanism per element. The value is unchanged: `--border-secondary`, the
+   * mockups' #383e47 rung, and the reason the shut state outlines at all —
+   * "--bg-tertiary is 1.13:1 on the light card and a non-text indicator owes
+   * 3:1" — is unaffected by which property draws it. */
   background: var(--bg-tertiary);
-  box-shadow: inset 0 0 0 1px var(--border-secondary);
+  border-color: var(--border-secondary);
   color: var(--text-primary);
 }
 
@@ -554,16 +636,68 @@
 
 /* AND THE TRAILING CONTROL GIVES ITS MARGIN BACK, or the gutter above is 20px.
  *
- * `.insp-toggle`'s own `margin-right: 0.375rem` lives in `90-inspector.css`,
- * which sorts after this file and belongs to a different lane. This is not a
- * later rule beating an earlier one on order — `.shell-chrome > .insp-toggle`
- * is (0,2,0) against `.insp-toggle`'s (0,1,0), so specificity decides it and
- * the file order is irrelevant. The selector is the sheet's own idiom for this
- * control: `90-inspector.css` already writes `.shell-chrome > .insp-toggle` for
- * its `<704px` rule.
+ * `.insp-toggle`'s own rules live in `90-inspector.css`, which sorts after this
+ * file and belongs to a different lane. Nothing below is a later rule being
+ * beaten on order — `.shell-chrome > .insp-toggle` is (0,2,0) against
+ * `.insp-toggle`'s (0,1,0), and `.shell-chrome > .insp-toggle:hover` is (0,3,0)
+ * against `.insp-toggle:hover`'s (0,2,0), so specificity decides both and the
+ * file order is irrelevant. The selector is that sheet's own idiom for this
+ * control: it already writes `.shell-chrome > .insp-toggle` for its `<704px`
+ * rule.
  *
- * It is written this way round because the gutter is the BAND's fact — where
- * the window's trailing edge is — and the toggle's is the inspector's. */
+ * WHY HERE AND NOT THERE. The two band toggles are one control drawn twice —
+ * the mockups give them the same chip, the same fill and the same off state —
+ * and the wave-0e dedupe closed the inspector toggle's own issue INTO this one
+ * precisely so the pair could not drift. Splitting the pair across two files
+ * would put the nav toggle's ladder here and the inspector toggle's there, with
+ * nothing to hold them equal; the whole ladder is in one block below for that
+ * reason. When the inspector lane is done, the base rule should move here and
+ * these four should collapse into it. */
 .shell-chrome > .insp-toggle {
   margin-right: 0;
+  /* The same two declarations `.nav-toggle` takes, for the same measurement:
+     the mockups' `.tgl.r` (31-collapse-right, box 1398,12 28x21) is the left
+     toggle's chip character for character, and this control measured
+     `bg rgba(0,0,0,0)` with four transparent border colours until now. */
+  background: var(--surface-raise);
+  border-color: var(--shell-line);
+}
+
+.shell-chrome > .insp-toggle:hover {
+  /* `.nav-toggle:hover`'s note has the arithmetic and the caveat. Written out
+     rather than shared with a comma, because `90-inspector.css`'s own
+     `.insp-toggle:hover` would otherwise win the `background` on file order and
+     hand back the no-op this rule exists to prevent. */
+  background: color-mix(in srgb, var(--text-tertiary) 16%, var(--surface-raise));
+  color: var(--text-primary);
+  border-color: var(--border-secondary);
+}
+
+/* THE SHUT STATE THE INSPECTOR TOGGLE HAS NEVER HAD, where the nav toggle has
+ * had one since the collapse landed.
+ *
+ * The mockups treat the pair identically: `.tgl.r` off in 31-collapse-right and
+ * 32-collapse-both is `bg rgb(42,47,54)` with `inset 0 0 0 1px rgb(56,62,71)` —
+ * the same two declarations the left toggle's off state gets, from one shared
+ * `.tgl.off` rule. The app had `[data-nav="closed"] .nav-toggle` and no
+ * `[data-insp="closed"]` counterpart at all, so with the inspector shut its
+ * button looked exactly as it does with the inspector open: the control gave no
+ * answer about the state it controls, while its twin two feet to the left did.
+ *
+ * Costs no Rust and no markup — `data-insp="open"|"closed"` is already on
+ * `.shell` (`src/shell/desktop/mod.rs`, and visible in every captured desktop
+ * state). Border rather than inset shadow, for the nav toggle's reason: one
+ * mechanism per element, or the shut chip draws two lines. */
+.shell[data-insp="closed"] .shell-chrome > .insp-toggle {
+  background: var(--bg-tertiary);
+  border-color: var(--border-secondary);
+  color: var(--text-primary);
+}
+
+.shell[data-insp="closed"] .shell-chrome > .insp-toggle:hover {
+  /* Or the shut toggle answers nothing to the pointer, since the rule above
+     out-specifies the hover rules on both sides of it. One step past the shut
+     fill, mixed for the reason stated twice already. */
+  background: color-mix(in srgb, var(--text-tertiary) 12%, var(--bg-tertiary));
+  border-color: var(--border-secondary);
 }
