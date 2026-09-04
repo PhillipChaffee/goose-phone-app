@@ -7,10 +7,59 @@
 //! middle of a flat, monochrome UI. Variation selector 15 does not rescue
 //! them either: most of these codepoints have no text presentation at all.
 //!
-//! Drawn instead, at a 24-unit grid with a 2-unit stroke, inheriting
-//! `currentColor` so every existing colour rule keeps working.
+//! Drawn instead, on a 24-unit grid at the stroke [`STROKE`] argues for,
+//! inheriting `currentColor` so every existing colour rule keeps working.
 
 use dioxus::prelude::*;
+
+/// The stroke every glyph is drawn with, in the 24 user units of its `view_box`.
+///
+/// **A glyph's optical weight is `stroke / grid`, not `stroke`.** That ratio is
+/// the ink it lays down per pixel of the box it is drawn in, and it is what
+/// makes one icon set read heavier than another at the same size. This file
+/// draws on 24 units. The E-options mockups draw on 16, so their strokes are
+/// not comparable to this one until both are divided by their own grid.
+///
+/// Measured, by rendering all eight mockups in `~/Desktop/goose-mockups-v2/
+/// E-options` and walking every `<svg>` that carries a stroke — 118 of them —
+/// rather than by sampling the four that #127 quotes:
+///
+/// | mockup stroke | ink per px of box | same weight on a 24 grid | glyphs |
+/// |---------------|-------------------|--------------------------|--------|
+/// | 1.4 / 16      | 0.0875            | 2.10                     | 58     |
+/// | 1.5 / 16      | 0.09375           | 2.25                     | 48     |
+/// | 1.6 / 16      | 0.1               | 2.40                     | 8      |
+/// | 1.7 / 16      | 0.10625           | 2.55                     | 4      |
+///
+/// Median 0.09375, mean 0.09155. A stroke of 2 on a 24 grid is 0.08333 —
+/// **below the lightest weight the mockups use anywhere**: 4.8% under their
+/// floor, 9.0% under their mean, 11.1% under their median. That is the whole of
+/// #127, and it is why every glyph in the window reads thinner than its
+/// reference at the same drawn size.
+///
+/// 2.25 is the median rescaled (`1.5 * 24 / 16`), and it is also what falls out
+/// of weighting the mockups by the sizes THIS app actually draws at. The
+/// mockups' mean weight is not flat across box sizes — at 12px it is 2.154 on a
+/// 24 grid, at 13px 2.299, at 15 and 16px 2.10 — and the desktop shell's 191
+/// glyphs sit at 11.5px (30), 12.5px (93), 13px (66) and 15px (2). Weighted by
+/// that distribution the mockups' own answer is **2.238**, which is 2.25 to two
+/// figures.
+///
+/// **Rejected, and why** — 2.40 is the mockups' 1.6, carried by 8 of 118
+/// glyphs; #127's own Fix names it as the value not to ship blanket, and at the
+/// phone's 16px drawer glyphs it lays down 1.6px of ink against the heaviest
+/// the mockups draw anywhere at 16px (1.4px). 2.10 is the mockups' modal
+/// stroke (58 of 118) but it is also their FLOOR: shipping it would put the
+/// segmented control, the plane badge and the New button — the 13px chrome the
+/// mockups deliberately draw at 1.5 and 1.6 — on the weight the mockups reserve
+/// for 15px gears, i.e. still 6.7% under the median this fixes.
+///
+/// **This number is markup, not CSS**, so `docs/gallery-states.json` carries
+/// the value that was captured (922 `stroke-width="2"` at the time of writing)
+/// and keeps rendering the old weight until the operator re-captures. Nothing
+/// in the repo gates on it: `docs/audit.js` measures pointer-target geometry
+/// and composited contrast, and stroke width changes neither.
+pub(crate) const STROKE: &str = "2.25";
 
 /// Stroke path data for `name`, or `None` if there is no such icon.
 pub(crate) fn path_for(name: &str) -> Option<&'static str> {
@@ -107,11 +156,95 @@ pub(crate) fn Icon(name: String) -> Element {
             view_box: "0 0 24 24",
             fill: "none",
             stroke: "currentColor",
-            stroke_width: "2",
+            stroke_width: STROKE,
             stroke_linecap: "round",
             stroke_linejoin: "round",
             "aria-hidden": "true",
             path { d: "{d}" }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{path_for, Icon, STROKE};
+    use dioxus::prelude::*;
+
+    /// Every arm of this file's own table, read out of the source rather than
+    /// repeated here.
+    ///
+    /// A second copy of the list is a list that goes stale, and the question
+    /// below is "is every arm in the table reachable" — which only the table
+    /// can answer. An arm is a line whose first non-space character is a quote
+    /// and whose name is followed by `=>`, which is how all 43 are written.
+    fn arms() -> Vec<String> {
+        include_str!("icons.rs")
+            .lines()
+            .filter_map(|line| {
+                let (name, tail) = line.trim_start().strip_prefix('"')?.split_once('"')?;
+                tail.trim_start().starts_with("=>").then(|| name.to_owned())
+            })
+            .collect()
+    }
+
+    /// The parse above is a guess about Rust source, so it is checked before
+    /// anything is concluded from it: a scan that matched nothing would make
+    /// every assertion in this module vacuously true, which is the failure
+    /// mode a source-reading test exists to avoid rather than to have.
+    #[test]
+    fn every_arm_in_the_table_resolves_to_a_path() {
+        let arms = arms();
+        assert!(
+            arms.len() > 40,
+            "parsed only {} arms out of this file's table",
+            arms.len()
+        );
+        for name in &arms {
+            let d = path_for(name).unwrap_or_default();
+            assert!(!d.is_empty(), "{name} resolves to nothing");
+            // Every glyph is one stroked path, so it opens with a move.
+            assert!(
+                d.starts_with(['M', 'm']),
+                "{name} does not begin with a move: {d}"
+            );
+        }
+        assert!(path_for("no-such-icon").is_none());
+    }
+
+    /// The whole of [`STROKE`]'s argument, as arithmetic rather than as prose:
+    /// 1.5 on the mockups' 16-unit grid is 0.09375 of ink per pixel of box —
+    /// the median of all 118 stroked `<svg>` in E-options — and the same
+    /// weight on this file's 24-unit grid is 2.25. The band assertion is the
+    /// guard against the two values this issue rejects: 2.55 and above is
+    /// heavier than anything the mockups draw, 2.10 and below is their floor.
+    #[test]
+    fn the_stroke_is_the_mockups_median_weight_rescaled_to_this_grid() {
+        let stroke: f64 = STROKE.parse().unwrap_or_default();
+        let ink_per_px = stroke / 24.0;
+        assert!(
+            (ink_per_px - 1.5 / 16.0).abs() < 1e-12,
+            "{STROKE} on a 24 grid is {ink_per_px} of ink per px, not the mockups' {}",
+            1.5 / 16.0
+        );
+        assert!(ink_per_px > 1.4 / 16.0, "lighter than the mockups' floor");
+        assert!(ink_per_px < 1.7 / 16.0, "heavier than the mockups' ceiling");
+    }
+
+    /// The constant reaching the markup is the entire change, and it is the
+    /// half no gate in this repo can see: `docs/audit.js` walks pointer-target
+    /// geometry and composited contrast, and a stroke width moves neither.
+    #[test]
+    fn the_component_draws_that_stroke_on_a_24_unit_box() {
+        let html = crate::testkit::render(|| rsx! { Icon { name: "gear".to_string() } });
+        assert!(html.contains(r#"stroke-width="2.25""#), "{html}");
+        assert!(html.contains(r#"viewBox="0 0 24 24""#), "{html}");
+    }
+
+    /// A name with no path renders nothing at all, rather than an empty 1em
+    /// box that would take a row's icon gutter and draw no glyph in it.
+    #[test]
+    fn an_unknown_name_renders_no_box() {
+        let html = crate::testkit::render(|| rsx! { Icon { name: "no-such-icon".to_string() } });
+        assert!(!html.contains("<svg"), "{html}");
     }
 }
