@@ -10,18 +10,47 @@
 
 /* NEW, and it is a button rather than a row: it makes something, it does not
  * go somewhere. Full width because it is the sidebar's primary action, and
- * `--accent` because it is the only one. */
+ * `--accent` because it is the only one.
+ *
+ * A SOLID RAISED BUTTON, which is half of the two-rung difference this column
+ * did not spend. Measured on the captured `desktop-chats` at 1440x860 dark,
+ * this and `.nav-library` painted the SAME fill rgb(33,36,41), and their two
+ * hairlines were swapped in loudness — the primary action carried
+ * `--border-secondary` rgb(59,65,74), the loudest line in the column, while
+ * the disclosure carried the structural `--shell-line`. So nothing said which
+ * box you were meant to press.
+ *
+ *                    fill              edge                mockup
+ *   .nav-new         rgb(33,36,41)  -> #24282e   rgb(59,65,74) -> #2c3138
+ *   .nav-library     rgb(33,36,41)  -> a 1.4% wash  rgb(44,49,56) -> #242830
+ *
+ * Both mockup values exactly: `.newbtn` is `background: #24282e; border: 1px
+ * solid #2c3138`. #119's census is the argument for the fill — across the
+ * mockups rgb(36,40,46) covers 271,425px over 19 elements, and in this app it
+ * covered 8,487 over 3, because the surface ramp reserved that rung for a
+ * hover/selected state where the mockups spend it on a control at rest.
+ *
+ * THE EDGE HAS TO MOVE WITH THE FILL and this is the trap the inspector lane
+ * recorded: in light `--border-primary` and `--surface-raise` are the same
+ * byte, #e3e6ea, so a control taking the raise rung while keeping a
+ * `--border-primary` edge loses its border entirely. This one was on
+ * `--border-secondary`, which light resolves to #cbd1d6 — 1.23:1 on the new
+ * fill, so the edge survives, and the fill is 1.15:1 on the light panel.
+ *
+ * The margin takes the mockups' 12px, matching the 12px `.plane-switch`
+ * already puts above it, so the three boxes above the list are evenly spaced
+ * rather than 12 / 8. */
 .nav-new {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 8px;
   min-height: 36px;
-  margin: 0 0 8px;
+  margin: 0 0 12px;
   padding: 0 12px;
-  border: 1px solid var(--border-secondary);
+  border: 1px solid var(--shell-line);
   border-radius: var(--radius-md);
-  background: var(--surface-card);
+  background: var(--surface-raise);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--text-sm);
@@ -71,9 +100,30 @@
   min-height: 2rem;
   margin: 0 0 0.6875rem;
   padding: 0 0.625rem;
-  border: 1px solid var(--shell-line);
+  /* THE SOFT RUNG, and it comes from the token rather than from a literal.
+   * `--shell-line-soft` is #242830 in dark, which is the mockups' `.libdisc`
+   * border exactly. Four issues each proposed writing that hex themselves, in
+   * four different region files; #52 declared it once so the four could not
+   * drift, and this is one of the four. It is 1.14:1 on the wash below, where
+   * `--shell-line` was 1.33:1 — the disclosure's edge was louder than the
+   * mockups' card edge while the primary action's was louder still. */
+  border: 1px solid var(--shell-line-soft);
   border-radius: var(--radius-md);
-  background: var(--surface-card);
+  /* A WASH, ALL BUT INVISIBLE — the mockups' `.libdisc` is
+   * `rgba(255,255,255,.016)` over the panel, against `.newbtn`'s solid fill,
+   * and that difference IS the hierarchy. #119 proposed `--surface-raise` here
+   * as well as on `.nav-new`; the dedupe overruled it, because painting both
+   * boxes the raise rung re-creates the shared fill this is about, as one
+   * `background` declaration with nothing to mark the conflict.
+   *
+   * `--text-primary` AND NOT `#ffffff`, which is what the issue prescribes.
+   * The two are identical in dark — 1.4% of #e9ecef over #181a1e rounds to
+   * #1b1d21, the same byte the white literal gives, 1.03:1 on the panel — and
+   * they are not identical in light, where the literal washes a near-white
+   * panel with white and computes to #f4f6f7: the panel itself, no box at all.
+   * The reader's own ink is what the mockups mean by "white" here; naming it
+   * that way makes the light side a 1.02:1 recess instead of nothing. */
+  background: color-mix(in srgb, var(--text-primary) 1.4%, var(--surface-panel));
   color: var(--text-secondary);
   font: inherit;
   font-size: var(--text-xs);
@@ -166,6 +216,16 @@
   padding: 0 8px;
   font-size: var(--text-sm);
   line-height: var(--lh-sm);
+  /* AND ONE RADIUS PER COLUMN. These five rows — the Library's four plus
+   * Settings — measured radius 12px while the `.nav-row`s stacked directly
+   * under them in the same 251px column measure 8, so the destinations were
+   * visibly rounder than the conversations and rounder than their own selected
+   * pill. Every row inside the mockups' `.side` is 8px, `.libpop .it` included.
+   *
+   * The 12 comes from `assets/main.css`'s `.drawer-item { border-radius:
+   * var(--radius-lg) }`, which is the phone's and stays the phone's — this
+   * block already overrides four other declarations for exactly that reason. */
+  border-radius: var(--radius-md);
 }
 
 .nav-sessions {
@@ -529,6 +589,51 @@
 .nav-search {
   flex: 0 0 auto;
   margin: 8px 0 0;
+}
+
+/* AND THE FIELD JOINS THE LADDER IT WAS STANDING BESIDE.
+ *
+ * It is `assets/main.css`'s `.field` unchanged, which makes it the one box in
+ * this column on none of the column's own rungs. Measured on the captured
+ * `desktop-chats` at 1440x860 dark, against its own neighbours:
+ *
+ *                     height  radius  fill             edge
+ *   .plane-switch     38      8       #24282e          #2c3138
+ *   .nav-new          36      8       #24282e          #2c3138
+ *   .nav-library      32      8       a 1.4% wash      #242830
+ *   .nav-search .field  40    12      rgb(30,33,38)    rgb(47,52,59)
+ *   after               32     8      #212429          #2c3138
+ *
+ * The old fill is the giveaway: rgb(30,33,38) is `--surface-canvas`, the
+ * CONTENT COLUMN's rung — `.pane-main` paints that exact value — so the
+ * sidebar's search box was painted the colour of the column it is not in.
+ *
+ * `--surface-card` AND NOT `--surface-raise`, which is the ladder's own rung
+ * and would be the obvious port. In light the raise rung resolves to
+ * `--bg-tertiary` #e3e6ea, where `.field::placeholder`'s `--text-secondary`
+ * #6f6f6f measures **4.01:1** — under the 4.5 a placeholder owes, and the
+ * exact failure `40-home-chat.css` already records against `.home-compose`.
+ * `--surface-card` is #ffffff in light, which is byte-identical to what this
+ * field already paints there, so light does not move at all; dark goes
+ * #1e2126 -> #212429, 94% of the way to the ladder with the placeholder at
+ * 5.95:1.
+ *
+ * 32px is `.nav-library`'s height and the shortest rung in the column;
+ * `docs/audit.js`'s tap floor does not reach it (that check is `tag ===
+ * 'button'`), so this is the ladder's number rather than a gate's. The padding
+ * comes down with the height — 6px of vertical inset around an 18px line box
+ * is 30, so the 32 comes from the `min-height` and the text sits centred in
+ * it rather than pressed against the top.
+ *
+ * SCOPED TO `.nav-search`, so `.field` everywhere else in the app — every
+ * settings row, every sheet — is untouched. `.nav-search` is rendered only by
+ * `SidebarList`. */
+.nav-search .field {
+  min-height: 32px;
+  padding: 6px 10px;
+  border-color: var(--shell-line);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
 }
 
 /* The text column takes what is left and is allowed to shrink, which is what

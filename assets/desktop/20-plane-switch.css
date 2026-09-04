@@ -36,7 +36,14 @@
    * --bg-tertiary at full strength. */
   background: color-mix(in srgb, var(--bg-tertiary) 30%, var(--nav-fill));
   border: 1px solid var(--shell-line);
-  border-radius: var(--radius-lg);
+  /* --radius-md (8px), which is the mockups' `.seg`, and it also restores the
+   * tier this file's own header promises. The header was written when
+   * `.navcard` was a 16px card holding a 12px track holding 8px segments;
+   * since #49 the card has no radius at all, so a 12px track around 8px
+   * segments was the outer and the inner tied — the two curves cutting each
+   * other. 8 outside 6 is the mockups' pair (`.seg` 8px, `.seg div` 6px) and
+   * an honest tier again. */
+  border-radius: var(--radius-md);
 }
 
 /* Each half. `flex: 1 1 0` and not `1 1 auto`, so the two segments are equal
@@ -57,7 +64,17 @@
   min-height: 32px;
   padding: 0 8px;
   border: 0;
-  border-radius: var(--radius-md);
+  /* 6px, and it is DERIVED rather than copied off the mockup even though the
+   * mockup says 6 too. `.plane-switch` rounds 8 and its groove is 2px, so a
+   * segment inside it rounds 8 - 2 = 6 or the two curves are not concentric —
+   * docs/design.md rule 4. The pair the mockups draw, `.seg` 8px and
+   * `.seg div` 6px, is the same arithmetic on the same 2px inset.
+   *
+   * The groove stays 2px rather than taking the mockups' 3: their segments are
+   * 26px tall and `docs/audit.js` fails any `button` under 32 in either axis,
+   * so the segment cannot come down and a 3px groove would only push the track
+   * to 40. The floor wins over the picture, as it does on `.nav-library`. */
+  border-radius: 6px;
   background: transparent;
   font: inherit;
   font-size: var(--text-sm);
@@ -77,6 +94,13 @@
    * gives 4.51:1 and 15% gives 4.55:1, so the whole control would rest on a
    * hundredth of a point, and the groove is the thing that makes this read as
    * a switch rather than two loose buttons.
+   *
+   * The dark half of that paragraph is re-measured against the track the block
+   * at the foot of this file now paints: on #24282e, secondary is 5.66:1 and
+   * primary 12.49:1, where the numbers below were taken on the old rgb(29,32,
+   * 37). The conclusion is unchanged and the arithmetic is not the shipped
+   * one, which is why it is corrected here rather than left to be reasoned
+   * from.
    *
    * It is also the consistent answer. `.drawer-item` in assets/main.css is
    * `color: var(--text-primary)`, so as secondary these two segments were
@@ -136,6 +160,64 @@
  * moved off --text-secondary above. */
 .plane-seg:not(.active):hover {
   background: color-mix(in srgb, var(--bg-tertiary) 65%, var(--nav-fill));
+}
+
+/* ── the track is raised off the panel, not sunk into it ──────────────────
+ *
+ * In dark, where "raised" and "sunk" are different directions.
+ *
+ * Measured on the captured `desktop-chats` at 1440x860 dark: the 30% mix above
+ * computes to rgb(29,32,37), five units off the rgb(24,26,30) panel it sits on
+ * and DARKER than the rgb(33,36,41) `.nav-new` directly beneath it. The groove
+ * meant to say "a track with something in it" barely read, and the pill
+ * floated on almost nothing. The mockups' `.seg` is #24282e — the lightest
+ * thing in that stack, not the darkest — with their selected pill #2a2f36 on
+ * top of it, which `.plane-seg.active` already matches exactly.
+ *
+ *   panel #181a1e -> track -> hover -> pill #2a2f36
+ *   before   1.00    1.30 (rgb 29,32,37)  1.30 (hover was the track)   1.19
+ *   after    1.00    1.18 (#24282e)       1.05 (#272c32)               1.04
+ *
+ * THE HOVER MOVES WITH IT AND THAT IS NOT OPTIONAL. The shipped hover is a 65%
+ * mix of `--bg-tertiary` over `--nav-fill`, derived as the midpoint between a
+ * 30% track and a 100% pill. `--surface-raise` #24282e IS that same mix at
+ * **66.7%** — (36-24)/(42-24) = (40-26)/(47-26) = (46-30)/(54-30) = 0.667 — so
+ * re-pointing the track alone would have left hover 1.7 points BELOW the
+ * surface it paints over: a hover state that is invisible in dark, shipped
+ * green, by a change to a different declaration. Caught by re-deriving the
+ * midpoint rather than by any gate.
+ *
+ * So dark's hover is restated as the midpoint of the two ends THEMSELVES —
+ * half of `--bg-tertiary` over `--surface-raise` — rather than as a percentage
+ * that has to be re-derived every time either end moves. #272c32.
+ *
+ * DARK ONLY, and mandatory rather than cautious. In light `--surface-raise`
+ * resolves to #e3e6ea, which is exactly what `.plane-seg.active` fills with:
+ * the track would equal the pill, and a 50% mix of the pill with the pill is
+ * the pill, so the control would lose its groove AND its selection in one
+ * step. Light keeps both mixes above — track #eff1f2 at 1.05 over its #f4f6f7
+ * panel, hover #e9ecef at 1.05 over that, pill #e3e6ea at 1.06 over that: the
+ * same three even steps dark now has.
+ *
+ * These out-rank the two rules above on SPECIFICITY — (0,4,0) and (0,5,0)
+ * against (0,1,0) and (0,3,0) — and they also sort after them, so neither
+ * mechanism is load-bearing alone. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .plane-switch {
+    background: var(--surface-raise);
+  }
+
+  :root:not([data-theme="light"]) .plane-seg:not(.active):hover {
+    background: color-mix(in srgb, var(--bg-tertiary) 50%, var(--surface-raise));
+  }
+}
+
+:root[data-theme="dark"] .plane-switch {
+  background: var(--surface-raise);
+}
+
+:root[data-theme="dark"] .plane-seg:not(.active):hover {
+  background: color-mix(in srgb, var(--bg-tertiary) 50%, var(--surface-raise));
 }
 
 /* ── the footer ─────────────────────────────────────────────────────────
