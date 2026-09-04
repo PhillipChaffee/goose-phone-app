@@ -280,6 +280,65 @@ async fn a_pull_request_decodes_with_its_state_and_its_checks() {
     );
 }
 
+/// Issue #84: the four builds the list can draw, over the real socket.
+///
+/// The list's build state (`code::row_checks_label`) is a function of
+/// `PullRequest.state` and `PullRequest.checks` together, and before this
+/// fixture set exactly one tree in the whole mock carried a pull request and
+/// its checks were `passing`. So a red build — the entire reason the row draws
+/// a build — could not be reached in the development loop, in the gallery, or
+/// in any test that drives a real client over a real socket. It can now, and
+/// this walks the fleet and says so per state rather than per fixture, because
+/// the fixtures move and the states are what the screen is written against.
+#[tokio::test]
+async fn the_fleet_carries_a_red_build_a_running_one_and_a_branch_that_landed() {
+    use opencode_client::{Checks, PullState};
+
+    let server = Server::start();
+    let client = server.client();
+    let chats = client.chats().await.expect("chats");
+    let mut seen: Vec<(PullState, bool, Checks)> = Vec::new();
+    let mut with_pulls = 0;
+    for chat in &chats {
+        for pull in client.pulls(&chat.id).await.expect("pulls") {
+            assert_eq!(
+                pull.head, chat.branch,
+                "the manager only ever answers with pull requests off THIS \
+                 chat's branch, and a fixture that disagrees teaches the \
+                 wrong contract"
+            );
+            seen.push((pull.state, pull.draft, pull.checks));
+        }
+        with_pulls += usize::from(!client.pulls(&chat.id).await.expect("pulls").is_empty());
+    }
+    assert!(
+        with_pulls >= 3,
+        "one tree with a pull request cannot show a list what a list looks \
+         like; found {with_pulls}"
+    );
+    assert!(
+        seen.contains(&(PullState::Open, false, Checks::Failing)),
+        "no red build anywhere in the fleet: {seen:?}"
+    );
+    assert!(
+        seen.contains(&(PullState::Open, true, Checks::Pending)),
+        "no draft with a build still running: {seen:?}"
+    );
+    assert!(
+        seen.contains(&(PullState::Open, false, Checks::Passing)),
+        "no green build: {seen:?}"
+    );
+    assert!(
+        seen.iter().any(|(state, ..)| *state == PullState::Merged),
+        "no branch that has already landed: {seen:?}"
+    );
+    assert!(
+        seen.iter().all(|(_, _, checks)| *checks != Checks::Unknown),
+        "a checks string the client does not recognise reads as a credential \
+         problem and would draw nothing: {seen:?}"
+    );
+}
+
 /// The transcript, and the field that decides whose turn a message was.
 #[tokio::test]
 async fn a_transcript_comes_back_with_its_roles() {

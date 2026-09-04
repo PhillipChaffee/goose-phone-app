@@ -221,7 +221,17 @@ impl State {
     }
 
     /// A fleet worth looking at: three repos, five trees, one of each state,
-    /// an ask parked in one, a pull request on another, and a diff to review.
+    /// an ask parked in one, a diff to review, and **four different builds**
+    /// across four pull requests.
+    ///
+    /// The builds are the fixture issue #84 is about. Before them exactly one
+    /// tree carried a pull request and its checks were `passing`, so a red
+    /// build — the whole reason the list draws a build at all — could not be
+    /// seen anywhere in the development loop, and neither could a running one
+    /// or a branch that had already landed. `Checks::None` is deliberately
+    /// still unrepresented: three of the fixtures carry no pull request, and
+    /// "the repo runs no checks" is what the list is asked to say nothing
+    /// about (`code::row_checks_label`).
     fn seed(&mut self) {
         let t = now();
         self.repos = repos();
@@ -229,12 +239,25 @@ impl State {
             waiting_chat(t),
             awake_chat(t),
             reviewed_chat(t),
-            asleep_chat(t, "goose-phone-app", "Add a --no-color flag", 4.0 * 3600.0),
+            asleep_chat(
+                t,
+                "goose-phone-app",
+                "Add a --no-color flag",
+                4.0 * 3600.0,
+                // The red build. Open, mergeable as far as GitHub is
+                // concerned, and the only thing wrong with it is the thing
+                // the row now says.
+                vec![pull(121, "open", "failing", Some(true))],
+            ),
             asleep_chat(
                 t,
                 "notes-public",
                 "Fix the broken anchor links",
                 26.0 * 3600.0,
+                // Landed. `mergeable` is null on a merged pull request —
+                // GitHub stops computing it — which is also the shape that
+                // proves the client is not coercing null to false.
+                vec![pull(109, "merged", "passing", None)],
             ),
         ];
         // One container the manager swept and could not reach. The app has a
@@ -365,7 +388,19 @@ fn awake_chat(t: f64) -> Chat {
         ),
         asks: vec![],
         diff: vec![],
-        pulls: vec![],
+        // The build that has not answered yet, on the tree that is mid-turn:
+        // a draft pushed while the agent keeps working, which is the shape
+        // `Checks::Pending` and `PullState::Open { draft }` both exist for and
+        // which nothing in the fixtures reached before.
+        pulls: vec![Pull {
+            draft: true,
+            // GitHub answers null while it works mergeability out, and a
+            // branch this young is exactly when it does.
+            mergeable: None,
+            head: format!("agent/{id}"),
+            title: "Document the code-agent ports".to_owned(),
+            ..pull(126, "open", "pending", None)
+        }],
     }
 }
 
@@ -431,11 +466,32 @@ fn reviewed_chat(t: f64) -> Chat {
     }
 }
 
-fn asleep_chat(t: f64, repo: &str, title: &str, ago: f64) -> Chat {
+/// One pull request off a fixture's branch. `head` is filled in by the caller
+/// that knows the branch, because the manager only ever answers with pull
+/// requests whose head IS this chat's branch and a fixture that disagreed
+/// would teach the reader the wrong contract.
+fn pull(number: u64, state: &str, checks: &str, mergeable: Option<bool>) -> Pull {
+    Pull {
+        number,
+        title: String::new(),
+        state: state.to_owned(),
+        draft: false,
+        mergeable,
+        checks: checks.to_owned(),
+        head: String::new(),
+        base: "main".to_owned(),
+    }
+}
+
+fn asleep_chat(t: f64, repo: &str, title: &str, ago: f64, mut pulls: Vec<Pull>) -> Chat {
     let id = format!(
         "{repo}-{:x}",
         (ago as u64).wrapping_mul(2_654_435_761) & 0xff_ffff
     );
+    for p in &mut pulls {
+        p.head = format!("agent/{id}");
+        p.title = title.to_owned();
+    }
     Chat {
         id: id.clone(),
         repo: repo.to_owned(),
@@ -454,7 +510,7 @@ fn asleep_chat(t: f64, repo: &str, title: &str, ago: f64) -> Chat {
         ),
         asks: vec![],
         diff: vec![],
-        pulls: vec![],
+        pulls,
     }
 }
 
