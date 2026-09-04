@@ -1958,6 +1958,29 @@ const fn sweep_due(swept: u64, now: u64) -> bool {
     swept == 0 || now.saturating_sub(swept) >= SWEEP_FLOOR_SECS
 }
 
+/// Which chats one sweep asks about, or `None` for "not this time".
+///
+/// The whole of the sweep's decision, out where a test can reach it: the
+/// floor, the cap, and the empty list. What is left inside
+/// [`refresh_plane_pulls`] is the request loop, which needs a socket.
+///
+/// The cap falls on the END of the list because the manager sends the index
+/// newest-first and this app renders it in wire order, so the rows it drops
+/// are the ones a reader has to scroll to reach.
+fn sweep_targets(chats: &[ChatMeta], swept: u64, now: u64) -> Option<Vec<String>> {
+    if !sweep_due(swept, now) {
+        return None;
+    }
+    let ids: Vec<String> = chats
+        .iter()
+        .take(SWEEP_MAX_CHATS)
+        .map(|c| c.id.clone())
+        .collect();
+    // Not `Some(vec![])`: an empty list would still claim `swept` and put the
+    // first real list five minutes behind the connection that produced it.
+    (!ids.is_empty()).then_some(ids)
+}
+
 /// Fill in every row's build state: one `/api/chats/<id>/pulls` per chat,
 /// floored to one sweep per [`SWEEP_FLOOR_SECS`] and capped at
 /// [`SWEEP_MAX_CHATS`] chats.
@@ -1993,27 +2016,18 @@ pub(crate) fn refresh_plane_pulls(ctx: &AppCtx) {
     let Some(client) = ctx.code_client.peek().clone() else {
         return;
     };
-    let ids: Vec<String> = ctx
-        .code_chats
-        .peek()
-        .iter()
-        .take(SWEEP_MAX_CHATS)
-        .map(|c| c.id.clone())
-        .collect();
-    if ids.is_empty() {
-        return;
-    }
     let now = now_secs();
-    {
+    let ids = {
         let mut p = pulls.write();
+        let Some(ids) = sweep_targets(&ctx.code_chats.peek(), p.swept, now) else {
+            return;
+        };
         // `swept` is claimed here rather than when the sweep finishes, so the
         // poll tick that lands while a slow sweep is still walking the list
         // does not start a second one behind it.
-        if !sweep_due(p.swept, now) {
-            return;
-        }
         p.swept = now;
-    }
+        ids
+    };
     let ctx = *ctx;
     spawn_forever(async move {
         for id in &ids {
@@ -2380,9 +2394,9 @@ pub(crate) fn status_label(
 mod tests {
     use super::{
         checks_label, fold_part_into, merge_permission_report, mergeability_label, poll_tick,
-        pull_state_label, row_checks_label, row_pull_word, status_label, sweep_due, ChatItem,
-        ChatMeta, Checks, CodePermission, GapSink, HashMap, HashSet, PermissionReport, PullRequest,
-        PullState, PullsState, Tab, Tick, SWEEP_FLOOR_SECS,
+        pull_state_label, row_checks_label, row_pull_word, status_label, sweep_due, sweep_targets,
+        ChatItem, ChatMeta, Checks, CodePermission, GapSink, HashMap, HashSet, PermissionReport,
+        PullRequest, PullState, PullsState, Tab, Tick, SWEEP_FLOOR_SECS, SWEEP_MAX_CHATS,
     };
     use opencode_client::{Part, PendingAsk};
 
@@ -2522,6 +2536,49 @@ mod tests {
         assert!(
             !sweep_due(1_000, 500),
             "a clock that stepped backwards must not make every sweep due"
+        );
+    }
+
+    /// The rest of the sweep's decision: the cap, and the empty list that must
+    /// not claim the floor.
+    ///
+    /// The cap is the ceiling on the worst case in the cost table — 24 chats
+    /// is 96 GitHub calls a sweep — so a fleet that grows past it must lose
+    /// rows rather than lose the budget, and it must lose the ones furthest
+    /// down a newest-first list.
+    #[test]
+    fn a_sweep_asks_about_the_newest_rows_and_never_more_than_the_cap() {
+        let fleet: Vec<ChatMeta> = (0..SWEEP_MAX_CHATS + 6)
+            .map(|n| ChatMeta {
+                id: format!("c{n}"),
+                repo: String::new(),
+                title: String::new(),
+                branch: String::new(),
+                base: String::new(),
+                status: "stopped".to_owned(),
+                model: None,
+                last_active: 0.0,
+            })
+            .collect();
+
+        let picked = sweep_targets(&fleet, 0, 1_000).unwrap_or_default();
+        assert!(!picked.is_empty(), "a first sweep is due");
+        assert_eq!(picked.len(), SWEEP_MAX_CHATS);
+        assert_eq!(picked.first().map(String::as_str), Some("c0"));
+        assert_eq!(
+            picked.last().map(String::as_str),
+            Some(format!("c{}", SWEEP_MAX_CHATS - 1).as_str()),
+            "the cap has to fall off the END of a newest-first list"
+        );
+
+        assert!(
+            sweep_targets(&fleet, 1_000, 1_002).is_none(),
+            "inside the floor, nothing is asked"
+        );
+        assert!(
+            sweep_targets(&[], 0, 1_000).is_none(),
+            "an empty list must not claim the floor, or the first real list \
+             arrives five minutes before its builds do"
         );
     }
 
