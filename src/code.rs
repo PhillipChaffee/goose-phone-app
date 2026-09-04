@@ -256,12 +256,19 @@ fn marks_to_view(marks: &HashMap<String, u64>) -> HashMap<String, FileView> {
         .collect()
 }
 
-/// The pull-request screen's state for the open chat.
+/// The pull-request screen's state for the open chat, plus the plane-wide
+/// index every row in the list reads (issue #84).
 ///
 /// A signal of its own, for the same reason `DiffState` is one: the chat
 /// screen re-renders on every keystroke and reads its state by cloning it,
 /// and this list belongs to a different plane entirely — the manager's
 /// GitHub calls, not the chat's container.
+///
+/// Two halves with two lifetimes, and they must not be cleared together:
+/// `pulls`/`loading`/`loaded`/`error`/`merging` belong to whichever chat is
+/// open and are dropped when a different one is, while `by_chat` and `swept`
+/// belong to the plane and survive every open. `open_code_chat` says so where
+/// it does the reset.
 #[derive(Clone, PartialEq, Eq, Default)]
 pub(crate) struct PullsState {
     /// Only the pull requests off this chat's branch; see `CodeClient::pulls`.
@@ -274,6 +281,26 @@ pub(crate) struct PullsState {
     pub error: Option<String>,
     /// The number whose merge is in flight.
     pub merging: Option<u64>,
+    /// chat id -> that chat's pull requests, for every chat
+    /// [`refresh_plane_pulls`] has reached. A chat that is absent has not been
+    /// asked about; a chat mapped to an empty list has, and has none. The two
+    /// must stay distinguishable for the same reason `loaded` exists.
+    pub by_chat: HashMap<String, Vec<PullRequest>>,
+    /// Unix seconds at which the last sweep started. The floor that keeps the
+    /// ten-second poll off GitHub's hourly budget — see [`SWEEP_FLOOR_SECS`].
+    pub swept: u64,
+}
+
+impl PullsState {
+    /// The pull request a row should speak for, or `None` when the sweep has
+    /// not reached this chat or the chat's branch has none.
+    ///
+    /// The newest, which is the manager's first: `chat_pulls` asks GitHub with
+    /// `sort=created&direction=desc`. A branch with two pull requests is a
+    /// branch someone reopened, and the row is about what is happening now.
+    pub(crate) fn plane_pull(&self, chat_id: &str) -> Option<&PullRequest> {
+        self.by_chat.get(chat_id)?.first()
+    }
 }
 
 /// On-device transcript cache (issue #2, A11): instant open while the
@@ -366,6 +393,12 @@ pub(crate) async fn refresh_code_chats(ctx: &AppCtx) {
         Err(e) => show_toast(ctx, format!("Failed to list code chats: {e}")),
     }
     loading.set(false);
+    // Kicked, not awaited: the sweep is up to twenty-four round trips to
+    // GitHub and nothing on the screen should hold a spinner for them. It is
+    // called from here rather than from the poll so that the pull gesture and
+    // ⌘R drive it too — `viewport::refresh_named`'s "code" arm is this
+    // function — and its own floor decides whether it does anything.
+    refresh_plane_pulls(ctx);
 }
 
 async fn refresh_repos(ctx: &AppCtx) {
@@ -912,7 +945,19 @@ pub(crate) fn open_code_chat(ctx: &AppCtx, meta: ChatMeta) {
     // credential and touches neither, so waiting for the wake would be paying
     // a cost the request does not have. The chip carries its number while the
     // container is still booting.
-    ctx.code_pulls.clone().set(PullsState::default());
+    // The screen's half is this chat's and goes; the plane's half is every
+    // row's and stays. Clearing `by_chat` here would blank the build state on
+    // the whole list on every open and then not refill it for five minutes,
+    // which is the sweep floor working against the thing it protects.
+    let (by_chat, swept) = {
+        let p = ctx.code_pulls.peek();
+        (p.by_chat.clone(), p.swept)
+    };
+    ctx.code_pulls.clone().set(PullsState {
+        by_chat,
+        swept,
+        ..PullsState::default()
+    });
     refresh_pulls(ctx);
     let ctx = *ctx;
     spawn_forever(async move { attach_chat(&ctx, meta.id, new_epoch).await });
@@ -1864,12 +1909,144 @@ pub(crate) fn refresh_pulls(ctx: &AppCtx) {
         p.loading = false;
         match result {
             Ok(list) => {
+                // The plane's copy too, so the row this chat came from is
+                // never staler than the screen opened from it — and so a
+                // merge answered here shows on the list without waiting out
+                // the sweep floor.
+                p.by_chat.insert(chat_id, list.clone());
                 p.pulls = list;
                 p.loaded = true;
                 p.error = None;
             }
             Err(e) => p.error = Some(e.message()),
         }
+    });
+}
+
+/// How long a plane-wide sweep's answer stands before another is allowed.
+///
+/// Five minutes, and the number is a rate limit rather than a taste. See
+/// [`refresh_plane_pulls`] for the arithmetic; the short version is that this
+/// sweep on the ten-second poll would spend seven times GitHub's whole hourly
+/// budget, and at this floor it spends between 5% and 23% of it. A build that
+/// turns red is on the rows within five minutes, which is inside the time the
+/// build itself takes.
+const SWEEP_FLOOR_SECS: u64 = 300;
+
+/// How many chats one sweep will ask about, most recently active first.
+///
+/// The manager sends the index newest-first and this app renders it in wire
+/// order, so the cap falls on the rows a reader has to scroll to reach. It is
+/// a ceiling on the worst case, not a target: it exists so that a fleet that
+/// grows to eighty trees cannot quietly turn a status dot into a
+/// rate-limit outage.
+const SWEEP_MAX_CHATS: usize = 24;
+
+/// Whether a sweep is allowed to start, given when the last one did.
+///
+/// A function of its own for [`poll_tick`]'s reason: this is the whole of the
+/// rate limit, and it is worth being able to say in a test that a sweep two
+/// seconds after a sweep does not happen while one six minutes after one
+/// does. `swept == 0` is "never swept", which is always due — the first list
+/// to arrive should carry its build states, not wait five minutes for them.
+///
+/// `saturating_sub` is not decoration: `now_secs` reads the wall clock, and a
+/// clock that steps backwards (a phone crossing a time-zone-less NTP
+/// correction, a laptop waking) would otherwise wrap the subtraction and make
+/// every sweep due forever.
+const fn sweep_due(swept: u64, now: u64) -> bool {
+    swept == 0 || now.saturating_sub(swept) >= SWEEP_FLOOR_SECS
+}
+
+/// Fill in every row's build state: one `/api/chats/<id>/pulls` per chat,
+/// floored to one sweep per [`SWEEP_FLOOR_SECS`] and capped at
+/// [`SWEEP_MAX_CHATS`] chats.
+///
+/// **Why a fan-out is allowed here and is not allowed for the diff.** This
+/// route is the manager talking to GitHub with its own credential
+/// (`chat_pulls`, personal-ai-setup `scripts/vps/code-agent-manager.py`); it
+/// is never proxied to a container, so a sweep wakes nothing and keeps
+/// nothing awake. The per-session diff is the opposite — `/chat/<id>/…` goes
+/// through the transparent proxy — which is why issue #81's numbers are not
+/// fetched this way and are absent instead.
+///
+/// **The cost, measured rather than asserted.** The manager spends `1 + 3P`
+/// GitHub calls per chat: one list call, then per pull request on the branch
+/// one detail call (the list form carries no `mergeable` — confirmed against
+/// the real API, `GET /repos/…/pulls?per_page=1` answers without it) and two
+/// in `summarise_checks` (check runs, then combined status). A fine-grained
+/// PAT gets 5,000 REST requests an hour.
+///
+/// | policy | calls/sweep | calls/hour | share of 5,000 |
+/// |---|---|---|---|
+/// | 24 chats, 1 pull each, every 10s poll | 96 | 34,560 | 691% |
+/// | 24 chats, 1 pull each, this floor | 96 | 1,152 | 23% |
+/// | 10 chats, 4 with a pull, this floor | 22 | 264 | 5.3% |
+///
+/// The first row is why the sweep does not ride the poll, and 23% for a
+/// status dot is still more than it is worth. **The fix is one aggregate
+/// route on the manager**, the shape `/api/permissions` already has, which
+/// would make the whole table one call — filed upstream and linked from #84.
+pub(crate) fn refresh_plane_pulls(ctx: &AppCtx) {
+    let mut pulls = ctx.code_pulls;
+    let Some(client) = ctx.code_client.peek().clone() else {
+        return;
+    };
+    let ids: Vec<String> = ctx
+        .code_chats
+        .peek()
+        .iter()
+        .take(SWEEP_MAX_CHATS)
+        .map(|c| c.id.clone())
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+    let now = now_secs();
+    {
+        let mut p = pulls.write();
+        // `swept` is claimed here rather than when the sweep finishes, so the
+        // poll tick that lands while a slow sweep is still walking the list
+        // does not start a second one behind it.
+        if !sweep_due(p.swept, now) {
+            return;
+        }
+        p.swept = now;
+    }
+    let ctx = *ctx;
+    spawn_forever(async move {
+        for id in &ids {
+            // Sequential, not joined: a burst of twenty-four TLS requests at
+            // once is twenty-four threads on the manager's
+            // `ThreadingHTTPServer`, each holding a 20-second GitHub timeout.
+            // Nothing on screen is waiting for the last row.
+            if ctx.code_client.peek().is_none() {
+                return;
+            }
+            if let Ok(list) = client.pulls(id).await {
+                // Only a success writes. A chat GitHub could not answer for
+                // keeps the answer it had, because a row that drops its build
+                // state on one flaky request reads as "this branch has no
+                // pull request", which is a different claim.
+                ctx.code_pulls
+                    .clone()
+                    .write()
+                    .by_chat
+                    .insert(id.clone(), list);
+            }
+        }
+        // A deleted chat's answer would otherwise sit in the map for the life
+        // of the process, and its id can be reused. Kept against the WHOLE
+        // index and not against `ids`: a chat past the cap was never asked
+        // about, which is not the same as one that is gone, and dropping it
+        // would also throw away the open chat's own answer whenever it sits
+        // below row twenty-four.
+        let live: HashSet<String> = ctx.code_chats.peek().iter().map(|c| c.id.clone()).collect();
+        ctx.code_pulls
+            .clone()
+            .write()
+            .by_chat
+            .retain(|id, _| live.contains(id));
     });
 }
 
@@ -1975,6 +2152,59 @@ pub(crate) const fn mergeability_label(pull: &PullRequest) -> Option<(&'static s
         // Not a refusal: GitHub computes mergeability asynchronously and has
         // not answered yet. Pulling the list again is what re-asks.
         None => Some(("dot busy", "mergeability pending")),
+    }
+}
+
+/// What a LIST ROW says about the newest pull request off its branch.
+///
+/// The number is the useful half — it is the thing you type into a browser,
+/// and it is the only identifier a working tree has outside this app — so it
+/// leads. The state follows as a word, from [`pull_state_label`], which is the
+/// same vocabulary the pull-request screen uses; two screens with two words
+/// for `draft` would be two facts to a reader.
+///
+/// [`PullState::Unknown`] drops the word rather than printing "state unknown"
+/// on a row: the number is still true, and a row is not where a reader can do
+/// anything about a state string this client has not heard of. The pull
+/// request screen still says it, with a red dot, where the reader is looking
+/// at that one pull request.
+pub(crate) fn row_pull_word(pull: &PullRequest) -> String {
+    if matches!(pull.state, PullState::Unknown) {
+        return format!("#{}", pull.number);
+    }
+    let (_, word) = pull_state_label(pull);
+    format!("#{} {word}", pull.number)
+}
+
+/// Dot and word for the build behind a row, or `None` when there is no build
+/// this row can usefully report (issue #84).
+///
+/// `None` in three cases, and each is a decision rather than a gap:
+///
+/// - [`Checks::None`] — nothing runs checks on this repo. Every row on that
+///   repo would carry the same words forever.
+/// - [`Checks::Unknown`] — the manager's PAT cannot read check runs
+///   (`summarise_checks` says so in its own doc). Fifteen rows reading "checks
+///   unknown" is a credential problem announced fifteen times, and the pull
+///   request screen already draws that distinction with a chip of its own,
+///   one tap away, where a reader is looking at the one branch they care
+///   about.
+/// - the pull request is not open. A closed branch's red build is not
+///   something anybody is going to fix, and `merged` / `closed` from
+///   [`row_pull_word`] is already the whole story of that row.
+///
+/// Rejected: showing the chip unconditionally, on the argument that the wire
+/// said it so the app should say it. It is the argument the app usually
+/// takes, and it loses here because this row exists to answer "which of these
+/// wants me" — a chip that is present on every row answers nothing, and the
+/// fact is one tap away rather than absent.
+pub(crate) const fn row_checks_label(pull: &PullRequest) -> Option<(&'static str, &'static str)> {
+    if !matches!(pull.state, PullState::Open) {
+        return None;
+    }
+    match pull.checks {
+        Checks::Passing | Checks::Failing | Checks::Pending => Some(checks_label(pull.checks)),
+        Checks::None | Checks::Unknown => None,
     }
 }
 
@@ -2149,8 +2379,9 @@ pub(crate) fn status_label(
 mod tests {
     use super::{
         checks_label, fold_part_into, merge_permission_report, mergeability_label, poll_tick,
-        pull_state_label, status_label, ChatItem, ChatMeta, Checks, CodePermission, GapSink,
-        HashMap, HashSet, PermissionReport, PullRequest, PullState, Tab, Tick,
+        pull_state_label, row_checks_label, row_pull_word, status_label, sweep_due, ChatItem,
+        ChatMeta, Checks, CodePermission, GapSink, HashMap, HashSet, PermissionReport, PullRequest,
+        PullState, PullsState, Tab, Tick, SWEEP_FLOOR_SECS,
     };
     use opencode_client::{Part, PendingAsk};
 
@@ -2180,6 +2411,119 @@ mod tests {
 
         let unknown = pull(PullState::Unknown, false, Some(true), Checks::Passing);
         assert_eq!(pull_state_label(&unknown), ("dot err", "state unknown"));
+    }
+
+    /// A row leads with the number, because that is the only identifier a
+    /// working tree has outside this app — and it drops a state word this
+    /// client has not heard of rather than printing "state unknown" in a list.
+    #[test]
+    fn a_row_names_the_pull_request_by_number_and_where_it_stands() {
+        assert_eq!(
+            row_pull_word(&pull(PullState::Open, false, Some(true), Checks::Passing)),
+            "#12 open"
+        );
+        assert_eq!(
+            row_pull_word(&pull(PullState::Open, true, None, Checks::Pending)),
+            "#12 draft"
+        );
+        assert_eq!(
+            row_pull_word(&pull(PullState::Merged, false, None, Checks::Passing)),
+            "#12 merged"
+        );
+        assert_eq!(
+            row_pull_word(&pull(PullState::Closed, false, None, Checks::None)),
+            "#12 closed"
+        );
+        assert_eq!(
+            row_pull_word(&pull(PullState::Unknown, false, None, Checks::Passing)),
+            "#12",
+            "a list row has nothing a reader can do about an unrecognised \
+             state, and the number is still true"
+        );
+    }
+
+    /// The build a row draws, and the three it deliberately does not: a repo
+    /// that runs no checks, a credential that cannot read them, and a branch
+    /// that is already closed or merged. Each would be the same words on every
+    /// row of a list that exists to say which row wants you.
+    #[test]
+    fn a_row_draws_a_build_only_where_there_is_one_to_act_on() {
+        assert_eq!(
+            row_checks_label(&pull(PullState::Open, false, Some(true), Checks::Failing)),
+            Some(("dot err", "checks failing"))
+        );
+        assert_eq!(
+            row_checks_label(&pull(PullState::Open, true, None, Checks::Pending)),
+            Some(("dot busy", "checks running")),
+            "a draft is still a branch with a build running on it"
+        );
+        assert_eq!(
+            row_checks_label(&pull(PullState::Open, false, Some(true), Checks::Passing)),
+            Some(("dot on", "checks passing"))
+        );
+        assert_eq!(
+            row_checks_label(&pull(PullState::Open, false, Some(true), Checks::None)),
+            None
+        );
+        assert_eq!(
+            row_checks_label(&pull(PullState::Open, false, Some(true), Checks::Unknown)),
+            None
+        );
+        assert_eq!(
+            row_checks_label(&pull(PullState::Merged, false, None, Checks::Failing)),
+            None,
+            "nobody is going to fix a red build on a branch that has landed"
+        );
+        assert_eq!(
+            row_checks_label(&pull(PullState::Closed, false, None, Checks::Failing)),
+            None
+        );
+    }
+
+    /// Three answers, not two: never asked, asked and none, asked and some.
+    /// A chat the sweep has not reached must not read as a branch with no
+    /// pull request, for `loaded`'s reason one level down.
+    #[test]
+    fn the_plane_index_tells_unasked_apart_from_answered_empty() {
+        let mut state = PullsState::default();
+        assert!(state.plane_pull("c1").is_none());
+
+        state.by_chat.insert("c1".to_owned(), Vec::new());
+        assert!(state.plane_pull("c1").is_none());
+
+        let newest = PullRequest {
+            number: 30,
+            ..pull(PullState::Open, false, Some(true), Checks::Passing)
+        };
+        let older = PullRequest {
+            number: 29,
+            ..pull(PullState::Closed, false, None, Checks::Passing)
+        };
+        state
+            .by_chat
+            .insert("c2".to_owned(), vec![newest.clone(), older]);
+        assert_eq!(
+            state.plane_pull("c2").map(|p| p.number),
+            Some(30),
+            "the manager sorts newest first and a reopened branch is about \
+             what is happening now"
+        );
+    }
+
+    /// The whole of the rate limit. A sweep two seconds after a sweep must not
+    /// happen — that is the ten-second poll multiplying the cost by thirty —
+    /// and the first list to arrive must not wait five minutes for its builds.
+    #[test]
+    fn a_sweep_waits_out_its_floor_and_survives_a_clock_that_steps_back() {
+        assert!(sweep_due(0, 0), "never swept is always due");
+        assert!(sweep_due(0, 9_999));
+        assert!(!sweep_due(1_000, 1_002));
+        assert!(!sweep_due(1_000, 1_000 + SWEEP_FLOOR_SECS - 1));
+        assert!(sweep_due(1_000, 1_000 + SWEEP_FLOOR_SECS));
+        assert!(
+            !sweep_due(1_000, 500),
+            "a clock that stepped backwards must not make every sweep due"
+        );
     }
 
     /// "No checks" and "we could not read the checks" are different facts, and

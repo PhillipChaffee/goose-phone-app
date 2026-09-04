@@ -17,10 +17,10 @@ use crate::code::{
     ensure_code_models, expand_diff_gap, is_free_model, load_code_diff, mark_all_diff_seen,
     merge_pull, mergeability_label, new_code_chat, open_chat_allows_free_models, open_code_chat,
     open_code_pulls, pull_state_label, refresh_code_chats, refresh_code_permissions,
-    repo_allows_free_models, reveal_removed_lines, send_code_prompt, set_code_agent,
-    set_code_effort, set_code_model, start_code_poll, status_label, stop_code_turn,
-    toggle_diff_file, toggle_diff_seen, BranchList, CodeScreen, DiffFile, DiffState,
-    NewSessionSpec, NEW_CONVERSATION,
+    repo_allows_free_models, reveal_removed_lines, row_checks_label, row_pull_word,
+    send_code_prompt, set_code_agent, set_code_effort, set_code_model, start_code_poll,
+    status_label, stop_code_turn, toggle_diff_file, toggle_diff_seen, BranchList, CodeScreen,
+    DiffFile, DiffState, NewSessionSpec, NEW_CONVERSATION,
 };
 use crate::diff::Block;
 use crate::external::open_external;
@@ -64,6 +64,11 @@ pub fn CodeSessionsView() -> Element {
     let running_chat = ctx.code_chat.read().chat_id.clone();
     let running_turn = ctx.code_chat.read().running;
     let asks = (ctx.code_permissions)();
+    // Read once for the whole list rather than once per row, and read here
+    // rather than inside `render_code_row` so that the row stays a function of
+    // its arguments. This is also what subscribes the list to the plane-wide
+    // sweep, so a build that turns red repaints the rows without a navigation.
+    let plane_pulls = (ctx.code_pulls)();
 
     rsx! {
         header { class: "topbar",
@@ -137,7 +142,14 @@ pub fn CodeSessionsView() -> Element {
                         chats.iter().map(|meta| {
                             let turn = running_chat.as_deref() == Some(meta.id.as_str())
                                 && running_turn;
-                            render_code_row(&ctx, meta, turn, chat_ask(&asks, &meta.id), confirm_delete)
+                            render_code_row(
+                                &ctx,
+                                meta,
+                                turn,
+                                chat_ask(&asks, &meta.id),
+                                plane_pulls.plane_pull(&meta.id),
+                                confirm_delete,
+                            )
                         })
                     }
                 }
@@ -182,13 +194,31 @@ fn chat_ask(queue: &[(String, CodePermission)], chat_id: &str) -> Option<(CodePe
     Some((front, mine.count()))
 }
 
-/// One chat's row: what it is, what its container is doing, and — when it is
-/// parked on a permission — the ask itself.
+/// One chat's row: what it is, what its container is doing, what its branch
+/// has open on GitHub, and — when it is parked on a permission — the ask
+/// itself.
+///
+/// `pull` is the newest pull request off this branch, from the plane-wide
+/// sweep (`code::refresh_plane_pulls`), or `None` when the sweep has not
+/// reached this chat or the branch has none. Passed in rather than read here
+/// so that the row stays a function of its arguments — the list already reads
+/// the signal once for the whole list rather than once per row.
+///
+/// **What is still absent, and why** (issues #81, #82). The mockups' working
+/// tree row also carries `+34 −11`, a file count, a commit count and an
+/// ahead-count. None of them is on this wire. The diffstat exists only per
+/// SESSION and only through the container (`CodeClient::diff`), so a sweep
+/// for it would wake every sleeping tree; the commit and ahead counts have no
+/// endpoint at all — `ChatMeta` is id/repo/title/branch/base/status/model/
+/// `last_active` and nothing else. Both are one container-free GitHub call
+/// away on the manager's side, filed upstream and linked from the two issues.
+/// Until that lands the row says the number it has and no others.
 fn render_code_row(
     ctx: &AppCtx,
     meta: &ChatMeta,
     running_turn: bool,
     ask: Option<(CodePermission, usize)>,
+    pull: Option<&PullRequest>,
     mut confirm_delete: Signal<Option<String>>,
 ) -> Element {
     let ctx = *ctx;
@@ -196,6 +226,8 @@ fn render_code_row(
     let id = meta.id.clone();
     let waiting = ask.is_some();
     let (dot, label) = status_label(&meta, running_turn, waiting);
+    let build = pull.and_then(row_checks_label);
+    let pull_word = pull.map(row_pull_word);
 
     rsx! {
         li {
@@ -223,9 +255,23 @@ fn render_code_row(
                             span { class: "{dot}" }
                             "{label}"
                         }
+                        // The build, ahead of the repo and the branch on
+                        // purpose: a red one is the only thing on this line
+                        // that is asking for something, and `.session-meta`
+                        // wraps, so a row that has one does not push anything
+                        // off the end — it gains a second line.
+                        if let Some((build_dot, build_word)) = build {
+                            span { class: "chip",
+                                span { class: "{build_dot}" }
+                                "{build_word}"
+                            }
+                        }
                         span { "{meta.repo}" }
                         if !meta.branch.is_empty() {
                             span { "{meta.branch}" }
+                        }
+                        if let Some(word) = pull_word {
+                            span { "{word}" }
                         }
                     }
                     if let Some((perm, more)) = ask {
@@ -2888,6 +2934,98 @@ mod tests {
         assert!(
             html.contains("New session"),
             "a connected list offers the way to start one"
+        );
+    }
+
+    /// Issue #84: a row whose branch has a red build looked exactly like a row
+    /// whose branch is green — both said "asleep" and nothing else — so the
+    /// reader could not triage from the list and had to open every tree.
+    ///
+    /// Three rows, three answers, from one plane-wide sweep: the red build
+    /// says so beside the container's own status, the landed branch names its
+    /// number, and the tree with no pull request gains nothing at all. The
+    /// last one is the assertion that matters most — it is what says the row
+    /// is reporting the wire rather than decorating every row alike.
+    #[test]
+    fn a_row_whose_branch_has_a_red_build_no_longer_looks_like_a_green_one() {
+        let html = render_seeded(
+            |ctx| {
+                connect(ctx);
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    chat_meta(
+                        "red",
+                        "Add a --no-color flag",
+                        "acme/app",
+                        "agent/red",
+                        "stopped",
+                    ),
+                    chat_meta(
+                        "done",
+                        "Fix the anchors",
+                        "acme/notes",
+                        "agent/done",
+                        "stopped",
+                    ),
+                    chat_meta(
+                        "bare",
+                        "Tidy the audit script",
+                        "acme/tools",
+                        "agent/bare",
+                        "stopped",
+                    ),
+                ]);
+                let mut pulls = ctx.code_pulls;
+                let mut state = PullsState::default();
+                state.by_chat.insert(
+                    "red".to_owned(),
+                    vec![PullRequest {
+                        number: 121,
+                        state: PullState::Open,
+                        checks: Checks::Failing,
+                        mergeable: Some(true),
+                        ..PullRequest::default()
+                    }],
+                );
+                state.by_chat.insert(
+                    "done".to_owned(),
+                    vec![PullRequest {
+                        number: 109,
+                        state: PullState::Merged,
+                        checks: Checks::Passing,
+                        ..PullRequest::default()
+                    }],
+                );
+                // Asked about, and the branch has none. The row must render
+                // exactly as it did before this feature existed.
+                state.by_chat.insert("bare".to_owned(), Vec::new());
+                pulls.set(state);
+            },
+            || rsx! { CodeSessionsView {} },
+        );
+        assert!(
+            html.contains("checks failing") && html.contains("#121 open"),
+            "the red branch has to say both that it is open and that its build \
+             failed: {html:.400}"
+        );
+        assert!(
+            html.contains("dot err\"></span>checks failing"),
+            "and the build has to carry the error dot, not just the words: \
+             {html:.400}"
+        );
+        assert!(
+            html.contains("#109 merged"),
+            "a branch that has landed says so on the row: {html:.400}"
+        );
+        assert!(
+            !html.contains("checks passing"),
+            "a merged branch's green build is history and would be three \
+             words on every finished row: {html:.400}"
+        );
+        assert_eq!(
+            html.matches("#1").count(),
+            2,
+            "the tree with no pull request must gain nothing: {html:.400}"
         );
     }
 
