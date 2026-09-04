@@ -722,4 +722,49 @@ mod tests {
             );
         }
     }
+
+    /// EVERY COMMENT CLOSES EXACTLY ONCE, because a sheet where one does not
+    /// still parses and every other gate still passes.
+    ///
+    /// This campaign writes its measurements into CSS comments — contrast
+    /// ratios, box dimensions, the argument for a value — and it writes them in
+    /// markdown. Markdown emphasis is `**`, and CSS closes a comment with `*/`.
+    /// So a measurement written as `**450**/#c2c8cf` — bold, then a slash —
+    /// spells `*/` inside its own second asterisk pair. The comment ends 25
+    /// lines early, the rest of the paragraph becomes stray CSS, and the parser
+    /// discards tokens until it finds a block to throw away, which is the next
+    /// rule.
+    ///
+    /// That happened. `cargo fmt`, `cargo clippy`, `cargo test` and
+    /// `node docs/audit.js both` were all green over a rule that no longer
+    /// existed: the audit renders `docs/gallery-states.json`, the store had not
+    /// moved, and nothing in the repo read a selector list.
+    ///
+    /// COUNTING is the whole check, and it is enough because it is not
+    /// symmetric. The stray `*/` is an EXTRA close — the author's own `*/` is
+    /// still down the page — so the file ends with more closes than opens. A
+    /// rule-count oracle is not enough and was tried: the stray selector adds a
+    /// rule while eating one, so the net can be zero.
+    ///
+    /// Known limitation, stated rather than papered over: `/*` inside a string
+    /// or a `url()` would be counted. No sheet here has one, and if one ever
+    /// does, this test is where to teach the exception.
+    ///
+    /// REPRODUCED: `**450**/#c2c8cf` in any of the fifteen files gives that
+    /// file one open and two closes, and this fails naming it.
+    #[test]
+    fn every_comment_in_every_region_file_closes_exactly_once() {
+        for &(name, body) in super::SHELL_PARTS {
+            let opens = body.matches("/*").count();
+            let closes = body.matches("*/").count();
+            assert_eq!(
+                opens, closes,
+                "{name} opens {opens} comments and closes {closes}. An extra \
+                 close ends a comment where its author did not, and everything \
+                 after it — up to and including the next rule — stops being \
+                 CSS. Look for `**` immediately before a `/`: markdown emphasis \
+                 and a slash spell a comment terminator."
+            );
+        }
+    }
 }
