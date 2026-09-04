@@ -28,6 +28,15 @@
   text-overflow: ellipsis;
 }
 
+/* LIGHT ONLY IN PRACTICE, and the rule that makes it so is in
+ * `30-sidebar-list.css` rather than here — see the carve-out beside
+ * `.nav-row.on .nav-row-sub`. In dark the mockups' amber #f0b429 measures
+ * 7.23:1 on the selected fill #2a2f36, so the one label whose entire job is
+ * its colour keeps it; in light #8a6100 is 4.42:1 on #e3e6ea, 0.08 short of
+ * the 4.5 a 10.5px/600 label owes, so light still promotes.
+ *
+ * The carve-out beats this on SPECIFICITY — (0,5,0) against (0,3,0) — not on
+ * file order, so moving either rule cannot silently re-invert them. */
 .nav-row.on .nav-row-needs {
   color: var(--text-primary);
 }

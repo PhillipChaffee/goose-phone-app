@@ -374,6 +374,62 @@
   color: var(--text-primary);
 }
 
+/* EXCEPT IN DARK, WHERE IT IS NO LONGER PAYING FOR ANYTHING — and the rule
+ * above says so itself with numbers that have gone stale.
+ *
+ * Its "4.24:1 in dark" is #b8b8b8 on `--bg-tertiary` #474e57, which is what
+ * that token is in `assets/main.css`. This shell REMAPS `--bg-tertiary` to
+ * #2a2f36, and `--text-secondary` is #98a1ac now rather than #b8b8b8. Measured
+ * against what `.nav-row.on` actually paints:
+ *
+ *                        selected #2a2f36   hover #21252a
+ *   --text-secondary     5.15:1             5.89:1
+ *   --text-primary       11.36:1            12.99:1
+ *
+ * So in dark the promotion buys nothing a 12px label needs and costs the whole
+ * row's hierarchy: opening a chat made its title, snippet and age jump to one
+ * ink at once, three levels louder than its neighbours, where the mockups'
+ * `.row.sel` recolours no text at all — it declares a fill and an inset ring
+ * and stops.
+ *
+ * LIGHT KEEPS IT, and that is measured too, not caution. On the light selected
+ * fill #e3e6ea, `--text-secondary` #6f6f6f is **4.01:1** and on the light hover
+ * fill #eceef1 it is **4.32:1** — both under the 4.5 an 11.5px snippet owes.
+ * Light's quiet rungs simply sit closer to its surfaces than dark's do.
+ *
+ * `.nav-row-needs` is in this list and is the reason it exists: it is the one
+ * label whose entire job is its colour, and selecting a waiting row turned
+ * "Needs input" from amber to plain ink. Dark amber #f0b429 is 7.23:1 on the
+ * selected fill and 8.27:1 on hover, so it keeps its colour there. It cannot
+ * in light — #8a6100 is **4.42:1** on #e3e6ea, 0.08 short at 10.5px/600 — so
+ * light promotes it with the rest. The declaration lives in
+ * `60-sidebar-extra.css`, which SORTS AFTER this file, so order could not have
+ * decided it: this out-ranks it on specificity, (0,5,0) against (0,3,0).
+ *
+ * TWO BLOCKS FOR ONE RULE because that is what a theme carve-out costs in CSS:
+ * the media query is the system preference and the attribute is the app's own
+ * override, and `00-tokens.css` writes every one of its remaps exactly this
+ * way. Nothing else in `assets/desktop/`'s region files scopes by theme, so
+ * this is the first — kept to one place, with the numbers above as its
+ * warrant. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .nav-row:is(.on, :hover) :is(.nav-row-sub, .nav-row-age) {
+    color: var(--text-secondary);
+  }
+
+  :root:not([data-theme="light"]) .nav-row:is(.on, :hover) .nav-row-needs {
+    color: var(--text-warning);
+  }
+}
+
+:root[data-theme="dark"] .nav-row:is(.on, :hover) :is(.nav-row-sub, .nav-row-age) {
+  color: var(--text-secondary);
+}
+
+:root[data-theme="dark"] .nav-row:is(.on, :hover) .nav-row-needs {
+  color: var(--text-warning);
+}
+
 /* ── the row's own actions ──────────────────────────────────────────────
  *
  * Rename and delete, on the row, revealed by the pointer. That is this shell's
@@ -491,6 +547,52 @@
   white-space: nowrap;
   font-size: var(--text-sm);
   line-height: var(--lh-sm);
+  /* 500, which is the mockups' `.row .t`. It shipped at 400 — the UA default —
+   * so a row title was set lighter than the `.plane-seg` labels above it and
+   * lighter than the mockups' own quietest row. */
+  font-weight: 500;
+}
+
+/* AND THE EIGHT ROWS THAT ARE DOING NOTHING SIT BEHIND THE ONE THAT IS.
+ *
+ * The mockups draw two title voices — `.row .t` at 500 in #e9ecef and
+ * `.row.idle .t` at 450 in #c2c8cf — and 8 of the 9 rows in
+ * `22-nav-disclosure` are idle. The app had one voice on every row whatever
+ * the mark said, so a list of nine dormant conversations shouted as loudly as
+ * a running one and the eye had nothing to land on.
+ *
+ * (An emphasis marker was written next to that slash while this was drafted —
+ * "450" starred, then "/#c2c8cf" — and the last star and the slash spelled a
+ * comment terminator. The rest of the paragraph became stray CSS, the parser
+ * swallowed the rule below it looking for a block to discard, and `cargo test`
+ * and `node docs/audit.js both` were both green over a rule that no longer
+ * existed. Caught by listing the sheet's parsed selectors in Chromium and
+ * finding 39 where the file declares 40. Nothing in this repo can see that;
+ * the only defence is to render the change.)
+ *
+ * KEYED OFF THE MARK THE ROW ALREADY RENDERS, so no markup changes. `:has()`
+ * is the sheet's own idiom (`:has(.chrome-title)` decides the pane's heading)
+ * and 450 is a real variable-font weight WKWebView resolves — the mockups'
+ * source line is `.row.idle .t{color:#c2c8cf;font-weight:450}`, so it is not a
+ * rounding artefact of a measurement.
+ *
+ * THE COLOUR IS DERIVED, NOT PASTED. #c2c8cf is 52% of the way from
+ * `--text-primary` #e9ecef to `--text-secondary` #98a1ac on all three
+ * channels — (194-152)/(233-152) = 0.519, (200-161)/(236-161) = 0.520,
+ * (207-172)/(239-172) = 0.522 — so a 52% mix reproduces the mockups' literal
+ * to (194.1, 200.0, 206.9) in dark and, unlike the literal, means something in
+ * light. A hard #c2c8cf would be 1.31:1 on the light panel: unreadable, and
+ * this rule is not theme-scoped. The mix lands on #56585c there, 6.58:1 on the
+ * light panel — a step down from primary's 9.16:1 that stays well clear of the
+ * 4.5 a 12.5px title owes. Dark measures 10.33:1 against primary's 14.69:1.
+ *
+ * It applies to a SELECTED idle row too, and that is the point rather than an
+ * oversight: after the carve-out below, selection is carried by the fill and
+ * the ring, and live-vs-idle by the ink and the weight. Two orthogonal
+ * signals, neither borrowing the other's mechanism. */
+.nav-row:has(.mark.idle) .nav-row-title {
+  color: color-mix(in srgb, var(--text-primary) 52%, var(--text-secondary));
+  font-weight: 450;
 }
 
 /* Secondary, not tertiary, and for the reason written on `.mark.idle`: on the
@@ -577,6 +679,18 @@
 
 .mark.waiting {
   background: var(--text-warning);
+  /* 7px, which is the mockups' `.dot.amber`, drawn on the 8px box every mark
+   * keeps. `transform` and not `width`/`height` for `.mark.idle`'s reason
+   * verbatim: a mark that changed box size per state would shift the title
+   * beside it by whatever the difference was. 8 x 0.875 is exactly 7, and
+   * scaling about the centre leaves the dot on the 15px axis the row's mark
+   * gutter puts every other state on.
+   *
+   * The hue is NOT here. `--text-warning` is #f0b429 in dark already — the
+   * mockups' own amber, declared by #121 in `00-tokens.css` — so the fill and
+   * `.nav-row-needs`, which reads the same token, both landed with the token
+   * PR. What was left of this finding was the pixel. */
+  transform: scale(0.875);
 }
 
 /* The same teal the start button spends, so "something is happening here" is
@@ -594,26 +708,68 @@
   box-shadow: inset 0 0 0 0.125rem var(--accent);
 }
 
-/* Idle is an outline rather than a fill: an idle tree is the DEFAULT state and
- * a list of filled dots says everything is happening at once.
+/* Idle is a fleck: an idle session is the DEFAULT state of most of the list,
+ * and a column of dots all shouting equally is a column where the one amber
+ * dot that means "this is waiting on you" has to compete with eight
+ * neighbours.
  *
- * --text-secondary and NOT --text-tertiary, which is what this was written as
- * and what the arithmetic rejected. A non-text indicator owes 3:1, and against
- * the card tertiary measures **2.03:1 in light** and 2.87:1 in dark — under it
- * in both themes, which is the one direction a "subtle" choice is not allowed
- * to go. Secondary is 4.64:1 and 7.75:1. The other two marks were never in
- * doubt: warning is 5.11:1 / 11.25:1 and info 5.23:1 / 6.74:1. */
+ * THE SURFACE THIS RULE ARGUED AGAINST NO LONGER EXISTS, and that is what
+ * settles a decision three findings could not. The paragraph here used to
+ * read: "--text-secondary and NOT --text-tertiary ... against the card
+ * tertiary measures 2.03:1 in light and 2.87:1 in dark — under it in both
+ * themes." The card was `.navcard`'s #212429. #49 took the fill off the card
+ * and put it on the column, so the mark now sits on `--nav-fill`, which is the
+ * panel #181a1e — and re-measured there, `--text-tertiary` #606c7a is
+ * **3.26:1**. It clears the 3:1 this sheet holds a non-text indicator to. The
+ * value was never the problem; the surface under it moved.
+ *
+ * So the change is 8.70:1 -> 3.26:1, and the mark stops being as loud as the
+ * text beside it while staying legal.
+ *
+ * IN LIGHT IT IS NOT LEGAL — tertiary #a7b0b9 on the light panel #f4f6f7 is
+ * 2.03:1, exactly as the old paragraph computed, because light's quiet rungs
+ * sit close to a near-white panel by construction. There is no single
+ * declaration that can be quieter in dark and unchanged in light: every mix
+ * toward a surface dims in BOTH themes, and every mix toward the ink brightens
+ * in both. So light keeps `--text-secondary` (4.64:1) and dark takes the rung
+ * below, which is what all three findings asked for in their own words.
+ *
+ * THE OTHER TWO ANSWERS, and why not. #65 prescribes ONE `background` with
+ * three values, so two of them are written down here rather than shipped:
+ *
+ *   #4a525d, "the middle course, dark only"     2.20:1 on the panel
+ *   #31373f, the mockups' own `.dot.none`       1.45:1
+ *   var(--text-tertiary)                        3.26:1   <- shipped
+ *
+ * Both rejected candidates are hex literals that would need this same
+ * two-block theme scope to avoid wrecking light, so neither is cheaper; and
+ * both are under the floor the sheet argues for, which would make this an
+ * overrule rather than a fix. The third answer offered — draw no mark at all —
+ * costs more than it looks: `.mark` is what holds the row's 14px mark gutter
+ * open, so `display: none` would slide every idle title 14px left and make the
+ * list ragged in exactly the way the gutter exists to prevent.
+ *
+ * The mockups are quieter still at 1.45:1 and the `aria-label="idle"` the span
+ * carries is doing the accessible work either way. This stops at the floor
+ * rather than going under it, because a value that clears the sheet's own bar
+ * does not need anyone to overrule anything.
+ *
+ * `transform` and not `width`/`height`: a mark that changed box size per state
+ * would shift every title 1.5px depending on what the agent was doing. 8 x
+ * 0.625 is exactly the mockups' 5px. */
 .mark.idle {
-  /* A FLECK, not a ring. `.dot.none{background:#31373f;width:5px;height:5px}` —
-   * idle is the default state of most of the list and the mockups make it the
-   * smallest, quietest thing on the row. This shipped as a 1px outline ring,
-   * which is now what `running` means.
-   *
-   * `transform` and not `width`/`height`: a mark that changed box size per state
-   * would shift every title 1.5px depending on what the agent was doing. 8 x
-   * 0.625 is exactly the mockup's 5. */
   background: var(--text-secondary);
   box-shadow: none;
   transform: scale(0.625);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .mark.idle {
+    background: var(--text-tertiary);
+  }
+}
+
+:root[data-theme="dark"] .mark.idle {
+  background: var(--text-tertiary);
 }
 
