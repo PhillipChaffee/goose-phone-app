@@ -275,18 +275,45 @@
    * `cs.color` and `cs.opacity`, and a mask sets neither.
    *
    * So the gradient is a LENGTH and the scroller pads by the same length: the
-   * fade always lands on the padding, never on a row. 24px at that 542px
-   * scroller is 95.6%, under four points off the mockups' 92 and visually the
-   * same ramp. Both figures are re-measured on the shipping window: this read
-   * 500px and 95.2% while it was written against the 820pt window the app
-   * opened at before the re-scale, and the conclusion is the one it always
-   * was. The three declarations below carry ONE number, and
+   * fade always lands on the padding, never on a row.
+   *
+   * AND 47px IS THAT LENGTH, WHERE IT WAS 24. The old paragraph argued the
+   * number from where the fade STARTS — "24px at that 542px scroller is 95.6%,
+   * under four points off the mockups' 92" — and that is true and is not what
+   * a reader sees. What is visible is the ramp's LENGTH, and the mockups' is
+   * 52.4px: their `.list` is 655px tall and masks `#000 92%`, so 8% of it is
+   * ramp. This one's was 24px on a scroller of the same order — a hard little
+   * dissolve half a row deep where theirs dissolves a whole row.
+   *
+   * 47 is that 8% evaluated on THIS window rather than on theirs. Measured on
+   * the captured `desktop-chats` at the 1440x860 `src/main.rs` opens:
+   * `.nav-sessions` is **588px**, and 8% of 588 is 47.04. At 47 the fade
+   * starts at 92.01% against the mockups' 92.00 — 0.01 of a point — where 46
+   * gives 92.18 and 48 gives 91.84.
+   *
+   * Two derivations, and they agree, which is the reason to trust it: 47px is
+   * also 0.92 of a row's 51px pitch, against the mockups' 52.4 over 50.34 =
+   * 1.04 rows. Both readings said "about one row" and the shipped 24 was 0.47
+   * of one on either.
+   *
+   * IT COSTS 23px MORE OF SCROLLER, which is the whole trade. The padding is
+   * inside the scroller, so a full list is 23px further to scroll and a short
+   * one has 23px more air above the footer; nothing is unreachable either way.
+   * At the audit's smallest window, 480x560 with the library expanded, the
+   * scroller is 156px and 47 of it is padding — still two rows live, and the
+   * geometry walk reports Clean there.
+   *
+   * The 542px this paragraph used to quote is twice stale: #54 gave the column
+   * 18px back when the band came down to 34, and #68 gave it 8 more when the
+   * search field came off `.field`'s 40px default. Re-measure before quoting.
+   *
+   * The three declarations below carry ONE number, and
    * `the_sidebar_fade_lands_on_the_padding_it_is_measured_from` in
-   * `src/css.rs` holds them equal — a test this comment claimed for as long
-   * as there was none. */
-  padding-bottom: 24px;
-  -webkit-mask-image: linear-gradient(#000 calc(100% - 24px), transparent);
-  mask-image: linear-gradient(#000 calc(100% - 24px), transparent);
+   * `src/css.rs` holds them equal by reading all three out of this file —
+   * change one and it goes red, which is the point. */
+  padding-bottom: 47px;
+  -webkit-mask-image: linear-gradient(#000 calc(100% - 47px), transparent);
+  mask-image: linear-gradient(#000 calc(100% - 47px), transparent);
 }
 
 .nav-sessions-empty {
