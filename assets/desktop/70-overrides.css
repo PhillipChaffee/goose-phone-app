@@ -263,6 +263,60 @@
   padding-right: 80px;
 }
 
+/* THE TWO FILLS INSIDE A ROW THAT THE SURFACE RAMP LEFT WITH NO EDGE.
+ *
+ * `assets/shared.css:1673` and `:1738` paint `.session-tile` and
+ * `.session-quote` with `--bg-secondary` and nothing else — no border, no
+ * shadow — and on a phone that is enough: the token is #3f434b there against a
+ * #22252a row, 1.55:1, twenty-nine RGB units of separation. `00-tokens.css`
+ * remaps `--bg-secondary` to `--surface-raise` #24282e on this shell and the
+ * row it sits on is the canvas #1e2126: SIX units apart, 1.09:1. A card the
+ * same colour as the page with no edge is not a card, and the tile is the mark
+ * a reader scans the list by.
+ *
+ * The remap's own comment argues its case about CONTROLS — "a card you can see
+ * the edge of, but a button that is gone" — and it is right about them.
+ * `.btn.secondary`, `.icon-btn.action`, `.composer-chip`, `.attach-chip` and
+ * `.sheet-search` all land at 1.05–1.09:1 on this shell too and every one of
+ * them already carries a 1px border. These two are the pair that got the fill
+ * and not the hairline, because nothing in `assets/desktop/` was looking at
+ * them at all: `.session-quote`'s only other desktop rule is the clip fix in
+ * `80-measure.css`, which says nothing about its colour.
+ *
+ * `--border-primary`, which is what `.insp-chip` — the same #24282e fill, one
+ * column over — already spends: 1.18:1 dark, 1.15:1 light. One token draws
+ * both the row's edge and these, and that is not laziness, it is the
+ * arithmetic doing the tiering. The row's own edge is this token on the
+ * CANVAS — #2f343b on #1e2126 is 1.29:1 dark, #e3e6ea on #ffffff is 1.25:1
+ * light — and the fill under these two is nearer the line than the canvas is,
+ * so the same value reads quieter inside the row than around it, in both
+ * themes. Structure louder than detail, with no third rung.
+ *
+ * `--shell-line-soft` is the obvious answer and is the wrong one: #242830 on
+ * #24282e is 1.00:1, the identical collision #52 records against spending the
+ * soft rung on `.insp-chip`. A rung that erases the line is not a quieter
+ * line.
+ *
+ * OUTLINE AND NOT BORDER, and the reason is `80-measure.css`'s fourth line.
+ * That rule moves `.session-quote`'s bottom padding OUT of the clip by making
+ * it a 10px TRANSPARENT bottom border, so a `border` here overwrites it —
+ * measured against these sheets, the quote goes from 562x38 to 562x30 and a
+ * fourth line is sliced through its glyphs again. `box-shadow: inset` leaves
+ * that border alone and still does not work: an inner shadow is clipped to the
+ * PADDING box, so the ring stops 10px short and the quote is a box open along
+ * the bottom. An outline at -1px offset follows the border box and its radius,
+ * and costs no layout at all — both boxes measure the same to the pixel before
+ * and after. This file's `:focus-visible` note in the next section already
+ * records that WebKit and Chromium draw an outline along the existing corners.
+ *
+ * Unscoped, like the rest of this section: a phone binary does not contain
+ * this sheet, so there is nothing to scope away from. */
+.session-tile,
+.session-quote {
+  outline: 1px solid var(--border-primary);
+  outline-offset: -1px;
+}
+
 /* Always visible, never revealed.
  *
  * goose's own desktop app hover-reveals the actions on a session CARD in a
@@ -518,5 +572,67 @@
   margin: 0;
   font-size: var(--text-sm);
   line-height: var(--lh-sm);
+}
+
+/* ── 6. the accent, on the control that does the thing ──────────────────
+ *
+ * `assets/shared.css:906` paints every primary action `--bg-inverse` — black
+ * on light, near-white on dark — and on a phone that is the right answer: a
+ * phone screen holds one action, and inverting a surface is how it is pointed
+ * at. In a 1440x860 window it made the primary the brightest object on the
+ * page. Measured against these sheets before this rule, `desktop-settings`'s
+ * "Reconnect" is 316x40 = 12,640px² of #cbd1d6 at 10.48:1 on the canvas, more
+ * ink than the plane badge, and in light the same button is a solid #000000
+ * slab at 21.00:1. The other two inside the shell are the same paint:
+ * `desktop-scheduler-detail`'s "Watch it run" at 316x40 and
+ * `desktop-code-pulls`'s "Merge" at 61x32.
+ *
+ * The mockups spend the accent there and this shell already agrees with them
+ * everywhere else — `95-transcript.css:612` puts the conversation's send on
+ * `--accent-fill`/`--accent-ink`, and `40-home-chat.css:322` says of the home
+ * composer's that "an accent used on four things is a colour; used on one it
+ * is an instruction". `.btn.primary` was the one primary left out of that
+ * argument, so pressing send in a conversation and pressing Reconnect in
+ * Settings were the same act in two different colours in the same session.
+ *
+ * The two tokens are a pair composed for exactly this and both are measured
+ * where they are declared: #0c1a19 on #13bbaf is 7.44:1 dark, #ffffff on
+ * #0e7a73 is 5.19:1 light. `border-color` goes with the fill because
+ * `shared.css:892` gives `.btn` `border: 1px solid transparent` — without it
+ * the accent stops one pixel short of the button's own edge.
+ *
+ * `.app > .shell` AND NOT THE WHOLE SHEET, and that scope is load-bearing
+ * rather than tidiness. The accent tokens are declared on `.app > .shell`, and
+ * `.modal-backdrop` is a SIBLING of `.shell` under `.app` — so an unscoped
+ * rule would resolve `var(--accent-fill)` to nothing on the three permission
+ * modals in the captured store and paint their primary TRANSPARENT. Those
+ * buttons keep `--bg-inverse` here. They are outside the whole surface ramp,
+ * not just outside this rule — measured in `desktop-code-chat-confirm` dark,
+ * "Always allow" comes out #3f434b on #22252a, which is the phone's palette
+ * inside a desktop window — and that is a larger finding than this one rule.
+ *
+ * AND THE DISABLED COMPANION, WHICH IS THE HALF THAT BITES. `shared.css:951`
+ * is `.btn:disabled { opacity: 0.55 }` with no colour swap at all, so an
+ * accent primary and nothing else said is a 55% teal ghost: a control that
+ * still reads as the accent while doing nothing. `40-home-chat.css:328`
+ * already worked this out for the composer's own button and the same three
+ * values are restated here — the fill drops to `--bg-tertiary`, the edge to
+ * `--shell-line`, the label to `--text-secondary`, which is 5.15:1 dark and
+ * 4.01:1 light. The light figure is under the body bar and is inside
+ * `docs/audit.js`'s own written exemption: its text walk skips anything below
+ * 0.99 opacity, which every disabled control in this app is. Nothing would
+ * have caught the omission either — all three `.btn.primary` elements the
+ * store holds inside the shell are ENABLED, so no audit run has ever measured
+ * a disabled one. */
+.app > .shell .btn.primary {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--accent-ink);
+}
+
+.app > .shell .btn.primary:disabled {
+  background: var(--bg-tertiary);
+  border-color: var(--shell-line);
+  color: var(--text-secondary);
 }
 

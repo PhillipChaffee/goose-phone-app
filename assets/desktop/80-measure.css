@@ -329,7 +329,7 @@ body.away-from-bottom .pane-main .scroll-bottom {
   overflow: hidden;
 }
 
-/* ── 7. a preview is one line in a column this wide ─────────────────────
+/* ── 7. one line of title over one line of preview ──────────────────────
  *
  * A 1440x860 window has 3.5x the area of a 402x874 phone and its content
  * column has 1.6x the area of the phone's screen, and it showed the SAME
@@ -347,32 +347,52 @@ body.away-from-bottom .pane-main .scroll-bottom {
  * 1.6x the area. Every pixel of the extra width went into an already-short
  * title's line box; none of it bought a row.
  *
- * None of the three things setting that height was a desktop decision. Two of
- * them are LINE COUNTS chosen for a narrow column: `.session-title` clamps to
- * two and `.session-quote` to three, and a line here holds roughly twice what
- * a line there does — measured on the same fixture, the 250-character recipe
- * preview is 7 lines at the phone's 268pt of text width and exactly 3 at the
- * column's 538pt.
+ * Nothing in `assets/desktop/` had ever set that height, and the three things
+ * that did are all the phone's. Two of them are LINE COUNTS chosen for a
+ * narrow column — `.session-title` clamps to two and `.session-quote` to
+ * three — and a line here holds roughly twice what a line there does:
+ * measured on the same fixture, the 250-character recipe preview is 7 lines at
+ * the phone's 268pt of text width and exactly 3 at the column's 538pt. The
+ * third is the preview's own 10px inset, sized to frame a three-line block.
  *
  * THE MOCKUPS' ANSWER FOR THIS COLUMN IS ONE LINE EACH, and it is not a
- * paraphrase — `E-options/10-home-chat.html`'s `.crow` is the content
- * column's list row, and both `.crow .t` and `.crow .q` are
- * `white-space: nowrap; overflow: hidden; text-overflow: ellipsis`, with the
- * preview 3px under the title and no surface behind it. Rendered at the same
- * 1440x860, its `.main` measures x=268 w=828 — this pane exactly — and the row
- * in it is **64.6px on a 71.6px pitch** against our 177.3 on 185.3.
- *
- * So: one line each, and the preview gives up the slab it wore to be a quote
- * on a phone. A single clamped line inside a filled 12px-padded box reads as a
- * tag rather than as the last thing said, and the mockups' hierarchy does the
- * same work with type — the title is serif at --text-primary and the preview
- * is 12.5px at --text-secondary, one rung down, which is `.crow .q`'s own
- * arrangement.
+ * paraphrase — `E-options/10-home-chat.html`'s `.crow` IS the content column's
+ * list row, and both `.crow .t` and `.crow .q` are `white-space: nowrap;
+ * overflow: hidden; text-overflow: ellipsis`. Rendered at the same 1440x860,
+ * its `.main` measures x=268 w=828 — this pane exactly — and the row in it is
+ * **64.6px on a 71.6px pitch** against our 177.3 on 185.3.
  *
  * NOT A SMALLER FONT, which is the other way to fit more rows and the wrong
  * one: every size here is untouched and the type scale in
  * assets/desktop/00-tokens.css still owns them. What changes is how many lines
  * of that scale a row spends.
+ *
+ * AND THE SLAB STAYS, which is where this stops short of the mockup on
+ * purpose. `.crow .q` has no surface behind it; ours does, and `#223` gave
+ * that surface a hairline in `70-overrides.css` on the ground that the
+ * desktop's `--bg-secondary` remap had left it 1.09:1 against the row. That
+ * decision is a week newer than the mockup and it is not this rule's to
+ * reverse — the preview keeps its fill, its radius and its new edge, and only
+ * the INSET becomes the wide column's.
+ *
+ * 4px, and the number is read off the two things it sits between. On a phone
+ * the 10px frames a 60px three-line block, a quarter of the box; the same
+ * proportion around one 18px line is 3px. The desktop's own single-line fill
+ * on this exact rung is `.insp-chip` — `90-inspector.css:233`, `--surface-raise`
+ * with a `--border-primary` hairline, which is what `#223` cited when it chose
+ * this quote's edge — and that is 2px. 4 is the rounder of the two neighbours
+ * and leaves the preview reading as a block rather than as a chip.
+ *
+ * THE §7 MECHANISM IS UNCHANGED AND IS STILL LOAD-BEARING. This section was
+ * "the fourth line of a preview": WebKit clips `overflow: hidden` at the
+ * PADDING box, so a preview needing a fourth line painted it into the bottom
+ * padding and had it sliced through the middle of its glyphs, and the fix was
+ * to move the inset OUTSIDE the clip as a transparent bottom border, painted
+ * over by the element's own background. Only the number moves, 10 to 4. It has
+ * to stay a border rather than becoming padding for a second reason now:
+ * `70-overrides.css`'s hairline is an `outline` precisely because a `border`
+ * would overwrite this one, and that argument is written against this
+ * declaration.
  *
  * AND THE TILE IS UNTOUCHED, WHICH IS WHY THIS DOES NOT COLLIDE WITH #63.
  * `.session-tile` is a 40x40 box in assets/shared.css and #63 is about the
@@ -383,45 +403,39 @@ body.away-from-bottom .pane-main .scroll-bottom {
  * becoming the thing that does — which is where a row that also lost its meta
  * line would land, and that is #63's ground rather than this rule's.
  *
- * Measured after, same fixture and same cell, rows visible in the scroller at
- * the two ends of the window list `docs/audit.js` walks:
+ * Measured before and after, same fixtures and same cell, rows visible in the
+ * scroller at three of the nine windows `docs/audit.js` walks:
  *
- *              row height       480          1440         1600
- *   recipes    177.3 → 92.3   2.60 → 4.81  4.22 → 7.80  4.98 → 9.19
- *   skills     119.3 → 92.3   3.79 → 4.81  6.14 → 7.80  7.24 → 9.19
- *   extensions 120.0 → 93.0   3.30 → 4.18  5.64 → 7.15  6.73 → 8.53
- *   scheduler   71.3 → 71.3   6.08 → 6.08  9.86 → 9.86 11.63 →11.63
+ *              row height        480          1440         1600
+ *   recipes    177.3 → 107.3  2.60 → 4.18  4.22 → 6.78  4.98 → 8.00
+ *   skills     119.3 → 107.3  3.79 → 4.18  6.14 → 6.78  7.24 → 8.00
+ *   extensions 120.0 → 108.0  3.30 → 3.64  5.64 → 6.22  6.73 → 7.43
+ *   scheduler   71.3 →  71.3  6.08 → 6.08  9.86 → 9.86 11.63 →11.63
  *
  * Scheduler is unchanged at the reference window and that is correct: its rows
- * carry no preview, so there was no third line to spend. Where it DOES move is
- * the cells with a 328pt pane — 628, 704 and 972 — where its title used to
- * wrap to two lines and now does not: 93.3px to 71.3, and 6.14 rows to 7.84.
- * Code's pull list is unchanged at every cell for the same reason plus one
- * more: no preview, and a 32px `.pull-actions` row under the meta line.
+ * carry no preview and its titles are short, so there was never a second or a
+ * third line to spend. Where it DOES move is the cells with a 328pt pane —
+ * 628, 704 and 972 — where its title used to wrap to two lines and now does
+ * not: 93.3px to 71.3, and 6.14 rows to 7.84. Code's pull list is unchanged at
+ * every cell for the same reason plus one more: no preview, and a 32px
+ * `.pull-actions` row under the meta line.
  *
- * §7 USED TO BE "the fourth line of a preview", and that rule is retired here
- * rather than deleted quietly. It read `padding-bottom: 0; border-bottom: 10px
- * solid transparent` and existed because WebKit clips `overflow: hidden` at
- * the PADDING box, so a preview needing a fourth line painted it into the
- * bottom padding and had it sliced through the middle of its glyphs. A
- * one-line preview with no padding at all cannot have a fourth line and has no
- * padding to clip into, so the defect is structurally gone and the workaround
- * with it. The phone's copy of the rule was never touched and is not touched
- * now.
- *
- * Scoped to `.pane-main` because this is a statement about the CONTENT COLUMN.
- * The sidebar has a row of its own — `.nav-row`, 50px with a title, a say-line
- * and a mark, and `.nav-row-title` is already `nowrap` + ellipsis — and it is
- * that row this brings the content column's into line with. */
+ * Scoped to `.pane-main` because this is a statement about the CONTENT COLUMN,
+ * and the inset travels with the clamp rather than staying unscoped as §7 was:
+ * 4px is the number for ONE line, and it would be the wrong one anywhere a
+ * preview still ran to three. There is nowhere: all 12 `.session-quote`s in
+ * the 20 captured desktop states are inside this pane, because the sidebar has
+ * a row of its own — `.nav-row`, 50px with a title, a say-line and a mark,
+ * whose `.nav-row-title` is already `nowrap` plus an ellipsis. It is that row
+ * this brings the content column's into line with. */
 .pane-main .session-title {
   -webkit-line-clamp: 1;
 }
 
 .pane-main .session-quote {
   -webkit-line-clamp: 1;
-  margin-top: 3px;
-  padding: 0;
-  background: none;
+  padding: 4px 12px 0;
+  border-bottom: 4px solid transparent;
 }
 
 /* ── 8. dialogs that are not sheets ─────────────────────────────────────

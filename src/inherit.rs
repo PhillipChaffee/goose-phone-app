@@ -280,14 +280,14 @@ const UNDECIDED: &[&str] = &[
     "setting-row",
     "setting-value",
     "sheet-head",
-    // src/views/chrome.rs — the session tile (#63) and its parts. `.session-
-    // title` came off when `80-measure.css` §7 took the content column's list
-    // row down to one line of title and one of preview (#224); the tile's own
-    // 40x40 box is still nobody's decision, which is #63.
+    // src/views/chrome.rs — the session row's parts. `session-tile` came off
+    // this list in #223: `70-overrides.css` gives it and `.session-quote` the
+    // hairline the desktop's `--bg-secondary` remap left them without.
+    // `session-title` came off in #224, when `80-measure.css` §7 took the
+    // content column's row down to one line of title over one of preview.
     "attention",
     "session-age",
     "session-main",
-    "session-tile",
     "subtitle",
     // src/views/recipes.rs — the recipe chooser.
     "choice",
