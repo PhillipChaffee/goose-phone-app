@@ -42,6 +42,22 @@ GOOSE_PORT="${GOOSE_PORT:-3284}"
 CODE_PORT="${CODE_PORT:-4300}"
 REMOTE_WORKDIR="${REMOTE_WORKDIR:-/data/goose}"
 
+# THE TWO HALVES DO NOT HAVE TO LIVE ON THE SAME BOX, and today they usually do
+# not. `goose serve` is one systemd unit on the brain; the code-agent manager is
+# a container host that needs podman and two paid API keys, so a tailnet can
+# easily carry a real goose and no real code plane at all. The app already keeps
+# a separate URL and secret per plane, so point them wherever each one is:
+#
+#   CODE_URL=http://127.0.0.1:4399 CODE_PASSWORD_PLAIN=mock-code-secret \
+#     BRAIN_HOST=brain.tailnet.ts.net ./scripts/serve-real.sh
+#
+# `CODE_PASSWORD_PLAIN` exists ONLY for a mock whose password is a published
+# constant. Never pass a real credential through it — it would be visible in
+# your shell history and in `ps`. A real code plane's password comes from the
+# keychain like goose's does, which is what happens when you leave this unset.
+GOOSE_URL="${GOOSE_URL:-}"
+CODE_URL="${CODE_URL:-}"
+
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 note() { printf '  %s\n' "$1"; }
 
@@ -56,33 +72,54 @@ keyfetch() {
   security find-generic-password -s "$KEYCHAIN_SERVICE" -a "$1" -w 2>/dev/null
 }
 
+GOOSE_URL="${GOOSE_URL:-https://$BRAIN:$GOOSE_PORT}"
+CODE_URL="${CODE_URL:-https://$BRAIN:$CODE_PORT}"
+
 GOOSE_SECRET="$(keyfetch GOOSE_SERVER__SECRET_KEY)"
-CODE_SECRET="$(keyfetch OPENCODE_SERVER_PASSWORD)"
-
 [ -n "$GOOSE_SECRET" ] || die "GOOSE_SERVER__SECRET_KEY not in keychain service '$KEYCHAIN_SERVICE'"
-[ -n "$CODE_SECRET" ]  || die "OPENCODE_SERVER_PASSWORD not in keychain service '$KEYCHAIN_SERVICE'"
-note "secrets: both present (values not read)"
 
-# ---- 2. the certificate fingerprint ----------------------------------------
-# Not a secret — it is a hash of a certificate the server hands to anyone who
-# connects. Taken from the server's own startup line so it cannot drift from
-# the certificate actually in use.
+if [ -n "${CODE_PASSWORD_PLAIN:-}" ]; then
+  CODE_SECRET="$CODE_PASSWORD_PLAIN"
+  note "code password: taken from CODE_PASSWORD_PLAIN (use this for a mock only)"
+else
+  CODE_SECRET="$(keyfetch OPENCODE_SERVER_PASSWORD)"
+  [ -n "$CODE_SECRET" ] || die "OPENCODE_SERVER_PASSWORD not in keychain service '$KEYCHAIN_SERVICE'"
+fi
+note "secrets: present (values not read)"
+
+# ---- 2. the certificate pin, only if one is needed --------------------------
+# ASK THE CERTIFICATE, do not assume. A pin is needed when the certificate does
+# not chain to a public root, and that is a question with a one-command answer:
+# curl WITHOUT -k either completes the handshake or it does not.
+#
+# Guessing it wrong is expensive in both directions. Assume self-signed and you
+# go hunting for a `GOOSED_CERT_FINGERPRINT` line that a CA-issued deployment
+# never printed. Assume CA-issued and the client falls back to chain validation
+# and refuses to connect, with nothing on screen naming the certificate.
+#
+# Tailscale hands out real Let's Encrypt certificates for `*.ts.net`, so a goose
+# configured with them validates on its own port with no `tailscale serve` in
+# front of it — which is the case this branch exists to detect.
 FP="${GOOSE_DEV_FINGERPRINT:-}"
-if [ -z "$FP" ]; then
-  note "fetching the certificate fingerprint from $BRAIN"
+if [ -n "$FP" ]; then
+  note "fingerprint: supplied (${#FP} chars)"
+elif curl -sS -o /dev/null --max-time 10 "$GOOSE_URL/status" 2>/dev/null; then
+  note "certificate: chains to a public root — no pin needed"
+elif curl -sS -o /dev/null --max-time 10 -k "$GOOSE_URL/status" 2>/dev/null; then
+  note "certificate: self-signed — fetching the pin from $BRAIN"
   FP="$(tailscale ssh "agent@$BRAIN" \
         "journalctl -u goose-serve 2>/dev/null | grep -o 'GOOSED_CERT_FINGERPRINT=[A-Fa-f0-9:]*' | tail -1" \
         2>/dev/null | cut -d= -f2)"
-fi
-if [ -z "$FP" ]; then
-  printf 'warn: no fingerprint found.\n' >&2
-  printf '      If goose is fronted by `tailscale serve` its certificate is a real\n' >&2
-  printf '      one and no pin is needed — carry on. If goose holds its own TLS the\n' >&2
-  printf '      certificate is self-signed and the connection WILL be refused; get\n' >&2
-  printf '      the line yourself and re-run with GOOSE_DEV_FINGERPRINT=... :\n' >&2
-  printf '        tailscale ssh agent@%s "journalctl -u goose-serve | grep -i fingerprint"\n' "$BRAIN" >&2
+  [ -n "$FP" ] && note "fingerprint: found (${#FP} chars)" || {
+    printf 'warn: self-signed certificate and no GOOSED_CERT_FINGERPRINT in the log.\n' >&2
+    printf '      The client will refuse this certificate. Re-run with\n' >&2
+    printf '      GOOSE_DEV_FINGERPRINT=... once you have the line.\n' >&2
+  }
 else
-  note "fingerprint: found (${#FP} chars)"
+  printf 'warn: %s answered nothing at all, with or without certificate checks.\n' "$GOOSE_URL" >&2
+  printf '      Check the service before blaming the app:\n' >&2
+  printf '        tailscale ssh agent@%s "systemctl is-active goose-serve"\n' "$BRAIN" >&2
+  printf '      After a reboot the stack stays down until luks-unlock.sh runs.\n' >&2
 fi
 
 # ---- 3. clear the field ----------------------------------------------------
@@ -97,17 +134,17 @@ if pgrep -f "dx serve" >/dev/null 2>&1; then
 fi
 
 # ---- 4. serve --------------------------------------------------------------
-printf '\n  goose  https://%s:%s\n  code   https://%s:%s\n  cwd    %s\n\n' \
-  "$BRAIN" "$GOOSE_PORT" "$BRAIN" "$CODE_PORT" "$REMOTE_WORKDIR"
+printf '\n  goose  %s\n  code   %s\n  cwd    %s\n\n' \
+  "$GOOSE_URL" "$CODE_URL" "$REMOTE_WORKDIR"
 printf '  The app starts DISCONNECTED by design — press Save & Connect once.\n\n'
 
 cd "$(dirname "$0")/.." || die "cannot reach the repo root"
 
 exec env \
-  GOOSE_DEV_SERVER_URL="https://$BRAIN:$GOOSE_PORT" \
+  GOOSE_DEV_SERVER_URL="$GOOSE_URL" \
   GOOSE_DEV_SECRET_KEY="$GOOSE_SECRET" \
   GOOSE_DEV_FINGERPRINT="$FP" \
   GOOSE_DEV_WORKING_DIR="$REMOTE_WORKDIR" \
-  GOOSE_DEV_CODE_URL="https://$BRAIN:$CODE_PORT" \
+  GOOSE_DEV_CODE_URL="$CODE_URL" \
   GOOSE_DEV_CODE_PASSWORD="$CODE_SECRET" \
   dx serve --desktop
