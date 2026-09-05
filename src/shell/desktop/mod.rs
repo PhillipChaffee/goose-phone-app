@@ -1102,11 +1102,25 @@ pub(crate) fn AppShell() -> Element {
                     // It falls out of `on_home` rather than being its own
                     // condition, so the button and the pane cannot disagree
                     // about which screen is up.
+                    //
+                    // `go_root` AND NOT `go`, and the difference is the whole
+                    // of #197. `go` means "restore this destination's stack
+                    // where you left it" (`src/nav.rs`), which for Code is one
+                    // `tab.set(Tab::Code)` — and the condition above means this
+                    // button is only ever on screen where the tab is ALREADY
+                    // `Tab::Code`. So the press wrote `Tab::Code` over
+                    // `Tab::Code` and the conversation the reader was trying to
+                    // leave re-rendered: a control labelled "New code session"
+                    // that did nothing from the chat, the review screen and the
+                    // pull list alike, and from Settings reopened an old
+                    // session. The Chat half worked by accident — `CHATS.go`
+                    // has to name a screen because Chats and Settings share
+                    // `ctx.screen`, and the screen it names is the root.
                     if !on_home {
                         button {
                             class: "nav-new",
                             title: new_label(plane),
-                            onclick: move |_| (nav::primary(plane).go)(&ctx),
+                            onclick: move |_| (nav::primary(plane).go_root)(&ctx),
                             Icon { name: "plus" }
                             "{new_label(plane)}"
                         }
@@ -1808,6 +1822,49 @@ mod tests {
             "a plane segment no longer navigates to that half's own \
              destination, so the switch and the pane can disagree about which \
              half the window is in"
+        );
+    }
+
+    /// New MAKES ONE; it does not restore the one you had.
+    ///
+    /// The sidebar's two navigating controls press the two halves of
+    /// `src/nav.rs`'s pair and it matters which is which. The switch presses
+    /// `go`, because "show me the other half" has nothing to reset. This
+    /// presses `go_root`, because a control called "New code session" that
+    /// lands you back in an old one is worse than one that is missing.
+    ///
+    /// It shipped pressing `go`, and #197 is what that cost: `CODE.go` is one
+    /// `tab.set(Tab::Code)`, the button renders only when `on_home` is false,
+    /// and on the Code half that means the tab is already `Tab::Code` — so
+    /// every press from a code chat, the review screen or the pull list wrote
+    /// `Tab::Code` over `Tab::Code` and re-rendered the same screen. The Chat
+    /// half worked by accident, because `CHATS.go` shares `ctx.screen` with
+    /// Settings and so has to name a root on the way in.
+    ///
+    /// A source scan for `the_switch_navigates_rather_than_setting_a_mode`'s
+    /// reason, written out there: `AppShell` calls
+    /// `dioxus::desktop::window()` and cannot be mounted. What `go_root` DOES
+    /// is held on the table itself, by `opening_a_destination_lands_on_its_own_root`
+    /// in `src/nav.rs`, from a pushed screen; this is what says the button
+    /// reaches for it.
+    ///
+    /// Shown to fail: put `.go` back in that `onclick` and this goes red while
+    /// every other test in both files stays green — which is exactly the state
+    /// the shell shipped in.
+    #[test]
+    fn the_new_button_resets_the_half_rather_than_restoring_it() {
+        let card = nav_card();
+        assert!(
+            card.contains("(nav::primary(plane).go_root)(&ctx)"),
+            "the sidebar's New button no longer resets the half to its own \
+             root, so on the Code plane — where it only ever renders with the \
+             tab already `Tab::Code` — it writes the tab it is already on and \
+             does nothing at all"
+        );
+        assert!(
+            !card.contains("(nav::primary(plane).go)(&ctx)"),
+            "something in the sidebar still navigates with `go` where the \
+             plane is already the one on screen, which is the shape of #197"
         );
     }
 

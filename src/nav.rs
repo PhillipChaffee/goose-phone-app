@@ -13,6 +13,15 @@
 //!     and coming back lands you where you were.
 //!   - A destination is "here" only when its stack is at its root. From a
 //!     chat, Chats is somewhere to go *back* to, not where you are.
+//!
+//! WHICH IS WHY THERE ARE TWO WAYS IN, [`Destination::go`] and
+//! [`Destination::go_root`]. The first rule is the drawer's and the second is
+//! what a control called "New" means, and they are the same journey for
+//! exactly one row — Chats, which shares the Home screen signal with Settings
+//! and so has to name its root on the way in whether it wants to or not.
+//! Reading that coincidence as a general truth is what left the desktop
+//! sidebar's **New code session** button writing `Tab::Code` over `Tab::Code`
+//! and re-rendering the conversation the reader was trying to leave (#197).
 
 use dioxus::prelude::*;
 
@@ -354,6 +363,39 @@ pub(crate) struct Destination {
     /// sets the tab and nothing else, which is what keeps its back stack
     /// across a trip through the drawer.
     pub go: fn(&AppCtx),
+    /// Make this destination the one on screen AND pop whatever it had
+    /// pushed — the journey that ends where [`Destination::at_root`] is true,
+    /// from wherever it started.
+    ///
+    /// THE OTHER HALF OF `go`, and the two are deliberately not one function.
+    /// `go` restores; this resets. On Chats they are the same two writes,
+    /// because Chats shares the Home screen signal with Settings and so has to
+    /// name its root on the way in — and that coincidence is exactly what made
+    /// the desktop sidebar's **New code session** button look like it worked
+    /// when the same expression was used for both. `CODE.go` sets the tab and
+    /// nothing else, and the button only renders on a screen where the tab is
+    /// already `Tab::Code`, so the press wrote `Tab::Code` over `Tab::Code` and
+    /// the conversation the reader was trying to leave re-rendered (#197).
+    ///
+    /// A field on the row rather than a `match` over the two primaries beside
+    /// [`primary`]: which signal a destination's stack lives in is a fact about
+    /// the row, and a second place that knew it would be a second thing to keep
+    /// in step. `opening_a_destination_lands_on_its_own_root` holds every row
+    /// of it at once, from a pushed screen.
+    ///
+    /// NOT what the plane switch presses. That control is "show me the other
+    /// half", and a half you are already on has nothing to reset; it keeps
+    /// `go`, so crossing to Chat and back lands on the code session you left.
+    #[cfg_attr(
+        any(target_os = "ios", target_os = "android"),
+        expect(
+            dead_code,
+            reason = "the phone drawer navigates and never resets, so this is \
+                      the desktop shell's until the phone grows a New control \
+                      of its own"
+        )
+    )]
+    pub go_root: fn(&AppCtx),
     /// True only when this destination's own stack is at its root — which is
     /// what the drawer marks as active.
     pub at_root: fn(&AppCtx) -> bool,
@@ -431,6 +473,17 @@ const CHATS: Destination = Destination {
         tab.set(Tab::Home);
         screen.set(Screen::Sessions);
     },
+    // THE ONE ROW WHERE THE TWO ARE THE SAME WRITES, and the whole reason the
+    // pair had to be pulled apart: Chats shares `screen` with Settings, so
+    // `go` already has to name a screen, and the one it names is this root.
+    // Written out rather than aliased — a const cannot refer to itself, and
+    // `opening_a_destination_lands_on_its_own_root` is what holds the copies
+    // equal.
+    go_root: |ctx| {
+        let (mut tab, mut screen) = (ctx.tab, ctx.screen);
+        tab.set(Tab::Home);
+        screen.set(Screen::Sessions);
+    },
     at_root: |ctx| (ctx.tab)() == Tab::Home && (ctx.screen)() == Screen::Sessions,
     root: Some(|_| rsx! { views::sessions::SessionsView {} }),
     detail: |ctx| match (ctx.screen)() {
@@ -464,6 +517,13 @@ const CODE: Destination = Destination {
     go: |ctx| {
         let mut tab = ctx.tab;
         tab.set(Tab::Code);
+    },
+    // And here is what `go` deliberately does not do. The desktop's **New code
+    // session** button presses this; the plane switch presses `go`.
+    go_root: |ctx| {
+        let (mut tab, mut screen) = (ctx.tab, ctx.code_screen);
+        tab.set(Tab::Code);
+        screen.set(CodeScreen::List);
     },
     // Root only, the same reading Chats has always had: from a code chat
     // Code is where you came from. The drawer used to mark Code active
@@ -515,6 +575,11 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
             let mut tab = ctx.tab;
             tab.set(Tab::Recipes);
         },
+        go_root: |ctx| {
+            let (mut tab, mut screen) = (ctx.tab, ctx.recipes.screen);
+            tab.set(Tab::Recipes);
+            screen.set(crate::recipes::Screen::List);
+        },
         at_root: |ctx| {
             (ctx.tab)() == Tab::Recipes && (ctx.recipes.screen)() == crate::recipes::Screen::List
         },
@@ -548,6 +613,11 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
             let mut tab = ctx.tab;
             tab.set(Tab::Skills);
         },
+        go_root: |ctx| {
+            let (mut tab, mut screen) = (ctx.tab, ctx.skills.screen);
+            tab.set(Tab::Skills);
+            screen.set(crate::skills::Screen::List);
+        },
         at_root: |ctx| {
             (ctx.tab)() == Tab::Skills && (ctx.skills.screen)() == crate::skills::Screen::List
         },
@@ -580,6 +650,11 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         go: |ctx| {
             let mut tab = ctx.tab;
             tab.set(Tab::Scheduler);
+        },
+        go_root: |ctx| {
+            let (mut tab, mut screen) = (ctx.tab, ctx.scheduler.screen);
+            tab.set(Tab::Scheduler);
+            screen.set(crate::scheduler::Screen::List);
         },
         at_root: |ctx| {
             (ctx.tab)() == Tab::Scheduler
@@ -620,6 +695,11 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
             let mut tab = ctx.tab;
             tab.set(Tab::Extensions);
         },
+        go_root: |ctx| {
+            let (mut tab, mut screen) = (ctx.tab, ctx.extensions.screen);
+            tab.set(Tab::Extensions);
+            screen.set(crate::extensions::Screen::List);
+        },
         // Root only, the same reading Chats and Code have: from an
         // extension's detail screen, Extensions is where you came from.
         at_root: |ctx| {
@@ -650,6 +730,14 @@ pub(crate) const DESTINATIONS: &[Destination] = &[
         // comment. It configures both servers at once.
         plane: None,
         go: |ctx| {
+            let (mut tab, mut screen) = (ctx.tab, ctx.screen);
+            tab.set(Tab::Home);
+            screen.set(Screen::Settings);
+        },
+        // Nothing to pop: one screen, which is its own detail. The row where
+        // the pair is identical because there is no stack, rather than because
+        // of a shared signal.
+        go_root: |ctx| {
             let (mut tab, mut screen) = (ctx.tab, ctx.screen);
             tab.set(Tab::Home);
             screen.set(Screen::Settings);
@@ -1083,26 +1171,85 @@ mod tests {
         );
     }
 
-    /// The drawer's whole promise: tapping a row puts you on that row's root,
-    /// and the row then marks itself as where you are.
+    /// [`Destination::go_root`]'s whole promise: from ANY screen the
+    /// destination has pushed, it lands on that destination's root — and the
+    /// row then marks itself as where you are.
     ///
-    /// Every `go` in the table is a different amount of work — Chats and
-    /// Settings name a screen because they share the Home signal, the other
-    /// five only set a tab because they own their screen signal — and a row
-    /// that sets the wrong one lands somewhere and lights up nothing. Change
-    /// Code's `go` to `Tab::Home` and its answer here turns `false` while the
-    /// drawer would go on showing the chat list under a highlighted Code.
+    /// FROM A PUSHED SCREEN, which is the whole of what this test is worth and
+    /// is what it did not do. It ran `go` against a freshly seeded context, and
+    /// `render_seeded` starts every screen signal at its own root — so five of
+    /// the seven rows were asserted to arrive somewhere they had never left.
+    /// `code=true` in particular held while the desktop sidebar's **New code
+    /// session** button was a complete no-op (#197): `CODE.go` is one
+    /// `tab.set(Tab::Code)` and the button only renders where the tab is
+    /// already `Tab::Code`.
+    ///
+    /// Both facts, because the drawer's highlight and the pane's content are
+    /// two readings of one state and a row that satisfied only the first would
+    /// light up over the screen it failed to pop.
+    ///
+    /// Shown to fail: give any of the five rows that own their own screen
+    /// signal `go`'s body instead of `go_root`'s and that row reports
+    /// `false,true` — arrived, nothing popped. Settings is the one row whose
+    /// detail is unconditional; it has no stack, so `true,true` is its right
+    /// answer and its expectation says so.
     #[test]
     fn opening_a_destination_lands_on_its_own_root() {
         assert_eq!(
             ask(|ctx| per_destination(|dest| {
                 (dest.go)(ctx);
-                format!("{}={}", dest.id, (dest.at_root)(ctx))
+                push_detail(ctx, dest.id);
+                (dest.go_root)(ctx);
+                format!(
+                    "{}={},{}",
+                    dest.id,
+                    (dest.at_root)(ctx),
+                    (dest.detail)(ctx).is_some()
+                )
             })),
-            "chats=true | code=true | recipes=true | skills=true | \
+            "chats=true,false | code=true,false | recipes=true,false | \
+             skills=true,false | scheduler=true,false | \
+             extensions=true,false | settings=true,true",
+            "a destination reset to its root either does not report itself as \
+             where you are, or still has something pushed on it"
+        );
+    }
+
+    /// AND `go` IS STILL THE OTHER JOURNEY: it restores rather than resets, so
+    /// leaving a destination through the drawer and coming back lands you where
+    /// you were. The first rule this module's header states.
+    ///
+    /// The pair is why `go_root` is a second field rather than an edit to
+    /// `go`: making `go` pop would land the phone's drawer on the chat list
+    /// every time you tapped Chats from a chat, and would take the back stack
+    /// off all five of the rows that own a screen signal.
+    ///
+    /// Chats answers `false` and means it: it SHARES the Home screen signal
+    /// with Settings, so entering it has to name a screen and the one it names
+    /// is the root — there is no stack left to restore. That coincidence on
+    /// that one row is the whole reason #197 was invisible for as long as it
+    /// was. Settings answers `true` for the opposite reason: one screen, which
+    /// is its own detail, so there is nowhere else it could have been left.
+    ///
+    /// Shown to fail: give `CODE.go` a `code_screen.set(CodeScreen::List)` —
+    /// the cheap fix #197 offers and the one that would cost the phone its back
+    /// stack — and `code` turns `false` here while every other test stays green.
+    #[test]
+    fn coming_back_through_the_drawer_lands_where_you_left() {
+        assert_eq!(
+            ask(|ctx| per_destination(|dest| {
+                (dest.go)(ctx);
+                push_detail(ctx, dest.id);
+                // Out of the destination entirely, and back in the way the
+                // drawer does it.
+                (CHATS.go)(ctx);
+                (dest.go)(ctx);
+                format!("{}={}", dest.id, (dest.detail)(ctx).is_some())
+            })),
+            "chats=false | code=true | recipes=true | skills=true | \
              scheduler=true | extensions=true | settings=true",
-            "a destination the drawer opened does not report itself as where \
-             you are"
+            "a destination reopened from the drawer no longer shows the screen \
+             it was left on"
         );
     }
 

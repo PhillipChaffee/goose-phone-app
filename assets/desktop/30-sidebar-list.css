@@ -196,24 +196,88 @@
  * they are behind the disclosure — so that rule is overridden below and the
  * scrolling moves here. Two `flex: 1` scrollers in one card is two boxes
  * fighting over the same height, and the loser collapses to nothing. */
-/* `0 1 auto`, not `0 0 auto`: it takes only the height it needs, and gives
- * height back when there is not enough.
+/* THE SESSION LIST IS THE ONLY ROW OF THIS CARD THAT GIVES HEIGHT BACK, and
+ * this one is not. `0 0 auto` with a cap, where it was `0 1 auto`.
  *
- * It shipped as `0 0 auto` and the audit caught what that costs — with the
- * library expanded at 480x560 the card's content ran 22px past its box
- * (`SPILL div.navcard content leaves the box by 22px`, and `CLIPPED-Y
- * aside.navpane scroll=522 client=508`) across all nine states that had it
- * open. Four 48px rows that refuse to shrink is 192px the short window does
- * not have.
+ * The paragraph that used to be here claimed an ordering CSS does not have:
+ * "the session list below is `1 1 auto`, so it still absorbs surplus first and
+ * this only starts scrolling once the list is already at nothing". `flex-grow`
+ * decides who takes SURPLUS. Once the list is longer than the column there is
+ * never any surplus, only a deficit, and a deficit is distributed in proportion
+ * to `flex-shrink x flex-base-size` — so the two lost the same FRACTION of
+ * their content height, simultaneously, from the first pixel of overflow.
  *
- * The session list below is `1 1 auto`, so it still absorbs surplus first and
- * this only starts scrolling once the list is already at nothing — which is
- * the order the reader wants. Two scrollers in one card is not ideal and is
- * the price of the library and the list being separate components; the
- * alternative, one scroller over both, is a change in `mod.rs`'s structure
- * rather than in this sheet. */
+ * Measured against a real server's 50 conversations, on the captured
+ * `desktop-chat` (the one state with the library open), rendered against the
+ * sheets `docs/audit.js` links, dark, with its `.nav-row` cloned to N. The four
+ * library rows are 4 x 32px plus three 2px gaps = 134px of content:
+ *
+ *                        3 sessions        50 sessions
+ *   1600x1000            134.0             30.9
+ *   1440x860 (reference) 134.0             24.0   <- 0.75 of one 32px row
+ *   972x800              134.0             21.1
+ *   704x760              134.0             19.2
+ *   480x560               73.7              9.4   <- 0.29 of one row
+ *
+ * The disclosure announced `4` in `.nav-library-count` and opened onto three
+ * quarters of one row. Nothing spilled and nothing was clipped — `.navcard`
+ * measured `scrollHeight === clientHeight` in every cell — which is why the
+ * audit reports Clean over it and why every captured state missed it: the store
+ * holds 3 conversations, and it takes a list longer than the column to bite.
+ *
+ * `min-height: 0` is still here and is not the cause; it removes the automatic
+ * content floor, which is what let the shrink run past one row rather than
+ * stopping at it. With `flex-shrink: 0` there is nothing for that floor to
+ * hold back, and the declaration stays because it is also what makes an
+ * `overflow-y: auto` box scroll rather than stretch.
+ *
+ * IT IS THE MOCKUPS' SHAPE SAID IN FLEX. `.side` in 22-nav-disclosure.html is
+ * `grid-template-rows: auto auto minmax(0,1fr) auto auto` — every row fixed
+ * except the list — and `.side.v-lib` inserts the library as a fifth `auto`.
+ * The literal port is a grid on `.navcard`, which lives in
+ * `10-sidebar-frame.css` and is another lane's file; with every one of this
+ * card's other children already `0 0 auto`, this one declaration says the same
+ * thing about the same pixels from the row that was wrong.
+ *
+ * WHAT MAKES `0 0 auto` SAFE THIS TIME IS THE ROW HEIGHT, NOT THE CAP. It was
+ * tried before and reverted, and the audit was right to reject it: `SPILL
+ * div.navcard content leaves the box by 22px` at 480x560, because four
+ * `assets/shared.css` rows at 48px are 192px a 560pt window does not have.
+ * `.navcard .drawer-item` below has since taken those rows to 32px, so the same
+ * four are 134. Measured at the floor — `MIN_INNER` is 480x560, and 526 of
+ * `clientHeight` less this card's 12px top padding is a 514px content box —
+ * the six other children are all fixed and come to 313: 50 switch, 48 New,
+ * 43 disclosure, 40 search, 47 of `.nav-sessions` at its own `padding-bottom`,
+ * 85 footer. So the budget for this box is 201px, and the library rows measure:
+ *
+ *   4 rows  134   spill 0      <- today
+ *   5 rows  168   spill 0
+ *   6 rows  202   spill 9
+ *
+ * So the headroom is one more destination, and a seventh would arrive as
+ * `SPILL div.navcard` from `docs/audit.js` on the day it landed: 480x560 is in
+ * `DESKTOP_SIZES`, `nav open` is in `DESKTOP_SHELL`, and `desktop-chat` is a
+ * captured state with this disclosure open. That gate is what caught the first
+ * `0 0 auto`, and it is still the guard here.
+ *
+ * THE CAP IS THE BOUND, not the guarantee, and it is live rather than
+ * decorative. `max-height: 50%` resolves against the card's content box, so at
+ * the reference window it is 407px and at the floor 257 — measured by cloning
+ * the captured library to 24 rows, where the box stops at exactly those two
+ * numbers and scrolls the remaining 814px of content, and the card's spill is
+ * held at 64px rather than growing with the library. Half the column is also
+ * the rule a reader can hold: the thing you visit weekly may not take more room
+ * than the thing you scan every minute. A number tuned to leave 1px of slack
+ * against today's six siblings would be neither.
+ *
+ * The answer past that point is not a taller cap, it is a different element:
+ * `20-nav-overflow.html:314` floats the expanded library over the sidebar and
+ * the content column as `.libpop` — 302x280 at 112,53 — with the list beneath
+ * it unchanged. That is markup rather than a rule, so it belongs to whoever
+ * next finds this box too small. */
 .navcard .drawer-nav {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
+  max-height: 50%;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -299,9 +363,18 @@
    * IT COSTS 23px MORE OF SCROLLER, which is the whole trade. The padding is
    * inside the scroller, so a full list is 23px further to scroll and a short
    * one has 23px more air above the footer; nothing is unreachable either way.
-   * At the audit's smallest window, 480x560 with the library expanded, the
-   * scroller is 156px and 47 of it is padding — still two rows live, and the
-   * geometry walk reports Clean there.
+   * At the audit's smallest window, 480x560, the scroller is 240px with the
+   * library shut — 193 of it live, 3.8 rows at the 51px pitch — and 106px with
+   * it expanded, which is 59 live and 1.16 rows. The geometry walk reports
+   * Clean in both.
+   *
+   * That second figure was 156px until `.navcard .drawer-nav` above stopped
+   * being shrinkable, and it is the price of #206 stated in the row that pays
+   * it: at the shortest window this shell can be dragged to, opening the
+   * disclosure now costs the list all but one of its rows instead of taking
+   * three quarters of a row off the disclosure. It is the right way round —
+   * the reader has just asked for the library, the library is shut on every
+   * launch, and one is a whole row where 23px was not.
    *
    * The 542px this paragraph used to quote is twice stale: #54 gave the column
    * 18px back when the band came down to 34, and #68 gave it 8 more when the

@@ -535,7 +535,17 @@ pub(crate) fn Inspector(plane: Plane, on_subject: bool) -> Element {
     } else {
         (Vec::new(), 0)
     };
-    let meter = if plane == Plane::Chat {
+    // `on_subject`, LIKE THE FOUR ABOVE IT, and it was the one conversation-
+    // scoped block in this file that did not ask (#199).
+    //
+    // `ctx.usage` is written on a `usage_update` for the open session and
+    // cleared only by `open_session` and `new_session_with` — leaving a
+    // conversation is neither — so on the chat home the bar was the last
+    // conversation's. Not merely stale, either: `pump` gates usage updates on
+    // the session id you left, so a turn still streaming in it went on MOVING
+    // the bar under a screen that had nothing to do with it, which reads as a
+    // number tracking whatever you are looking at.
+    let meter = if on_subject && plane == Plane::Chat {
         context_meter(&ctx)
     } else {
         None
@@ -1305,6 +1315,49 @@ mod tests {
                  that keeps them out"
             );
         }
+    }
+
+    /// THE METER BELONGS TO A CONVERSATION, so on the half's home screen there
+    /// is none — and this is the render nobody did.
+    ///
+    /// Every test that touched the meter before this one either called
+    /// `context_meter` directly or rendered the column with `on_subject: true`,
+    /// so the one arrangement the defect lived in was never built: chat plane,
+    /// no subject, `ctx.usage` holding the conversation you walked out of. The
+    /// capture cannot see it either — `desktop-chats` in
+    /// `docs/gallery-states.json` carries no `.insp-meter` at all, because that
+    /// process reached the home screen without a `usage_update` ever arriving.
+    ///
+    /// Both halves, because suppressing the bar is only half the claim: the
+    /// same seed on an open conversation must still paint it, or the fix is a
+    /// meter nobody ever sees.
+    ///
+    /// REPRODUCED: drop `on_subject &&` from the `meter` binding and the first
+    /// assertion fails with `insp-meter` in the markup of a home screen.
+    #[test]
+    fn the_context_meter_is_absent_on_a_screen_with_no_conversation_on_it() {
+        let seed: fn(&crate::state::AppCtx) = |ctx| {
+            let mut usage = ctx.usage;
+            usage.set(Some((23_000, 1_000_000)));
+        };
+        let home = crate::testkit::render_settled(seed, || {
+            rsx! { Inspector { plane: Plane::Chat, on_subject: false } }
+        });
+        assert!(
+            !home.contains("insp-meter"),
+            "the chat home is drawing a context bar for the conversation the \
+             reader left, and `pump` goes on moving it while that turn streams: \
+             {home}"
+        );
+
+        let open = crate::testkit::render_settled(seed, || {
+            rsx! { Inspector { plane: Plane::Chat, on_subject: true } }
+        });
+        assert!(
+            open.contains("insp-meter"),
+            "the meter is gone from the screen it is FOR, so the guard is \
+             suppression rather than scoping: {open}"
+        );
     }
 
     /// With nothing connected and nothing open the column says so, rather than
