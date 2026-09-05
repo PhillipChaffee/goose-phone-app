@@ -163,6 +163,38 @@ pub(crate) const DUMP_PREFIX_DESKTOP: &str = "desktop-";
 #[cfg(any(target_os = "ios", target_os = "android"))]
 const _: () = assert!(DUMP_PREFIX.is_empty());
 
+/// The machine the reader is at, named as the reader would name it.
+///
+/// THE GENERAL ONE. Six shared sentences need this noun and they are spread
+/// over four files, three of which compose their copy a layer below the view
+/// that renders it — so it cannot live in a view. It started as
+/// `views::settings::tailscale_host`, which is #145's fix, and moved here whole
+/// when #161 turned up nine more sites for it.
+///
+/// TAKES THE SHELL, and deliberately does not read [`Shell::CURRENT`] itself.
+/// `cargo test` runs on a host, where `CURRENT` is always [`Shell::Desktop`],
+/// so a phone assertion against an ambient read would be an assertion about the
+/// desktop arm passing under a phone's name. The call site passes the `const`,
+/// so the choice is still made at compile time with no `cfg` and no branch in
+/// the binary, and `src/views/` keeps its zero `cfg(target_os)`.
+///
+/// "computer" and not "Mac": [`Shell::Desktop`] is every target that is not iOS
+/// or Android (see the top of this file), so naming the hardware would just be
+/// a different wrong answer on Linux and Windows.
+///
+/// Not every phone word is a device word, and this is not the answer to all of
+/// them. Three of #161's sites turned out to be claims about this CLIENT rather
+/// than about hardware — what can reach an OAuth consent screen, what a form
+/// can edit, where a secret is not stored — and the honest wording there drops
+/// the device instead of renaming it. `src/voice.rs` is the gate that asks the
+/// question; it does not answer it.
+pub(crate) const fn this_device(shell: Shell) -> &'static str {
+    match shell {
+        Shell::Mobile => "this phone",
+        Shell::Desktop => "this computer",
+    }
+}
+
 /// The tooltip on a destination button.
 ///
 /// `None` on the phone, where nothing hovers and the label is right there.
@@ -296,7 +328,9 @@ pub(crate) fn render_destination(ctx: &AppCtx, dest: &'static Destination) -> El
 mod tests {
     use dioxus::prelude::*;
 
-    use super::{nav_is_active, nav_tooltip, render_destination, Shell, DUMP_PREFIX_DESKTOP};
+    use super::{
+        nav_is_active, nav_tooltip, render_destination, this_device, Shell, DUMP_PREFIX_DESKTOP,
+    };
     use crate::nav::{primary, Plane};
     use crate::state::{AppCtx, Tab};
     use crate::views::press::{alone, Pressable};
@@ -395,6 +429,21 @@ mod tests {
             arrived.contains("class=\"drawer-item active\""),
             "the row navigated but did not take the pill with it: {arrived}"
         );
+    }
+
+    /// Both arms, in one process, which is the whole reason this is a function
+    /// of the enum rather than a `cfg` at the leaf: `cargo test` builds for the
+    /// host and the host is `Shell::Desktop`, so the phone's answer is the one
+    /// nothing else in this repo executes.
+    ///
+    /// The words are asserted rather than merely told apart. "computer" is a
+    /// decision — `Shell::Desktop` is every target that is not iOS or Android,
+    /// so "Mac" would be a different wrong answer on Linux — and a test that
+    /// only checked the two differ would go green on it.
+    #[test]
+    fn the_shared_views_name_the_machine_the_reader_is_actually_at() {
+        assert_eq!(this_device(Shell::Mobile), "this phone");
+        assert_eq!(this_device(Shell::Desktop), "this computer");
     }
 
     /// The phone's rule is `at_root` and only `at_root` — a destination one
