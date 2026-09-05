@@ -139,6 +139,40 @@
     width: var(--nav-w);
   }
 
+  /* AND A CLOSED SIDEBAR IS STILL CLOSED, which the rule above took away.
+   *
+   * The 627 tier one block up writes the same five declarations on a bare
+   * `.navpane` — (0,1,0) — so `10-sidebar-frame.css`'s
+   * `.shell[data-nav="closed"] .navpane { width: 0 }` at (0,3,0) beats it and
+   * the collapse works. This copy had to out-rank `90-inspector.css`, so it was
+   * written `.shell[data-insp="open"] .navpane` — also (0,3,0), and `10-` sorts
+   * first, so `var(--nav-w)` won the tie and a shut sidebar kept its 268px.
+   * `flex-basis: 0` could not rescue it: the box is out of flow, so `width` was
+   * the only declaration left that could collapse it. `border-right-width: 0`
+   * is a different property and still applied, so the panel lost its hairline
+   * too, and the shadow is scoped to `[data-nav="open"]` — leaving a
+   * borderless, shadowless slab of `--nav-fill` at 1.08:1 against the pane in
+   * BOTH themes, with `elementsFromPoint(134, 400)` returning `aside.navpane`
+   * topmost. A rectangle you cannot see, over a transcript you cannot click.
+   *
+   * Measured on `desktop-chat` under the sheet list `docs/audit.js` links, over
+   * 4 shell cells x 14 widths from 480 to 1600: the six widths in this band go
+   * from `nav 268, main 0..w` to `nav 0, main 0..w` in their nav-closed cells,
+   * and NOTHING else moves — 628, 703, 972, 1440 and 1600 are byte-identical,
+   * and every nav-open cell in the band is untouched.
+   *
+   * Two declarations and not one. `width` is what the rule above set and what
+   * has to be taken back; `box-shadow: none` is because the panel is still
+   * `position: absolute` here, and an absolutely-positioned box of zero width
+   * casts its shadow anyway — a 0-wide slab at x=0 with a 32px blur is a smudge
+   * down the left edge of the window, which is the same class of stray mark. It
+   * is inert today, since the shadow above is scoped to `[data-nav="open"]`,
+   * and it is written down so that widening that scope cannot resurrect it. */
+  .shell[data-insp="open"][data-nav="closed"] .navpane {
+    width: 0;
+    box-shadow: none;
+  }
+
   .shell[data-insp="open"][data-nav="open"] .navpane {
     box-shadow: 0 8px 32px rgb(0 0 0 / 24%);
   }
