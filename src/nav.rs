@@ -221,6 +221,15 @@ impl Plane {
     /// already carry: the segment IS those destinations' plane, and a switch
     /// that used a third pair of glyphs would be naming the same two things
     /// twice in two alphabets.
+    ///
+    /// Code's is `git-branch` and not `code`, which was `</>` — #130. The
+    /// mockups name this half in three places (the segment, the band's badge,
+    /// the branch chip) and put the same three-node branch mark on all three,
+    /// so which half is open is recognisable without reading; `src/icons.rs`
+    /// has drawn exactly that mark since #171. Angle brackets say "source
+    /// code", which is not what this plane is: it is a working tree with
+    /// branches, and the phone has been saying so with this same glyph on its
+    /// base-branch pill (`src/views/code.rs`) the whole time.
     #[cfg_attr(
         any(target_os = "ios", target_os = "android"),
         expect(
@@ -233,7 +242,7 @@ impl Plane {
     pub(crate) const fn icon(self) -> &'static str {
         match self {
             Self::Chat => "message",
-            Self::Code => "code",
+            Self::Code => "git-branch",
         }
     }
 }
@@ -509,7 +518,11 @@ const CHATS: Destination = Destination {
 const CODE: Destination = Destination {
     id: "code",
     label: "Code",
-    icon: "code",
+    // Moved with [`Plane::icon`] and for its reasons (#130), because
+    // `the_switch_wears_the_glyphs_of_the_destinations_it_opens` holds the
+    // two equal — one mark for this half wherever it is named, which is what
+    // the row, the segment, the band's badge and the empty column all draw.
+    icon: "git-branch",
     group: Group::Work,
     plane: Some(Plane::Code),
     // Nothing to name: Code owns `code_screen` outright, so it is left

@@ -83,6 +83,21 @@
    * at 32px rather than sized by their text. */
   display: inline-flex;
   align-items: center;
+  /* THE GLYPH'S OWN SEPARATION, and the only thing this chip has two of.
+   *
+   * `display: inline-flex; align-items: center` was declared here for a chip
+   * with exactly one child in it — a text node — so the arrangement was right
+   * and did nothing. Since #130 the span holds `Icon { name: plane.icon() }`
+   * as well, and two flex items with no gap are a mark touching a letter: the
+   * mockups' own rule is `.plane-badge{display:inline-flex;align-items:center;
+   * gap:5px}` and that 5px exists for this and for nothing else.
+   *
+   * 5px verbatim rather than the ladder's 4 or 6: the mark is 13px against a
+   * 10px word, so the gap is the whole of what keeps the branch's right-hand
+   * node off the C. Measured at 1440x860, the chip goes 48.22x19 → 66.22x19
+   * with the glyph and this gap in it, against the mockups' 61.89x18.50 — the
+   * 4px is `letter-spacing: 0.09em` on a 4-letter word, which they also set. */
+  gap: 5px;
   /* 19px AND A DERIVED MARGIN, where this was a 32px box pinned like the rest.
    *
    * Measured before: box 130,0 48.22x32 — a solid accent slab twice the height
@@ -129,6 +144,23 @@
   letter-spacing: 0.09em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+/* THE MARK IS NOT SET AT THE LABEL'S SIZE, which is the one place the usual
+ * idiom cannot be used. Everywhere else in this band the glyph's box comes
+ * from `font-size: var(--icon-md)` on the BUTTON — `.nav-toggle` and
+ * `.insp-toggle` both do it, and `.icon { width: 1em }` in shared.css turns
+ * that into 13px — because those controls hold nothing but a glyph. This chip
+ * holds a word too, and that word is deliberately 10px (`--text-3xs`, "the
+ * element it was added for" three declarations up), so sizing the glyph from
+ * the parent would draw a 10px branch mark: 23% under the 13px svg the mockups
+ * put in this exact chip, and under `--icon-md`'s own floor.
+ *
+ * So the token is read on the glyph itself, where its `1em` resolves against
+ * this rule instead. Same value, same token, one element lower — and it makes
+ * `--icon-md` an eighth user, which 00-tokens.css's inventory now records. */
+.plane-badge > .icon {
+  font-size: var(--icon-md);
 }
 
 /* THE MID CELL'S OWN LEFT EDGE, derived from the band's constants and not
