@@ -335,15 +335,70 @@
  *
  * One line and never more, which is `.chip-row`'s rule in assets/shared.css and
  * its reason: a composer that grows a row under the pointer is worse than a
- * value you can read in full by widening the window. It shrinks and scrolls
- * rather than wrapping, and the button beside it never moves. */
+ * value you can read in full, and the button beside it never moves.
+ *
+ * THIS RULE USED TO CLAIM `.chip-row`'s SHAPE AND NOT HAVE IT, and all three
+ * claims it made were false. It was `overflow: hidden` over children that are
+ * `flex: 0 0 auto; white-space: nowrap`, so nothing shrank, nothing scrolled,
+ * and — because the content column stops growing at `--measure` — widening the
+ * window did not help either: `.home-chips` is 650px wide at 1440 AND at 1600.
+ * What the reader got was a hard cut at the container's edge, mid-glyph, with
+ * nothing on screen to say text had been removed.
+ *
+ * Measured against the captured `desktop-chats` with the four chips
+ * `compose_chips` builds on the owner's real server (a 32-character model
+ * reference, a tailnet host, `19 extensions`, `1.0M context`), rendered
+ * against the sheet list `docs/audit.js` links, at all nine `DESKTOP_SIZES`:
+ * the row wanted 652.4px at every one of them. It got 650 at the 1440x860
+ * window `src/main.rs` opens — 2.4px short, which is exactly the final `t` of
+ * `1.0M context` and exactly the owner's screenshot — and 266px at the three
+ * sizes where both the sidebar and the inspector are up, where 386px of it was
+ * simply gone.
+ *
+ * Three declarations, and they are one fix in three parts.
+ *
+ * `gap: 0` IS WHAT MAKES THE REFERENCE WINDOW FIT. The separator between two
+ * chips is drawn by `.home-chip + .home-chip::before` below, which carries
+ * `margin: 0 6px` — 12px of its own. The 6px flex gap was a second helping of
+ * the same space, so consecutive chips stood 18px plus a glyph apart where the
+ * mockups' `.mini` puts one middot in the text flow. Taking it back is 18px
+ * across three separators: the row comes down from 652.4 to 634.4 and the
+ * owner's four facts fit the window the app opens. Measured after: `scrollWidth
+ * - clientWidth` at 1440x860 is 0 where it was 2, and the last chip's ink stops
+ * 1.6px before the fade zone starts. That 1.6px is the whole margin and it is
+ * stated rather than rounded up — a model reference a character or two longer
+ * puts the row back over, and the fade below is what that is for.
+ *
+ * THE SCROLLER IS `.chip-row`'s, VERBATIM — `overflow-x: auto`, `overflow-y:
+ * hidden`, and the bar suppressed in both dialects. It is a valve rather than a
+ * layout, in the words that rule uses for itself: four facts do not fit a 266px
+ * column at any type size, so the question there is not how to lay them out but
+ * whether they are reachable at all. Scrolled, they are; clipped, they were
+ * destroyed.
+ *
+ * AND THE FADE IS THE PART THAT SAYS SO. A hidden scrollbar with no fade is
+ * the same invisible content one layer down. `padding-right` and the mask
+ * carry ONE number, which is `.nav-sessions`' trick in `30-sidebar-list.css`
+ * turned on its side: the padding is inside the scrollable box, so when the
+ * chips fit, the last one ends at least that far from the trailing edge and
+ * the gradient fades nothing but padding. When they do not, the same gradient
+ * lands on the cut glyph — a conditional fade with no condition in it. */
 .home-chips {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
-  overflow: hidden;
+  gap: 0;
+  padding-right: 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent);
+}
+
+.home-chips::-webkit-scrollbar {
+  display: none;
 }
 
 /* A FACT, not a control. The mockups draw two visual classes in this row and
