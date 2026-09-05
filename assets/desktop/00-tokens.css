@@ -537,11 +537,16 @@
    * inventory the old comment carried is corrected with it, having gone stale
    * twice over: `.conn-badge` does NOT read this token — `50-band.css` pins its
    * own 24px height and its glyph measures 11.5px — and three more DO. The
-   * seven users, all of them: `.nav-toggle` (`50-band.css`), `.insp-toggle`
+   * eight users, all of them: `.nav-toggle` (`50-band.css`), `.insp-toggle`
    * (`90-inspector.css`), `.row-action` (`70-overrides.css`), and shared.css's
    * `.icon-btn`, `.send`, `.scroll-bottom` and `.session-tile`. Everything else
    * is `1em` and already scales with its label. `.swipe-action .icon` reads it
    * too and is not counted: there is no swipe tray at any width in this shell.
+   *
+   * The eighth is `.plane-badge > .icon` (#130), and it is the one that reads
+   * this token on the GLYPH rather than on the control around it, because that
+   * chip's own font-size is the 10px floor its label is set in. `50-band.css`
+   * has the whole argument beside the rule.
    *
    * --icon-lg IS STILL NOT TOUCHED, but not for the reason written here
    * before. That reason — "its users are 44px circles whose glyph is meant to

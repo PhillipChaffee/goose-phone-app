@@ -924,7 +924,21 @@ pub(crate) fn AppShell() -> Element {
                 // own below the two-column width. The band is the one strip
                 // that is present at every width and in every state, which is
                 // the same argument that put the connection badge here.
-                span { class: "plane-badge", "{plane.label()}" }
+                //
+                // AND IT SAYS IT WITH THE GLYPH TOO, which is #130's other
+                // half. This shipped as a bare word in all 13 captured
+                // `desktop-` states while the switch six lines of markup away
+                // drew `Icon { name: half.icon() }` beside its own — so the
+                // one strip that is always on screen was the one place the
+                // half was named in words only, and the mockups put the mark
+                // in all three places they name it. No new class: `Icon`
+                // renders `class="icon"`, which
+                // `every_class_the_desktop_shell_renders_is_in_the_captured_store`
+                // already has.
+                span { class: "plane-badge",
+                    Icon { name: plane.icon() }
+                    "{plane.label()}"
+                }
 
                 {
                     let crumb = crumb_parts(
@@ -2305,6 +2319,75 @@ mod tests {
             "the band no longer passes the sidebar's state to `crumb_parts`, \
              so a shut sidebar takes the half's counts off screen with it and \
              nothing puts them back"
+        );
+    }
+
+    /// THE BADGE WEARS THE HALF'S GLYPH, and for thirteen captured states it
+    /// wore nothing — #130.
+    ///
+    /// `docs/gallery-states.json` has `<span class="plane-badge">Chat</span>`
+    /// with zero child nodes in every `desktop-` key, against the mockups'
+    /// `<span class="plane-badge"><svg …/> Chat</span>`. The switch six lines
+    /// of markup away has drawn `Icon { name: half.icon() }` beside its own
+    /// label since it was written, so the one strip that is on screen at every
+    /// width and in every state was the only place this app named a half in
+    /// words alone.
+    ///
+    /// NOTHING ELSE IN THE REPO CAN SEE IT, which is why this is here rather
+    /// than left to the audit. `Icon` renders `class="icon"`, a class the
+    /// store already holds, so
+    /// `every_class_the_desktop_shell_renders_is_in_the_captured_store` is
+    /// silent; `docs/audit.js` renders the STORE, and the store is the
+    /// photograph that predates the glyph — it would report Clean over a badge
+    /// with no mark in it and over the two declarations below as no-ops. That
+    /// was measured, and it is what stopped the last attempt at this issue.
+    ///
+    /// BOTH DECLARATIONS, because each alone is a defect the other hides.
+    /// Without `.plane-badge > .icon` the mark is `1em` of the badge's own
+    /// font-size — 10px, the floor rung the LABEL is set in, against the
+    /// mockups' 13px svg. Without the `gap` the two flex items touch: measured
+    /// at 1440x860 against the real sheet list, the chip goes 48.22x19 →
+    /// 66.22x19 with the glyph, a 13x13 mark at 8px in from its leading edge.
+    ///
+    /// REPRODUCED: drop the `Icon` line and the first assertion fails; drop
+    /// either declaration from `assets/desktop/50-band.css` and the matching
+    /// one does.
+    #[test]
+    fn the_bands_badge_wears_its_halfs_glyph() {
+        let band = chrome_band();
+        // Bounded to the span, not asked of the band: `Icon { … }` appears
+        // three times in this bar and a file-wide `contains` would be answered
+        // by the nav toggle's.
+        let badge = block(&band, "span { class: \"plane-badge\",", "crumb_parts(");
+        assert!(
+            badge.contains("Icon { name: plane.icon() }"),
+            "the window's bar names its half in words alone, so the one strip \
+             that is present at every width says nothing a reader can \
+             recognise without reading it: {badge}"
+        );
+
+        // COMMENTS OUT FIRST, and this is not tidiness — it is the difference
+        // between a check and a tautology. Both declarations are ARGUED FOR in
+        // prose beside themselves, and one of those comments quotes the
+        // mockups' own `.plane-badge{…;gap:5px}` verbatim, so a `contains`
+        // over the raw sheet is answered by the paragraph explaining the rule
+        // rather than by the rule. Measured: delete both declarations and this
+        // test still passed until this line went in. `crate::css` keeps the
+        // stripper for exactly this class of mistake.
+        let sheet = crate::css::without_comments(crate::css::SHELL);
+        assert!(
+            sheet.contains(".plane-badge > .icon"),
+            "assets/desktop/ never sizes the badge's glyph, so it draws at the \
+             10px floor its label is set in rather than the mockups' 13px"
+        );
+        let rule = sheet
+            .split_once("\n.plane-badge {")
+            .and_then(|(_, rest)| rest.split_once("\n}"))
+            .map_or("", |(body, _)| body);
+        assert!(
+            rule.contains("gap:"),
+            "`.plane-badge` is a flex box with two items in it and no gap, so \
+             the branch mark touches the C of CODE: {rule}"
         );
     }
 
