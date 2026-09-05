@@ -161,6 +161,64 @@
   margin-bottom: 0.625rem;
 }
 
+/* ── the transcript's disclosure marks, all three of them ────────────────
+ *
+ * ONE GLYPH AT ONE SIZE, and it is a filled triangle rather than an angle
+ * quote. #132.
+ *
+ * Measured at 1440x860 against this sheet list, dark, on `desktop-chat` and
+ * `desktop-chat-confirm` — the store carries an open `.thought`, an open
+ * `.tool-run` and both an open and a closed `.tool-output` since #247, so
+ * every one of these is a real captured element rather than injected markup:
+ *
+ * | mark                              | was            | mockup            |
+ * |-----------------------------------|----------------|-------------------|
+ * | `.thought > summary::before`      | `›` 12.5px     | `▸` 12px (`.think .chev`) |
+ * | `.tool-output > summary::before`  | `›` 15px       | `▸` 12px          |
+ * | `.tool-run > summary::after`      | `›` 15px       | `▸` 12px          |
+ *
+ * The two 15px marks are shared.css's `--text-md`, which resolves to 15px in
+ * this pane and is the size this shell sets PROSE in: the hint that a section
+ * opens was drawn a quarter larger than the word it labels (`summary` is
+ * `--text-xs`, 11.5px) and in the same ink, so it read as content rather than
+ * as furniture. That is the whole of #132's symptom.
+ *
+ * `--text-xs` AND NOT A LITERAL 12px. The ladder in `00-tokens.css` is closed
+ * and its two rungs either side of the mockups' 12 are 11.5 and 12.5 — equally
+ * far from it, so the tie is broken by what the mark is FOR: at 11.5 it is its
+ * own label's size and cannot outshout it, which is the sentence above stated
+ * as a number. It takes `.thought`'s mark down 12.5 → 11.5 as well, so the
+ * three are one mark; a scroll that answered the same question with a 12.5px
+ * triangle here and an 11.5px one two rows down would be a worse outcome than
+ * the one this fixes.
+ *
+ * THE INK IS DELIBERATELY NOT MATCHED, and #132's own Fix says so. The
+ * mockups' #4d5661 and #5b646f are 1.6-2.2:1 on their surfaces; this glyph is
+ * the only indication that the section opens and the only indication of its
+ * state, so it is a non-text indicator and owes 3:1. `--text-secondary`
+ * measures 6.17:1 (dark) and 5.02:1 (light) on the thought's chip and 5.66:1 /
+ * 4.64:1 on the tool card. Matching the picture here would mean knowingly
+ * shipping a sub-3:1 disclosure mark.
+ *
+ * `width` IS NOT TOUCHED, which is where this departs from the issue's Fix as
+ * written. That asked for `width: auto` on the tool card's mark too, and the
+ * 2.375rem gutter three hundred lines down is load-bearing: it is the third
+ * rung that puts "Output" under the card's own title, and its note explains
+ * why the mark stays CENTRED in that column (shared.css rotates it 90deg about
+ * the box's centre when the section opens). `.thought` keeps the `width: auto`
+ * it already had.
+ *
+ * A DESKTOP DECISION, not a shared one. The declaration this overrides is
+ * `assets/shared.css:2049` — a frozen sheet both shells link — and #132 is a
+ * measured diff against the desktop mockups only. The phone keeps `›` until
+ * somebody measures the phone. */
+.pane-main .scroll.chat > .thought > summary::before,
+.pane-main .scroll.chat .tool > .tool-output > summary::before,
+.pane-main .scroll.chat > .tool-run > summary::after {
+  content: "\25b8";
+  font-size: var(--text-xs);
+}
+
 /* THE SOFT SIDE OF THE TIER. 22 gives `.think` and `.out` the same
  * rgb(36,40,48) it gives `.tool`, and reserves the stronger line for what the
  * reader wrote. See the note over `.bubble-text` for the whole argument; this
@@ -179,9 +237,11 @@
   line-height: var(--lh-xs);
 }
 
+/* The size moved up to the block that sets all three marks (#132); what is
+ * left here is the one thing that is this mark's alone — no gutter, because
+ * the thought is a chip with nothing above it to line a column up with. */
 .pane-main .scroll.chat > .thought > summary::before {
   width: auto;
-  font-size: var(--text-sm);
 }
 
 .pane-main .scroll.chat > .thought > .md {
