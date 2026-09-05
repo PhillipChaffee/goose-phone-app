@@ -723,6 +723,55 @@ mod tests {
         }
     }
 
+    /// THE PANE HEADER DOES NOT OUTRANK THE SIDEBAR, because for a while it
+    /// did and that made the app's only cross-plane control unclickable.
+    ///
+    /// `assets/main.css` gives `.topbar` `position: absolute` and
+    /// `z-index: var(--z-chrome)` so it can float over the phone's scroller.
+    /// `70-overrides.css` puts it back in flow for the desktop — and taking
+    /// the positioning away does NOT take the z-index with it. `.pane` is
+    /// `display: flex`, so `.topbar` is a flex item, and CSS Flexbox §4.3
+    /// keeps `z-index` applying to a flex item at `position: static`. A 20
+    /// therefore lands in the root stacking context and beats the overlay
+    /// sidebar's 3.
+    ///
+    /// Measured before the fix, `desktop-chat` at 728x860: the bar painted
+    /// over all 38px of `.plane-switch` and `elementFromPoint` at the switch's
+    /// centre returned `header.topbar`. `src/shell/desktop/mod.rs`'s plane
+    /// switch is the only cross-plane control there is — no chord, and the
+    /// badge is a span — so on the Code half there was no way back to Chat.
+    ///
+    /// Pinned as TEXT rather than as a rendered ratio because the failure is a
+    /// missing declaration, not a wrong value: delete the line and the sheet
+    /// still parses, the audit still reports Clean, and only the hit test
+    /// changes. `docs/audit.js` has no occlusion check — that is the general
+    /// fix and it is its own issue; this is the specific one.
+    #[test]
+    fn the_pane_header_claims_no_stacking_order_of_its_own() {
+        const FILE: &str = "70-overrides.css";
+        let sheet = super::SHELL_PARTS
+            .iter()
+            .find(|&&(name, _)| name == FILE)
+            .map(|&(_, body)| without_comments(body))
+            .unwrap_or_default();
+
+        let topbar = declarations(&sheet, ".topbar {");
+        let z = topbar
+            .iter()
+            .find(|(prop, _)| prop == "z-index")
+            .map(|(_, value)| value.as_str());
+
+        assert_eq!(
+            z,
+            Some("auto"),
+            "{FILE}'s `.topbar` gives `z-index` as {z:?}. It must say `auto`: \
+             the rule takes the phone's `position: absolute` away, main.css's \
+             `z-index: var(--z-chrome)` survives that on a flex item, and 20 \
+             paints this bar over the overlay sidebar — including over the \
+             plane switch, which is the only way to change halves."
+        );
+    }
+
     /// EVERY COMMENT CLOSES EXACTLY ONCE, because a sheet where one does not
     /// still parses and every other gate still passes.
     ///
