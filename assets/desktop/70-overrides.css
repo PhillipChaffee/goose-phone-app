@@ -78,6 +78,28 @@
  * either way. */
 .topbar {
   position: static;
+  /* AND ITS STACKING GOES WITH ITS POSITIONING, which is the half this rule
+   * missed and it cost the app its only way to change halves.
+   *
+   * `assets/main.css` gives `.topbar` `position: absolute` and
+   * `z-index: var(--z-chrome)` — 20 — because on the phone it floats over the
+   * scroller. Taking the positioning away above does NOT take the z-index with
+   * it: `.pane` is `display: flex`, so `.topbar` is a flex item, and CSS
+   * Flexbox §4.3 keeps `z-index` applying to a flex item even at
+   * `position: static` and makes it a stacking context. Nothing between it and
+   * the root creates one, so a 20 lands in the ROOT stacking context.
+   *
+   * The overlay sidebar is `z-index: 3` (`65-responsive.css`). 20 beats 3.
+   * Measured on `desktop-chat` at 728x860 before this line: `.topbar` painted
+   * 0,34 384x64 over a `.plane-switch` at 8,46 251x38 — all 38px of it — and
+   * `elementFromPoint` at the switch's centre returned `header.topbar`, so it
+   * was UNCLICKABLE as well as invisible. `src/shell/desktop/mod.rs:1066` is
+   * the only cross-plane control in the app: no chord, and `.plane-badge` is a
+   * span. On the Code half with anything open there was no way back to Chat.
+   *
+   * `auto` and not a number: this bar has nothing to stack against once it is
+   * in flow, and a number would be a second thing to keep true. */
+  z-index: auto;
   min-height: 4rem;
   padding: 10px var(--edge);
   border-bottom: 0;
