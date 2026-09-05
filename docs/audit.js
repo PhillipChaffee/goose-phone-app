@@ -17,10 +17,23 @@
 //             gutter it floats on, the chrome band still opaque where that
 //             title sits with the scroller's padding still clearing it, and
 //             rows that render nothing and therefore measure nothing.
+//   occlusion an interactive element painted over by a box that neither
+//             contains it nor sits inside it, with nothing full-screen between
+//             the two — because a modal is meant to cover the page and a
+//             covered button is not. Four defects found in one week lived in
+//             cells this file already walked and reported Clean on.
 //   contrast  every element carrying its own text, composited against the
 //             first opaque background behind it, against 4.5:1 (3:1 for large
-//             or bold text) — and every icon, which carries no text of its
-//             own and so is invisible to that walk, against 3:1.
+//             or bold text); every icon, which carries no text of its own and
+//             so is invisible to that walk, against 3:1; and every indicator
+//             that paints a fill and no text — a status dot has neither text
+//             nor an `.icon` class, so both of the others walked straight past
+//             one at 2.03:1.
+//
+// Colour is walked through BOTH of the app's theme mechanisms: the media query
+// and `data-theme` on the root, the second set to the opposite of the first so
+// that the attribute's own block is rendered alone rather than under an
+// identical one.
 //
 // Each state is also repeated with server-supplied text swapped for the
 // longest plausible value, because a captured state only ever shows the one
@@ -946,8 +959,24 @@ const SHELL_ATTRS = ['data-nav', 'data-fullscreen', 'data-insp'];
 // second per cell for the same answer. `!important` because a transition is
 // declared on the element itself, and `all` because the card's deferred
 // `visibility` is part of the same slide: at rest a closed nav is hidden, not
-// hidden-in-200ms. Desktop states only, since nothing flips an attribute on a
-// phone frame and a transition that never starts needs no turning off.
+// hidden-in-200ms.
+//
+// EVERY FRAME NOW, AND THE PHONE'S HALF WAS BOUGHT WITH A REAL NUMBER. This
+// said "desktop states only, since nothing flips an attribute on a phone frame"
+// until the `data-theme` axis went in, and that axis flips one on every frame
+// there is. Measured, with this sheet still desktop-only: **208 findings**, all
+// of them the colour walk reading a `background-color` mid-transition —
+// `.btn` declares `transition: background-color 120ms`, so setting the
+// attribute repaints the text instantly and leaves the fill on its way, and
+// `button.btn.primary` reports 1.00:1 black-on-black that no reader has ever
+// seen. Linked into the phone's list as well: **Clean**, and the whole grid's
+// existing numbers are unmoved, because everything this script measures was
+// already being measured at rest.
+//
+// It also takes a second source of drift out of the fill walk below. `.dot.busy`
+// and `.dot-anim` carry `animation`s that move `opacity`, the colour walks skip
+// anything under 0.99, and which of those two things is true at the instant a
+// walk runs was a property of the wall clock.
 const AT_REST_CSS = '*, *::before, *::after { transition: none !important;'
   + ' animation: none !important; }';
 
@@ -972,6 +1001,96 @@ for (const [desktop, found] of Object.entries(REFERENCE)) {
     process.exit(1);
   }
 }
+
+// ── the two ledgers ─────────────────────────────────────────────────────
+// Two checks below went in against a tree that already fails them, which is
+// what a check finding something means and is not a reason to soften it. What
+// they found is written down here, exactly, so that everything they did NOT
+// find is a failure from the day they landed rather than after somebody has
+// triaged a wall of output.
+//
+// THESE LISTS MAY ONLY SHRINK, and that is enforced rather than asked for. The
+// shape is `UNCAPTURED`'s in src/shell/desktop/mod.rs — a ledger of what is
+// broken today, not a set of exemptions — and it fails in both directions: a
+// pair that is not on the list fails the run, and an entry on the list that
+// nothing produced ALSO fails the run, because an allowance for a defect that
+// has been fixed is an allowance nobody can check. The answer to a new entry is
+// a fix or an issue, never a line here.
+//
+// The reverse half is only asked of a `both` run — see the check at the end of
+// this file. Occlusion is geometry and is identical in the two themes
+// (measured: the same 16 pairs in each), but a fill's contrast is not, and
+// `span.mark.idle` fails in dark alone. A single-theme run walks half the grid,
+// so it may not judge a ledger written for all of it. CI runs `both`.
+
+// ── the occlusion ledger ────────────────────────────────────────────────
+// `layer >> target`: a box that is painted over an interactive element it does
+// not contain and is not contained by. Every one of these is a real defect with
+// an issue against it; the OCCLUDED walk below is what the check asks and #226
+// is why it asks it that way.
+//
+//   aside.navpane  #215 and #212. The desktop sidebar becomes an overlay below
+//                  628 and again in 704..971 while the inspector is open, and
+//                  it has neither a scrim nor a dismissal — so it is not a
+//                  panel you open and close, it is 268px permanently over the
+//                  content column. 13 of these 16 pairs are that one panel, and
+//                  the fix deletes all 13 at once. Measured: it fires at 480,
+//                  627, 704 and 971 and at no other window size, which is
+//                  exactly the two bands the sheet makes it an overlay in.
+//   button.fab     `--z-chrome` is 20 and the overlay sidebar is `z-index: 3`,
+//                  so a floating button belonging to the content column paints
+//                  over the sidebar's rows — the second half of #209, one
+//                  element over. And on the PHONE, where there is no sidebar,
+//                  the same button covers the bottom of the list it floats on:
+//                  `chats` at 402x874 with a long title, the fab at 264,806
+//                  121x48 over "Load more" at 16,800 370x40.
+//   div.toast      A toast is `position: fixed; z-index: 60` and at AX5 it is
+//                  440px tall on a 568px phone, so it reaches the bar: 7px of
+//                  the 44px back chevron on `recipes-detail-toast` at 320x568.
+const OCCLUSION_KNOWN = [
+  'aside.navpane >> button.btn.primary',
+  'aside.navpane >> button.btn.secondary',
+  'aside.navpane >> button.composer-chip.action.attach',
+  'aside.navpane >> button.composer-chip.action.mode',
+  'aside.navpane >> button.composer-chip.action.model',
+  'aside.navpane >> button.home-starter',
+  'aside.navpane >> button.icon-btn',
+  'aside.navpane >> button.icon-btn.back',
+  'aside.navpane >> button.recent',
+  'aside.navpane >> button.row-action',
+  'aside.navpane >> button.setting-row',
+  'aside.navpane >> input.field',
+  'aside.navpane >> textarea.input',
+  'button.fab >> button.btn.secondary.grow',
+  'button.fab >> button.drawer-item',
+  'div.toast >> button.icon-btn.back',
+];
+
+// ── the fill-contrast ledger ────────────────────────────────────────────
+// Indicators that carry their whole meaning in a background colour and do not
+// clear 3:1 against what is behind them. All three are #213's, named by the
+// element rather than by the ratio because the ratio is a fact about which
+// surface the mark landed on and there are several: `.dot.off` alone measures
+// 2.03, 2.20, 2.87 and 1.85 depending on the ground.
+//
+// #213's own table is desktop-only and says dark clears the bar everywhere.
+// This walk covers the phone as well, and the worst number in the app is there:
+// `.dot.off` on the Code plane's `code-pulls` is **1.85:1 in DARK** and 2.03:1
+// in light. The token is `--text-tertiary` spent as a fill, and the sheet
+// already bans it as ink at every rung.
+const FILL_KNOWN = [
+  'span.dot-anim',
+  'span.dot.off',
+  'span.mark.idle',
+];
+
+// A finding the ledger already holds comes back marked instead of counted, so
+// the run can also say which entries fired. The string is passed INTO both
+// walks rather than written twice: `page.evaluate` serialises a function
+// without its closure, so a constant either travels as an argument or is
+// duplicated, and a duplicated protocol between two halves of one file is how
+// the halves stop agreeing.
+const LEDGER_MARK = 'LEDGER ';
 
 // ── stress ──────────────────────────────────────────────────────────────
 // A captured state only ever shows the one string the app happened to be
@@ -1052,7 +1171,7 @@ const stressed = (states) => states.flatMap((state) => {
 });
 
 // ── geometry ────────────────────────────────────────────────────────────
-const GEOMETRY = () => {
+const GEOMETRY = ({ mark, ledger }) => {
   const out = [];
   const px = (v) => parseFloat(v) || 0;
   const vw = document.documentElement.clientWidth;
@@ -1876,11 +1995,153 @@ const GEOMETRY = () => {
       out.push(`COLLAPSED    .${cls.split(/\s+/).join('.')} has no height — empty content generates no line box`);
     }
   }
+
+  // ONE BOX PAINTED OVER ANOTHER, WHICH IS NOT A QUESTION ANYTHING ABOVE PUTS.
+  // #226 is the whole argument, including every number quoted below.
+  //
+  // Four defects found in one week live in cells this file already walks, in a
+  // tree it already reports Clean on. #212 is a blank 268px panel over the
+  // transcript, topmost in the hit test. #214 was the pane header over the
+  // plane switch — the app's only way to change halves, unclickable, on a tree
+  // where every one of the four gates passed. #215 is the overlay sidebar over
+  // 252px of content. #209 is the jump-to-latest button over the last 52px of
+  // the conversation. #215 states the gap in one sentence and it is the reason
+  // this walk exists: "an element painted over another element is not one of
+  // the questions the walk puts. Occlusion is the gap, not the widths."
+  //
+  // Nothing above can see it, and that is structural rather than accidental.
+  // OVERFLOW-X is about leaving the viewport, CLIPPED-* about a box cutting its
+  // own content, SPILL about ink outside a box, SQUARE and RADIUS-NEST about
+  // corners, CONTRAST about a pair of colours. A covered control is correctly
+  // laid out, correctly coloured and entirely inside its parent. It is simply
+  // behind something.
+  //
+  // GETTING THE PREDICATE RIGHT IS THE WHOLE JOB, because a check that fires on
+  // every modal is a check somebody turns off within a day — and it is not a
+  // small effect. Measured on this tree with the one exemption below deleted:
+  // **6,542 findings**, of which 6,192 are `div.modal-backdrop` and
+  // `div.drawer-scrim.open` and `aside.drawer.open` covering the page they are
+  // over on purpose. With it: **350**, every one of them a defect with an issue.
+  // So the rule is stated three ways, and each is a claim rather than a filter:
+  //
+  //   AN INTERACTIVE TARGET. A paragraph behind a panel is a legibility
+  //   question and this file has no vocabulary for it; a BUTTON behind a panel
+  //   is a control that cannot be pressed, which is a fact `elementsFromPoint`
+  //   can settle. Every one of the four defects above is that shape — #214's
+  //   own commit message ends "only the hit test changes".
+  //
+  //   IT DOES NOT OWN THE TARGET. An element's own descendants paint over it by
+  //   construction (the `<svg>` inside a button is above the button), and its
+  //   ancestors are the box it lives in. Neither is an occlusion; both are
+  //   containment, so both are exempt.
+  //
+  //   NOTHING FULL-SCREEN IS BETWEEN THEM. This is the one that separates a
+  //   defect from a design. A modal SHOULD cover the page and a scrim SHOULD
+  //   cover content — that is what they are for — and the property they share
+  //   is that the page as a WHOLE has gone behind something, which is a
+  //   statement to the reader rather than an accident. So the walk stops at the
+  //   first box in the stack that spans the viewport in both axes: everything
+  //   under it is deliberately not the subject. `.modal-backdrop`,
+  //   `.drawer-scrim` and the phone's open drawer all pass out through that one
+  //   sentence, with no class named anywhere.
+  //
+  // A STICKY HEADER OVER SCROLLED CONTENT IS CORRECT, and the answer to it is
+  // the property this whole script already has rather than a fourth rule: every
+  // state is measured AT REST. scripts/capture-gallery.py records markup with
+  // no scroll offset, so at rest there is nothing scrolled up under a bar and
+  // the scroller's own top padding is what keeps it that way — which SCRIM
+  // above already checks. #214's bar, by contrast, covered the plane switch
+  // with the page at its top, which is why it is a finding and a sticky header
+  // is not.
+  //
+  // THE LAYER, NOT THE TOPMOST BOX. Naming whatever `elementsFromPoint` put
+  // first fragments one cause into dozens: the overlay sidebar reported as
+  // `span.nav-row-title`, `div.nav-sessions`, `div.navcard` and `p.nav-standing`
+  // over the same three controls, 16 pairs of it, which is a wall of output for
+  // one rule in one file. Measured: naming the topmost box gives **714**
+  // findings and 61 distinct pairs; naming the layer gives 350 and 16, and the
+  // 16 are three causes. The layer is defined rather than guessed — the
+  // outermost ancestor of the blocker, stopping before the target's own box,
+  // that is out of flow or claims a stacking order. That is precisely the
+  // property that put it on top, and it names the element whose declaration is
+  // the bug in all four defects: `.navpane` (absolute, z 3), `.fab` (absolute,
+  // z 20), `.toast` (fixed, z 60) and #214's `.topbar` (STATIC, z 20 — a flex
+  // item keeps its z-index, which is the whole of that bug and is why
+  // `position` alone would have missed it).
+  //
+  // NINE POINTS, not one. A control covered down one side is the ordinary case
+  // — the fab takes the right 59px of a 251px sidebar row, and its centre is
+  // clear — so a centre-only test would report neither that nor #209. A 3x3
+  // grid inset to 15% needs roughly a third of one axis to be covered before a
+  // sample lands in it, which is a noise floor stated as geometry rather than
+  // as a threshold nobody can derive.
+  const INTERACTIVE = 'a[href], button, summary, input, select, textarea,'
+    + ' [role="button"], [role="radio"], [role="tab"], [role="link"],'
+    + ' [role="switch"], [role="checkbox"], [tabindex]:not([tabindex="-1"])';
+  const overPage = (el) => {
+    const b = el.getBoundingClientRect();
+    return b.width >= vw - 0.5 && b.height >= vh - 0.5;
+  };
+  const covered = new Map();
+  for (const el of document.querySelectorAll(INTERACTIVE)) {
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+    if (!el.checkVisibility()) continue;
+    // `pointer-events: none` and `disabled` both take the control out of the
+    // hit test itself, so it is not IN the stack to be above or below anything
+    // — that is a different fault and this walk would only ever report it as
+    // "covered by everything". `.scroll-bottom` is the live example: it is
+    // `opacity: 0; pointer-events: none` until src/viewport.rs adds
+    // `body.away-from-bottom`, a class no capture contains, so #209 is out of
+    // this walk's reach until a capture carries one — not because the check
+    // cannot see it, and the PR that added this proved that by adding the class
+    // to a state and watching it fire.
+    if (cs.pointerEvents === 'none' || el.disabled) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) continue;
+    // Off the screen entirely is parked, OVERFLOW-X's word for it: the closed
+    // drawer is translated off the left edge on purpose and everything in it
+    // goes with it.
+    if (r.right <= 0.5 || r.left >= vw - 0.5 || r.bottom <= 0.5 || r.top >= vh - 0.5) continue;
+    for (const fy of [0.15, 0.5, 0.85]) {
+      for (const fx of [0.15, 0.5, 0.85]) {
+        const x = r.left + r.width * fx;
+        const y = r.top + r.height * fy;
+        if (x < 0 || y < 0 || x >= vw || y >= vh) continue;
+        const stack = document.elementsFromPoint(x, y);
+        const at = stack.indexOf(el);
+        // Absent from its own stack is the STRONGEST form of this finding, not
+        // a reason to skip: `elementsFromPoint` returns the ancestors of
+        // whatever it hit, so a control that is not in the list at a point
+        // inside its own box is a control something else answered for entirely.
+        const above = at < 0 ? stack : stack.slice(0, at);
+        if (above.some(overPage)) continue;
+        const blocker = above.find((b) => !b.contains(el) && !el.contains(b));
+        if (!blocker) continue;
+        let layer = blocker;
+        for (let p = blocker; p && !p.contains(el); p = p.parentElement) {
+          const ps = getComputedStyle(p);
+          if (/absolute|fixed|sticky/.test(ps.position) || ps.zIndex !== 'auto') layer = p;
+        }
+        const key = `${name(layer)} >> ${name(el)}`;
+        covered.set(key, (covered.get(key) || 0) + 1);
+      }
+    }
+  }
+  for (const [key, n] of covered) {
+    if (ledger.includes(key)) {
+      out.push(`${mark}${key}`);
+      continue;
+    }
+    const [layer] = key.split(' >> ');
+    out.push(`OCCLUDED     ${key} at ${n} of 9 points — ${layer} is painted over a control`
+      + ' it neither contains nor sits inside, with nothing full-screen between them');
+  }
   return out;
 };
 
 // ── contrast ────────────────────────────────────────────────────────────
-const CONTRAST = () => {
+const CONTRAST = ({ mark, ledger }) => {
   // color-mix() resolves to color(srgb r g b / a) with components in 0..1
   // while rgb() gives 0..255. Scaling the wrong one makes every glass bar
   // read as near-black and invents a screenful of failures that are not there.
@@ -1964,6 +2225,96 @@ const CONTRAST = () => {
       out.push(`ICON-CONTRAST ${got.toFixed(2)}:1 (need 3) icon in ${cls ? `.${cls.split(/\s+/).join('.')}` : owner?.tagName.toLowerCase()}`);
     }
   }
+
+  // AND EVERY INDICATOR THAT CARRIES ITS MEANING IN A BACKGROUND, WHICH BOTH
+  // WALKS ABOVE ARE STRUCTURALLY BLIND TO.
+  //
+  // #213: `.dot.off` is the mark that says the app has lost its server, and on
+  // the desktop band in light it measures **2.03:1** — a 6x6 square at two
+  // thirds of the bar a non-text indicator owes. It survived every gate in this
+  // repository because neither existing walk can see a dot at all. The text
+  // walk needs an element with its own text and `<span class="dot off"></span>`
+  // is empty; the icon walk is `querySelectorAll('.icon')` reading
+  // `getComputedStyle(el).color`, because it is written for `stroke:
+  // currentColor` SVGs, and a dot has no `.icon` class and spends its whole
+  // meaning on `background-color`. So every background-painted indicator in the
+  // app was unmeasured, in both themes.
+  //
+  // 3:1, WCAG 1.4.11, which is the icon walk's number four lines up and the
+  // number `assets/desktop/30-sidebar-list.css` restates in its own words as "a
+  // non-text indicator owes 3:1". Not 4.5 — that is the text bar, and this is
+  // not text.
+  //
+  // A SHAPE, NOT A CLASS LIST. `.dot, .mark, .dot-anim` would have caught
+  // exactly today's three and nothing added tomorrow, which is the disease this
+  // file keeps being treated for. The shape is: it paints a fill, it carries no
+  // text anywhere under it, it has no element children, and it has no border of
+  // its own — so the fill is the whole of what there is to see. Measured over
+  // the whole grid, that predicate reports **64 findings across three element
+  // families and nothing else**: `.dot.off`, `.mark.idle`, `.dot-anim`, which
+  // is #213's list exactly, arrived at without naming one of them.
+  //
+  // The two conditions that made it that clean, each stated as a claim:
+  //
+  //   NO BORDER. An element with an edge of its own is a bordered box, and this
+  //   design draws its boxes with hairlines that are deliberately well under
+  //   3:1 — whether a hairline is enough of an edge is a real question, and it
+  //   is a DIFFERENT one, with its own threshold and its own findings. Without
+  //   this line the walk reports `input.field` at 1.00:1 in every state that has
+  //   a text box, 54 of the 188 findings, because a field's fill is the page's
+  //   by design and its border is what makes it a field. A `.dot` given a
+  //   border to quiet this check has become a bordered box and owes that other
+  //   rule instead — which nothing in this file asks yet, and is worth knowing.
+  //
+  //   NOT THE WHOLE PAGE. A scrim is a fill with no text and no border, and a
+  //   scrim that reached 3:1 would be a blackout: `.drawer-scrim.open` is a 40%
+  //   black wash measuring 1.18:1 in dark and 2.85:1 in light, and both numbers
+  //   are the design working. An indicator is a mark ON something; something
+  //   the size of the viewport is the something.
+  //
+  // WHAT IT STILL CANNOT SEE, said rather than implied: a fill painted by
+  // `background-image` — a gradient, a mask — computes `backgroundColor:
+  // rgba(0, 0, 0, 0)` and is skipped here, and nothing else in this file looks
+  // at one either.
+  const nameOf = (el) => {
+    const cls = typeof el.className === 'string' ? el.className.trim() : '';
+    return el.tagName.toLowerCase() + (cls ? `.${cls.split(/\s+/).join('.')}` : '');
+  };
+  const vw = document.documentElement.clientWidth;
+  const vh = document.documentElement.clientHeight;
+  const marked = new Set();
+  for (const el of document.querySelectorAll('*')) {
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+    if (!el.checkVisibility()) continue;
+    if (parseFloat(cs.opacity) < 0.99) continue;
+    // Anything with text under it answers to the text walk, and anything with
+    // an element child is a container rather than a mark.
+    if (el.children.length || el.textContent.trim()) continue;
+    // Inside an `<svg>` is the icon walk's subject, painted with `fill` and
+    // `stroke` off `currentColor` rather than with a background.
+    if (el.ownerSVGElement) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) continue;
+    const own = parse(cs.backgroundColor);
+    if (own.a === 0) continue;
+    if (['Top', 'Right', 'Bottom', 'Left'].some((s) => parseFloat(cs[`border${s}Width`]) > 0)) continue;
+    if (r.width >= vw - 0.5 && r.height >= vh - 0.5) continue;
+    // The ground is what is behind the mark, so the walk starts at the PARENT:
+    // `backdrop(el)` composites the element's own fill first and would measure
+    // the dot against itself.
+    const bg = el.parentElement ? backdrop(el.parentElement) : { r: 255, g: 255, b: 255, a: 1 };
+    const got = ratio(own.a < 1 ? over(own, bg) : own, bg);
+    if (got >= 3) continue;
+    const id = nameOf(el);
+    if (ledger.includes(id)) {
+      marked.add(`${mark}${id}`);
+      continue;
+    }
+    out.push(`FILL-CONTRAST ${got.toFixed(2)}:1 (need 3) ${id} ${r.width.toFixed(0)}x${r.height.toFixed(0)}`
+      + ' — a mark with no text, no children and no edge, so its fill is the whole of it');
+  }
+  out.push(...marked);
   return out;
 };
 
@@ -2137,7 +2488,7 @@ const compareFonts = async (states) => {
   // tokens and has to beat every sheet that names them.
   const sheetsFor = (state) => (state.desktop
     ? [...STYLESHEETS, ...DESKTOP_SHEETS, atRestSheet, fontSheet]
-    : [...STYLESHEETS, fontSheet]);
+    : [...STYLESHEETS, atRestSheet, fontSheet]);
   const browser = await chromium.launch(LAUNCH);
 
   // Every character this run will lay out, taken from the markup itself
@@ -2166,6 +2517,10 @@ const compareFonts = async (states) => {
   }
 
   let findings = 0;
+  // Which ledger entries the run actually produced. A ledger of what is broken
+  // is only a ledger while every line of it is still true, and the check at the
+  // end of this file is what makes it one.
+  const ledgerUsed = new Set();
 
   for (const theme of themes) {
     const page = await browser.newPage({
@@ -2318,23 +2673,81 @@ const compareFonts = async (states) => {
                 process.exit(1);
               }
             }
-            const issues = [...new Set([
-              ...await page.evaluate(GEOMETRY),
-              // Contrast at the smallest scale and the reference size only. It
-              // is a walk over computed colours: the 18.66px large-text
-              // threshold makes every larger scale strictly more permissive,
-              // and a wider phone moves boxes rather than colours. Honest to
-              // gate on the size only because the two checks that were in this
-              // function and were NOT about colour — the scrim covering the bar,
-              // and a row that measures nothing — have moved into GEOMETRY,
-              // where they are walked at every size like the geometry they are.
-              //
-              // And at the FIRST nav state, which is the captured one: a
-              // closed nav is `visibility: hidden`, which the colour walk
-              // skips element by element, so the shut column can only ever
-              // report a subset of what the open one does.
-              ...(s === 0 && n === 0 && size.reference ? await page.evaluate(CONTRAST) : []),
+            // Contrast at the smallest scale and the reference size only. It
+            // is a walk over computed colours: the 18.66px large-text
+            // threshold makes every larger scale strictly more permissive,
+            // and a wider phone moves boxes rather than colours. Honest to
+            // gate on the size only because the two checks that were in this
+            // function and were NOT about colour — the scrim covering the bar,
+            // and a row that measures nothing — have moved into GEOMETRY,
+            // where they are walked at every size like the geometry they are.
+            //
+            // And at the FIRST nav state, which is the captured one: a
+            // closed nav is `visibility: hidden`, which the colour walk
+            // skips element by element, so the shut column can only ever
+            // report a subset of what the open one does.
+            //
+            // AND THROUGH BOTH THEME MECHANISMS, WHICH IS #165.
+            //
+            // `grep -c data-theme docs/audit.js` was 0 before this: the theme
+            // came from `page.emulateMedia({ colorScheme })` and nothing else,
+            // which drives `prefers-color-scheme` alone. CLAUDE.md states the
+            // app's mechanism as "semantic tokens, light and dark, with
+            // `data-theme` on the root element overriding the system
+            // preference", and every palette in the tree is written twice for
+            // it — `assets/shared.css:283` and `:336`,
+            // `assets/desktop/00-tokens.css:715` and `:752`, plus the same pair
+            // in 20-plane-switch.css and twice in 30-sidebar-list.css. The
+            // second of each pair was rendered by nothing at all, in either
+            // shell, and #123 had already found seven tokens missing from one
+            // of them. A rule no frame ever renders is indistinguishable from a
+            // rule that works.
+            //
+            // THE OPPOSITE OF THE EMULATED THEME, which is what makes this one
+            // extra cell cover both holes instead of neither. Setting the
+            // attribute to the theme already being emulated renders the media
+            // block and the attribute block on top of each other, so a
+            // difference between them is invisible; setting it to the opposite
+            // renders the attribute block ALONE. Over the two theme passes that
+            // is `data-theme="dark"` under a light system — the arm nothing has
+            // ever rendered — and `data-theme="light"` under a dark one, which
+            // is the app-says-light-while-the-system-says-dark path #165 also
+            // names. Both are what a reader who has used the in-app override
+            // actually sees.
+            //
+            // CONTRAST ONLY, and measured rather than assumed: with the whole
+            // grid walked twice, once with the attribute set, GEOMETRY returns
+            // a byte-identical finding set in every cell — 0 differences across
+            // 124 states x 2 themes x every size, scale and shell cell. These
+            // blocks are colour and nothing else, so the geometry axis would be
+            // paying for a second product to re-report what it already said.
+            let colour = [];
+            if (s === 0 && n === 0 && size.reference) {
+              colour = await page.evaluate(CONTRAST, { mark: LEDGER_MARK, ledger: FILL_KNOWN });
+              const override = theme === 'light' ? 'dark' : 'light';
+              await page.evaluate((v) => {
+                document.documentElement.setAttribute('data-theme', v);
+              }, override);
+              colour = colour.concat(
+                (await page.evaluate(CONTRAST, { mark: LEDGER_MARK, ledger: FILL_KNOWN }))
+                  // A finding the ledger already holds comes back marked and is
+                  // not a finding, so it must not be labelled as one — the mark
+                  // is the whole string and the driver matches it exactly.
+                  .map((z) => (z.startsWith(LEDGER_MARK) ? z : `${z}  [via data-theme="${override}"]`)),
+              );
+              // Removed rather than left: this page is reused for every size
+              // after this one, and the reference size is not the last of them.
+              await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
+            }
+            const walked = [...new Set([
+              ...await page.evaluate(GEOMETRY, { mark: LEDGER_MARK, ledger: OCCLUSION_KNOWN }),
+              ...colour,
             ])];
+            const issues = walked.filter((str) => {
+              if (!str.startsWith(LEDGER_MARK)) return true;
+              ledgerUsed.add(str.slice(LEDGER_MARK.length));
+              return false;
+            });
             if (issues.length) {
               findings += issues.length;
               console.log(`\n${state.label}  [${theme}, ${size.width}x${size.height}, root ${scale}px`
@@ -2386,11 +2799,45 @@ const compareFonts = async (states) => {
       return `${ref.width}x${ref.height} at root ${scales[0]}px`;
     })
     .join(' and ');
+  // WHICH MECHANISM THE COLOUR WALK MEASURED, stated for the reason every other
+  // number in this sentence is: before #165 it said "2 themes" over one of two,
+  // and a coverage claim that names only the half it happens to walk is how the
+  // other half stays unwalked for the life of a feature.
+  const themeScope = `\`prefers-color-scheme\` and, in the same cell with the`
+    + ' attribute set to the OTHER theme, `data-theme` on the root';
+  // THE OTHER DIRECTION OF THE LEDGERS, which is what makes them ledgers rather
+  // than suppressions — the shape `UNCAPTURED` uses in
+  // src/shell/desktop/mod.rs, for its reason: an allowance for a defect that
+  // has since been fixed is a line nobody can check, and it quietly widens the
+  // gate every time the thing it named comes back.
+  //
+  // A `both` RUN ONLY. Occlusion is geometry and produces the identical 16
+  // pairs in either theme, but a fill's contrast does not — `span.mark.idle` is
+  // 2.52:1 in dark and 4.01:1 in light, so it fires in one pass and not the
+  // other. A single-theme run walks half the grid and may not judge a ledger
+  // written for all of it; CI runs `both`, which is where this bites.
+  if (arg === 'both') {
+    const stale = [...OCCLUSION_KNOWN, ...FILL_KNOWN].filter((e) => !ledgerUsed.has(e));
+    if (stale.length) {
+      console.error(`${stale.length} ledger entr${stale.length > 1 ? 'ies name' : 'y names'} a defect this run did not find:`
+        + `\n  ${stale.join('\n  ')}\n`
+        + 'These lists may only shrink. If the defect is fixed, delete the'
+        + ' line — so that the next time it comes back it is a finding and not'
+        + ' a line in a list that has stopped being true. If a capture stopped'
+        + ' rendering the screen it was on, that is the store having gone stale'
+        + ' and the entry still cannot stay.');
+      process.exit(1);
+    }
+  }
   if (findings) {
     console.log(`\n${findings} finding${findings > 1 ? 's' : ''} across ${scope}`
-      + ` (contrast at ${contrastScope} only).`);
+      + ` (contrast at ${contrastScope} only, through ${themeScope}).`);
     process.exit(1);
   }
   console.log(`Clean: no geometry findings across ${scope};`
-    + ` no contrast findings at ${contrastScope}, which is where that walk runs.`);
+    + ` no contrast findings at ${contrastScope}, which is where that walk runs,`
+    + ` through ${themeScope}.`
+    + `\nThe ledgers hold ${OCCLUSION_KNOWN.length} occlusion pair(s) and`
+    + ` ${FILL_KNOWN.length} indicator(s) that DID fail and are known — see`
+    + ' OCCLUSION_KNOWN and FILL_KNOWN, which may only shrink.');
 })();
