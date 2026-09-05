@@ -1,4 +1,19 @@
-/* Goose Mobile — the design system.
+/* Goose — the shared design system.
+ *
+ * BOTH SHELLS LINK THIS SHEET, which is what the name means and why it is no
+ * longer called main.css. `src/css.rs` puts it first in `STYLES` and
+ * `src/app.rs` emits that into the phone and the desktop alike, so a
+ * declaration here lands in a 1440pt window as surely as on a 402pt one.
+ *
+ * The phone-only exceptions are three and this is the whole list: `.ptr`
+ * (492-566), created only by the pull-to-refresh gesture in `src/viewport.rs`;
+ * the drawer panel head (3237-3319) — `.drawer`, `.drawer-scrim`,
+ * `.drawer-brand` — emitted only by `src/shell/mobile.rs`; and `.drawer-group`
+ * (4454-4481), whose `render_group` in `src/shell/mod.rs` carries the same
+ * `#[cfg(any(ios, android))]`. That is 186 lines of 4,481, about 4%. All the
+ * rest reaches the desktop — including the drawer ROWS below the panel head,
+ * which the sidebar renders. To change how a rule lands there, add an
+ * override in `assets/desktop/`; do not edit it here.
  *
  * ATTRIBUTION, and the reason these numbers are not free to taste: the
  * palette, type scale, radii and shadow ramp mirror the goose desktop app's
@@ -3219,7 +3234,14 @@ body.away-from-bottom .scroll-bottom {
   line-height: var(--lh-xs);
 }
 
-/* ── drawer ─────────────────────────────────────────────────────────── */
+/* ── drawer panel (phone only) ──────────────────────────────────────── */
+
+/* The panel itself, and the only part of the drawer that is the phone's
+ * alone. `.drawer`, `.drawer-scrim` and `.drawer-brand` are emitted by
+ * `src/shell/mobile.rs` and by nothing else; the desktop has a sidebar in
+ * normal flow and needs no sliding panel, no scrim and no wordmark of its
+ * own. The rows BELOW this section are a different matter — see the next
+ * banner. */
 
 /* A panel over the page, not a column beside it: at phone width there is no
  * room for both. The page dims and stays put behind it, so closing the drawer
@@ -3296,6 +3318,16 @@ body.away-from-bottom .scroll-bottom {
   line-height: var(--lh-xl);
 }
 
+/* ── drawer rows (shared) ───────────────────────────────────────────── */
+
+/* SHARED, despite the class names. `render_destination` in `src/shell/mod.rs`
+ * is not gated, and the desktop sidebar calls it twice — once for the Library
+ * list and once for the footer — so every rule from here to the next banner
+ * paints in both shells. The desktop does not want the phone's numbers and
+ * does not edit them: `assets/desktop/30-sidebar-list.css` overrides the
+ * scroller at `.navcard .drawer-nav` and the 48px row at `.navcard
+ * .drawer-item`, which is the pattern anything else here should follow. */
+
 .drawer-nav {
   display: flex;
   flex-direction: column;
@@ -3356,6 +3388,13 @@ body.away-from-bottom .scroll-bottom {
 .drawer-item:active {
   background: var(--bg-secondary);
 }
+
+/* ── sheets: settings, choices ──────────────────────────────────────── */
+
+/* NOT THE DRAWER, which is where these rules sat for as long as they were
+ * filed under the banner above. This is the settings list and the choice
+ * sheet — `src/views/settings.rs` and `src/views/session_settings.rs` — and
+ * both shells render them; `desktop-settings` is a captured gallery state. */
 
 /* A sheet that is a list of choices: taller than an alert, shorter than a
  * screen, and it stops at what it holds.
@@ -4380,7 +4419,16 @@ body.away-from-bottom .scroll-bottom {
   }
 }
 
-/* ── drawer, at seven destinations ──────────────────────────────────── */
+/* ── drawer nav overflow (shared) + group label (phone) ─────────────── */
+
+/* TWO RULES WITH DIFFERENT REACH, which the old name for this section
+ * ("drawer, at seven destinations") hid. `.drawer-nav` is emitted by
+ * `src/shell/mobile.rs` and by `src/shell/desktop/mod.rs` both, so the
+ * overflow below is shared and the desktop restates it for the sidebar's
+ * shorter card. `.drawer-group` is the phone's alone: its only caller is
+ * `render_group` in `src/shell/mod.rs`, which is
+ * `#[cfg(any(target_os = "ios", target_os = "android"))]`, and the desktop
+ * groups its nav by plane instead. */
 
 /* Appended as its own section rather than merged into the drawer block
  * above. Five branches are editing this file at once, and an append is the

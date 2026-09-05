@@ -16,6 +16,12 @@
 /// Every stylesheet in the app, in cascade order. `shared.css` is the design
 /// system — tokens, chrome, the shared components — so it comes first and
 /// everything after it is a feature's own additions.
+///
+/// It is named for its reach, not for a shell: this const is emitted by
+/// `src/app.rs` on the phone AND on the desktop, so a rule in `shared.css` is
+/// a rule in both. Its own header names the three phone-only exceptions and
+/// the rule for changing anything else — an override in `assets/desktop/`,
+/// not an edit there.
 pub(crate) const STYLES: &str = concat!(
     include_str!("../assets/shared.css"),
     include_str!("../assets/features/recipes.css"),
