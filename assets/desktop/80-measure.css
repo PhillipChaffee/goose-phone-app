@@ -115,6 +115,94 @@
   right: var(--gutter);
 }
 
+/* AND THE JUMP-TO-LATEST DISC GOES THE OTHER WAY, off the measure entirely.
+ *
+ * It looks like the same problem as the FAB and it is the opposite one. The FAB
+ * is a control ABOUT THE CONTENT — "Run this recipe" — so it belongs on the
+ * content's own edge. This is a control about the VIEWPORT, and every pixel of
+ * it that lands on the column is a pixel of the conversation it is offering to
+ * take you to.
+ *
+ * `assets/shared.css` hangs a 44x44 button out of a zero-height slot at
+ * `bottom: 8px; left: 50%`, which puts its whole box INSIDE the scroller above
+ * the slot, centred on the reading column. Measured on `desktop-chat` under the
+ * sheet list `docs/audit.js` links, `body.away-from-bottom` forced on (the
+ * class `src/viewport.rs`'s listener adds, and the reason no capture has ever
+ * held one): the disc's top sits 52.0px above the scroller's bottom edge at
+ * 480, 628, 704, 728, 971, 972, 1440 and 1600 — the same 52.0 at every width,
+ * because it is anchored to the scroller and not to the window — and its centre
+ * lands on the measure's centre to within 0.2px. It is opaque: `--shadow-md`,
+ * an inset hairline and `backdrop-filter: blur(20px) saturate(1.8)`.
+ *
+ * THE PHONE'S REASON DOES NOT REACH HERE, and shared.css states it in its own
+ * words: the button hangs out of a zero-height slot "so that it follows the
+ * composer as the draft grows it and as the shell tracks the visual viewport
+ * with the keyboard up — anything anchored to the bottom of the screen ends up
+ * behind one or the other". There is no keyboard inset on macOS, and `.pane` is
+ * a flex column in which `.composer` is `flex-shrink: 0` in normal flow, so
+ * nothing can end up behind it. Only the centring is left, and centring is what
+ * puts it on the text.
+ *
+ * `--edge` AND NOT `--gutter`, which is the one number in this rule that had to
+ * be chosen rather than derived. `--gutter` is the FAB's answer and it parks
+ * the disc's right edge exactly ON the measure's, so it would still cover the
+ * last 44px of the bottom line at every width. `--edge` is the PANE's own
+ * inset, and the measure leaves room beside it whenever the pane has any to
+ * leave: the disc clears the column outright wherever the PANE is 760 or wider
+ * (`--gutter` >= 60 = the disc plus its inset), and below that it overlaps the
+ * line's END by `60 - --gutter` px. Swept over 4 shell cells x 11 windows, the
+ * overlap is 0 at every 1440 and 1600 cell and at 800/971/972 with both side
+ * columns shut, 16px at a 728 pane, 28px at a 704 pane and 44px wherever the
+ * pane is 628 or narrower — which is where the pane IS the column and something
+ * has to give. A line's trailing 44px is usually blank; its middle never is,
+ * and its middle is where the disc was: measured before this change, its centre
+ * sat on the measure's centre to within 0.2px at every one of those 44 cells.
+ *
+ * `z-index: auto`, which is #214's argument one element over. The phone gives
+ * this `--z-chrome` (20) because there it floats over the page; here it only
+ * has to paint over the scroller it hangs into, and `position: absolute` alone
+ * does that — positioned boxes paint above in-flow content whatever their
+ * z-index. What the 20 DID do was outrank the overlay sidebar's 3, so at the
+ * 480 floor with the sidebar open the disc painted on top of a session row:
+ * `elementsFromPoint` at its centre returned `button.scroll-bottom` above
+ * `button.nav-row-open` and `div.nav-row.on`. The move already separates the
+ * boxes — the disc is 420..464 there against a sidebar of 0..268 — so `auto` is
+ * not what fixes that today. It is what stops the app carrying a rung it has no
+ * use for, and it is checked rather than asserted: forced back over the sidebar
+ * with everything else as it ships, the stack reads `div.navcard` /
+ * `aside.navpane` ABOVE `button.scroll-bottom`, where the phone's 20 put it
+ * below. A future change to `--nav-w` or to this inset cannot quietly put the
+ * defect back.
+ *
+ * THREE RULES BECAUSE `transform` IS DOING TWO JOBS. shared.css writes
+ * `translate(-50%, 8px)` — the `-50%` is the centring this rule is undoing, and
+ * the `8px` is the rise the button is revealed with. Overriding the whole
+ * property means restating the rise in both states, and the reduced-motion
+ * block is the third because shared.css's own copy of it is (0,1,0) and would
+ * otherwise lose to this rule and give a reader who asked for no motion an 8px
+ * rise the phone does not give them. The alternative — `right: calc(var(--edge)
+ * - 22px)`, letting the `-50%` stand and cancelling it — is one declaration and
+ * hard-codes half of a width declared in another sheet. */
+.pane-main .scroll-bottom {
+  left: auto;
+  right: var(--edge);
+  z-index: auto;
+  transform: translateY(8px);
+}
+
+/* (0,3,0), because shared.css's `body.away-from-bottom .scroll-bottom` is
+ * (0,2,1) — `body` is a type selector — and would otherwise put the `-50%`
+ * back the moment the button appeared. */
+body.away-from-bottom .pane-main .scroll-bottom {
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pane-main .scroll-bottom {
+    transform: translateY(0);
+  }
+}
+
 /* A short transcript starts at the top of the pane, not at the bottom of it.
  *
  * `.chat::before { margin-top: auto }` is what grows a conversation upward
