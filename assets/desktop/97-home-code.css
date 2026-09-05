@@ -96,9 +96,72 @@
     line-height: var(--lh-sm);
 }
 
+/* 140 AND NOT 160, BECAUSE THERE ARE FIVE NOW. #77's pull-request tile makes
+ * this the mockup's own `.stats{grid-template-columns:repeat(5,1fr);gap:8px}`,
+ * and five tracks with a 160px floor do not fit the 776px measure — 5x160 +
+ * 4x8 is 832, so `auto-fit` wrapped the fifth onto a row of its own. At 140 the
+ * five fit with 44px to spare and each track lands at 148.8px, which is the
+ * mockup's own width to a third of a pixel.
+ *
+ * STILL `auto-fit` AND NOT `repeat(5, 1fr)`: the number of tiles is data.
+ * `pull_tile` returns `None` whenever the sweep has not answered for every
+ * tree, so this grid gets four as often as five, and a fixed five-track rule
+ * would leave a gap where the fifth is absent. */
 .home-code .home-tiles {
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     margin-top: 0;
+}
+
+/* THREE OF THE FIVE TILES ARE CONTROLS NOW — #203, and the owner's words:
+ * "these things aren't clickable at all. I feel like they should be."
+ *
+ * ELEMENT SELECTOR, NO NEW CLASS. `src/shell/desktop/home.rs` emits a `button`
+ * where the tile names a slice of the board and a `div` where it does not, so
+ * the affordance is carried by the tag and the pressed state by `aria-pressed`
+ * — which a screen reader needs anyway, and which
+ * `every_class_the_desktop_shell_renders_is_in_the_captured_store` therefore
+ * has nothing new to hold. The two inert tiles keep the treatment they had,
+ * and are `div`s: a disabled button that looks identical to a card is a worse
+ * lie than a card.
+ *
+ * A `button` inherits none of a card's typography, hence the four resets.
+ * `text-align` is the one that shows: without it the numeral, the label and
+ * the sub-line all centre. */
+button.home-tile {
+  font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+/* AN EDGE AND NEVER A FILL, and this is measured rather than a preference.
+ * `40-home-chat.css` records the arithmetic on `.home-tile-label`:
+ * `--text-secondary` is 4.64:1 on `--surface-card` in light and "passes light
+ * by 0.14, which is why the tile may not gain a hover fill: --surface-raise
+ * would take it to 4.01 and fail". So the whole of hover and the whole of
+ * press are spent on the border, which owes no ratio at all — it is
+ * decoration, `.recent` and `.home-tile`'s own base rule say so. */
+button.home-tile:hover {
+  border-color: var(--text-tertiary);
+}
+
+/* WHICH FILTER IS ENGAGED. `box-shadow: inset` and not a border, for
+ * `.plane-seg.active`'s reason verbatim: a border would move the numeral 1px
+ * on whichever tile is pressed. Two of the three pressable tiles already spend
+ * their border on a colour that means something — `--text-warning` on the
+ * urgent one, `--accent` on the live one — so the ring goes INSIDE it and
+ * neither has to give its own edge up to say it is selected.
+ *
+ * `--text-primary` is 9.93:1 on the light card and higher in dark, well past
+ * the 3:1 a non-text indicator owes, and it is neutral: an accent ring on the
+ * amber tile would have been two colours arguing on one 148px card. */
+button.home-tile[aria-pressed='true'] {
+  box-shadow: inset 0 0 0 2px var(--text-primary);
+}
+
+button.home-tile[aria-pressed='true'] .home-tile-label {
+  color: var(--text-primary);
 }
 
 .home-tile-sub {
@@ -184,9 +247,27 @@
   color: var(--text-warning);
 }
 
+/* THE GROUP TOTAL, `.rhead .rt`'s third span — a wrapper and almost nothing
+ * else. `.repo-head-facts` is a flex row with a 13px gap, so `+84` and `−0`
+ * emitted as two of its children would be spaced apart like two separate
+ * facts; inside one inline span they are one. The ink is on `.tree-add` and
+ * `.tree-del` below, which is the same pair the rows use, because it is the
+ * same statement at a different scale. */
+.repo-head-num {
+  white-space: nowrap;
+}
+
+/* SIX COLUMNS NOW, WHICH IS THE MOCKUP'S OWN COUNT.
+ * `.trow{grid-template-columns:12px minmax(0,1.35fr) minmax(0,1.05fr) 84px
+ * 136px 74px}` — this row had five, because the 84px numbers column had
+ * nothing to put in it until #260 put `additions`, `deletions`, `commits` and
+ * `changed_files` on the wire. 5.25rem is that 84px at the 16px root, and the
+ * two flexible columns give up 22px each to make room, which is what the
+ * mockup's own arithmetic does at this measure. */
 .tree {
   display: grid;
-    grid-template-columns: 0.75rem minmax(0, 1.35fr) minmax(0, 1.05fr) 8.5rem 4.625rem;
+    grid-template-columns:
+      0.75rem minmax(0, 1.35fr) minmax(0, 1.05fr) 5.25rem 8.5rem 4.625rem;
     gap: 12px;
     align-items: center;
     width: 100%;
@@ -302,6 +383,117 @@
     font-family: var(--font-mono);
     font-size: var(--text-2xs);
     line-height: var(--lh-sm);
+}
+
+/* ── the row's numbers, #81 ──────────────────────────────────────────────
+ *
+ * `.trow .num{font-family:mono;font-size:11px;white-space:nowrap;
+ * text-align:right}` — the mockup's fourth column, right-aligned against the
+ * state column beside it. 10.5px rather than its 11, because every other
+ * number on this row is `--text-2xs` and one of them being half a point bigger
+ * would be a hierarchy nobody meant.
+ *
+ * TWO LINES, AND THAT IS ARITHMETIC RATHER THAN TASTE. The file count started
+ * on a third line of its own, which took this cell to 51px — 18px of numbers,
+ * 4+9 of sparkline, 2+18 of count — inside a row whose other two columns are
+ * 38px (two lines of `--text-2xs` on `--lh-sm` with a 2px gap). So every
+ * measured row stood 73px against every unmeasured row's 60px, and on the
+ * fixture board that is 60/73/73/60/73 down one group, which reads as a
+ * rendering fault rather than as a difference in what is known. The count and
+ * the sparkline share the second line and the whole board is 60px again.
+ *
+ * THE CELL IS ALWAYS EMITTED, EMPTY OR NOT. It is a grid column: a row for an
+ * unmeasured tree that left its `span` out would slide its state and its age
+ * one track to the left, and the board would stop lining up on exactly the
+ * rows this issue is about. */
+.tree-num {
+  min-width: 0;
+    text-align: right;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+/* ONE PAIR OF TOKENS FOR BOTH THE INK AND THE FILL, which is why these two
+ * names are on four different elements: the `+34` on a row, the `−11` beside
+ * it, the group total in the heading above, and the sparkline cells below.
+ * They all say the same two things.
+ *
+ * `--text-success` and `--text-danger`, measured on all three row surfaces in
+ * both themes: the worst of the twelve is 4.71:1 (success on the light card),
+ * so the TEXT clears 4.5:1 and the BARS clear the 3:1 a non-text indicator
+ * owes with room to spare. `--bg-success` was the other candidate and it is
+ * 3.21:1 in light — fine as a fill, not fine as 10.5px type. */
+.tree-add {
+  color: var(--text-success);
+}
+
+.tree-del {
+  color: var(--text-danger);
+}
+
+/* THE SECOND LINE OF THE CELL: the file count and the sparkline, packed right
+ * under the pair above them. Right-packed rather than spread, so the sparkline
+ * keeps the edge the numbers are aligned to and the count reads as attached to
+ * it — spread, the two would look like two columns in an 84px box. */
+.tree-sub {
+  display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-top: 2px;
+}
+
+/* `.bars{display:inline-flex;gap:2px}` plus `.trow .num .bars{display:flex;
+ * gap:2px;justify-content:flex-end}` — the mockup's own numbers, and the
+ * alignment is what makes the sparkline a second reading of the pair above it
+ * rather than a decoration floating beside it. */
+.tree-bars {
+  display: flex;
+    flex: 0 0 auto;
+    gap: 2px;
+    justify-content: flex-end;
+}
+
+/* `.bars i{width:4px;height:9px;border-radius:1px;display:block}`.
+ *
+ * THE MOCKUP'S THIRD KIND OF CELL IS NOT HERE, and that is deliberate. Its
+ * `i.e` is a grey filler at `#333a43` — a background-painted mark carrying no
+ * meaning, which is precisely the shape `docs/audit.js`'s indicator walk
+ * exists to catch and would have measured at about 1.2:1. `home::spark` emits
+ * five cells split by ratio and both kinds are painted, so there is no empty
+ * one to fail. */
+.tree-bar {
+  display: block;
+    width: 4px;
+    height: 9px;
+    border-radius: 1px;
+}
+
+.tree-bar.tree-add {
+  background: var(--text-success);
+}
+
+.tree-bar.tree-del {
+  background: var(--text-danger);
+}
+
+/* The file count, left of the sparkline on the cell's second line.
+ * `changed_files` is a third fact rather than a third number in the pair —
+ * "3 files" is a sentence and "+77 −33 3" is not — so it takes the sub-line
+ * ink the rest of this row spends on its second lines.
+ *
+ * It is the one thing in this 84px cell that can be arbitrarily long: a pull
+ * request touching a thousand files is `1000 files`, and `min-width: 0` plus
+ * the ellipsis is what stops it pushing the sparkline out of the column
+ * instead of losing its own tail. */
+.tree-files {
+  min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .tree-state {

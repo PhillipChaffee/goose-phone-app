@@ -408,17 +408,24 @@ impl PullsState {
     /// measured whether or not it has a pull request. Nothing else has to
     /// change here when it does.
     ///
-    /// Nothing renders a repo header yet, so outside `cfg(test)` this has no
-    /// caller and would be `dead_code` against CI's `-D warnings`. The
-    /// exception is an `expect` rather than an `allow` on purpose: the day the
-    /// header is built the expectation goes unfulfilled and the build says to
-    /// take these four lines out.
+    /// The repo header IS built now — `shell::desktop::home`'s `code_board`
+    /// fills `RepoGroup::num` from this, once per group — so the unconditional
+    /// `expect(dead_code)` that used to stand here has gone, which is exactly
+    /// what its own reason said would happen to it.
+    ///
+    /// What is left of it is the phone. That header is the DESKTOP's, and
+    /// `src/shell/mod.rs` compiles the whole desktop shell out under
+    /// `cfg(any(target_os = "ios", target_os = "android"))` — so on an iOS
+    /// build this genuinely has no caller, and `RUSTFLAGS="-D warnings" cargo
+    /// check --target aarch64-apple-ios` is the gate that says so. Still an
+    /// `expect` rather than an `allow`: the day the phone's own list grows a
+    /// repo heading, that build fails and takes these lines out.
     #[cfg_attr(
-        not(test),
+        all(not(test), any(target_os = "ios", target_os = "android")),
         expect(
             dead_code,
-            reason = "the repo header that reads this is not built yet; when \
-                      it is, this expectation fails and takes itself out"
+            reason = "the repo heading that reads this is the desktop shell's, \
+                      and the phone does not compile that shell"
         )
     )]
     pub(crate) fn group_diffstat<'a>(

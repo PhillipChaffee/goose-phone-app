@@ -87,12 +87,20 @@ pub(crate) const fn compose_placeholder(plane: Plane) -> &'static str {
 
 /// A count worth putting on the Code half's home screen.
 ///
-/// Only four, and every one of them is read off a signal. The mockup has nine;
-/// five of them (spend, containers warm, queue depth, cold-start seconds,
-/// runners busy) have no source on this side of the wire at all.
+/// Only five, and every one of them is read off a signal. The mockup has nine;
+/// four of them (spend, containers warm, queue depth, cold-start seconds,
+/// runners busy) have no source on this side of the wire at all. The fifth was
+/// **pull requests**, and it was never on that list — #77's whole argument is
+/// that its number IS on the wire and costs no container: `chat_pulls` is the
+/// manager answering GitHub with its own credential, never proxied, so the
+/// plane-wide sweep behind it wakes nothing (`code::refresh_plane_pulls`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Tile {
-    pub value: String,
+    /// A COUNT, not a string, and that is load-bearing rather than tidy: every
+    /// one of these is `something.len()`, and [`Tile::press`] has to ask
+    /// whether the number is zero. Held as a `String` it asked by comparing
+    /// against `"0"`.
+    pub value: usize,
     pub label: &'static str,
     /// The mockup's second line. `None` where there is no SECOND fact — a
     /// blank sub-line is a data slot pretending to be data.
@@ -103,6 +111,54 @@ pub(crate) struct Tile {
     /// can be, and it is the one counting questions the agents are blocked on
     /// — the same fact `sidebar::Mark::Waiting` paints on a row.
     pub urgent: bool,
+    /// The slice of the board directly under it that this tile names, when
+    /// there is one — #203, and the whole of what makes a tile a control.
+    ///
+    /// **Only where the number and the rows AGREE by construction**, which is
+    /// why two of the five are `None` rather than pointed somewhere plausible.
+    /// A tile that reads `5` and filters to four rows is a worse control than
+    /// a tile that does not press: the reader has no way to tell which of the
+    /// two numbers is the lie. `repos` counts groups and no subset of rows;
+    /// `pull requests` counts pull REQUESTS, and a branch that was reopened
+    /// has two of them on one row. See [`code_tiles`].
+    pub filter: Option<BoardFilter>,
+}
+
+impl Tile {
+    /// The filter pressing this tile selects, or `None` when pressing it would
+    /// do nothing.
+    ///
+    /// A count of zero has no rows to select, so the tile renders as the `div`
+    /// it always was rather than as a control that empties the board. That is
+    /// also what keeps `Home` from having to handle a filtered board with
+    /// nothing in it: the only filters reachable are the ones with rows.
+    pub(crate) const fn press(&self) -> Option<BoardFilter> {
+        match self.filter {
+            Some(f) if self.value > 0 => Some(f),
+            _ => None,
+        }
+    }
+}
+
+/// Which slice of the board the tiles are asking for — #203.
+///
+/// Three, and each is the predicate its own tile counts with, not a
+/// paraphrase of it. That is the only reason the set is three rather than
+/// five: a filter whose row count can differ from the number on the tile that
+/// opened it is a filter that makes the screen less trustworthy, not more.
+///
+/// [`Self::Awake`] reads `ChatMeta::is_running` and NOT `TreeState::Awake`,
+/// and the difference is the whole trap. A tree whose container is up and
+/// which is also blocked on the reader is `TreeState::Waiting` — waiting
+/// outranks awake, for `sidebar::Mark`'s reason — while the `awake` tile
+/// counts it, because its container really is up. Filtering on the row's
+/// state would show one row under a tile reading `2`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum BoardFilter {
+    #[default]
+    All,
+    Waiting,
+    Awake,
 }
 
 /// The Code half's counts, from `AppCtx` and nothing else.
@@ -130,20 +186,29 @@ pub(crate) fn code_tiles(ctx: &AppCtx) -> Vec<Tile> {
         names.len()
     };
     let allowed = (ctx.code_repos)().len();
-    vec![
+    let mut tiles = vec![
         Tile {
-            value: chats.len().to_string(),
+            value: chats.len(),
             label: "working trees",
             sub: None,
             urgent: false,
             live: false,
+            // The whole board, which is what pressing it selects: it is how
+            // the reader gets back from one of the two below.
+            filter: Some(BoardFilter::All),
         },
         Tile {
-            value: waiting.to_string(),
+            value: waiting,
             label: "waiting on you",
             sub: None,
             urgent: waiting > 0,
             live: false,
+            // THE ONE #203 IS ABOUT. It is the only tile painted urgent, so
+            // it is the loudest object on the screen, and it was the one that
+            // did nothing. Its count is distinct chats in `code_permissions`
+            // and `code_board` tags a row `Waiting` off the same list, so the
+            // number and the rows cannot disagree.
+            filter: Some(BoardFilter::Waiting),
         },
         // "AWAKE", NOT "RUNNING NOW", and it is a correction rather than a
         // rewording. `ChatMeta.status` is the CONTAINER's lifecycle —
@@ -153,20 +218,90 @@ pub(crate) fn code_tiles(ctx: &AppCtx) -> Vec<Tile> {
         // mid-turn, so a tile headed "running now" was over-claiming, directly
         // above rows that would have had to say "idle".
         Tile {
-            value: awake.to_string(),
+            value: awake,
             label: "awake",
             sub: (asleep > 0).then(|| format!("{asleep} asleep")),
             urgent: false,
             live: awake > 0,
+            // `is_running`, the same field this count is built from — see
+            // `BoardFilter::Awake` for why it is not the row's own state.
+            filter: Some(BoardFilter::Awake),
         },
-        Tile {
-            value: repos.to_string(),
-            label: "repos",
-            sub: (allowed > 0).then(|| format!("{allowed} allowed")),
-            urgent: false,
-            live: false,
-        },
-    ]
+    ];
+    tiles.extend(pull_tile(ctx, &chats));
+    tiles.push(Tile {
+        value: repos,
+        label: "repos",
+        sub: (allowed > 0).then(|| format!("{allowed} allowed")),
+        urgent: false,
+        live: false,
+        // INERT, and #203 asked the question honestly rather than guessing an
+        // answer. This value is groups on the board, its sub-line is the
+        // manager's ALLOWLIST — a different set — and there is no repos
+        // screen anywhere in the app and no endpoint behind one. The nearest
+        // thing that exists is "start a session in a repo", which is a verb
+        // and not this noun.
+        filter: None,
+    });
+    tiles
+}
+
+/// The plane's open pull requests, or `None` when the count would be short.
+///
+/// **The absence is the honest answer and it is the whole of this function.**
+/// `PullsState::by_chat` holds an entry per chat the sweep has ANSWERED for,
+/// and `refresh_plane_pulls` caps a sweep at `SWEEP_MAX_CHATS` (24) — so on a
+/// fleet of thirty, or in the seconds before the first sweep finishes,
+/// flattening the map gives a number that is silently smaller than the truth
+/// and drifts upward while the reader watches it. #77 gave two ways out ("say
+/// so on the subtitle, or leave the tile off past the cap") and this takes the
+/// second: a tile that is missing is a reader who goes and looks, and a tile
+/// reading `3` when it is `9` is a reader who does not.
+///
+/// So the tile appears only when **every tree on the board has been asked
+/// about**. `by_chat` is pruned against the whole index by the sweep, so
+/// "asked about" is exactly `contains_key`, and a chat mapped to an empty list
+/// is an answer — it has no pull requests — rather than a gap.
+///
+/// Draft and red are counted among the OPEN ones only. A merged pull request
+/// with a red build is nobody's problem, which is `code::row_checks_label`'s
+/// rule in its own words, one screen up.
+fn pull_tile(ctx: &AppCtx, chats: &[opencode_client::ChatMeta]) -> Option<Tile> {
+    let pulls = (ctx.code_pulls)();
+    if !chats.iter().all(|c| pulls.by_chat.contains_key(&c.id)) {
+        return None;
+    }
+    let open: Vec<&opencode_client::PullRequest> = chats
+        .iter()
+        .filter_map(|c| pulls.by_chat.get(&c.id))
+        .flatten()
+        .filter(|p| matches!(p.state, opencode_client::PullState::Open))
+        .collect();
+    let draft = open.iter().filter(|p| p.draft).count();
+    let red = open
+        .iter()
+        .filter(|p| matches!(p.checks, opencode_client::Checks::Failing))
+        .count();
+    let mut facts: Vec<String> = Vec::new();
+    if draft > 0 {
+        facts.push(format!("{draft} draft"));
+    }
+    if red > 0 {
+        facts.push(format!("{red} red"));
+    }
+    Some(Tile {
+        value: open.len(),
+        label: "pull requests",
+        sub: (!facts.is_empty()).then(|| facts.join(" \u{b7} ")),
+        urgent: false,
+        live: false,
+        // INERT, for the reason on `Tile::filter`: this counts pull requests
+        // and the board counts trees, and a branch someone reopened carries
+        // two of them on one row (`PullsState::plane_pull` says so where it
+        // takes the first). A filter that could show four rows under a tile
+        // reading five is the defect #203 is complaining about, not its fix.
+        filter: None,
+    })
 }
 
 /// What a working tree is doing, in the one word a board has room for.
@@ -208,11 +343,31 @@ pub(crate) struct Tree {
     /// `ChatMeta.base` is empty for every chat made before the base picker
     /// existed, which is a default rather than a migration — so an empty one
     /// renders no line instead of the word "from".
+    ///
+    /// NOT DRAWN ANY MORE — [`Tree::branch_sub`] is what the row's second
+    /// branch line says, and this is one of the two things it can be. Kept as
+    /// its own field because [`RepoGroup::base`] is a claim about the raw ref
+    /// and would be wrong built from a line that might say `#121 open`.
     pub base: Option<String>,
+    /// The line under the branch name: the pull request and its commit count
+    /// where the branch has one, `from <base>` where it does not — #82.
+    pub branch_sub: Option<String>,
+    /// `(additions, deletions)`, and only where a server sent both — #81. A
+    /// tree with no pull request has no numbers AT ALL, not zeroes, and the
+    /// three limits on that are written on `code::PullsState::plane_pull`.
+    pub num: Option<(u32, u32)>,
+    /// `changed_files` off the same pull request, on its own `Option` because
+    /// the manager can send it without the pair or the pair without it.
+    pub files: Option<u32>,
     /// The ask that is parked in it, or nothing. The mockup's own content here
     /// is the live shell command, which no index on this wire carries.
     pub say: Option<String>,
     pub state: TreeState,
+    /// Whether the CONTAINER is up, which is not [`TreeState::Awake`] — a tree
+    /// that is both up and blocked on the reader is `Waiting`. This is the
+    /// field [`BoardFilter::Awake`] selects on, so that the filter and the
+    /// tile that opened it count the same thing.
+    pub awake: bool,
     pub age: Option<String>,
 }
 
@@ -226,18 +381,152 @@ pub(crate) struct RepoGroup {
     pub base: Option<String>,
     pub awake: usize,
     pub waiting: usize,
+    /// The mockup's `.rhead .rt` total, `+108 −30`, or `None` — which is most
+    /// of the time and by construction.
+    ///
+    /// `code::PullsState::group_diffstat` is what answers it, and the refusal
+    /// is in ITS return type rather than in a comment here: one tree in the
+    /// group that no server measured and there is no total. Summing only the
+    /// trees that happen to carry a pull request would put a plausible figure
+    /// on a heading, and plausible is worse than absent — the reader cannot
+    /// tell a total of four trees from a total of two.
+    pub num: Option<(u32, u32)>,
     pub trees: Vec<Tree>,
+}
+
+/// One tree's commit count, in words. `None` where no pull request carries
+/// one — a branch with no pull request has no commits anybody counted, and
+/// `0 commits` would be a claim (#82).
+fn commits_word(n: u32) -> String {
+    if n == 1 {
+        "1 commit".to_owned()
+    } else {
+        format!("{n} commits")
+    }
+}
+
+/// The file count, in words, for the row's number column.
+fn files_word(n: u32) -> String {
+    if n == 1 {
+        "1 file".to_owned()
+    } else {
+        format!("{n} files")
+    }
+}
+
+/// The mockup's five-cell `+/−` sparkline, as one `true` per added-cell.
+///
+/// It is a RATIO and nothing else — five cells split between the additions and
+/// the deletions — so it renders exactly wherever `+N −M` does and says
+/// nothing the pair beside it does not. #81 asked for it in those words.
+///
+/// **Empty when there is nothing to divide.** A pull request that added and
+/// removed nothing draws no bar at all rather than five blank cells: an empty
+/// cell would be a fill with no meaning, and `docs/audit.js`'s indicator walk
+/// would measure it as one. That is also why the two painted kinds are the
+/// only kinds — the mockup's grey `i.e` filler is a background-painted mark
+/// carrying nothing, which is a finding rather than a design.
+///
+/// Both clamps are the honest half of the rounding: a side with any change at
+/// all keeps a cell, so `+84 −1` shows the deletion instead of rounding it
+/// away, and `+1 −84` still shows the addition.
+fn spark(add: u32, del: u32) -> Vec<bool> {
+    let total = u64::from(add) + u64::from(del);
+    if total == 0 {
+        return Vec::new();
+    }
+    let mut green = (5 * u64::from(add) + total / 2) / total;
+    if add > 0 {
+        green = green.max(1);
+    }
+    if del > 0 {
+        green = green.min(4);
+    }
+    (0..5).map(|i| i < green).collect()
+}
+
+/// One row, from the index entry, the ask parked in it and the newest pull
+/// request off its branch.
+///
+/// Its own function because [`code_board`] is a grouping loop and this is a
+/// dozen field decisions, three of which (`branch_sub`, `num`, `files`) are
+/// the whole of #81 and #82 and want to be read together rather than found
+/// among the bucketing.
+fn tree_of(
+    meta: &opencode_client::ChatMeta,
+    ask: Option<&(String, opencode_client::CodePermission)>,
+    pull: Option<&opencode_client::PullRequest>,
+    state: TreeState,
+    now: i64,
+) -> Tree {
+    let base = (!meta.base.trim().is_empty()).then(|| format!("from {}", meta.base));
+    Tree {
+        id: meta.id.clone(),
+        title: if meta.title.trim().is_empty() {
+            meta.id.clone()
+        } else {
+            meta.title.clone()
+        },
+        branch: (!meta.branch.trim().is_empty()).then(|| meta.branch.clone()),
+        base: base.clone(),
+        // THE MOCKUP'S FINISHED ROW, `4 commits · merged #124`, and each half
+        // arrives on its own. `commits` on a pull request IS the count ahead
+        // of its base, so the mockup's other second line, `3 commits · ↑3
+        // ahead`, is the same number said twice wherever a pull request
+        // exists — and where one does not, neither half has a source and the
+        // line falls back to the base ref.
+        branch_sub: pull
+            .map(|p| match p.commits {
+                Some(n) => format!(
+                    "{} \u{b7} {}",
+                    commits_word(n),
+                    crate::code::row_pull_word(p)
+                ),
+                None => crate::code::row_pull_word(p),
+            })
+            .or(base),
+        num: pull.and_then(opencode_client::PullRequest::diffstat),
+        files: pull.and_then(|p| p.changed_files),
+        say: ask
+            .map(|(_, p)| p.title.trim().to_owned())
+            .filter(|t| !t.is_empty()),
+        state,
+        awake: meta.is_running(),
+        // Guarded against a stamp in the FUTURE, which is a clock skew between
+        // this machine and the manager and would otherwise render as "in 3
+        // hours". `now` is an `i64` of seconds and `last_active` an `f64` of
+        // the same; the cast is scoped to this one comparison and is exact for
+        // any epoch second this century.
+        age: {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "an epoch second is ~2^31, three orders of magnitude \
+                          below where f64 stops representing integers exactly"
+            )]
+            let now = now as f64;
+            (meta.last_active > 0.0 && meta.last_active <= now)
+                .then(|| crate::state::relative_time_secs(meta.last_active))
+        },
+    }
 }
 
 /// THE CODE HALF'S BOARD: per-repo groups of working trees.
 ///
 /// `now` is a parameter for `sidebar::band_of`'s reason — a function that read
 /// the clock could only be checked by a test that also read it.
-pub(crate) fn code_board(ctx: &AppCtx, now: i64) -> Vec<RepoGroup> {
+///
+/// `filter` selects rows BEFORE they are grouped, so a group with nothing left
+/// in it is never made and every count on a heading describes what is under
+/// it. See [`BoardFilter`] for why the set is three.
+pub(crate) fn code_board(ctx: &AppCtx, now: i64, filter: BoardFilter) -> Vec<RepoGroup> {
     // The FRONT of each chat's queue, which is what `views::code` already does
     // with the same list: a board row is not the place to work through a
     // backlog, it is the place to say there is one.
     let asks = (ctx.code_permissions)();
+    // ONE READ FOR THE WHOLE BOARD, which is `views::code`'s habit with the
+    // same map: `plane_pull` is a hash lookup, but the signal behind it is a
+    // clone of every pull request the sweep has seen.
+    let pulls = (ctx.code_pulls)();
 
     let mut chats = (ctx.code_chats)();
     // Newest first, `sidebar::code_rows`' own comparator.
@@ -258,36 +547,18 @@ pub(crate) fn code_board(ctx: &AppCtx, now: i64) -> Vec<RepoGroup> {
         } else {
             TreeState::Asleep
         };
-        let tree = Tree {
-            id: meta.id.clone(),
-            title: if meta.title.trim().is_empty() {
-                meta.id.clone()
-            } else {
-                meta.title.clone()
-            },
-            branch: (!meta.branch.trim().is_empty()).then(|| meta.branch.clone()),
-            base: (!meta.base.trim().is_empty()).then(|| format!("from {}", meta.base)),
-            say: ask
-                .map(|(_, p)| p.title.trim().to_owned())
-                .filter(|t| !t.is_empty()),
-            state,
-            // Guarded against a stamp in the FUTURE, which is a clock skew
-            // between this machine and the manager and would otherwise render
-            // as "in 3 hours". `now` is an `i64` of seconds and `last_active`
-            // an `f64` of the same; the cast is scoped to this one comparison
-            // and is exact for any epoch second this century.
-            age: {
-                #[expect(
-                    clippy::cast_precision_loss,
-                    reason = "an epoch second is ~2^31, three orders of \
-                              magnitude below where f64 stops representing \
-                              integers exactly"
-                )]
-                let now = now as f64;
-                (meta.last_active > 0.0 && meta.last_active <= now)
-                    .then(|| crate::state::relative_time_secs(meta.last_active))
-            },
+        let keep = match filter {
+            BoardFilter::All => true,
+            BoardFilter::Waiting => state == TreeState::Waiting,
+            BoardFilter::Awake => meta.is_running(),
         };
+        if !keep {
+            continue;
+        }
+        // The newest pull request off this branch, or nothing at all. Every
+        // number on the row hangs off this one read, and `plane_pull`'s own
+        // doc is where the three limits it inherits are written down.
+        let tree = tree_of(meta, ask, pulls.plane_pull(&meta.id), state, now);
         if let Some(group) = groups.iter_mut().find(|g| g.repo == repo) {
             group.trees.push(tree);
         } else {
@@ -296,11 +567,17 @@ pub(crate) fn code_board(ctx: &AppCtx, now: i64) -> Vec<RepoGroup> {
                 base: None,
                 awake: 0,
                 waiting: 0,
+                num: None,
                 trees: vec![tree],
             });
         }
     }
     for group in &mut groups {
+        // THE GROUP TOTAL IS NOT SUMMED HERE, and that is the point. It is
+        // asked of `group_diffstat`, which refuses a group holding a tree no
+        // server measured — the refusal is a return type rather than a note,
+        // so this call site has no argument to make.
+        group.num = pulls.group_diffstat(group.trees.iter().map(|t| t.id.as_str()));
         group.awake = group
             .trees
             .iter()
@@ -865,6 +1142,24 @@ fn CodeDial() -> Element {
     rsx! {}
 }
 
+/// What is inside a count tile, whichever element is carrying it.
+///
+/// A component rather than a copy, because #203 turns three of the five tiles
+/// into `button`s and leaves two as `div`s: written twice, the three class
+/// names inside would be two places to rename, and
+/// `every_class_the_desktop_shell_renders_is_in_the_captured_store` counts a
+/// literal it finds in either.
+#[component]
+fn TileFace(tile: Tile) -> Element {
+    rsx! {
+        div { class: "home-tile-value", "{tile.value}" }
+        div { class: "home-tile-label", "{tile.label}" }
+        if let Some(sub) = tile.sub {
+            div { class: "home-tile-sub", "{sub}" }
+        }
+    }
+}
+
 /// The plane's home screen.
 ///
 /// Its own component rather than rsx inside `AppShell`, for `SidebarList`'s
@@ -881,6 +1176,35 @@ pub(crate) fn Home(plane: Plane) -> Element {
     let count = match plane {
         Plane::Chat => (ctx.sessions)().len(),
         Plane::Code => (ctx.code_chats)().len(),
+    };
+
+    // WHICH SLICE OF THE BOARD THE TILES ARE ASKING FOR — #203.
+    //
+    // The screen's own signal and not `AppCtx`'s, deliberately: it is a view
+    // of a list rather than a fact about the plane, and leaving the shell
+    // resets it, which is the right answer to "I filtered to `waiting`, went
+    // and answered it, and came back".
+    let mut want = use_signal(BoardFilter::default);
+    let tiles = if plane == Plane::Code {
+        code_tiles(&ctx)
+    } else {
+        Vec::new()
+    };
+    // A FILTER WHOSE COUNT HAS FALLEN TO ZERO IS NOT A FILTER, and this is
+    // read rather than written back, because writing a signal during a render
+    // is how a render loop starts. Reachable without any race: filter to
+    // `waiting on you`, answer the last ask in another window, and the poll
+    // empties the queue under a board that would otherwise show nothing at
+    // all with no way back.
+    let filter = match want() {
+        BoardFilter::All => BoardFilter::All,
+        other => {
+            if tiles.iter().any(|t| t.press() == Some(other)) {
+                other
+            } else {
+                BoardFilter::All
+            }
+        }
     };
 
     let starters = if plane == Plane::Chat {
@@ -983,21 +1307,60 @@ pub(crate) fn Home(plane: Plane) -> Element {
                         if !connected {
                             p { class: "home-standing", "{standing(plane, connected, count)}" }
                         }
+                        // THREE OF THE FIVE PRESS, AND TWO DO NOT — #203, and
+                        // the split is the answer rather than a shortfall.
+                        // The issue asked honestly what each tile could go to
+                        // and found two with no destination; `Tile::filter`
+                        // carries which is which and says why. A `button`
+                        // where a `div` was costs no class name, so what the
+                        // capture gate sees added here is nothing — the
+                        // pressed state travels on `aria-pressed`, which is
+                        // also the attribute a screen reader needs.
+                        //
+                        // NO FILL ON HOVER OR ON PRESS, and that is measured
+                        // rather than taste: `40-home-chat.css` records that
+                        // `--text-secondary` on `--surface-card` is 4.64:1 in
+                        // light and that `--surface-raise` would take
+                        // `.home-tile-label` to 4.01 and fail the text walk.
+                        // The whole treatment is therefore an edge.
                         div { class: "home-tiles",
-                            for tile in code_tiles(&ctx) {
-                                div {
-                                    key: "{tile.label}",
-                                    class: if tile.urgent {
-                                        "home-tile urgent"
-                                    } else if tile.live {
-                                        "home-tile live"
-                                    } else {
-                                        "home-tile"
-                                    },
-                                    div { class: "home-tile-value", "{tile.value}" }
-                                    div { class: "home-tile-label", "{tile.label}" }
-                                    if let Some(sub) = tile.sub.clone() {
-                                        div { class: "home-tile-sub", "{sub}" }
+                            for tile in tiles {
+                                if let Some(pick) = tile.press() {
+                                    button {
+                                        key: "{tile.label}",
+                                        class: if tile.urgent {
+                                            "home-tile urgent"
+                                        } else if tile.live {
+                                            "home-tile live"
+                                        } else {
+                                            "home-tile"
+                                        },
+                                        "aria-pressed": if filter == pick { "true" } else { "false" },
+                                        // Pressing the engaged one clears it,
+                                        // which is what a toggle is: there is
+                                        // no other affordance on this screen
+                                        // for "show me all of them again"
+                                        // except the `working trees` tile,
+                                        // and that one IS this gesture.
+                                        onclick: move |_| {
+                                            want.set(
+                                                if filter == pick { BoardFilter::All } else { pick },
+                                            );
+                                        },
+                                        TileFace { tile: tile.clone() }
+                                    }
+                                }
+                                if tile.press().is_none() {
+                                    div {
+                                        key: "{tile.label}",
+                                        class: if tile.urgent {
+                                            "home-tile urgent"
+                                        } else if tile.live {
+                                            "home-tile live"
+                                        } else {
+                                            "home-tile"
+                                        },
+                                        TileFace { tile: tile.clone() }
                                     }
                                 }
                             }
@@ -1012,7 +1375,7 @@ pub(crate) fn Home(plane: Plane) -> Element {
                         // whole row is the target and it opens the chat, where
                         // the permission modal offers the same two answers with
                         // the ask beside them.
-                        for group in code_board(&ctx, crate::state::now_secs()) {
+                        for group in code_board(&ctx, crate::state::now_secs(), filter) {
                             div { key: "{group.repo}", class: "repo-group",
                                 div { class: "repo-head",
                                     Icon { name: "repo" }
@@ -1030,6 +1393,20 @@ pub(crate) fn Home(plane: Plane) -> Element {
                                         }
                                         if group.awake > 0 {
                                             span { class: "live", "{group.awake} awake" }
+                                        }
+                                        // THE MOCKUP'S `+108 −30`, and it is
+                                        // absent on most headings by design.
+                                        // See `RepoGroup::num`: one tree in
+                                        // the group that no server measured
+                                        // and `group_diffstat` answers
+                                        // nothing, so this slot cannot carry
+                                        // a figure nobody sent.
+                                        if let Some((add, del)) = group.num {
+                                            span { class: "repo-head-num",
+                                                span { class: "tree-add", "+{add}" }
+                                                " "
+                                                span { class: "tree-del", "\u{2212}{del}" }
+                                            }
                                         }
                                     }
                                 }
@@ -1068,8 +1445,62 @@ pub(crate) fn Home(plane: Plane) -> Element {
                                             if let Some(branch) = tree.branch.clone() {
                                                 span { class: "tree-branch-name", "{branch}" }
                                             }
-                                            if let Some(base) = tree.base.clone() {
-                                                span { class: "tree-branch-base", "{base}" }
+                                            // `4 commits · #121 open` where
+                                            // the branch has a pull request,
+                                            // `from main` where it does not —
+                                            // #82. Same class, same geometry;
+                                            // what changed is that the line
+                                            // stopped repeating the heading
+                                            // directly above it on every row.
+                                            if let Some(sub) = tree.branch_sub.clone() {
+                                                span { class: "tree-branch-base", "{sub}" }
+                                            }
+                                        }
+                                        // THE 84px COLUMN THE ROW HAS NEVER
+                                        // HAD — #81. Emitted whether or not
+                                        // it has anything in it, because it
+                                        // is a grid cell: an unmeasured tree
+                                        // that skipped its `span` would slide
+                                        // its state and its age one column
+                                        // left and the board would stop
+                                        // lining up.
+                                        span { class: "tree-num",
+                                            if let Some((add, del)) = tree.num {
+                                                span { class: "tree-add", "+{add}" }
+                                                " "
+                                                span { class: "tree-del", "\u{2212}{del}" }
+                                            }
+                                            // TWO LINES AND NOT THREE, and it
+                                            // is measured: the file count on
+                                            // a line of its own took this
+                                            // cell to 51px inside a row whose
+                                            // other columns are 38, so every
+                                            // measured row stood 13px taller
+                                            // than every unmeasured one and
+                                            // the board went ragged. The
+                                            // count and the sparkline share
+                                            // the second line and every row
+                                            // is 60px again.
+                                            if tree.num.is_some() || tree.files.is_some() {
+                                                span { class: "tree-sub",
+                                                    if let Some(files) = tree.files {
+                                                        span { class: "tree-files", {files_word(files)} }
+                                                    }
+                                                    if let Some((add, del)) = tree.num {
+                                                        span { class: "tree-bars",
+                                                            for (i, on) in spark(add, del).into_iter().enumerate() {
+                                                                i {
+                                                                    key: "{i}",
+                                                                    class: if on {
+                                                                        "tree-bar tree-add"
+                                                                    } else {
+                                                                        "tree-bar tree-del"
+                                                                    },
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                         span { class: "tree-state", {tree.state.word()} }
@@ -1646,7 +2077,8 @@ fn home_sheet(
 mod tests {
     use super::{
         code_board, code_tiles, compose_chips, compose_placeholder, part_of_day, recent_for,
-        sched_line, standing, starter_kinds, Home, RecentState, Starter, TreeState,
+        sched_line, spark, standing, starter_kinds, BoardFilter, Home, RecentState, Starter, Tile,
+        TreeState,
     };
     use crate::nav::Plane;
     use crate::views::press::Pressable;
@@ -1765,14 +2197,13 @@ mod tests {
             tiles
                 .iter()
                 .find(|t| t.label == label)
-                .map(|t| t.value.clone())
-                .unwrap_or_default()
+                .map_or(usize::MAX, |t| t.value)
         };
-        assert_eq!(by("working trees"), "3");
+        assert_eq!(by("working trees"), 3);
         // "awake" and not "running now": `ChatMeta.status` is the container's
         // lifecycle and not a turn's, and `code::status_label` calls the same
         // state "idle". The tile was over-claiming — see `code_tiles`.
-        assert_eq!(by("awake"), "1");
+        assert_eq!(by("awake"), 1);
         assert_eq!(
             tiles
                 .iter()
@@ -1781,12 +2212,136 @@ mod tests {
             Some("2 asleep".to_owned()),
             "the tile's second line should account for the trees that are not awake"
         );
-        assert_eq!(by("repos"), "2", "two trees in one repo counted twice");
-        assert_eq!(by("waiting on you"), "0");
+        assert_eq!(by("repos"), 2, "two trees in one repo counted twice");
+        assert_eq!(by("waiting on you"), 0);
         assert_eq!(
             tiles.iter().filter(|t| t.urgent).count(),
             0,
             "nothing is blocked, so nothing should be shouting"
+        );
+        // NO PULL-REQUEST TILE, because the sweep has answered for none of
+        // these three trees. Flattening `by_chat` here would have printed `0`
+        // over a plane whose pull requests nobody has asked about yet — see
+        // `pull_tile`.
+        assert_eq!(
+            tiles.iter().filter(|t| t.label == "pull requests").count(),
+            0,
+            "the plane claimed a pull-request count before the sweep had \
+             answered for a single tree"
+        );
+    }
+
+    /// THE PULL-REQUEST TILE IS ABSENT UNTIL EVERY TREE HAS BEEN ASKED
+    /// ABOUT, and present the moment they all have — #77.
+    ///
+    /// The two directions are one test because the interesting half is the
+    /// first: `by_chat` fills one chat at a time and is capped at 24, so a
+    /// tile built by flattening it would print a number that is silently
+    /// short and then creep upward while the reader watches. `pull_tile`
+    /// refuses instead, which is #77's own second option — "leave the tile off
+    /// past the cap".
+    ///
+    /// REPRODUCED: drop the `all(contains_key)` guard in `pull_tile` and the
+    /// first half fails with a tile reading `1` over a plane with two trees.
+    #[test]
+    fn the_pull_request_tile_waits_until_every_tree_has_answered() {
+        let short = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    meta("a", "repo", "stopped", 2.0),
+                    meta("b", "repo", "stopped", 1.0),
+                ]);
+                let mut pulls = ctx.code_pulls;
+                pulls.write().by_chat.insert(
+                    "a".to_owned(),
+                    vec![pull(7, opencode_client::PullState::Open)],
+                );
+            },
+            code_tiles,
+        );
+        assert!(
+            !short.iter().any(|t| t.label == "pull requests"),
+            "the tile counted one tree's pull requests and called it the \
+             plane's, while the second tree had never been asked about"
+        );
+
+        let whole = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    meta("a", "repo", "stopped", 2.0),
+                    meta("b", "repo", "stopped", 1.0),
+                ]);
+                let mut pulls = ctx.code_pulls;
+                let mut w = pulls.write();
+                w.by_chat.insert(
+                    "a".to_owned(),
+                    vec![opencode_client::PullRequest {
+                        draft: true,
+                        checks: opencode_client::Checks::Failing,
+                        ..pull(7, opencode_client::PullState::Open)
+                    }],
+                );
+                // Asked, and has none. An answer, not a gap.
+                w.by_chat.insert("b".to_owned(), Vec::new());
+            },
+            code_tiles,
+        );
+        let tile = whole
+            .iter()
+            .find(|t| t.label == "pull requests")
+            .expect("every tree answered, so the plane can say how many");
+        assert_eq!(tile.value, 1);
+        assert_eq!(
+            tile.sub.as_deref(),
+            Some("1 draft \u{b7} 1 red"),
+            "the mockup's own sub-line is `1 draft \u{b7} 1 red` and both \
+             facts are on the wire"
+        );
+        assert_eq!(
+            tile.press(),
+            None,
+            "the pull-request tile filtered the board, which counts trees \
+             rather than pull requests — see `Tile::filter`"
+        );
+    }
+
+    /// A MERGED PULL REQUEST IS NOT AN OPEN ONE, and its red build is nobody's
+    /// problem.
+    ///
+    /// `code::row_checks_label` already drops the build for a pull request
+    /// that is not open, one screen down; a tile that counted it would be the
+    /// app disagreeing with itself about the same pull request in one window.
+    #[test]
+    fn the_pull_request_tile_counts_only_what_is_open() {
+        let tiles = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![meta("a", "repo", "stopped", 1.0)]);
+                let mut pulls = ctx.code_pulls;
+                pulls.write().by_chat.insert(
+                    "a".to_owned(),
+                    vec![
+                        opencode_client::PullRequest {
+                            checks: opencode_client::Checks::Failing,
+                            ..pull(9, opencode_client::PullState::Merged)
+                        },
+                        pull(8, opencode_client::PullState::Closed),
+                    ],
+                );
+            },
+            code_tiles,
+        );
+        let tile = tiles
+            .iter()
+            .find(|t| t.label == "pull requests")
+            .expect("the tree answered, so the tile is owed");
+        assert_eq!(tile.value, 0, "a merged and a closed pull counted as open");
+        assert_eq!(
+            tile.sub, None,
+            "a merged pull request's red build was counted as a plane that \
+             has something red waiting for it"
         );
     }
 
@@ -2038,7 +2593,7 @@ mod tests {
                     },
                 )]);
             },
-            |ctx| code_board(ctx, 2_000_000_000),
+            |ctx| code_board(ctx, 2_000_000_000, BoardFilter::All),
         );
         assert_eq!(groups.len(), 2, "two repos, two groups");
         assert_eq!(groups[0].repo, "goose-phone-app");
@@ -2076,7 +2631,7 @@ mod tests {
                     based("c2", "repo", "main"),
                 ]);
             },
-            |ctx| code_board(ctx, 2_000_000_000),
+            |ctx| code_board(ctx, 2_000_000_000, BoardFilter::All),
         );
         assert_eq!(same[0].base.as_deref(), Some("from main"));
 
@@ -2088,12 +2643,312 @@ mod tests {
                     based("c2", "repo", "release"),
                 ]);
             },
-            |ctx| code_board(ctx, 2_000_000_000),
+            |ctx| code_board(ctx, 2_000_000_000, BoardFilter::All),
         );
         assert_eq!(
             mixed[0].base, None,
             "the heading picked one of two bases and presented it as the repo's"
         );
+    }
+
+    /// A ROW DRAWS THE NUMBERS IT WAS SENT AND NOT ONE MORE — #81, #82.
+    ///
+    /// Three trees in one repo, and the middle one is the whole point: it has
+    /// a pull request whose detail form the manager could not read, which is
+    /// the shape `mock-opencode-server`'s `#126` ships and the shape a real
+    /// manager produces on any minute GitHub is slow. `Option<u32>` on the
+    /// wire only helps if the renderer keeps the distinction, and a
+    /// `unwrap_or(0)` anywhere on this path would put `+0 −0` on that row —
+    /// a claim that the branch changed nothing.
+    ///
+    /// REPRODUCED: replace `pull.and_then(PullRequest::diffstat)` with a sum
+    /// defaulted to zero and the second row's assertion fails.
+    #[test]
+    fn a_row_carries_only_the_numbers_a_server_sent() {
+        let groups = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    based("measured", "repo", "main"),
+                    opencode_client::ChatMeta {
+                        last_active: 2.0,
+                        ..based("unmeasured", "repo", "main")
+                    },
+                    opencode_client::ChatMeta {
+                        last_active: 3.0,
+                        ..based("no-pull", "repo", "main")
+                    },
+                ]);
+                let mut pulls = ctx.code_pulls;
+                let mut w = pulls.write();
+                w.by_chat.insert(
+                    "measured".to_owned(),
+                    vec![opencode_client::PullRequest {
+                        commits: Some(4),
+                        additions: Some(77),
+                        deletions: Some(33),
+                        changed_files: Some(3),
+                        ..pull(121, opencode_client::PullState::Open)
+                    }],
+                );
+                w.by_chat.insert(
+                    "unmeasured".to_owned(),
+                    vec![pull(126, opencode_client::PullState::Open)],
+                );
+                w.by_chat.insert("no-pull".to_owned(), Vec::new());
+            },
+            |ctx| code_board(ctx, 2_000_000_000, BoardFilter::All),
+        );
+        let tree = |id: &str| {
+            groups[0]
+                .trees
+                .iter()
+                .find(|t| t.id == id)
+                .expect("every seeded tree is on the board")
+                .clone()
+        };
+
+        let measured = tree("measured");
+        assert_eq!(measured.num, Some((77, 33)));
+        assert_eq!(measured.files, Some(3));
+        assert_eq!(
+            measured.branch_sub.as_deref(),
+            Some("4 commits \u{b7} #121 open"),
+            "the mockup's finished row is `4 commits \u{b7} merged #124` and \
+             both halves are off one read of `plane_pull`"
+        );
+
+        let unmeasured = tree("unmeasured");
+        assert_eq!(
+            unmeasured.num, None,
+            "a pull request the manager could not read a detail form for was \
+             drawn as a branch that changed nothing"
+        );
+        assert_eq!(unmeasured.files, None);
+        assert_eq!(
+            unmeasured.branch_sub.as_deref(),
+            Some("#126 open"),
+            "the pull request is still real without its size, so the row says \
+             what it knows and drops only the count"
+        );
+
+        let none = tree("no-pull");
+        assert_eq!(none.num, None);
+        assert_eq!(
+            none.branch_sub.as_deref(),
+            Some("from main"),
+            "a branch with no pull request keeps the base ref, which is the \
+             only thing anybody has measured about it"
+        );
+    }
+
+    /// THE GROUP TOTAL REFUSES A GROUP HOLDING AN UNMEASURED TREE, and it is
+    /// `group_diffstat` that refuses rather than this file.
+    ///
+    /// The mockup's `.rhead .rt` reads `+108 −30` — a sum over every tree in
+    /// the repo. Summing only the ones that happen to carry a pull request
+    /// would put a plausible figure on a heading, and the reader has no way to
+    /// tell a total of three trees from a total of one. So the heading says
+    /// nothing until every tree under it has been measured, which today means
+    /// a group with no pull-request-less tree in it.
+    #[test]
+    fn a_repo_heading_totals_only_a_group_it_can_measure_whole() {
+        let groups = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    based("solo", "measured-repo", "main"),
+                    opencode_client::ChatMeta {
+                        last_active: 2.0,
+                        ..based("with-pull", "mixed-repo", "main")
+                    },
+                    opencode_client::ChatMeta {
+                        last_active: 3.0,
+                        ..based("without", "mixed-repo", "main")
+                    },
+                ]);
+                let sized = opencode_client::PullRequest {
+                    additions: Some(84),
+                    deletions: Some(0),
+                    ..pull(109, opencode_client::PullState::Merged)
+                };
+                let mut pulls = ctx.code_pulls;
+                let mut w = pulls.write();
+                w.by_chat.insert("solo".to_owned(), vec![sized.clone()]);
+                w.by_chat.insert("with-pull".to_owned(), vec![sized]);
+                w.by_chat.insert("without".to_owned(), Vec::new());
+            },
+            |ctx| code_board(ctx, 2_000_000_000, BoardFilter::All),
+        );
+        let group = |repo: &str| {
+            groups
+                .iter()
+                .find(|g| g.repo == repo)
+                .expect("both repos are on the board")
+                .num
+        };
+        assert_eq!(
+            group("measured-repo"),
+            Some((84, 0)),
+            "a group whose every tree was measured is a real total, and `0` \
+             deletions is a measurement rather than an absence"
+        );
+        assert_eq!(
+            group("mixed-repo"),
+            None,
+            "the heading totalled the one tree that had a pull request and \
+             presented it as the repo's"
+        );
+    }
+
+    /// A TILE SELECTS EXACTLY ITS OWN NUMBER OF ROWS — #203, and this is the
+    /// assertion the whole filter design exists to satisfy.
+    ///
+    /// The trap is `awake`. `c1`'s container is up AND it is blocked on the
+    /// reader, so its ROW is `Waiting` — waiting outranks awake — while the
+    /// awake TILE counts it, because the container really is up. A filter
+    /// written against `TreeState::Awake` would show one row under a tile
+    /// reading two, and a reader would have no way to tell which number lied.
+    ///
+    /// REPRODUCED: change `BoardFilter::Awake`'s arm in `code_board` to
+    /// `state == TreeState::Awake` and this fails on the awake tile with 1 row
+    /// against a value of 2.
+    #[test]
+    fn every_pressable_tile_selects_exactly_the_rows_it_counts() {
+        let (tiles, boards) = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    meta("c1", "one", "running", 300.0),
+                    meta("c2", "one", "running", 200.0),
+                    meta("c3", "two", "stopped", 100.0),
+                ]);
+                let mut perms = ctx.code_permissions;
+                perms.set(vec![(
+                    "c1".to_owned(),
+                    opencode_client::CodePermission::default(),
+                )]);
+            },
+            |ctx| {
+                let boards: Vec<(BoardFilter, usize)> =
+                    [BoardFilter::All, BoardFilter::Waiting, BoardFilter::Awake]
+                        .into_iter()
+                        .map(|f| {
+                            (
+                                f,
+                                code_board(ctx, 2_000_000_000, f)
+                                    .iter()
+                                    .map(|g| g.trees.len())
+                                    .sum(),
+                            )
+                        })
+                        .collect();
+                (code_tiles(ctx), boards)
+            },
+        );
+        let mut checked = 0;
+        for tile in &tiles {
+            let Some(pick) = tile.press() else { continue };
+            let rows = boards
+                .iter()
+                .find(|(f, _)| *f == pick)
+                .map(|(_, n)| *n)
+                .expect("every filter a tile can press is walked above");
+            assert_eq!(
+                rows, tile.value,
+                "the `{}` tile reads {} and selects {rows} row(s) — a control \
+                 whose number disagrees with what it shows is worse than one \
+                 that does not press",
+                tile.label, tile.value
+            );
+            checked += 1;
+        }
+        assert_eq!(
+            checked, 3,
+            "three of the five tiles are meant to press; a change to that set \
+             wants this assertion looked at rather than bumped"
+        );
+        // And the two that do not press say so, rather than pressing to
+        // nowhere. `pull requests` is absent here: nothing has been swept.
+        assert_eq!(
+            tiles
+                .iter()
+                .filter(|t| t.press().is_none())
+                .map(|t| t.label)
+                .collect::<Vec<_>>(),
+            ["repos"]
+        );
+    }
+
+    /// A FILTER WITH NOTHING LEFT IN IT IS NOT A FILTER, so a tile whose count
+    /// has fallen to zero cannot be pressed and cannot stay pressed.
+    ///
+    /// `Home` reads `Tile::press` for both, which is why the rule lives on the
+    /// tile: the board can never be handed a filter that empties it.
+    #[test]
+    fn a_count_of_zero_is_not_a_control() {
+        let tiles = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![meta("c1", "one", "stopped", 1.0)]);
+            },
+            code_tiles,
+        );
+        let by = |label: &str| {
+            tiles
+                .iter()
+                .find(|t| t.label == label)
+                .and_then(Tile::press)
+        };
+        assert_eq!(by("working trees"), Some(BoardFilter::All));
+        assert_eq!(
+            by("waiting on you"),
+            None,
+            "nothing is blocked, so the amber tile would filter the board to \
+             nothing at all"
+        );
+        assert_eq!(by("awake"), None, "no container is up");
+    }
+
+    /// THE SPARKLINE IS A RATIO, AND IT NEVER DRAWS AN EMPTY CELL.
+    ///
+    /// The mockup's fifth cell is a grey filler, and a grey filler is a
+    /// background-painted mark carrying no meaning — which is the exact shape
+    /// `docs/audit.js`'s indicator walk exists to catch, at about 1.2:1. So
+    /// the five cells are split between the two real kinds and both are
+    /// painted.
+    ///
+    /// The clamps are the honest half of the rounding: 84 added against 1
+    /// removed still shows the deletion, because rounding it away would say
+    /// the branch removed nothing.
+    #[test]
+    fn the_sparkline_divides_five_cells_and_leaves_none_blank() {
+        assert_eq!(spark(0, 0), Vec::<bool>::new(), "nothing to divide");
+        for (add, del) in [(77_u32, 33_u32), (84, 0), (0, 12), (23, 2), (1, 1)] {
+            let cells = spark(add, del);
+            assert_eq!(cells.len(), 5, "+{add} \u{2212}{del} drew {cells:?}");
+            assert_eq!(
+                cells.iter().filter(|c| **c).count() > 0,
+                add > 0,
+                "+{add} \u{2212}{del}: an addition with no cell, or a cell \
+                 with no addition"
+            );
+            assert_eq!(
+                cells.iter().filter(|c| !**c).count() > 0,
+                del > 0,
+                "+{add} \u{2212}{del}: a deletion with no cell, or a cell \
+                 with no deletion"
+            );
+        }
+        assert_eq!(spark(84, 0), [true; 5]);
+        assert_eq!(spark(0, 84), [false; 5]);
+        assert_eq!(
+            spark(84, 1),
+            [true, true, true, true, false],
+            "one line removed out of 85 rounded away to nothing, which says \
+             the branch removed nothing"
+        );
+        assert_eq!(spark(1, 84), [true, false, false, false, false]);
     }
 
     /// A tree the manager sent with no repo is filed rather than dropped.
@@ -2107,7 +2962,7 @@ mod tests {
                 let mut chats = ctx.code_chats;
                 chats.set(vec![meta("c1", "  ", "stopped", 1.0)]);
             },
-            |ctx| code_board(ctx, 2_000_000_000),
+            |ctx| code_board(ctx, 2_000_000_000, BoardFilter::All),
         );
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].repo, "no repo");
@@ -2160,6 +3015,18 @@ mod tests {
             status: status.to_owned(),
             model: None,
             last_active: last,
+        }
+    }
+
+    /// A pull request with nothing measured about it — the shape a manager
+    /// that could not read GitHub's detail form sends, which is
+    /// `mock-opencode-server`'s `#126`. Sizes are added by the caller that
+    /// wants them, so a test that forgets to is testing the absent case.
+    fn pull(number: u64, state: opencode_client::PullState) -> opencode_client::PullRequest {
+        opencode_client::PullRequest {
+            number,
+            state,
+            ..opencode_client::PullRequest::default()
         }
     }
 
@@ -2920,6 +3787,143 @@ mod tests {
         assert!(
             at("home-dock") < at("home-compose"),
             "the composer is not inside the dock"
+        );
+    }
+
+    /// A board with a measured tree, an unmeasured one and one with no pull
+    /// request at all — which is the fixture set `mock-opencode-server` ships
+    /// and the state the operator captures.
+    fn seed_board(ctx: &crate::state::AppCtx) {
+        let mut chats = ctx.code_chats;
+        chats.set(vec![
+            opencode_client::ChatMeta {
+                branch: "agent/blocked".to_owned(),
+                ..based("blocked-tree", "repo", "main")
+            },
+            opencode_client::ChatMeta {
+                last_active: 2.0,
+                branch: "agent/quiet".to_owned(),
+                ..based("quiet-tree", "repo", "main")
+            },
+        ]);
+        let mut perms = ctx.code_permissions;
+        perms.set(vec![(
+            "blocked-tree".to_owned(),
+            opencode_client::CodePermission {
+                title: "Run cargo clippy?".to_owned(),
+                ..opencode_client::CodePermission::default()
+            },
+        )]);
+        let mut pulls = ctx.code_pulls;
+        let mut w = pulls.write();
+        w.by_chat.insert(
+            "quiet-tree".to_owned(),
+            vec![opencode_client::PullRequest {
+                commits: Some(4),
+                additions: Some(77),
+                deletions: Some(33),
+                changed_files: Some(3),
+                ..pull(121, opencode_client::PullState::Open)
+            }],
+        );
+        w.by_chat.insert("blocked-tree".to_owned(), Vec::new());
+    }
+
+    /// THE 84px NUMBERS COLUMN IS ON THE ROW — #81, #82, in the markup the
+    /// window really produces.
+    ///
+    /// Two rows, and only one of them has been measured: the assertions below
+    /// are as much about what the OTHER row does not say. A `+0 −0` on the
+    /// blocked tree would be the app claiming its branch changed nothing, and
+    /// a `.tree-bars` there would be five cells dividing zero.
+    ///
+    /// REPRODUCED: drop the `if let Some((add, del))` guard round the number
+    /// column and the last two assertions fail together.
+    #[test]
+    fn a_board_row_draws_its_numbers_and_the_unmeasured_row_draws_none() {
+        let html =
+            crate::testkit::render_seeded(seed_board, || rsx! { Home { plane: Plane::Code } });
+        assert!(
+            html.contains("class=\"tree-add\">+77<")
+                && html.contains("class=\"tree-del\">\u{2212}33<"),
+            "the measured tree drew no `+77 \u{2212}33`: {html}"
+        );
+        assert!(
+            html.contains("class=\"tree-files\">3 files<"),
+            "no file count on a pull request that carries `changed_files`"
+        );
+        assert!(
+            html.contains("4 commits \u{b7} #121 open"),
+            "the second branch line still reads `from main` on a tree with a \
+             pull request, which is the fact the heading above it repeats"
+        );
+        assert!(
+            html.contains("from main"),
+            "the tree with no pull request lost its base ref as well"
+        );
+        // The unmeasured row's cell is EMITTED and EMPTY: it is a grid column,
+        // and a row that skipped it would slide its state and its age left.
+        assert!(
+            html.contains("<span class=\"tree-num\"></span>"),
+            "the row with no numbers dropped its grid cell rather than \
+             leaving it empty, so the board stops lining up: {html}"
+        );
+        assert_eq!(
+            html.matches("class=\"tree-num\"").count(),
+            2,
+            "one numbers cell per row, measured or not"
+        );
+        assert_eq!(
+            html.matches("tree-bar tree-").count(),
+            5,
+            "the sparkline is five cells on the one measured row and none \
+             anywhere else"
+        );
+    }
+
+    /// PRESSING THE AMBER TILE FILTERS THE BOARD, AND PRESSING IT AGAIN
+    /// CLEARS IT — #203, and the owner's words: "these things aren't clickable
+    /// at all. I feel like they should be."
+    ///
+    /// The tile counting the questions the agents are blocked on is the only
+    /// one painted urgent, so it is the loudest object on the screen, and it
+    /// was the one that did nothing.
+    ///
+    /// REPRODUCED: render the tiles as `div`s again and `press` panics with
+    /// "nothing matching \"home-tile urgent\" carries an click listener".
+    #[test]
+    fn the_amber_tile_filters_the_board_to_what_is_waiting() {
+        let _guard = crate::views::press::alone();
+        let mut screen = Pressable::mount(seed_board, CodeHome);
+        screen.settle();
+
+        let all = screen.markup();
+        assert!(
+            all.contains("blocked-tree") && all.contains("quiet-tree"),
+            "both trees should be on an unfiltered board: {all}"
+        );
+
+        screen.press("home-tile urgent");
+        let waiting = screen.markup();
+        assert!(
+            waiting.contains("blocked-tree"),
+            "the tree the reader is blocked on left the board it filtered TO"
+        );
+        assert!(
+            !waiting.contains("quiet-tree"),
+            "pressing `waiting on you` left the quiet tree on the board, so \
+             the tile is decoration: {waiting}"
+        );
+        assert!(
+            waiting.contains("aria-pressed=\"true\""),
+            "nothing on screen says which filter is engaged"
+        );
+
+        screen.press("home-tile urgent");
+        assert!(
+            screen.markup().contains("quiet-tree"),
+            "pressing the engaged tile again did not clear it, so the reader \
+             is stranded on a filtered board"
         );
     }
 
