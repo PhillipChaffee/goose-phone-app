@@ -634,34 +634,58 @@
   line-height: var(--lh-sm);
 }
 
+/* THE TARGET, AND NOTHING PAINTED — the same split `.nav-toggle` takes, and
+ * for the same two issues. #208: this control rested as a 32px filled circle
+ * around a 13px glyph, which is a highlight bubble drawn in every state of
+ * every window; #207: a 32px box pinned to the traffic lights inside a 33px
+ * content box had nowhere to put its top edge but y=0, so the only painted
+ * object in this corner of the window was flush against its top edge with
+ * nothing above it. `50-band.css` paints both band toggles as one 28x21
+ * rounded chip on a `::before`, from one rule, so the pair cannot drift — its
+ * block is the whole argument.
+ *
+ * WHAT CAME OUT OF THIS RULE and where it went:
+ *
+ *   background / border-color   never painted anything here (both were
+ *                               transparent); `50-band.css` sets the chip's
+ *                               two custom properties instead.
+ *   border-radius: --radius-full  the circle. Now the chip's corner, on the
+ *                               chip. `calc(--radius-sm + 1px)` stays on this
+ *                               box only because `70-overrides.css`'s
+ *                               `:focus-visible` outline follows it.
+ *   `.insp-toggle:hover`        DELETED. Every one of its three declarations
+ *                               was already out-specified by
+ *                               `.shell-chrome > .insp-toggle:hover` (0,3,0
+ *                               against 0,2,0), and this control is rendered
+ *                               in exactly one place — as a direct child of
+ *                               `.shell-chrome` (`src/shell/desktop/mod.rs`).
+ *                               A second answer to hover that could only ever
+ *                               lose is the drift this pair keeps being
+ *                               protected from.
+ *
+ * `border: 0` and not `1px solid transparent`: the edge is the chip's now, and
+ * a transparent border on an unfilled 32px box is what `docs/audit.js`'s SQUARE
+ * check calls "boxed". */
 .insp-toggle {
   flex: 0 0 auto;
   margin-top: var(--chrome-pad);
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  position: relative;
   width: 2rem;
   height: 2rem;
   padding: 0;
   margin-right: 0.375rem;
-  border: 1px solid transparent;
-  border-radius: var(--radius-full);
+  border: 0;
+  border-radius: calc(var(--radius-sm) + 1px);
   background: transparent;
   color: var(--text-secondary);
   font-family: inherit;
   font-size: var(--icon-md);
   line-height: 1;
   cursor: pointer;
-  transition:
-    background-color 120ms ease,
-    color 120ms ease,
-    border-color 120ms ease;
-}
-
-.insp-toggle:hover {
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  border-color: var(--border-secondary);
+  transition: color 120ms ease;
 }
 
 @media (max-width: 971px) {
