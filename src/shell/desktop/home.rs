@@ -910,8 +910,23 @@ pub(crate) fn Home(plane: Plane) -> Element {
                 crate::state::new_session(&ctx);
             }
             Plane::Code => {
-                let mut code_draft = ctx.code_draft;
-                code_draft.set(text);
+                // `new_task`, AND IT USED TO BE `code_draft`, WHICH DESTROYED
+                // THE SENTENCE. `code_draft` is the code CHAT's composer:
+                // `CodeNewView` never reads it — it seeded a fresh
+                // `use_signal(String::new)` from nothing — and `open_code_chat`
+                // then blanked it, because its guard is true for every newly
+                // created chat. So the text was written to a signal with no
+                // reader and wiped, and the composer on this screen was a box
+                // whose only function was to enable a button.
+                //
+                // Not fixed by making `CodeNewView` read `code_draft` either:
+                // that would carry a half-typed correction out of one
+                // conversation and into a new session pointed at a different
+                // repo, which is the line `open_code_chat` and
+                // `new_attachments` both already draw. `new_task` is the tray's
+                // own shape for the tray's own reason — see the field.
+                let mut new_task = ctx.new_task;
+                new_task.set(text);
                 // The code half has no "create and send": a session needs a
                 // repo and a base branch before it can exist, which is what
                 // `CodeNewView` is for. So this carries the text and opens
@@ -2225,6 +2240,11 @@ mod tests {
         rsx! { Home { plane: Plane::Chat } }
     }
 
+    #[component]
+    fn CodeHome() -> Element {
+        rsx! { Home { plane: Plane::Code } }
+    }
+
     /// The screen renders its three parts.
     #[test]
     fn the_home_screen_greets_and_offers_the_composer() {
@@ -2276,6 +2296,53 @@ mod tests {
             "rotate the tailscale cert",
             "the text typed on the home screen did not reach the draft the new \
              chat reads from, so it is lost the moment the session opens"
+        );
+    }
+
+    /// …AND SO DOES THE CODE HALF'S, which is the arm nothing covered.
+    ///
+    /// The test above mounts `ChatHome` and there was no counterpart, which is
+    /// how a signal write with no reader survived: `start()`'s `Plane::Code`
+    /// arm wrote `ctx.code_draft`, the code CHAT's composer, which
+    /// `CodeNewView` does not read and `open_code_chat` then blanks. The
+    /// sentence was destroyed between two screens with nothing on either
+    /// saying so.
+    ///
+    /// The second assertion is the half that would not have been enough on its
+    /// own. `code_draft` staying empty is the cross-conversation line
+    /// `open_code_chat` and `new_attachments` already draw: a correction typed
+    /// in one chat has no business in a new session pointed at another repo,
+    /// and pointing the home composer at that signal would have carried it
+    /// there.
+    ///
+    /// REPRODUCED: point the Code arm back at `ctx.code_draft` and both
+    /// assertions fail.
+    #[test]
+    fn what_you_type_on_the_code_home_screen_reaches_the_new_session() {
+        let _guard = crate::views::press::alone();
+        let mut screen = Pressable::mount(|_| {}, CodeHome);
+
+        screen.type_into("Describe a change", "add a retry to the poll");
+        screen.settle();
+        screen.press("Start a session");
+        screen.settle();
+
+        assert_eq!(
+            screen.with(|ctx| (ctx.new_task)()),
+            "add a retry to the poll",
+            "the text typed on the code home did not reach the carrier the \
+             new-session screen seeds its field from, so it is lost the moment \
+             that screen opens"
+        );
+        assert_eq!(
+            screen.with(|ctx| (ctx.code_draft)()),
+            "",
+            "the code home wrote into the code CHAT's draft, which is a \
+             conversation's and not a session-about-to-exist's"
+        );
+        assert!(
+            screen.with(|ctx| (ctx.code_screen)() == crate::code::CodeScreen::New),
+            "the press did not open the screen that can act on the sentence"
         );
     }
 

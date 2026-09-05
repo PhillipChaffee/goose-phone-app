@@ -537,6 +537,28 @@ pub(crate) struct AppCtx {
     /// first prompt. `conversation_key` only ever gated the *arrival* of a
     /// pick; what a tray already holds needed the same line drawn through it.
     pub new_attachments: Signal<Vec<crate::attach::PendingAttachment>>,
+    /// The first message a session that does not exist yet is being started
+    /// with, handed from one screen to the one that can act on it.
+    ///
+    /// ITS OWN SIGNAL, BESIDE `new_attachments`, AND NOT `code_draft`. The
+    /// desktop's Code home screen has a composer, and pressing its arrow cannot
+    /// create anything: a working tree needs a repo and a base branch first,
+    /// which is what `views::code::CodeNewView` is for. So the sentence has to
+    /// survive one screen change with no conversation to belong to — exactly
+    /// the situation the tray above is in, and it is answered the same way.
+    ///
+    /// `code_draft` was the wrong carrier twice over. It is the code CHAT's
+    /// composer, so `CodeNewView` never reads it (measured: `grep -n code_draft
+    /// src/views/code.rs` returns one line, three inside `CodeChatView`) and
+    /// the sentence was written to a signal with no reader and then blanked by
+    /// `open_code_chat`. Made to work, it would have leaked the other way: a
+    /// half-typed correction left in a chat would turn up in the field of a new
+    /// session pointed at a different repo, which is the line `open_code_chat`
+    /// and `new_attachments` both already draw.
+    ///
+    /// TAKEN, NOT READ. `CodeNewView` empties it as it seeds its field, so a
+    /// second visit to that screen does not resurrect a sentence already sent.
+    pub new_task: Signal<String>,
     // ---- one field per feature, each a Copy struct from its own module ----
     //
     // A feature's state is a struct it defines and this holds, rather than a
@@ -642,6 +664,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_draft: use_signal(String::new),
         code_attachments: use_signal(Vec::new),
         new_attachments: use_signal(Vec::new),
+        new_task: use_signal(String::new),
 
         extensions: crate::extensions::use_ctx(),
         // One line per feature, each calling its own module's hook. There was

@@ -906,7 +906,24 @@ pub fn CodeNewView() -> Element {
     let mut branch = use_signal(|| None::<String>);
     let model = use_signal(|| None::<String>);
     let agent = use_signal(initial_mode);
-    let mut task = use_signal(String::new);
+    // SEEDED FROM WHATEVER STARTED THIS SCREEN, and it used to be seeded from
+    // nothing. The desktop's Code home has a composer of its own, and pressing
+    // its arrow can only bring you here — a working tree needs a repo and a
+    // base branch before it can exist. It wrote the sentence to `ctx.code_draft`
+    // and this line threw it away, so a reader who typed on that screen arrived
+    // at an empty field with nothing to paste and no undo.
+    //
+    // TAKEN RATHER THAN READ, for the reason the dismiss button below clears
+    // its tray: leaving the carrier full would resurrect a sentence already
+    // sent the next time this screen opened. It empties during the first
+    // render and cannot loop — `peek` does not subscribe, so nothing in this
+    // component re-runs for the write.
+    let mut task = use_signal(move || {
+        let mut carried = ctx.new_task;
+        let seed = carried.peek().clone();
+        carried.set(String::new());
+        seed
+    });
     let mut sheet = use_signal(|| None::<NewPill>);
 
     // Default to the first allowlisted repo, as the form did — through
@@ -3361,6 +3378,56 @@ mod tests {
         assert!(
             html.contains("chip-model\">Model<"),
             "and it is the one place a chip may name its own control: {html:.400}"
+        );
+    }
+
+    /// THE FIELD ARRIVES WITH WHAT WAS TYPED ON THE HOME SCREEN IN IT.
+    ///
+    /// The desktop's Code home has a composer and its arrow can only bring you
+    /// here — a working tree needs a repo and a base branch before it can
+    /// exist. That sentence used to be written to `ctx.code_draft`, which this
+    /// screen does not read, and `open_code_chat` then blanked it: the reader
+    /// arrived at an empty field with nothing to paste and no undo.
+    ///
+    /// The second half is the one that keeps it from coming back the other
+    /// way. The carrier is TAKEN, so a second visit to this screen — pressing
+    /// New from the sidebar after starting a session — opens on a blank field
+    /// rather than on the sentence that already went out.
+    ///
+    /// REPRODUCED: seed `task` from `String::new` again and the first
+    /// assertion fails; drop the `carried.set(String::new())` and the second
+    /// does.
+    #[test]
+    fn the_new_screen_opens_with_the_task_the_home_screen_carried() {
+        let html = render_seeded(
+            |ctx| {
+                seed_repos(ctx);
+                let mut carried = ctx.new_task;
+                carried.set("add a retry to the poll".to_owned());
+            },
+            || rsx! { CodeNewView {} },
+        );
+        assert!(
+            html.contains("add a retry to the poll"),
+            "the field opened empty over a carried task, so what was typed on \
+             the home screen is gone: {html:.400}"
+        );
+
+        let _guard = crate::views::press::alone();
+        let screen = crate::views::press::Pressable::mount(
+            |ctx| {
+                seed_repos(ctx);
+                let mut carried = ctx.new_task;
+                carried.set("add a retry to the poll".to_owned());
+            },
+            CodeNewView,
+        );
+        assert_eq!(
+            screen.with(|ctx| (ctx.new_task)()),
+            "",
+            "the carrier still holds the task after the screen seeded itself \
+             from it, so opening New a second time resurrects a sentence that \
+             was already sent"
         );
     }
 
