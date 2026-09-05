@@ -108,7 +108,7 @@
 
 /* AND THE AGENT STRING ELLIPSISES RATHER THAN SPILLING.
  *
- * `assets/main.css` caps `.conn-label` at 9.25rem and argues against an
+ * `assets/shared.css` caps `.conn-label` at 9.25rem and argues against an
  * ellipsis there — "goose-mock 1...." reads as a rendering fault rather than
  * as a shortened name — and that is right on a phone, where the bar has one
  * other thing in it. In this band the pill now yields to the window's title

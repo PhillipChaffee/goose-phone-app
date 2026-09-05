@@ -424,7 +424,7 @@ mod tests {
     }
 
     /// The phone's arm is FROZEN. These four strings are what
-    /// `assets/main.css` styles, what `src/viewport.rs`'s tap-to-close handler
+    /// `assets/shared.css` styles, what `src/viewport.rs`'s tap-to-close handler
     /// and `src/domdump.rs`'s `swiped` detector look for, and what all 49
     /// captured gallery states contain. A change to any of them is a change to
     /// mobile rendering, which is the one thing the desktop shell promised not

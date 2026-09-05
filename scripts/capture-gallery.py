@@ -80,8 +80,8 @@ DESKTOP = "desktop-"
 
 # EVERY stylesheet the app embeds, in the order `src/css.rs` concatenates them.
 #
-# main.css alone was a live bug, and the same one `docs/audit.js` documents at
-# its own top ("Linking main.css alone would rebuild every feature screen
+# shared.css alone was a live bug, and the same one `docs/audit.js` documents at
+# its own top ("Linking shared.css alone would rebuild every feature screen
 # unstyled and then measure the result, which passes"). The audit fixed it for
 # itself; this file, which is generated alongside it and read by a human rather
 # than by a walk, never got the same fix — so every recipes, skills, scheduler,
@@ -130,7 +130,7 @@ SHELL_SHEETS = [f"../assets/desktop/{f}" for f in SHELL_REGIONS] + [
 
 
 def head(key: str) -> str:
-    sheets = ["../assets/main.css"] + [f"../assets/features/{f}" for f in FEATURES]
+    sheets = ["../assets/shared.css"] + [f"../assets/features/{f}" for f in FEATURES]
     if key.startswith(DESKTOP):
         sheets += SHELL_SHEETS
     links = "".join(f'<link rel="stylesheet" href="{href}">' for href in sheets)

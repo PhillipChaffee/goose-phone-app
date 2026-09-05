@@ -1,7 +1,7 @@
 # Design guide
 
 What this app is trying to look like, and the rules that get it there. If you
-are about to change `assets/main.css`, read this first — most of the values in
+are about to change `assets/shared.css`, read this first — most of the values in
 that file are consequences of the rules below rather than free choices.
 
 ## Where the look comes from
@@ -696,7 +696,7 @@ failed — the work was thrown away.
 
 ### 14. The app follows the system text size
 
-Every size in `assets/main.css` is a `rem`, and `rem` means the root's
+Every size in `assets/shared.css` is a `rem`, and `rem` means the root's
 font-size. On iOS `assets/platform/ios.css` sets that root to
 `font: -apple-system-body`, which resolves through `UIFont`'s preferred body
 font — so the root's computed size **is** the content size category the reader
@@ -911,7 +911,7 @@ at 320×568: `streamable_http` 277px in a 256px `.banner`, `reviewed` 152px in a
 worst of the four — 290px in a 254px card head, whose ink lands 3px past the
 right edge of the *screen* and is saved only by `.app`'s own overflow. All four
 are the second half of an idiom this stylesheet already states nine times (ten
-counting the feature sheets; the tenth line a grep for it finds in `main.css`
+counting the feature sheets; the tenth line a grep for it finds in `shared.css`
 is a comment), and two of them already carried the first half (`min-width: 0`):
 the flex minimum had been lowered without the `overflow-wrap: anywhere` that
 lets the word actually break. `anywhere` rather than `break-word`, because only
@@ -960,7 +960,7 @@ product. Separately, every stylesheet is checked non-empty at startup, because
 a zero-byte `<link>` fires the load event and `document.styleSheets` counts a
 link that 404s — so nothing inside the page can tell a styled document from an
 unstyled one. Emptying `assets/features/skills.css` and running the gate
-reports **Clean**; emptying `assets/main.css` reports 73664 findings about
+reports **Clean**; emptying `assets/shared.css` reports 73664 findings about
 `<textarea>`'s default 182×21 box and buttons at radius 0, which reads as a
 design regression rather than as a missing file.
 
@@ -1249,7 +1249,7 @@ which is how `.diff-seen` was found rendering "Viewed" in **Arial** (the UA
 stylesheet's `font` shorthand names a family, and overriding `font-size` left
 it behind) and a bare `<code>` outside `.md` rendering in the generic
 `monospace` (Courier on iOS, WenQuanYi Zen Hei Mono on a Linux runner, Menlo
-here). Both are fixed in `assets/main.css`. The other renders the whole corpus
+here). Both are fixed in `assets/shared.css`. The other renders the whole corpus
 and asks the browser which platform faces it reached for, so a character
 outside the shipped subsets cannot quietly bring a host font with it.
 
@@ -1310,7 +1310,7 @@ paint, and an earlier read reports every bar 62px too high.
 
 ## The desktop shell
 
-The same design system, worn a second way. `assets/main.css` is untouched by
+The same design system, worn a second way. `assets/shared.css` is untouched by
 it: everything below lives in `assets/desktop/`, which `src/css.rs` embeds
 only in a desktop binary.
 
@@ -1485,7 +1485,7 @@ verified without a desktop run.
 **The row is the list's, the detail is beside it, and the row says so.** In
 three columns the list and what it opened are on screen together, which is the
 one arrangement where an unmarked list is confusing — the phone never had it.
-The open row takes `--bg-tertiary`, which is the token `assets/main.css` already
+The open row takes `--bg-tertiary`, which is the token `assets/shared.css` already
 proved reads as *selected* (see the note over `.drawer-item.active`), and
 `ListRow` refuses to paint it at all on the phone.
 
@@ -1509,7 +1509,7 @@ app draws no such divider either. The one line the shell still draws is
 between the two content columns, which are two different things.
 
 **The connection keeps its words here — above the rail tier, and nowhere
-else.** Rule 8 says "in a bar, the dot is *all* you get", and `assets/main.css`
+else.** Rule 8 says "in a bar, the dot is *all* you get", and `assets/shared.css`
 enforces it with `.topbar .conn-label { display: none }`. The reason that rule
 gives is specific — "the agent name and version are ~107px of text that a
 **centred** title cannot clear" — and it does not survive the move: nothing in
@@ -1534,7 +1534,7 @@ was only ever the identification of a control. This is the phone's argument
 arriving at the phone's answer, and it takes the phone's own rule rather than
 inventing a second one.
 
-Which of the two gives way when they cannot both fit is `assets/main.css`'s
+Which of the two gives way when they cannot both fit is `assets/shared.css`'s
 decision, not a new one. `.conn-label`'s own note says the badge holds its
 name and "the title beside it shrinks first — it has min-width 0 and its own
 ellipsis, and a truncated title is normal", so the badge is `flex: 0 0 auto` —
@@ -1609,12 +1609,12 @@ arrangement reached without changing the markup, which is what keeps the
 phone's DOM identical.
 
 **The app's first `:hover` and `:focus-visible` rules live here.**
-`assets/main.css` has none at all; it was written for a thumb. Hover changes
+`assets/shared.css` has none at all; it was written for a thumb. Hover changes
 colour and shows a button's border — it never *reveals* a control and never
 moves one. Two corollaries that are easy to get wrong and were:
 
 - **Hover may not borrow the selected colour.** `--bg-tertiary` is what
-  `.drawer-item.active` paints with, and main.css's own note says why ("at
+  `.drawer-item.active` paints with, and shared.css's own note says why ("at
   1.08:1 against the light page the selected destination was indistinguishable
   from the unselected ones"). Spending it on hover made two destinations look
   selected at once. Hover gets its own step, halfway between the pane and the
@@ -1809,7 +1809,7 @@ beat, and the row silently fails to reproduce.
 
 *The `.setting-row` row had stopped reaching its check at all.* `min-height: 0;
 height: 0` alone now reports **488 SPILL and 252 SMALL-TAP and zero
-COLLAPSED** — because `assets/main.css` sets `box-sizing: border-box` and
+COLLAPSED** — because `assets/shared.css` sets `box-sizing: border-box` and
 `.setting-row` keeps `padding: 8px 12px`, so a row asked for zero height still
 measures 16 and `COLLAPSED`'s `height < 1` test never fires. The sabotage had
 quietly become a demonstration of two *other* checks. `padding: 0` is what

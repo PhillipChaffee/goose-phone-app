@@ -30,7 +30,7 @@ const path = require('path');
 const os = require('os');
 const { chromium } = require('playwright');
 
-const CSS = fs.readFileSync(path.join(__dirname, '..', 'assets', 'main.css'), 'utf8');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'assets', 'shared.css'), 'utf8');
 const VIEWPORT = fs.readFileSync(path.join(__dirname, '..', 'src', 'viewport.rs'), 'utf8');
 
 const die = (why) => {
@@ -97,7 +97,7 @@ const CROWDED = ATTACH + CHIP + MODE + '<span class="composer-chip warn">96%</sp
 // the wrap lived one level in and a flat fixture could not produce a two-line
 // composer at all; the row is one line now, and the reason to keep it is what
 // the level was always for — .chip-row is the send button's SIBLING, which is
-// what pins send to the trailing edge (assets/main.css).
+// what pins send to the trailing edge (assets/shared.css).
 const shell = (c) => `<div class="app">
 <header class="topbar"><h1 class="title">Chat</h1></header>
 <main class="scroll chat" id="chat-scroll">${c.transcript || '<p>content</p>'}</main>

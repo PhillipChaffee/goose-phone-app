@@ -313,7 +313,7 @@
    * `.toggle.collapsed{background:their --surface-2;box-shadow:inset 0 0 0 1px
    * #383e47}` in 22-nav-disclosure and `.tgl.off{…}` in 30/31/32 are the same
    * two declarations character for character. --bg-tertiary is this app's
-   * --surface-2 and is the token main.css already proved reads as selected
+   * --surface-2 and is the token shared.css already proved reads as selected
    * (`.drawer-item.active`, `.plane-seg.active`, `.nav-row.on`), and the inset
    * outline is those rules' too, for their reason verbatim: --bg-tertiary is
    * 1.13:1 on the light card and a non-text indicator owes 3:1.
@@ -546,7 +546,7 @@
 
 /* The connection, at the trailing end of the window's bar.
  *
- * WITH ITS WORDS, which is a deviation from `assets/main.css`'s
+ * WITH ITS WORDS, which is a deviation from `assets/shared.css`'s
  * `.topbar .conn-label { display: none }` and from design rule 8 as that rule
  * is written. The reason the rule gives is specific and does not survive the
  * move: "the agent name and version are ~107px of text that a CENTRED title
@@ -555,7 +555,7 @@
  * window bar is a control nobody can identify; the same dot with `goose 1.12.0`
  * beside it is what the reference paints in the same place
  * (`EnvironmentBadge`, `BaseChat.tsx`). `.conn-label` brings its own 9.25rem
- * cap and ellipsis from assets/main.css. */
+ * cap and ellipsis from assets/shared.css. */
 /* ── the connection, as the mockups' pill ── */
 .shell-chrome > .conn-badge {
   /* Shrinkable, and heavily — `.chrome-sub`'s note has the arithmetic. A pill
@@ -590,14 +590,14 @@
 
 /* THE DOT IS 6px IN THE BAND, and the form is what matters as much as the size.
  *
- * `assets/main.css:1152` gives every `.dot` `width: max(8px, 0.5em)`, and its
+ * `assets/shared.css:1152` gives every `.dot` `width: max(8px, 0.5em)`, and its
  * comment argues the 8px floor for AX5 — "the alternative is an 8px speck
  * beside 53px text". In this pill the text is 11.5px, so 0.5em is 5.75 and the
  * floor binds: measured 1163.5,12 8x8 against the mockups' `.conn .dot` at
  * 1275,19 6x6, a third wider inside a lozenge this sheet has already slimmed
  * from 32px to 24 for the same kind of reason.
  *
- * `max(6px, 0.5em)` and NOT a flat `0.375rem`: the flat form discards main.css's
+ * `max(6px, 0.5em)` and NOT a flat `0.375rem`: the flat form discards shared.css's
  * em relationship and stops scaling at all, which is the one property the 8px
  * floor was defending. This keeps the relationship and simply lowers the floor
  * to the mockups' number, which is exactly 0.5em of their own 12px pill. The
@@ -606,7 +606,7 @@
  * does, this dot grows with the label instead of staying a speck.
  *
  * BAND-SCOPED, deliberately. The phone's `.dot` is untouched: it is the same
- * class in a bar with one other thing in it, at the text size main.css's
+ * class in a bar with one other thing in it, at the text size shared.css's
  * comment is about.
  *
  * The HUE is not here. `--bg-success` is #68d391 as of the token pass, which is

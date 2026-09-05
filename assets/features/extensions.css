@@ -1,4 +1,4 @@
-/* Extensions — everything else on these screens is `main.css`'s. */
+/* Extensions — everything else on these screens is `shared.css`'s. */
 
 /* The row's state line. Not `.session-meta`, which is mono because it carries
  * ids and timestamps; this line is copy ("On · Local command") and reads as

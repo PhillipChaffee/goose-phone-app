@@ -191,7 +191,7 @@
 
 /* THE LIST, and the one thing in the card that scrolls.
  *
- * `.drawer-nav` in assets/main.css is `flex: 1; overflow-y: auto`, which was
+ * `.drawer-nav` in assets/shared.css is `flex: 1; overflow-y: auto`, which was
  * right when the destinations were the card's body. They are not any more —
  * they are behind the disclosure — so that rule is overridden below and the
  * scrolling moves here. Two `flex: 1` scrollers in one card is two boxes
@@ -219,7 +219,7 @@
   overscroll-behavior: contain;
 }
 
-/* A DESTINATION ROW AT POINTER SIZE. `.drawer-item` in assets/main.css is
+/* A DESTINATION ROW AT POINTER SIZE. `.drawer-item` in assets/shared.css is
  * 48px tall with a 14px gap at `--text-md`, and every number in it was chosen
  * for a thumb — its own comment measures a two-line "Scheduler" label at AX5
  * on a 375x667 phone. Five of those rows is 240px, and this column is 252px
@@ -232,7 +232,7 @@
  * whole library), but 32 is where this app's own gate sits and a gate is a
  * better place to stop than a picture.
  *
- * main.css is untouched: the phone's 48px row is still the phone's. */
+ * shared.css is untouched: the phone's 48px row is still the phone's. */
 .navcard .drawer-item {
   min-height: 32px;
   gap: 8px;
@@ -245,7 +245,7 @@
    * visibly rounder than the conversations and rounder than their own selected
    * pill. Every row inside the mockups' `.side` is 8px, `.libpop .it` included.
    *
-   * The 12 comes from `assets/main.css`'s `.drawer-item { border-radius:
+   * The 12 comes from `assets/shared.css`'s `.drawer-item { border-radius:
    * var(--radius-lg) }`, which is the phone's and stays the phone's — this
    * block already overrides four other declarations for exactly that reason. */
   border-radius: var(--radius-md);
@@ -324,7 +324,7 @@
 }
 
 /* A band heading — Today, Yesterday, Earlier. Deliberately NOT `.drawer-item`,
- * for the reason `.drawer-group` states in assets/main.css: docs/audit.js keys
+ * for the reason `.drawer-group` states in assets/shared.css: docs/audit.js keys
  * its tap-target check off that class, and a heading is not a target. */
 /* ── a band heading with a count ── */
 .nav-band {
@@ -453,7 +453,7 @@
  * permanently silent about what you are looking at.
  *
  * The same `--bg-tertiary` that `.drawer-item.active` and `.plane-seg.active`
- * spend, for the reason main.css established: it is the one token that reads
+ * spend, for the reason shared.css established: it is the one token that reads
  * as selected in both themes. The inset outline is theirs too — the fill is
  * 1.13:1 on the light card and a non-text indicator owes 3:1.
  *
@@ -488,7 +488,7 @@
  * above says so itself with numbers that have gone stale.
  *
  * Its "4.24:1 in dark" is #b8b8b8 on `--bg-tertiary` #474e57, which is what
- * that token is in `assets/main.css`. This shell REMAPS `--bg-tertiary` to
+ * that token is in `assets/shared.css`. This shell REMAPS `--bg-tertiary` to
  * #2a2f36, and `--text-secondary` is #98a1ac now rather than #b8b8b8. Measured
  * against what `.nav-row.on` actually paints:
  *
@@ -628,7 +628,7 @@
    * the resting state cannot see a control that only exists under the pointer.
    *
    * `--icon-md` and not `--text-*`: the only thing in this box is an `.icon`,
-   * which sizes off the font (`assets/main.css` sets `.icon` to `1em`), and
+   * which sizes off the font (`assets/shared.css` sets `.icon` to `1em`), and
    * #125 declared that token as the shell's glyph rung. */
   font: inherit;
   font-size: var(--icon-md);
@@ -664,7 +664,7 @@
 
 /* AND THE FIELD JOINS THE LADDER IT WAS STANDING BESIDE.
  *
- * It is `assets/main.css`'s `.field` unchanged, which makes it the one box in
+ * It is `assets/shared.css`'s `.field` unchanged, which makes it the one box in
  * this column on none of the column's own rungs. Measured on the captured
  * `desktop-chats` at 1440x860 dark, against its own neighbours:
  *

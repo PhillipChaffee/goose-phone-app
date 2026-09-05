@@ -6,7 +6,7 @@
  * category — 17px at Large, 23 at xxxLarge, 28/33/40/47/53 at AX1 through AX5
  * — and WebKit re-resolves system fonts on a trait-collection change, so it
  * tracks the setting rather than sampling it at launch. Every --text-* and
- * --lh-* token in main.css is a rem and rem means the root, so one
+ * --lh-* token in shared.css is a rem and rem means the root, so one
  * declaration moves all of them.
  *
  * `-webkit-text-size-adjust` is the reflex and it is the wrong tool twice
@@ -21,7 +21,7 @@
  * iOS ONLY, and the gate is `#[cfg(target_os = "ios")]` in src/css.rs rather
  * than anything in this file, because macOS is WKWebView too: there the same
  * keyword resolves to the macOS system body size, a flat 13px with no Dynamic
- * Type behind it, so a bare declaration in main.css would render `dx serve
+ * Type behind it, so a bare declaration in shared.css would render `dx serve
  * --desktop` about 19% smaller than the phone and quietly invalidate every
  * judgement made in it. A compile-time gate cannot be fooled the way a feature
  * query can; `@supports (-webkit-touch-callout: none)` distinguishes the two
@@ -32,7 +32,7 @@
  * and is dropped, leaving the root at the browser's 16px. Verified: that is
  * why docs/audit.js simulates the scale by setting the root in px instead.
  *
- * A STANDALONE `html` rule, deliberately not folded into main.css's
+ * A STANDALONE `html` rule, deliberately not folded into shared.css's
  * `html, body` block: the `font` shorthand also resets font-family and
  * line-height, so applying it to body as well would wipe body's own
  * declarations of both by source order. On html there is nothing to wipe —

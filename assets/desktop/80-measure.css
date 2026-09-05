@@ -1,6 +1,6 @@
 /* ── 6. the measure ─────────────────────────────────────────────────────
  *
- * A phone form is as wide as the phone, so nothing in assets/main.css caps a
+ * A phone form is as wide as the phone, so nothing in assets/shared.css caps a
  * line: there was never any surplus to spend. A detail pane is 1288pt at a
  * 1500pt window and every control was spending all of it — measured, a
  * 21-character server URL in a 1213pt field, "Reconnect" in a 621pt button,
@@ -95,7 +95,7 @@
  * A diff line is as long as the author left it, and the width is the whole
  * reason this screen is better on a desktop than on a phone — it is the one
  * capture in the review that was right at every width. So the scroller keeps
- * `.scroll.diff`'s own zero gutter from assets/main.css (the file cards
+ * `.scroll.diff`'s own zero gutter from assets/shared.css (the file cards
  * inside it are full-bleed by design), and its header keeps the pane's edge
  * rather than the measure's, so the two still start at the same place. */
 .pane-main:has(.scroll.diff) .topbar {
@@ -215,7 +215,7 @@
  * `.session-quote` clamps to three lines and pads by 10, and WebKit clips
  * `overflow: hidden` at the PADDING box — so a preview needing four lines
  * painted the fourth one into the bottom padding and had it sliced through the
- * middle of its glyphs. It is in assets/main.css and it is not a desktop bug,
+ * middle of its glyphs. It is in assets/shared.css and it is not a desktop bug,
  * but it fires whenever the text needs a fourth line, which a 330pt column
  * makes routine and a 402pt phone does not.
  *
@@ -292,7 +292,7 @@
 
 /* And the sentence itself moves up under the control that caused it.
  *
- * `.empty` is `min-height: 100%` in assets/main.css so the message centres in
+ * `.empty` is `min-height: 100%` in assets/shared.css so the message centres in
  * the box, which is right on a 874pt phone screen and wrong in a 940pt column:
  * "No chats match" was stranded about 500pt below the search field it was
  * answering. Only in the LIST column — in the detail, "That recipe is no

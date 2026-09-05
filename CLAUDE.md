@@ -56,9 +56,13 @@ that stops being needed fails the build instead of rotting.
 Styling: [`docs/design.md`](docs/design.md) is the design guide — where the
 look comes from and the rules that produce it (floating chrome, tiered
 rounding, borders vs shadows, tap targets). Read it before changing
-`assets/main.css`, which is the whole design system: semantic tokens, light
+`assets/shared.css`, which is the whole design system: semantic tokens, light
 and dark, with `data-theme` on the root element overriding the system
-preference.
+preference. It is called *shared* because **both shells link it** — `src/app.rs`
+emits it into the phone and the desktop alike, and only about 4% of it (`.ptr`
+and the drawer panel head, both named in its header) is the phone's alone. A
+rule there lands on the desktop too; to change how it lands there, add an
+override in `assets/desktop/` rather than editing it.
 
 Every size in it is a `rem`, because the root font-size is the reader's — on
 iOS `assets/platform/ios.css` sets it to `-apple-system-body` and the whole

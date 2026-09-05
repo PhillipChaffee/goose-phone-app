@@ -424,7 +424,7 @@ pub(crate) fn ChoicePickerSheet(
                 // At the bottom, where a thumb is and where it stays put as
                 // the list moves under it — which is where the reference puts
                 // it, and what costs the sheet its single scrollbox (see
-                // .modal.sheet:has(.sheet-search) in main.css).
+                // .modal.sheet:has(.sheet-search) in shared.css).
                 if searchable {
                     div { class: "sheet-search",
                         Icon { name: "search" }
@@ -641,7 +641,7 @@ mod tests {
 
     /// No tier either backend serves is long enough to crowd the model name
     /// off the chip. Five characters is what `.chip-effort` gives one before
-    /// it starts clipping (assets/main.css), and the goose row at 360pt has
+    /// it starts clipping (assets/shared.css), and the goose row at 360pt has
     /// only 120px of label to divide between the two.
     #[test]
     fn every_tier_a_backend_serves_fits_the_chip() {

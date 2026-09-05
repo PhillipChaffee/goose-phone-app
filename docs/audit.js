@@ -58,13 +58,13 @@ const { chromium } = require('playwright');
 
 const STATES = path.join(__dirname, 'gallery-states.json');
 // Every stylesheet the app embeds, in the order src/css.rs concatenates them:
-// assets/main.css is the design system and comes first, and a feature brings
-// assets/features/<name>.css of its own. Linking main.css alone would rebuild
+// assets/shared.css is the design system and comes first, and a feature brings
+// assets/features/<name>.css of its own. Linking shared.css alone would rebuild
 // every feature screen unstyled and then measure the result, which passes.
 const ASSETS = path.join(__dirname, '..', 'assets');
 const FEATURE_CSS = path.join(ASSETS, 'features');
 const STYLESHEETS = [
-  path.join(ASSETS, 'main.css'),
+  path.join(ASSETS, 'shared.css'),
   ...(fs.existsSync(FEATURE_CSS)
     ? fs.readdirSync(FEATURE_CSS).filter((f) => f.endsWith('.css')).sort()
       .map((f) => path.join(FEATURE_CSS, f))
@@ -76,7 +76,7 @@ const STYLESHEETS = [
 // neither the wait nor the count can tell a styled document from an unstyled
 // one. Measured: empty assets/features/skills.css and the run still reports
 // **Clean**, because the two selectors it carries are the whole difference
-// between a styled `.skill-body` and an unstyled one. Empty assets/main.css
+// between a styled `.skill-body` and an unstyled one. Empty assets/shared.css
 // and it is the loud version of the same fault — 73664 findings about
 // `<textarea>`'s default 182x21 box and buttons at radius 0, which read as a
 // design regression rather than as a missing file. One stat each, at startup,
@@ -120,7 +120,7 @@ const SHELL_REGIONS = fs.existsSync(SHELL_CSS)
 // it: an empty list has no missing file and no zero-byte file in it, so every
 // desktop state would render against macos.css alone and the run would go on to
 // report whatever that is. The zero-byte case was already the loud one (73664
-// findings for an empty main.css); this is the quiet one, and it is the failure
+// findings for an empty shared.css); this is the quiet one, and it is the failure
 // the split newly makes possible.
 if (SHELL_REGIONS.length === 0) {
   console.error(`${SHELL_CSS} has no .css in it — every desktop state would be measured with the whole shell sheet missing`);
@@ -359,7 +359,7 @@ const coverage = (states) => {
 // about geometry: a difference of advance widths.
 //
 // What each environment actually resolved, measured with CDP's
-// CSS.getPlatformFontsForNode against assets/main.css's three stacks:
+// CSS.getPlatformFontsForNode against assets/shared.css's three stacks:
 //
 //   iOS            San Francisco / New York / SF Mono — the first entry of
 //                  each stack, which is the whole design intent.
@@ -401,7 +401,7 @@ const coverage = (states) => {
 //     adjudicate the last few pixels of a text box. A design that FITS here
 //     by a few pixels is not thereby proven to fit on a phone — which is a
 //     claim about the design and not about the runner. `.fab` in
-//     assets/main.css grew a `max-width` for exactly that reason, and the
+//     assets/shared.css grew a `max-width` for exactly that reason, and the
 //     GUTTER check below states the rule it was relying on arithmetic for.
 //   * Size-specific tracking and Core Text's shaping are unmeasured, here and
 //     before. Optical sizing is NOT on that list any more, and it is why both
@@ -578,7 +578,7 @@ const face = (font) => {
 // double-quoted style="" attribute, which is where the glyph guard puts it.
 const STACK = (font) => [font, ...LEFTOVERS].map((f) => `'${f.family}'`).join(', ');
 const FONT_CSS = [...FONTS, ...LEFTOVERS].map(face).join('\n')
-  // Last sheet in the document, so this beats assets/main.css's :root on
+  // Last sheet in the document, so this beats assets/shared.css's :root on
   // order at equal specificity — the same way the app's own later sheets do.
   + `\n:root{${FONTS.map((font) => `${font.token}:${STACK(font)};`).join('')}}`;
 
@@ -955,7 +955,7 @@ const AT_REST_CSS = '*, *::before, *::after { transition: none !important;'
 // is the entire scope of one of this script's two walks. Drop the key while
 // rewriting the list and the colour walk stops running while the summary goes
 // on saying it found nothing — measured, with `.session-title, .setting-value,
-// .banner { color: #bbbbbb }` appended to main.css: 158 real contrast failures
+// .banner { color: #bbbbbb }` appended to shared.css: 158 real contrast failures
 // reported as Clean. Asserted rather than defaulted, because "whichever one
 // happens to be first" is not a reference size.
 //
@@ -1174,7 +1174,7 @@ const GEOMETRY = () => {
     // past zero was then decided by the advance width of one word, which is
     // how the same commit was green on a Mac and red on a Linux runner.
     //
-    // So the rule is stated instead of being waited for. assets/main.css:
+    // So the rule is stated instead of being waited for. assets/shared.css:
     // "--edge is the gutter every floating thing shares". An out-of-flow box
     // whose containing block is the screen and whose inset on one side IS that
     // gutter has declared itself one of those things; if its other side is
@@ -1447,7 +1447,7 @@ const GEOMETRY = () => {
     //
     // Reproduced, on the tree this comment ships in: wrap each of the seven
     // detail panes' headings in `<div class="titlewrap">`, broaden
-    // assets/main.css's `.topbar > .title` to `.topbar .title` and give the
+    // assets/shared.css's `.topbar > .title` to `.topbar .title` and give the
     // wrapper `display: contents` — which is a refactor that changes not one
     // pixel of a correct build — and the app paints the open thing's name
     // twice, in the band and again in the pane. With `>` here: **Clean**.

@@ -18,7 +18,7 @@ const { chromium } = require('playwright');
 
 const OUT = path.join(__dirname, '..', 'docs', 'images', 'og-card.png');
 
-// The tokens are the dark half of assets/main.css, copied the same way
+// The tokens are the dark half of assets/shared.css, copied the same way
 // docs/index.html copies them.
 const CARD = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><style>

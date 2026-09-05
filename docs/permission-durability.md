@@ -570,7 +570,7 @@ under `ToolCallId::new(tool_response.id)`, so the ids agree by construction.
 
 ### 4.2 Surface it durably, not as a toast
 
-`src/views/chat.rs` and `assets/main.css`. `show_toast` is one slot with
+`src/views/chat.rs` and `assets/shared.css`. `show_toast` is one slot with
 newest-wins semantics and a four-second life (`src/state.rs:559-571`), and the
 same code path already raises `Prompt failed: connection closed` at `:1364` and
 can raise `Failed to reload session` at `:739`. A report delivered there is a

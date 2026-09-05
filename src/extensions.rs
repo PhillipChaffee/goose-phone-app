@@ -174,7 +174,7 @@ impl RowState {
         }
     }
 
-    /// The dot's class, from the four `main.css` already defines.
+    /// The dot's class, from the four `shared.css` already defines.
     pub(crate) const fn dot(self) -> &'static str {
         match self {
             Self::On => "dot on",
@@ -670,7 +670,7 @@ mod tests {
         assert_eq!(RowState::of(true, true, true), RowState::Busy);
     }
 
-    /// Every state has a word and a dot class `main.css` actually defines —
+    /// Every state has a word and a dot class `shared.css` actually defines —
     /// a state that fell through to no dot would be an invisible one.
     #[test]
     fn every_state_has_a_word_and_a_dot() {

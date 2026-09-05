@@ -58,7 +58,7 @@
    * one edge it has is the one at x=267 that the band draws the top of. */
   background: var(--nav-fill);
   border-right: 1px solid var(--shell-line);
-  /* The phone's own drawer curve (`.drawer`, assets/main.css), so the two
+  /* The phone's own drawer curve (`.drawer`, assets/shared.css), so the two
    * shells open the same panel at the same speed. `padding` is off this list
    * because the column no longer has any; `border-right-width` is on it
    * because it does — without it the hairline vanishes on frame one of a
@@ -75,7 +75,7 @@
  * A FIXED width, not `100%`: the column's width is what animates, and a
  * percentage of an animating box is a box that reflows for 200ms. Minus the
  * 1px the border-right now takes out of the column's content box — with
- * `box-sizing: border-box` (assets/main.css) `--nav-w` is the OUTER width, so
+ * `box-sizing: border-box` (assets/shared.css) `--nav-w` is the OUTER width, so
  * a panel of `--nav-w` inside it would be clipped by exactly the hairline.
  *
  * PADDING 12px 8px 0, and the 8 is a compromise with a lane boundary rather
