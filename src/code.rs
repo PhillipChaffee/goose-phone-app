@@ -298,8 +298,74 @@ impl PullsState {
     /// The newest, which is the manager's first: `chat_pulls` asks GitHub with
     /// `sort=created&direction=desc`. A branch with two pull requests is a
     /// branch someone reopened, and the row is about what is happening now.
+    ///
+    /// **This is where a row's numbers come from, so this is where their three
+    /// limits are written down.** Everything a row can say about size —
+    /// `PullRequest::diffstat`, `commits`, `changed_files` — is read off what
+    /// this returns, and inherits all three from [`refresh_plane_pulls`]:
+    ///
+    /// 1. **A tree with no open pull request has no numbers at all.** Not
+    ///    zero: nothing. The manager measures a branch by reading its pull
+    ///    request, so a branch that has not opened one was never measured.
+    ///    `compare/<base>...<branch>` is the answer and it is upstream's
+    ///    `PhillipChaffee/personal-ai-setup#29`, not this client's.
+    /// 2. **Rows past the [`SWEEP_MAX_CHATS`]th are never swept**, so they
+    ///    answer `None` here however many pull requests they have.
+    /// 3. **A number can be up to [`SWEEP_FLOOR_SECS`] old** — the same
+    ///    freshness the build state beside it already ships with (#84), for
+    ///    the same rate-limit reason.
+    ///
+    /// All three are properties to design around rather than around: the row
+    /// draws nothing for what it was not sent.
     pub(crate) fn plane_pull(&self, chat_id: &str) -> Option<&PullRequest> {
         self.by_chat.get(chat_id)?.first()
+    }
+
+    /// The `+N −M` for a whole **group** of trees — the repo header's total —
+    /// or `None` when even one of them cannot be measured.
+    ///
+    /// It is a function rather than a note because the note is the thing that
+    /// gets ignored. Summing only the trees that happen to have a pull request
+    /// open would put a group figure on screen that no server ever sent, and
+    /// it would be *plausible*, which is worse than absent — the reader has no
+    /// way to tell a total of four trees from a total of two. So the
+    /// all-or-nothing is in the type: one unmeasured tree in the group and
+    /// there is no total, and there is no argument to make at the call site.
+    ///
+    /// A group of one measured tree is a real total and answers, because that
+    /// sum is a number the server did send.
+    ///
+    /// Today this is `None` for any group holding a tree with no pull request
+    /// — which is most of them — and it becomes generally answerable when
+    /// `PhillipChaffee/personal-ai-setup#29` lands and every branch can be
+    /// measured whether or not it has a pull request. Nothing else has to
+    /// change here when it does.
+    ///
+    /// Nothing renders a repo header yet, so outside `cfg(test)` this has no
+    /// caller and would be `dead_code` against CI's `-D warnings`. The
+    /// exception is an `expect` rather than an `allow` on purpose: the day the
+    /// header is built the expectation goes unfulfilled and the build says to
+    /// take these four lines out.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the repo header that reads this is not built yet; when \
+                      it is, this expectation fails and takes itself out"
+        )
+    )]
+    pub(crate) fn group_diffstat<'a>(
+        &self,
+        chat_ids: impl IntoIterator<Item = &'a str>,
+    ) -> Option<(u32, u32)> {
+        let mut any = false;
+        let mut total = (0_u32, 0_u32);
+        for id in chat_ids {
+            let (plus, minus) = self.plane_pull(id)?.diffstat()?;
+            total = (total.0.checked_add(plus)?, total.1.checked_add(minus)?);
+            any = true;
+        }
+        any.then_some(total)
     }
 }
 
@@ -2608,6 +2674,136 @@ mod tests {
             "the manager sorts newest first and a reopened branch is about \
              what is happening now"
         );
+    }
+
+    /// A row reads its size off the pull request the sweep found, so all three
+    /// of the sweep's limits show up as the same answer: nothing.
+    ///
+    /// Unswept, no pull request, and a pull request the manager could not get
+    /// a detail form for are three different reasons and one rendering. The
+    /// fourth case is the one that has to survive them: a real `Some(0)`.
+    #[test]
+    fn a_rows_size_is_absent_for_every_reason_the_sweep_can_fail_it() {
+        let mut state = PullsState::default();
+        let sized = |plus, minus| PullRequest {
+            additions: Some(plus),
+            deletions: Some(minus),
+            commits: Some(4),
+            changed_files: Some(3),
+            ..pull(PullState::Open, false, Some(true), Checks::Passing)
+        };
+
+        // Past SWEEP_MAX_CHATS, or simply not reached yet.
+        assert_eq!(
+            state.plane_pull("unswept").and_then(PullRequest::diffstat),
+            None
+        );
+
+        // Swept, and the branch has no pull request to measure — the case
+        // `personal-ai-setup#29` exists for.
+        state.by_chat.insert("no-pull".to_owned(), Vec::new());
+        assert_eq!(
+            state.plane_pull("no-pull").and_then(PullRequest::diffstat),
+            None
+        );
+
+        // Swept, has a pull request, and the manager's detail call raised.
+        state.by_chat.insert(
+            "unmeasured".to_owned(),
+            vec![pull(PullState::Open, false, None, Checks::Pending)],
+        );
+        assert!(state.plane_pull("unmeasured").is_some());
+        assert_eq!(
+            state
+                .plane_pull("unmeasured")
+                .and_then(PullRequest::diffstat),
+            None,
+            "a pull request with no detail form has no numbers, and `0` would \
+             be a claim that the branch changed nothing"
+        );
+
+        state
+            .by_chat
+            .insert("measured".to_owned(), vec![sized(23, 0)]);
+        assert_eq!(
+            state.plane_pull("measured").and_then(PullRequest::diffstat),
+            Some((23, 0)),
+            "a measured zero is a measurement and has to reach the row"
+        );
+        assert_eq!(
+            state.plane_pull("measured").and_then(|p| p.commits),
+            Some(4)
+        );
+    }
+
+    /// The repo header's total, and the sum it must refuse to make.
+    ///
+    /// `#28` measures the trees that have a pull request open and no others,
+    /// so a group holding one tree without one has no total — adding up the
+    /// rest would print a group figure no server sent, and a plausible number
+    /// is worse than an absent one because nothing on screen distinguishes it.
+    /// The refusal is the return type rather than a comment, so a caller
+    /// cannot decide otherwise.
+    #[test]
+    fn a_repo_group_gets_no_total_until_every_tree_in_it_is_measured() {
+        let mut state = PullsState::default();
+        let sized = |plus, minus| PullRequest {
+            additions: Some(plus),
+            deletions: Some(minus),
+            ..pull(PullState::Open, false, Some(true), Checks::Passing)
+        };
+        state.by_chat.insert("a".to_owned(), vec![sized(65, 12)]);
+        state.by_chat.insert("b".to_owned(), vec![sized(43, 18)]);
+        state.by_chat.insert("no-pull".to_owned(), Vec::new());
+        state.by_chat.insert(
+            "unmeasured".to_owned(),
+            vec![pull(PullState::Open, false, None, Checks::Pending)],
+        );
+
+        assert_eq!(
+            state.group_diffstat(["a", "b"]),
+            Some((108, 30)),
+            "every tree measured is a real total"
+        );
+        assert_eq!(
+            state.group_diffstat(["a"]),
+            Some((65, 12)),
+            "a group of one measured tree is that tree's own numbers"
+        );
+        assert_eq!(
+            state.group_diffstat(["a", "b", "no-pull"]),
+            None,
+            "a tree with no pull request contributes an unknown, not a zero"
+        );
+        assert_eq!(
+            state.group_diffstat(["a", "unmeasured"]),
+            None,
+            "a pull request with no detail form is unknown for the same reason"
+        );
+        assert_eq!(
+            state.group_diffstat(["a", "never-swept"]),
+            None,
+            "and so is a tree the sweep's cap dropped"
+        );
+        assert_eq!(
+            state.group_diffstat(std::iter::empty()),
+            None,
+            "an empty group has nothing to total, and `(0, 0)` would say it \
+             changed nothing"
+        );
+
+        // Unreachable through GitHub and cheap to be right about: a sum that
+        // does not fit is not a sum, and wrapping it would print a small
+        // number for an enormous one.
+        state
+            .by_chat
+            .insert("huge".to_owned(), vec![sized(u32::MAX, 0)]);
+        state
+            .by_chat
+            .insert("huge-cut".to_owned(), vec![sized(0, u32::MAX)]);
+        assert_eq!(state.group_diffstat(["a", "huge"]), None);
+        assert_eq!(state.group_diffstat(["a", "huge-cut"]), None);
+        assert_eq!(state.group_diffstat(["huge"]), Some((u32::MAX, 0)));
     }
 
     /// The whole of the rate limit. A sweep two seconds after a sweep must not

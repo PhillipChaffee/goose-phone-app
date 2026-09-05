@@ -169,8 +169,19 @@ pub(crate) fn file_diff(d: &FileDiff) -> Value {
 
 /// `PullRequest`. `state` and `checks` go through custom deserializers that
 /// accept exactly these strings and turn anything else into `Unknown` / `None`.
+///
+/// The four size counts are **inserted, not defaulted**, and only when the
+/// fixture has them. `pull_to_wire` builds its dict the same way — it copies
+/// each key only when GitHub really answered with it — so a pull with no
+/// detail form arrives with those keys simply missing rather than at `0` or
+/// `null`. The client decodes them as `Option<u32>`, and a mock that always
+/// sent them would leave the `None` arm unreachable in every local run.
+///
+/// Note the shape agrees with [`file_diff`] above deliberately: both spell the
+/// counts `additions`/`deletions` as plain numbers, so a `+N −M` read off a
+/// pull and one summed over a file list are the same two words.
 pub(crate) fn pull(p: &Pull) -> Value {
-    json!({
+    let mut v = json!({
         "number": p.number,
         "title": p.title,
         "state": p.state,
@@ -182,7 +193,14 @@ pub(crate) fn pull(p: &Pull) -> Value {
         "base": p.base,
         "created_at": "2026-09-01T09:00:00Z",
         "updated_at": "2026-09-02T14:20:00Z",
-    })
+    });
+    if let Some(c) = p.counts {
+        v["commits"] = json!(c.commits);
+        v["additions"] = json!(c.additions);
+        v["deletions"] = json!(c.deletions);
+        v["changed_files"] = json!(c.changed_files);
+    }
+    v
 }
 
 /// The model catalogue, as `/config/providers` spells it.

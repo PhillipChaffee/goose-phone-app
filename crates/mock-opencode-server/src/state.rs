@@ -154,6 +154,25 @@ pub(crate) struct Pull {
     pub(crate) checks: String,
     pub(crate) head: String,
     pub(crate) base: String,
+    /// How big the pull request is, or [`None`] for the pull whose detail
+    /// call the manager could not make. One `Option` for all four because
+    /// that is how the manager loses them — they ride one response, so they
+    /// arrive together or not at all.
+    pub(crate) counts: Option<PullCounts>,
+}
+
+/// The four numbers GitHub answers only on a pull request's **detail** form,
+/// which is the form `chat_pulls` already fetches for `mergeable`.
+///
+/// Present here as a whole because the manager copies them as a whole: a
+/// fixture that could send `additions` without `deletions` would be teaching a
+/// shape the real wire cannot make.
+#[derive(Clone, Copy)]
+pub(crate) struct PullCounts {
+    pub(crate) commits: u32,
+    pub(crate) additions: u32,
+    pub(crate) deletions: u32,
+    pub(crate) changed_files: u32,
 }
 
 /// One allowed repo.
@@ -256,7 +275,21 @@ impl State {
                 // The red build. Open, mergeable as far as GitHub is
                 // concerned, and the only thing wrong with it is the thing
                 // the row now says.
-                vec![pull(121, "open", "failing", Some(true))],
+                vec![pull(
+                    121,
+                    "open",
+                    "failing",
+                    Some(true),
+                    // No two fixtures share a size, and no two fields within
+                    // one share a value, so a renderer that crosses two rows
+                    // or two columns cannot pass by accident.
+                    Some(PullCounts {
+                        commits: 4,
+                        additions: 77,
+                        deletions: 33,
+                        changed_files: 3,
+                    }),
+                )],
             ),
             asleep_chat(
                 t,
@@ -266,7 +299,21 @@ impl State {
                 // Landed. `mergeable` is null on a merged pull request —
                 // GitHub stops computing it — which is also the shape that
                 // proves the client is not coercing null to false.
-                vec![pull(109, "merged", "passing", None)],
+                vec![pull(
+                    109,
+                    "merged",
+                    "passing",
+                    None,
+                    // `deletions: 0` is the other half of the absent case: a
+                    // measured zero has to survive the trip as `Some(0)` and
+                    // read differently from the pull that was never measured.
+                    Some(PullCounts {
+                        commits: 1,
+                        additions: 84,
+                        deletions: 0,
+                        changed_files: 5,
+                    }),
+                )],
             ),
         ];
         // One container the manager swept and could not reach. The app has a
@@ -403,14 +450,24 @@ fn awake_chat(t: f64) -> Chat {
         // a draft pushed while the agent keeps working, which is the shape
         // `Checks::Pending` and `PullState::Open { draft }` both exist for and
         // which nothing in the fixtures reached before.
+        //
+        // It is also **the pull whose detail form the manager did not get**,
+        // and that is the whole of `Option::None` in the local loop. The list
+        // form carries neither `mergeable` nor the four size counts, so when
+        // `chat_pulls`'s per-pull detail call raises they go missing together
+        // — this row is that degradation, and without one somewhere in the
+        // fixtures a renderer that assumed the numbers always arrive would
+        // pass every local run and every capture. (`null` mergeability is
+        // also what GitHub answers while it works mergeability out on a young
+        // branch; the app cannot tell those two apart and must not try, since
+        // both of them mean "nobody answered".)
         pulls: vec![Pull {
             draft: true,
-            // GitHub answers null while it works mergeability out, and a
-            // branch this young is exactly when it does.
             mergeable: None,
+            counts: None,
             head: format!("agent/{id}"),
             title: "Document the code-agent ports".to_owned(),
-            ..pull(126, "open", "pending", None)
+            ..pull(126, "open", "pending", None, None)
         }],
     }
 }
@@ -474,6 +531,17 @@ fn reviewed_chat(t: f64) -> Chat {
             checks: "passing".to_owned(),
             head: format!("agent/{id}"),
             base: "main".to_owned(),
+            // This is the one tree that has a diff as well as a pull request,
+            // so the two have to agree: 14+9 added and 2+0 removed across the
+            // two `FileDiff`s above. A fixture whose row said one thing and
+            // whose file list said another would look like a client bug in
+            // every screenshot it appeared in.
+            counts: Some(PullCounts {
+                commits: 3,
+                additions: 23,
+                deletions: 2,
+                changed_files: 2,
+            }),
         }],
     }
 }
@@ -482,7 +550,13 @@ fn reviewed_chat(t: f64) -> Chat {
 /// that knows the branch, because the manager only ever answers with pull
 /// requests whose head IS this chat's branch and a fixture that disagreed
 /// would teach the reader the wrong contract.
-fn pull(number: u64, state: &str, checks: &str, mergeable: Option<bool>) -> Pull {
+fn pull(
+    number: u64,
+    state: &str,
+    checks: &str,
+    mergeable: Option<bool>,
+    counts: Option<PullCounts>,
+) -> Pull {
     Pull {
         number,
         title: String::new(),
@@ -492,6 +566,7 @@ fn pull(number: u64, state: &str, checks: &str, mergeable: Option<bool>) -> Pull
         checks: checks.to_owned(),
         head: String::new(),
         base: "main".to_owned(),
+        counts,
     }
 }
 
