@@ -64,6 +64,18 @@ and the drawer panel head, both named in its header) is the phone's alone. A
 rule there lands on the desktop too; to change how it lands there, add an
 override in `assets/desktop/` rather than editing it.
 
+**What that inheritance has cost is measured, and now gated.** `src/inherit.rs`
+derives three sets from source — the classes `shared.css` styles, the classes a
+desktop binary can render, and the classes `assets/desktop/` decides — and
+fails the build when their gap grows. It was 107 the day it landed, and 102 of
+those come out of `src/views/`, which is why the shared views are where the
+desktop's defects have been: the only other class scan in the repo reads four
+files in `src/shell/desktop/`. A desktop decision means a rule whose SUBJECT
+carries the class; `:not(.x)` and `:has(.x)` are guards and decide nothing,
+which is the distinction that keeps `.dot.off` and `.send.stop` honest. The
+`UNDECIDED` list is a ledger and MAY ONLY SHRINK — a new name there is not the
+answer to a red gate; a rule in `assets/desktop/` is.
+
 Every size in it is a `rem`, because the root font-size is the reader's — on
 iOS `assets/platform/ios.css` sets it to `-apple-system-body` and the whole
 scale follows Dynamic Type. `assets/platform/` is the one directory `src/css.rs`

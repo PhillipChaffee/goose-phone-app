@@ -33,6 +33,13 @@ mod external;
 
 mod icons;
 
+// Asks the one question `assets/shared.css` being emitted into both shells
+// makes possible to get wrong: which classes does the desktop render, and
+// inherit a phone's decision about, with no `assets/desktop/` rule to its
+// name. `cfg(test)` like `selfscan` below, so none of it is in any binary.
+#[cfg(test)]
+mod inherit;
+
 mod markdown;
 
 mod nav;

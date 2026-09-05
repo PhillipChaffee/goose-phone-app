@@ -33,6 +33,50 @@ pub(crate) const STYLES: &str = concat!(
     include_str!("../assets/features/session-history.css"),
 );
 
+/// `assets/shared.css` ALONE, which [`STYLES`] is not — that is this sheet
+/// plus the five in `assets/features/`.
+///
+/// `src/inherit.rs` needs the shared design system by itself, because the
+/// question it asks is about the sheet BOTH shells link and not about a
+/// feature's own additions. Named here rather than `include_str!`'d there so
+/// this module stays the one place a stylesheet path is written down, and held
+/// to the front of `STYLES` by `the_shared_sheet_is_the_front_of_the_sheet_that_ships`
+/// so it cannot become a second copy that drifts.
+///
+/// `cfg(test)` because only that gate reads it, and a non-test const nothing
+/// calls is `dead_code` — which CI sets `-D warnings` against.
+#[cfg(test)]
+pub(crate) const SHARED: &str = include_str!("../assets/shared.css");
+
+/// `css` with every `/* ... */` taken out.
+///
+/// The block `the_two_dark_bodies_are_one_palette` reads has a `}` INSIDE a
+/// comment — it quotes the mockups' own rule,
+/// `mask-image:linear-gradient(...)}` — so a brace scan that counts it ends the
+/// block one declaration in and finds neither number. Stripping first is what
+/// makes the scan honest, and `src/inherit.rs`'s selector walk needs it for the
+/// same reason at larger scale: `assets/shared.css` carries 30 banner comments
+/// naming the classes below them, and a walk that read those would report every
+/// name in the prose as a rule.
+///
+/// Module level rather than inside `mod tests` so both readers share one
+/// answer; `cfg(test)` for [`SHARED`]'s reason.
+#[cfg(test)]
+pub(crate) fn without_comments(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut rest = css;
+    while let Some(open) = rest.find("/*") {
+        out.push_str(rest.get(..open).unwrap_or_default());
+        let after = rest.get(open + 2..).unwrap_or_default();
+        rest = after
+            .find("*/")
+            .and_then(|close| after.get(close + 2..))
+            .unwrap_or_default();
+    }
+    out.push_str(rest);
+    out
+}
+
 /// The platform-conditional sheet, emitted after [`STYLES`]. One per
 /// platform that has one, and never more than one in a binary.
 ///
@@ -282,26 +326,7 @@ mod tests {
         );
     }
 
-    /// `css` with every `/* ... */` taken out.
-    ///
-    /// The block the test below reads has a `}` INSIDE a comment — it quotes
-    /// the mockups' own rule, `mask-image:linear-gradient(...)}` — so a brace
-    /// scan that counts it ends the block one declaration in and finds neither
-    /// number. Stripping first is what makes the scan honest.
-    fn without_comments(css: &str) -> String {
-        let mut out = String::with_capacity(css.len());
-        let mut rest = css;
-        while let Some(open) = rest.find("/*") {
-            out.push_str(rest.get(..open).unwrap_or_default());
-            let after = rest.get(open + 2..).unwrap_or_default();
-            rest = after
-                .find("*/")
-                .and_then(|close| after.get(close + 2..))
-                .unwrap_or_default();
-        }
-        out.push_str(rest);
-        out
-    }
+    use super::without_comments;
 
     /// The body of the first `{ … }` that follows `opens`, comments already
     /// gone, as a list of `(property, value)` in source order.
