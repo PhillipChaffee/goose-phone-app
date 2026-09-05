@@ -67,7 +67,8 @@
   display: flex;
   flex-direction: column;
   /* AS TALL AS THE COLUMN, AT LEAST, and it is what makes the scheduled row's
-   * `margin-top: auto` mean anything (`98-home-sched.css`). The mockups' own
+   * `margin-top: auto` mean anything (`.home-sched`, at the foot of this
+   * file). The mockups' own
    * `.land .schedrow{margin-top:auto}` works because `.land` fills a
    * fixed-height grid cell; this box sizes to its content, so an auto margin
    * in it had no slack to eat and the row was laid out on a fixed 32px gap
@@ -898,3 +899,127 @@
   text-transform: uppercase;
 }
 
+/* ── the schedule row ───────────────────────────────────────────────────
+ *
+ * THE BLOCK THAT CLOSES THE CHAT COLUMN, and it is last in this file because
+ * it is last in the column: `src/shell/desktop/home.rs` renders it after the
+ * Code half's tiles, as the final child of `.home-inner`.
+ *
+ * IT WAS IN `98-home-sched.css` UNTIL #155, and that file existed only because
+ * the region split cut `assets/desktop.css` in filename order and these rules
+ * had been appended to it after the Code half's — so they sorted last in the
+ * whole directory, four files past the home screen they belong to. Sorting
+ * last was never load-bearing for the render, and that was checked rather than
+ * assumed: no rule in any sheet this shell links names `.home-sched`,
+ * `.home-sched-name`, `.home-sched-what` or `.home-sched-more` at all, and
+ * `.home-sched > .icon` is the only (0,2,0) `.icon` rule that can match its
+ * glyph. Measured as well as reasoned — every element of all 69 captured
+ * states at every size, theme and shell state `docs/audit.js` walks, 3,792
+ * cells and 534,696 element dumps of computed style and border-box rect,
+ * byte-identical before and after.
+ *
+ * It WAS load-bearing for `docs/design.md`, whose reproduction tables told a
+ * reader to append a fighting rule to the last file in `assets/desktop/`'s
+ * sort and named this one. That instruction now names `97-home-code.css`,
+ * which is what sorts last with this file and `60-sidebar-extra.css` gone.
+ *
+ * THE LEDE AND THE FOOTNOTE ARE GONE (#200), and the four rules that styled
+ * them went with them rather than being left dead: `.home-lede`, `.home-lede
+ * b`, `.home-footnote` and `.home-footnote > .icon`. The owner cut both blocks
+ * of prose on the chat home — "I don't think this text is really necessary"
+ * and "this doesn't seem necessary either" — and a rule with nothing to match
+ * is the same staleness one layer down.
+ *
+ * The 12-line note explaining why `.home-footnote .d` had been deleted went
+ * too: it argued about the colour of a separator inside an element that no
+ * longer exists. The decision it recorded survives where it is still live, on
+ * `.home-chip + .home-chip::before` above.
+ *
+ * WHAT THE COLUMN LOST WITH THEM IS ITS BOTTOM EDGE. The hairline was
+ * `.home-footnote`'s `border-top`, so the chat home now ends at the dashed pill
+ * below — which `margin-top: auto` already pushes to the column's bottom edge,
+ * and which is therefore the ending rather than a page that stops. Nothing
+ * replaces the rule: a hairline with nothing under it is a line to nowhere.
+ *
+ * Measured on the captured `desktop-chats` at 1440x860, with the composer at
+ * the `rows="2"` that has shipped since #170: `.home-inner`'s natural height
+ * falls 792px -> 675px, and `main.home` goes from 836/826 — overflowing by
+ * 10px — to 826/826. 117px, split 68 (the lede's 608x44 box and its 24px
+ * bottom margin) and 49 (the footnote's 712x35 box and its 14px top margin). */
+
+.home-sched {
+  display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    min-height: 2rem;
+    /* `auto`, not a number, and it is `.land .schedrow{margin-top:auto}` ported
+     * rather than approximated. The row is the last thing before the closing
+     * hairline, so on a tall window it belongs on the column's bottom edge —
+     * that is what gives the column an edge at all — and on a short one it
+     * belongs immediately under the cards, because a fixed gap there is 32px
+     * of nothing pushing the footnote off the screen.
+     *
+     * It only means something because `.home-inner` is now `min-height: 100%`
+     * (above in this file): an auto margin distributes SLACK, and a box that
+     * sizes to its content has none. Measured at 1440x860 with the row present:
+     * the column is 860px in a 764px content box with the fixed margin and
+     * 828px with this one, and at 1600x1000 the row lands on the bottom edge
+     * instead of 32px under the last card with 140px of blank beneath it. */
+    margin-top: auto;
+    padding: 8px 12px;
+    border: 1px dashed var(--shell-line);
+    /* 10px, `.schedrow{border-radius:10px}`, written as a literal because this
+     * shell's tiers are 8 (`--radius-md`) and 12 (`--radius-lg`) and the row is
+     * neither: it is one line of 12px text in a 35px box, half the height of
+     * the `.home-starter` cards above it, so `--radius-lg` would curve a strip.
+     * `--radius-md` was the nearer tier and it was 2px flatter than the
+     * reference. Unlike `.home-starter`'s radius above, there is no
+     * competing card at another value to be consistent WITH — this element has
+     * no siblings. */
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: var(--text-xs);
+    line-height: var(--lh-sm);
+    text-align: left;
+    cursor: pointer;
+    overflow: hidden;
+}
+
+.home-sched:hover {
+  border-color: var(--accent);
+    background: var(--surface-card);
+}
+
+.home-sched > .icon {
+  flex: 0 0 auto;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.home-sched-name {
+  flex: 0 0 auto;
+    color: var(--text-primary);
+    font-weight: 550;
+}
+
+.home-sched-what {
+  min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+}
+
+.home-sched-more {
+  flex: 0 0 auto;
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: var(--lh-sm);
+    white-space: nowrap;
+}

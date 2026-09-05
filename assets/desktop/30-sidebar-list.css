@@ -6,7 +6,57 @@
  *
  * The vertical order is the information architecture and the CSS does not
  * decide it (`src/shell/desktop/mod.rs` does): switch, New, Library, list,
- * footer. What the sheet decides is which of them scrolls, and only one does. */
+ * footer. What the sheet decides is which of them scrolls, and only one does.
+ *
+ * AND THE ORDER OF THE FILE IS THAT ORDER NOW, because `60-sidebar-extra.css`
+ * has been folded into it (#154). That file was ten sidebar rules appended to
+ * `assets/desktop.css` after the band's, so the region split — which cut the
+ * old sheet in filename order and changed no byte — had nowhere to put them
+ * but a slot four files later than the rules they belong beside. They are
+ * interleaved here at the element each one is about, and the file that carried
+ * them is gone.
+ *
+ * MOVING A RULE BETWEEN REGION FILES MOVES IT IN THE CASCADE, which is the one
+ * thing that could have made that unsafe: `60-` sorted after this file, so
+ * every one of the ten lost a position to `40-`, `50-` and `55-` and to the
+ * rules of this file below its new home. Nothing moved, and it was checked
+ * rather than argued — every element of all 69 captured states, at the nine
+ * window sizes and six phone sizes `docs/audit.js` walks, in both themes and
+ * all four shell states: 3,792 cells, 534,696 element dumps, full computed
+ * style and border-box rect, byte-identical before and after. The static half
+ * of the same check is that no rule in any sheet this shell links names
+ * `.nav-row-meta`, `.nav-band-count`, `.plane-seg-count`, `.nav-library-icon`
+ * or `.nav-standing` at all, and the two that DO have same-name company
+ * (`.nav-row-needs`, `.nav-row-actions`) are decided by specificity — the
+ * notes on those two rules carry the arithmetic. */
+
+/* ── the plane switch's counts ───────────────────────────────────────────
+ *
+ * The switch's own rules are in `20-plane-switch.css`; these two are its
+ * counts, and they are here rather than there because this file is where #154
+ * sent `60-sidebar-extra.css`'s contents and `20-` belonged to another lane
+ * for the width of that wave. They are the sidebar's topmost element either
+ * way, so they sit at the top of the file. Moving them on later costs
+ * nothing: `.plane-seg-count` is named by no other rule in any sheet the shell
+ * links, so it has no tie for file order to break.
+ *
+ * `.plane-seg` and `.plane-seg.active` themselves stay in `20-`. */
+.plane-seg-count {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  /* NOT the mockup's --faint. The shipped `.plane-seg` comment records the
+   * measurement: --text-secondary on this track is 4.44:1 in light — 28 audit
+   * findings, one per desktop state — and --text-primary is 8.77:1. So the
+   * unselected count is distinguished by face and size, not by ink. */
+  color: var(--text-primary);
+}
+
+.plane-seg.active .plane-seg-count {
+  color: var(--accent);
+}
 
 /* NEW, and it is a button rather than a row: it makes something, it does not
  * go somewhere. Full width because it is the sidebar's primary action, and
@@ -156,19 +206,27 @@
  * see it. `docs/audit.js` cannot either: it walks geometry and composited
  * contrast, and a 90deg rotation of a symmetric mark moves neither.
  *
- * `60-sidebar-extra.css` has carried the scoped `transition` half of this fix
- * since it was written, as a live rule whose own comment describes the
+ * `60-sidebar-extra.css` carried the scoped `transition` half of this fix from
+ * the day it was written, as a live rule whose own comment described the
  * `.open` half as an edit to make — "Replace both selectors with this one and
- * `.nav-library.open > .icon:first-child`". Nobody made it. That rule is
- * deleted in the same commit, because with both selectors fixed here it is a
- * duplicate, and a duplicate declaration in a later-sorting file is how the
- * next reader learns to distrust which one is live. */
+ * `.nav-library.open > .icon:first-child`". Nobody made it. That rule was
+ * deleted in the commit that fixed both selectors here, because it had become
+ * a duplicate, and a duplicate declaration in a later-sorting file is how the
+ * next reader learns to distrust which one is live. (The file itself is gone
+ * as of #154; its rules are in this one.) */
 .nav-library > .icon:first-child {
   transition: transform 150ms ease;
 }
 
 .nav-library.open > .icon:first-child {
   transform: rotate(90deg);
+}
+
+/* The 2x2 grid the comment above names — the row's SECOND glyph, which is why
+ * `:first-child` above cannot reach it and it carries a class instead. */
+.nav-library-icon {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
 }
 
 .nav-library-label {
@@ -434,6 +492,19 @@
   text-transform: uppercase;
 }
 
+/* And the count the heading is a flex row FOR, pushed to the end of it. Same
+ * face and rung as `.nav-library-count` above, because they are the same
+ * statement about two different collections. */
+.nav-band-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 400;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
 /* A row. Two lines of text, a mark, and an age — no tile, no action gutter,
  * no fab. See `src/shell/desktop/sidebar.rs` for why this is not the list view
  * that already exists, and for the measurement that settled it. */
@@ -585,9 +656,11 @@
  * "Needs input" from amber to plain ink. Dark amber #f0b429 is 7.23:1 on the
  * selected fill and 8.27:1 on hover, so it keeps its colour there. It cannot
  * in light — #8a6100 is **4.42:1** on #e3e6ea, 0.08 short at 10.5px/600 — so
- * light promotes it with the rest. The declaration lives in
- * `60-sidebar-extra.css`, which SORTS AFTER this file, so order could not have
- * decided it: this out-ranks it on specificity, (0,5,0) against (0,3,0).
+ * light promotes it with the rest. The declaration is
+ * `.nav-row.on .nav-row-needs`, further down this file since #154 folded
+ * `60-sidebar-extra.css` in; it lived in that later-sorting file until then,
+ * so order has never been what decided this and does not now — this out-ranks
+ * it on specificity, (0,5,0) against (0,3,0), either way round.
  *
  * TWO BLOCKS FOR ONE RULE because that is what a theme carve-out costs in CSS:
  * the media query is the system preference and the attribute is the app's own
@@ -659,6 +732,22 @@
   display: inline-flex;
 }
 
+/* THE OPEN ROW PAINTS THEM ITS OWN FILL. The block above paints the hover fill
+ * so the title it covers does not shine through; on the row the pane is
+ * showing, the fill under them is `.nav-row.on`'s full-strength
+ * `--bg-tertiary` instead, and a 50% mix on top of it would read as a patch.
+ *
+ * TIED WITH `.nav-row:focus-within .nav-row-actions` — both (0,3,0) — and this
+ * is why the tie is not a fact about which file the rule is in. They declare
+ * disjoint properties, `background` here and `display` there, so neither can
+ * win or lose anything to the other. That is what made moving this rule out of
+ * `60-sidebar-extra.css`, which sorted after this file, a move with no
+ * cascade behind it. The base `.nav-row-actions` block IS a real competitor for
+ * `background` and is out-ranked on specificity, (0,1,0) against (0,3,0), in
+ * either file order. */
+.nav-row.on .nav-row-actions {
+  background: var(--bg-tertiary);
+}
 
 /* 32x32, which is `.row-action`'s size and is not negotiable.
  *
@@ -844,6 +933,19 @@
   font-weight: 450;
 }
 
+/* ── the row's meta line ──────────────────────────────────────────────── */
+/* The row's second line, and the two things on it: the snippet and the age
+ * `margin-left: auto` puts at the end of it. `baseline` and not `center`,
+ * because the two sit at different rungs — 11.5px and 10.5px — and it is the
+ * text that has to line up, not the boxes. `.nav-row-needs` further down is a
+ * THIRD line and a sibling of this one, not a child of it. */
+.nav-row-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
 /* Secondary, not tertiary, and for the reason written on `.mark.idle`: on the
  * card tertiary is 2.03:1 in light, and this is text, which owes 4.5. The
  * hierarchy survives — the title is --text-primary at 8.77:1 and this is
@@ -864,6 +966,16 @@
   line-height: var(--lh-xs);
 }
 
+/* A code chat's subtitle is `repo · branch`, and both are identifiers, so the
+ * row sets them in mono — `sidebar.rs`'s `subtitle_mono`. (0,2,0) against the
+ * block above's (0,1,0), so it wins on specificity wherever either rule sits
+ * in the sort. */
+.nav-row-sub.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0;
+}
+
 .nav-row-age {
   /* `padding-top: 1px` IS GONE, and the comment below has been asking for that
    * since the age moved. It is the last 1px of the meta line's error: 18px of
@@ -877,6 +989,34 @@
   font-size: var(--text-2xs);
   line-height: var(--lh-xs);
   font-variant-numeric: tabular-nums;
+}
+
+/* ── "Needs input · 2m" ── */
+/* The row's third line, and the only one in this list whose entire job is its
+ * colour. `sidebar.rs` renders it on `Mark::Waiting` and nowhere else. */
+.nav-row-needs {
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+  font-weight: 600;
+  color: var(--text-warning);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* LIGHT ONLY IN PRACTICE, and the rule that makes it so is the dark carve-out
+ * further up this file — see the block beside `.nav-row.on .nav-row-sub`. In
+ * dark the mockups' amber #f0b429 measures 7.23:1 on the selected fill
+ * #2a2f36, so the one label whose entire job is its colour keeps it; in light
+ * #8a6100 is 4.42:1 on #e3e6ea, 0.08 short of the 4.5 a 10.5px/600 label owes,
+ * so light still promotes.
+ *
+ * The carve-out beats this on SPECIFICITY — (0,5,0) against (0,3,0) — not on
+ * order, which is what made it safe to bring this rule out of
+ * `60-sidebar-extra.css` and up here, above the carve-out it loses to. */
+.nav-row.on .nav-row-needs {
+  color: var(--text-primary);
 }
 
 /* THE MARK, and colour is the whole signal — there is no room for a word.
@@ -1020,5 +1160,28 @@
 
 :root[data-theme="dark"] .mark.idle {
   background: var(--text-tertiary);
+}
+
+/* ── the footer's standing line ──────────────────────────────────────────
+ *
+ * The last of the file header's five rows, and the only one of the footer's
+ * parts that is styled here: `.nav-footer` itself is in `50-band.css`, which
+ * gives the panel its bottom inset. This is the one line of the mockups'
+ * `.ident` that has a source (`standing_line` in `src/shell/desktop/mod.rs`),
+ * and it is a `p` rather than a row, so nothing in the footer's own block
+ * reaches it — no rule in any sheet the shell links names `.nav-standing`
+ * except this one, which is why it can sit in a file that sorts before
+ * `50-band.css` without losing anything. */
+.nav-standing {
+  margin: 0 0 0.5rem;
+  padding: 0 0.5rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 

@@ -148,7 +148,15 @@ pub(crate) const PLATFORM: &str = "";
 /// wide redesign appends to at once, and parallel appends have already left it
 /// carrying the same declaration twice. A region that needs rules of its own
 /// brings its own `assets/desktop/<nn>-<region>.css` and nothing else in this
-/// list moves. **The filename prefixes ARE the cascade order**: they are
+/// list moves. It was fifteen files and is thirteen: `60-sidebar-extra.css`
+/// and `98-home-sched.css` were named for where their rules SAT rather than
+/// for a region — the split cut the old sheet in filename order, so rules
+/// appended late to it landed late — and #154 and #155 put them back beside
+/// what they style, in `30-sidebar-list.css` and `40-home-chat.css`. Moving a
+/// rule between these files moves it in the cascade, which is why that was two
+/// commits after the split and not part of it, and why each carries the
+/// computed-style diff that proved nothing moved.
+/// **The filename prefixes ARE the cascade order**: they are
 /// zero-padded so that Rust's `sort`, JS's `Array.prototype.sort` and Python's
 /// `sorted` all produce this same sequence, because the two other places that
 /// link these sheets — `docs/audit.js` and `scripts/capture-gallery.py` — read
@@ -167,20 +175,18 @@ pub(crate) const SHELL: &str = concat!(
     include_str!("../assets/desktop/40-home-chat.css"),
     include_str!("../assets/desktop/50-band.css"),
     include_str!("../assets/desktop/55-panes.css"),
-    include_str!("../assets/desktop/60-sidebar-extra.css"),
     include_str!("../assets/desktop/65-responsive.css"),
     include_str!("../assets/desktop/70-overrides.css"),
     include_str!("../assets/desktop/80-measure.css"),
     include_str!("../assets/desktop/90-inspector.css"),
     include_str!("../assets/desktop/95-transcript.css"),
     include_str!("../assets/desktop/97-home-code.css"),
-    include_str!("../assets/desktop/98-home-sched.css"),
 );
 
 /// [`SHELL`]'s parts, named, in the same order — so a test that finds a fault
 /// in the concatenated string can say WHICH file carries it. A whole-sheet
 /// assertion that reports "unbalanced braces" against 165k characters names
-/// nothing; the same assertion over this array names one 90-line file.
+/// nothing; the same assertion over this array names one 124-line file.
 ///
 /// `cfg(test)` because only tests read it, and a non-test const nothing calls
 /// is `dead_code` — which CI sets `-D warnings` against.
@@ -212,10 +218,6 @@ pub(crate) const SHELL_PARTS: &[(&str, &str)] = &[
         include_str!("../assets/desktop/55-panes.css"),
     ),
     (
-        "60-sidebar-extra.css",
-        include_str!("../assets/desktop/60-sidebar-extra.css"),
-    ),
-    (
         "65-responsive.css",
         include_str!("../assets/desktop/65-responsive.css"),
     ),
@@ -239,10 +241,6 @@ pub(crate) const SHELL_PARTS: &[(&str, &str)] = &[
         "97-home-code.css",
         include_str!("../assets/desktop/97-home-code.css"),
     ),
-    (
-        "98-home-sched.css",
-        include_str!("../assets/desktop/98-home-sched.css"),
-    ),
 ];
 
 // The phone's stylesheet is exactly what it was, and this is the whole of that
@@ -258,7 +256,7 @@ const _: () = assert!(SHELL.is_empty());
 mod tests {
     /// THE THREE LISTS ARE ONE LIST, and this is the only thing that says so.
     ///
-    /// `SHELL` names its fifteen region files by hand, because `concat!` and
+    /// `SHELL` names its thirteen region files by hand, because `concat!` and
     /// `include_str!` cannot walk a directory. `docs/audit.js` and
     /// `scripts/capture-gallery.py` both `readdir` the same directory and sort
     /// it. So the app's cascade is written down and the two review tools'
@@ -371,7 +369,7 @@ mod tests {
     /// it, and a scan that quietly stops recognising things is a scan that
     /// quietly stops finding them.
     ///
-    /// The two tests below walk fifteen files looking for a repeated property,
+    /// The two tests below walk thirteen files looking for a repeated property,
     /// and everything they currently meet is a real declaration, so the reject
     /// arm never runs against the shipped sheet. It exists for what those files
     /// are one rule away from holding: `@media (max-width: 900px)` has a colon
@@ -496,7 +494,7 @@ mod tests {
     /// second pair mis-indented, which is what two branches appending to one
     /// 4278-line sheet leaves behind: git merges both hunks cleanly, the sheet
     /// still parses, the cascade still resolves, and the only trace is that one
-    /// of the two values is now unreachable. Splitting the sheet into fifteen
+    /// of the two values is now unreachable. Splitting the sheet into thirteen
     /// region files narrows the target; it does not remove it, because six
     /// lanes still write six files at once and five of the issues in this
     /// campaign were found to prescribe the same declaration from two places.
@@ -856,7 +854,7 @@ mod tests {
     /// or a `url()` would be counted. No sheet here has one, and if one ever
     /// does, this test is where to teach the exception.
     ///
-    /// REPRODUCED: `**450**/#c2c8cf` in any of the fifteen files gives that
+    /// REPRODUCED: `**450**/#c2c8cf` in any of the thirteen files gives that
     /// file one open and two closes, and this fails naming it.
     #[test]
     fn every_comment_in_every_region_file_closes_exactly_once() {

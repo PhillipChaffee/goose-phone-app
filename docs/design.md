@@ -1320,20 +1320,23 @@ The same design system, worn a second way. `assets/shared.css` is untouched by
 it: everything below lives in `assets/desktop/`, which `src/css.rs` embeds
 only in a desktop binary.
 
-**Fifteen files, and the sort is the cascade.** `assets/desktop/` is a
+**Thirteen files, and the sort is the cascade.** `assets/desktop/` is a
 directory rather than one sheet — `00-tokens.css`, `10-sidebar-frame.css`,
 `20-plane-switch.css`, `30-sidebar-list.css`, `40-home-chat.css`,
-`50-band.css`, `55-panes.css`, `60-sidebar-extra.css`, `65-responsive.css`,
-`70-overrides.css`, `80-measure.css`, `90-inspector.css`, `95-transcript.css`,
-`97-home-code.css`, `98-home-sched.css` — because one 4278-line file is one
-file every branch of a wide change appends to at once, and parallel appends had
-already left it declaring `--insp-add`/`--insp-del` twice. The split was purely
-mechanical: no rule was edited, reordered or reformatted, the parts are
-contiguous over the original's 1–4278, each is brace-balanced on its own, and
-`cat assets/desktop/*.css` reproduces the old file byte for byte. That
-byte-identity is the whole safety argument — identical bytes are an identical
+`50-band.css`, `55-panes.css`, `65-responsive.css`, `70-overrides.css`,
+`80-measure.css`, `90-inspector.css`, `95-transcript.css`, `97-home-code.css`
+— because one 4278-line file is one file every branch of a wide change appends
+to at once, and parallel appends had already left it declaring
+`--insp-add`/`--insp-del` twice. The split itself was purely mechanical: no
+rule was edited, reordered or reformatted, the parts were contiguous over the
+original's 1–4278, each was brace-balanced on its own, and
+`cat assets/desktop/*.css` reproduced the old file byte for byte. That
+byte-identity was the whole safety argument — identical bytes are an identical
 token stream and therefore an identical cascade — so a change that has to move
-a rule between files is a *second* commit, never part of a split.
+a rule between files is a *second* commit, never part of a split. Two such
+commits have since landed (#154, #155, below), so `cat` no longer reproduces
+the 2026-era `assets/desktop.css`; what replaces that argument is the
+computed-style diff those commits carry.
 
 The numeric prefixes are zero-padded so that Rust's `concat!` order in
 `src/css.rs`, `readdirSync().sort()` in `docs/audit.js` and `sorted()` in
@@ -1345,10 +1348,24 @@ all three, never swept into it — `src/app.rs` emits STYLES, then SHELL, then
 PLATFORM, and the platform sheet has to win the `--chrome-h`/`--traffic-w`
 declarations it shares with `00-tokens.css` at equal specificity.
 
-Two files are named for where they *are*, not where they belong:
-`60-sidebar-extra.css` is sidebar rules that were appended after the band's,
-and `98-home-sched.css` is home-screen rules that were appended after the Code
-half's. Moving either would forfeit the byte-identity proof, so they stayed put.
+Two files were named for where they *are*, not where they belong, and both are
+gone: `60-sidebar-extra.css` was sidebar rules appended after the band's, and
+`98-home-sched.css` was home-screen rules appended after the Code half's.
+Moving either would have forfeited the byte-identity proof, so they stayed put
+through the split and moved afterwards, in commits of their own (#154, #155) —
+into `30-sidebar-list.css` and `40-home-chat.css`, beside what they style.
+
+**A move between region files is a move in the cascade**, and that is what
+those two commits had to prove rather than assert: two rules of equal
+specificity are decided by which comes last, and `60-` sorted after `30-`,
+`40-`, `50-` and `55-` while `98-` sorted after everything. The proof is a
+computed-style diff — every element of all 69 captured states, at the nine
+window sizes and six phone sizes `docs/audit.js` walks, in both themes and all
+four shell states, full computed style and border-box rect: **3,792 cells and
+534,696 element dumps, byte-identical before and after**. Reproduce it the
+same way for the next such move; a Clean audit is a weaker claim, because the
+audit asks its own questions and a rule that changed a colour by a tenth of a
+point answers all of them the same way.
 
 **Platform and width are different axes.** The platform decides the
 *affordances* and it decides them at compile time — the desktop shell has
@@ -1558,8 +1575,10 @@ move; the 117px comes entirely off the badge. Nothing at 572pt and above moves
 at all. Reproduce it by putting the rail rule back — append
 `@media (max-width: 571px) { .shell-chrome > .conn-badge .conn-label { display:
 inline } .shell-chrome > .conn-badge { padding-right: 12px } }` to
-`assets/desktop/98-home-sched.css` and re-run the axis. The *last* file in the
-sort, because the point of an append is that the later copy wins.
+`assets/desktop/97-home-code.css` and re-run the axis. The *last* file in the
+sort, because the point of an append is that the later copy wins. (It was
+`98-home-sched.css` until #155 emptied that file; whatever sorts last is the
+one to use, so check the directory rather than the name.)
 
 **And inside the title group the qualifier yields to the name.** Both were
 `flex: 0 1 auto`, which takes a deficit off two items in proportion to what
@@ -1796,11 +1815,13 @@ How each row is reproduced: **append** the declarations to the sheet named and
 re-run. Appending is what makes them faithful without a rewrite — every one of
 these is at the same specificity as the rule it is fighting, so the later copy
 wins, and a `git checkout` of the one file puts the tree back. Append to
-`98-home-sched.css`, the last file in `assets/desktop/`'s sort: appending into
+`97-home-code.css`, the last file in `assets/desktop/`'s sort: appending into
 the middle of the directory puts the copy *before* the rule it is meant to
-beat, and the row silently fails to reproduce.
+beat, and the row silently fails to reproduce. (That was `98-home-sched.css`
+until #155 emptied it — read the last name out of the directory rather than
+from here.)
 
-| put back, appended to `assets/desktop/98-home-sched.css` | reported | where |
+| put back, appended to `assets/desktop/97-home-code.css` | reported | where |
 |---|---|---|
 | `.nav-toggle { position: absolute; z-index: calc(var(--z-chrome) + 1); top: 20px; left: calc(var(--nav-w) - var(--shell-gap) - 44px); margin-top: 0 }` — **the regression that shipped** | **224 CHROME-SLOT** and 426 TITLE-COLLIDE (650) | the slot findings at 480×560 and 571×700 **only**, never 572 and up — but in **nav open and nav closed alike**, 28 states × 2 themes × 2 widths × 2 cells |
 | the same collision behind `[data-nav="closed"]` — `.shell[data-nav="closed"] .nav-toggle { position: absolute; z-index: calc(var(--z-chrome) + 1); top: 14px; left: var(--shell-gap); margin-top: 0 }` | **392 CHROME-SLOT** | nav **closed** only, all seven widths |
