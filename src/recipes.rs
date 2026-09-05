@@ -27,6 +27,7 @@ use goose_acp_client::RecipeListEntry;
 use serde_json::{json, Value};
 
 use crate::cron::{self, Repeat, Schedule};
+use crate::shell::{this_device, Shell};
 use crate::state::{load_remote, new_session_with, show_toast, AppCtx, Remote, Tab};
 use crate::views::session_settings::{SettingChoice, SettingRow};
 
@@ -359,6 +360,41 @@ pub(crate) const fn run_offer(needs_input: bool, scan: ScanState) -> RunOffer {
 /// the sheet has exactly one row that decides whether the others exist.
 pub(crate) const SCHEDULE_OFF: &str = "off";
 
+/// What a cron this app has no form for says about itself.
+///
+/// ONE COPY, and that is the fix rather than a tidy-up. It shipped twice —
+/// `views/recipes.rs` on a recipe's Schedule row and `views/scheduler.rs` on a
+/// job's Cadence row — and both copies said "this phone", which is #161. Two
+/// copies of a sentence are two sentences to correct, and the second one is
+/// always the one that is missed.
+///
+/// "this app" and not a shell branch, because the sentence is not about
+/// hardware. What cannot express a `0 3 */2 * *` is this client's five-row
+/// form (`crate::cron`), which is the same five rows in a 1440pt window as on a
+/// phone. Renaming the device would have made the desktop's copy true by
+/// accident and left it saying the wrong thing about why.
+pub(crate) const CRON_SET_ELSEWHERE: &str =
+    "Set on another client, in a form this app cannot edit — change it there.";
+
+/// What a schedule promises about the machine you set it from.
+///
+/// The other sentence that shipped twice — `views/recipes.rs`'s schedule sheet
+/// and `scheduler.rs`'s facts card — and this one IS about hardware, so it
+/// takes the shell rather than dropping the noun. The whole point of a
+/// server-side timer is that your own machine does not have to be awake for it,
+/// and "the phone" said that to a reader sitting at a Mac.
+///
+/// Takes the shell rather than reading `Shell::CURRENT`, for
+/// [`crate::shell::this_device`]'s reason: `cargo test` runs on a host, where
+/// `CURRENT` is always `Shell::Desktop`, so an ambient read would leave the
+/// phone's arm asserted by nothing.
+pub(crate) fn runs_without_you(shell: Shell) -> String {
+    format!(
+        "goose runs this on the server, whether or not {} is on.",
+        this_device(shell)
+    )
+}
+
 /// The schedule sheet, as rows.
 ///
 /// Which rows exist follows from the repeat: an hourly schedule has no hour
@@ -532,6 +568,14 @@ pub(crate) fn facts(entry: &RecipeListEntry) -> Vec<SettingRow> {
 /// values it would stop and ask for are the reason the Run button is missing,
 /// and a missing button with no explanation is design rule 11 failed rather
 /// than followed.
+///
+/// The sentence says "this app" and names goose Desktop, and both halves are
+/// #161. What has no parameter form is this client — the same client in a
+/// 1440pt window — so "the phone" was the wrong noun on one shell and the wrong
+/// subject on both. "your desktop" was worse than wrong: it means the goose
+/// Desktop APPLICATION, and a reader in a macOS window is at a desktop already
+/// and has just been told to go to it. Naming the product is right on both
+/// shells and needs no branch.
 pub(crate) fn inputs_fact(count: usize, needs_input: bool) -> Option<(String, String)> {
     if count == 0 {
         return None;
@@ -540,8 +584,8 @@ pub(crate) fn inputs_fact(count: usize, needs_input: bool) -> Option<(String, St
     Some(if needs_input {
         (
             format!("{value} · asked for at launch"),
-            "Answering these is not supported on the phone yet, so this recipe \
-             has to be started from goose on your desktop."
+            "Answering these is not supported in this app yet, so this recipe \
+             has to be started from goose Desktop."
                 .to_owned(),
         )
     } else {
@@ -711,14 +755,60 @@ mod tests {
         assert_eq!(run_offer(true, ScanState::Warned), RunOffer::Blocked);
     }
 
-    /// The missing button has to be explained where the reader is looking,
-    /// and the explanation has to name the phone rather than the recipe.
+    /// The two sentences the Recipes sheet and the Scheduler both say, and the
+    /// two different answers #161 turned out to want.
+    ///
+    /// The cadence note DROPS the device: what cannot express a cron is this
+    /// client's five-row form, which is the same five rows on both shells, so
+    /// naming the hardware was naming the wrong obstacle as well as the wrong
+    /// machine. The schedule promise KEEPS it and chooses per shell: the whole
+    /// point of a server-side timer is that your own machine need not be awake,
+    /// and that sentence has to name the machine the reader has.
+    ///
+    /// Both arms asserted, because only one of them is ever rendered here — a
+    /// host `cargo test` is `Shell::Desktop`, so a render-only check would
+    /// leave the phone's wording, which is the one that ships, verified by
+    /// nothing at all.
+    #[test]
+    fn the_two_shared_schedule_sentences_name_the_right_thing() {
+        assert_eq!(
+            runs_without_you(Shell::Mobile),
+            "goose runs this on the server, whether or not this phone is on."
+        );
+        assert_eq!(
+            runs_without_you(Shell::Desktop),
+            "goose runs this on the server, whether or not this computer is on."
+        );
+        assert!(
+            CRON_SET_ELSEWHERE.contains("this app"),
+            "the cadence note names something other than the client that has \
+             no form for the cron: {CRON_SET_ELSEWHERE}"
+        );
+        assert!(
+            !CRON_SET_ELSEWHERE.contains("phone"),
+            "the cadence note is back to telling a 1440x860 window it is a \
+             phone: {CRON_SET_ELSEWHERE}"
+        );
+    }
+
+    /// The missing button has to be explained where the reader is looking, and
+    /// the explanation has to name somewhere the recipe can actually be run.
+    ///
+    /// "goose Desktop" and not "your desktop", which is #161: the sentence is
+    /// about a PRODUCT, and the reader of the other shell is already at a
+    /// desktop. Asserted with the capital, because that is the whole
+    /// difference.
     #[test]
     fn the_inputs_fact_says_why_there_is_no_button() {
         assert_eq!(inputs_fact(0, false), None);
         let (value, note) = inputs_fact(3, true).unwrap();
         assert_eq!(value, "3 inputs · asked for at launch");
-        assert!(note.contains("desktop"), "{note}");
+        assert!(note.contains("goose Desktop"), "{note}");
+        assert!(
+            !note.contains("phone"),
+            "a 1440x860 window is being told its inputs are a phone's problem: \
+             {note}"
+        );
         let (value, note) = inputs_fact(1, false).unwrap();
         assert_eq!(value, "1 input");
         assert!(note.contains("defaults"), "{note}");
@@ -832,12 +922,12 @@ mod tests {
             inputs
                 .note
                 .as_deref()
-                .is_some_and(|n| n.contains("desktop")),
+                .is_some_and(|n| n.contains("goose Desktop")),
             "the note has to point somewhere the recipe can actually be run"
         );
 
         // A recipe whose inputs all have defaults still gets the row — it is
-        // a fact about the recipe — but not the sentence about the desktop.
+        // a fact about the recipe — but not the sentence about goose Desktop.
         let runnable = entry(&with_parameters(&["optional"]), &Value::Null);
         let rows = facts(&runnable);
         assert_eq!(rows.len(), 1);

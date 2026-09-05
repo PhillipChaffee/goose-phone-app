@@ -40,6 +40,7 @@ use goose_acp_client::{
 
 use crate::cron::{self, Schedule};
 use crate::extensions::humanize;
+use crate::shell::Shell;
 use crate::state::{
     load_remote, relative_time, rfc3339_to_epoch, show_toast, AppCtx, Remote, Screen as HomeScreen,
     Tab,
@@ -331,7 +332,10 @@ pub(crate) fn facts(job: &ScheduledJob, now: i64) -> Vec<SettingRow> {
         "last_run",
         "Last run",
         last_run_label(job),
-        "goose runs this on the server, whether or not the phone is on.",
+        // The sentence itself is `crate::recipes`'s, because the schedule
+        // sheet says it too and it used to say it in its own words — both of
+        // them naming a phone in a 1440pt window (#161).
+        crate::recipes::runs_without_you(Shell::CURRENT),
     ));
     if job.currently_running {
         rows.push(SettingRow::fact(
@@ -1192,6 +1196,31 @@ pub(crate) mod tests {
                 ("Last run", "never"),
                 ("Started", "running 5m"),
             ]
+        );
+    }
+
+    /// The Last run note is the one sentence on this card about a machine, and
+    /// this card is shared: it said "the phone" in a 1440x860 window, which is
+    /// #161. It reaches the reader through `crate::recipes` now, because the
+    /// recipe's own schedule sheet says the same thing and used to say it in a
+    /// second copy that would have had to be corrected separately.
+    ///
+    /// Asserted through the function rather than against a frozen string, so
+    /// the arm this host cannot render is still the arm that is checked — the
+    /// two words themselves are pinned in `crate::shell`.
+    #[test]
+    fn the_last_run_note_names_the_machine_the_reader_is_at() {
+        let rows = facts(&job("nightly", "0 0 2 * * *", false, false), 1_800_000_000);
+        let note = rows
+            .iter()
+            .find(|row| row.name == "Last run")
+            .and_then(|row| row.note.clone())
+            .unwrap_or_default();
+        assert_eq!(note, crate::recipes::runs_without_you(Shell::CURRENT));
+        assert!(
+            !note.contains("this phone"),
+            "the card is telling a desktop reader their phone has to be on \
+             for a server-side timer: {note}"
         );
     }
 

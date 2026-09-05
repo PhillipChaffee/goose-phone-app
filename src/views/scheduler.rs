@@ -434,7 +434,11 @@ fn cadence_row(ctx: &AppCtx, job: &ScheduledJob) -> Element {
             "cadence",
             "Cadence",
             cron,
-            "Set on another client, in a form this phone cannot edit — change it there.",
+            // The recipe's Schedule row says this too, and both copies said
+            // "this phone" (#161). One sentence now, and it names the client
+            // rather than the hardware: what cannot express the cron is this
+            // app's five-row form, on either shell.
+            crate::recipes::CRON_SET_ELSEWHERE,
         )),
         Cadence::Editable(schedule) => rsx! {
             button {
@@ -1355,8 +1359,14 @@ mod tests {
              this schedule on the client that set it: {html}"
         );
         assert!(
-            html.contains("in a form this phone cannot edit"),
+            html.contains("in a form this app cannot edit"),
             "nothing says why the cadence is not editable here: {html}"
+        );
+        assert!(
+            !html.contains("this phone"),
+            "a 1440x860 window is being told a phone cannot edit its form, \
+             when what cannot is this app's five-row cron builder on either \
+             shell: {html}"
         );
         assert!(
             !html.contains(r#"<span class="setting-name">Cadence</span></span>"#),

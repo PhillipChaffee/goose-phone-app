@@ -129,34 +129,26 @@ const NOT_SCANNED: &[&str] = &[
 ///
 /// THIS LIST MAY ONLY SHRINK, for [`crate::inherit`]'s `UNDECIDED` reason and
 /// checked the same way — an entry that has stopped matching anything fails as
-/// loudly as a new sentence does. It is not a set of exemptions. It is the copy
-/// #161 found, written down at the size it was on the day the gate landed, so
-/// that the eleventh one is a red build rather than a fourth sweep.
+/// loudly as a new sentence does. It is not a set of exemptions. It landed at
+/// ten, which is what #161 found, so that the eleventh would be a red build
+/// rather than a fourth sweep.
 ///
 /// Each entry is a file and a FRAGMENT of the sentence, matched against the
 /// literal as the compiler builds it — so a line continuation in the source
 /// does not have to be reproduced here, and rewording around the fragment still
 /// fails.
-const ADDRESSING_A_PHONE: &[(&str, &str)] = &[
-    // The Inputs row's note, composed one layer below the view that shows it.
-    // Says both things at once: "the phone" for this client, and "your desktop"
-    // for the goose Desktop application.
-    ("src/recipes.rs", "not supported on the phone yet"),
-    // The scheduled-run facts card, likewise below its view.
-    ("src/scheduler.rs", "whether or not the phone is on"),
-    // A `title` attribute, so it is a HOVER tooltip: this one is only ever read
-    // on the desktop, and it says tap. `src/views/code.rs` belongs to another
-    // lane of this campaign (#190's fix is in `CodeNewView`), so the sentence
-    // stays here until that lane or a later pass takes it.
-    ("src/views/code.rs", "tap to unmark"),
-    ("src/views/extensions.rs", "not on this phone"),
-    ("src/views/extensions.rs", "finished from a phone"),
-    ("src/views/extensions.rs", "this phone and never saved here"),
-    ("src/views/recipes.rs", "add one from your desktop"),
-    ("src/views/recipes.rs", "in a form this phone cannot edit"),
-    ("src/views/recipes.rs", "whether or not the phone is on"),
-    ("src/views/scheduler.rs", "in a form this phone cannot edit"),
-];
+///
+/// NINE OF THE TEN WENT IN #161. This is the tenth, and it is still here for
+/// ownership rather than for difficulty: `src/views/code.rs` belongs to another
+/// lane of this campaign, whose own fix is in `CodeNewView`, and an edit here
+/// would conflict with it.
+///
+/// It is the worst of the ten. A `title` attribute is a HOVER tooltip, so this
+/// sentence is ONLY ever read on the desktop — it exists to be read with a
+/// pointer and it says tap. The wording it wants is
+/// `views::chrome::row_action_words`'s: a `Shell` branch with "tap" on one side
+/// and "click" on the other.
+const ADDRESSING_A_PHONE: &[(&str, &str)] = &[("src/views/code.rs", "tap to unmark")];
 
 /// One shipping sentence that names a device.
 #[derive(Debug)]
