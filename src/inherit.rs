@@ -295,10 +295,9 @@ const UNDECIDED: &[&str] = &[
     "choice-main",
     "choice-note",
     "sheet-search",
-    // src/views/mod.rs — the scroll-to-bottom affordance (#209) and the modal
-    // body every sheet is built from.
+    // src/views/mod.rs — the scroll-to-bottom affordance's slot (#209 decided
+    // the button itself) and the modal body every sheet is built from.
     "modal-body",
-    "scroll-bottom",
     "scroll-bottom-slot",
     // src/scheduler.rs — two of the three button faces.
     "danger-outline",
