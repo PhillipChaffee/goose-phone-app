@@ -15,6 +15,7 @@ use crate::recipes::{
     close, facts, list_state, open, refresh, row_meta, run, run_offer, schedule_rows, set_schedule,
     ListState, RunOffer, ScanState,
 };
+use crate::shell::Shell;
 use crate::state::{relative_time, rfc3339_to_epoch, use_app_ctx, AppCtx};
 use crate::views::chrome::{ListRow, RowAction, TopBar};
 use crate::views::session_settings::SettingRow;
@@ -68,7 +69,13 @@ pub fn RecipesView() -> Element {
                 },
                 ListState::Empty => rsx! {
                     p { class: "empty",
-                        "No recipes yet. Ask goose in a chat to save one, or add one from your desktop."
+                        // "goose Desktop" and not "your desktop", which is
+                        // #161. The other place recipes are authored is the
+                        // goose Desktop APPLICATION, and "your desktop" reads
+                        // as the reader's own machine — ambiguous on a phone,
+                        // and in a 1440x860 macOS window it tells a reader who
+                        // is already at a desktop to go to one.
+                        "No recipes yet. Ask goose in a chat to save one, or add one in goose Desktop."
                     }
                 },
                 ListState::Rows => rsx! {
@@ -364,7 +371,7 @@ fn schedule_row(ctx: &AppCtx, entry: &RecipeListEntry, mut sheet_open: Signal<bo
                 "schedule",
                 "Schedule",
                 cron,
-                "Set on another client, in a form this phone cannot edit — change it there.",
+                crate::recipes::CRON_SET_ELSEWHERE,
             ));
         }
     }
@@ -509,7 +516,7 @@ pub(crate) fn CronSheet(
                     "summary",
                     "Result",
                     if on() { cron::describe(schedule()) } else { "Not scheduled".to_owned() },
-                    "goose runs this on the server, whether or not the phone is on.",
+                    crate::recipes::runs_without_you(Shell::CURRENT),
                 ))}
             }
             div { class: "modal-actions",
@@ -995,12 +1002,17 @@ mod tests {
     /// The empty state is the one place that says where a recipe comes from.
     /// This app cannot author one, so an empty screen with no instructions on
     /// it is a dead end.
+    ///
+    /// It names the PRODUCT, which is #161: "your desktop" meant the goose
+    /// Desktop application and read as the reader's own machine, so on the
+    /// shell that IS a desktop the sentence told them to go where they already
+    /// are.
     #[test]
     fn an_empty_shelf_says_where_recipes_come_from() {
         let html = render_seeded(connect, || rsx! { RecipesView {} });
         assert!(
             html.contains(
-                "No recipes yet. Ask goose in a chat to save one, or add one from your desktop."
+                "No recipes yet. Ask goose in a chat to save one, or add one in goose Desktop."
             ),
             "the empty list does not say how to get a recipe onto it: {html}"
         );
@@ -1209,7 +1221,7 @@ mod tests {
              explanation anywhere on the screen: {html}"
         );
         assert!(
-            html.contains("has to be started from goose on your desktop"),
+            html.contains("has to be started from goose Desktop"),
             "the note does not say where the recipe can be run instead: {html}"
         );
     }

@@ -19,6 +19,7 @@ use crate::extensions::{
 };
 use crate::icons::Icon;
 use crate::nav::Crumb;
+use crate::shell::{this_device, Shell};
 use crate::state::{use_app_ctx, AppCtx};
 use crate::views::chrome::{ListRow, RowAction, RowFace, TopBar};
 
@@ -348,7 +349,14 @@ fn render_transport(extension: &GooseExtension) -> Element {
                     Fact {
                         name: "Command",
                         value: command,
-                        note: "Run on the goose server, not on this phone.",
+                        // A claim about hardware, so it names the reader's own
+                        // machine rather than dropping the noun (#161): the
+                        // point of the sentence is that this `npx …` is not
+                        // about to be executed where you are sitting.
+                        note: format!(
+                            "Run on the goose server, not on {}.",
+                            this_device(Shell::CURRENT),
+                        ),
                         mono: true,
                     }
                 }
@@ -444,7 +452,14 @@ fn AddSheet(sheet: Sheet) -> Element {
                 }
             }
             p { class: "hint",
-                "Only services that can be finished from a phone are listed. A service "
+                // "this app" and not a shell branch (#161). The sentence
+                // explains itself two clauses later: what cannot finish an
+                // OAuth flow is this CLIENT, because goose opens the browser
+                // on the server and the authorization URL never arrives here.
+                // That is as true in a 1440pt window as on a phone, so
+                // renaming the device would have made the desktop's copy true
+                // by accident while still naming the wrong obstacle.
+                "Only services that can be finished from this app are listed. A service "
                 "that needs an OAuth consent screen cannot be: goose opens the browser "
                 "on the server, and the authorization URL never reaches this app."
             }
@@ -517,9 +532,12 @@ fn CredentialForm(index: usize, drafts: Signal<Vec<String>>, busy: bool) -> Elem
         {credential_fields(entry, drafts)}
 
         p { class: "hint",
+            // A claim about hardware and the strongest one on the screen —
+            // "nothing you just typed lands on the machine in front of you" —
+            // so the noun is the reader's own machine, chosen per shell (#161).
             "Stored on the goose server, in its secrets file. It is never sent back to "
-            "this phone and never saved here — if you need it again, get it from the "
-            "service that issued it."
+            "{this_device(Shell::CURRENT)} and never saved here — if you need it again, "
+            "get it from the service that issued it."
         }
 
         p { class: "hint", "{entry.scope}" }
@@ -581,7 +599,8 @@ fn credential_fields(entry: &'static CatalogEntry, mut drafts: Signal<Vec<String
 )]
 mod tests {
     use super::{
-        crumb, timeout_of, AppCtx, GooseExtension, GooseExtensionEntry, McpServer, Screen, Sheet,
+        crumb, this_device, timeout_of, AppCtx, GooseExtension, GooseExtensionEntry, McpServer,
+        Screen, Sheet, Shell,
     };
     use crate::extensions::Toggle;
     use crate::state::{ConnState, Tab};
@@ -1524,9 +1543,18 @@ mod tests {
             head(&html)
         );
         assert!(
-            html.contains("It is never sent back to this phone and never saved here"),
+            html.contains(&format!(
+                "It is never sent back to {} and never saved here",
+                this_device(Shell::CURRENT)
+            )),
             "the one-way promise about the credential is not made where the \
              credential is typed: {}",
+            head(&html)
+        );
+        assert!(
+            !html.contains("this phone"),
+            "a 1440x860 window is being promised that a secret will not be \
+             sent to a phone it is not on: {}",
             head(&html)
         );
     }
