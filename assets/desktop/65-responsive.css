@@ -1,14 +1,63 @@
-@media (max-width: 627px) {
-
-    .chrome-parent,
-    .chrome-sep {
+/* ═══ THE PARENT CRUMB IS A THREE-COLUMN LUXURY ═══════════════════════════
+ *
+ * This rule was `max-width: 627px` and lived inside the tier below, on the
+ * reasoning that a crumb fragment is worth less than the room it costs. The
+ * reasoning was right and the breakpoint was wrong by 344 pixels: above 627 the
+ * pair came back, but it did not come back legible.
+ *
+ * `.chrome-parent` is `flex: 0 1 auto` inside `.chrome-title`, with
+ * `overflow: hidden; text-overflow: ellipsis` (`55-panes.css`), so it shrinks
+ * WITH the title rather than holding its own width. Measured on `desktop-chat`
+ * under the sheet list `docs/audit.js` links, as rendered box over the text's
+ * own `scrollWidth` — "Chats" wants 35px:
+ *
+ *     628  14/35    704  16/35    728  17/35    800  21/35
+ *     900  26/35    971  29/35    972  22/35   1440  35/35
+ *
+ * At 728 the band reads `CHAT  C…  /  Why does the transcript jump to the
+ * bott…` — one letter and an ellipsis, plus its margin and the `/`, is about
+ * 30px of band spent to say nothing, on the one screen whose title is already
+ * 330px short of what it wants.
+ *
+ * 971 AND NOT 627, because 972 is where the third column arrives and the crumb
+ * stops being squeezed by the two things beside it. It is the same turn
+ * `55-panes.css` makes for `.conn-host` at the same width and for the same
+ * reason, written there rather than here for the reason its own comment gives:
+ * these turn at the three-column breakpoint and the tier below turns at the
+ * two-column one.
+ *
+ * NOTHING IS LOST. `.chrome-parent` is a `span` — `src/shell/desktop/mod.rs`
+ * renders no control there — so it was never a way back to the parent screen;
+ * the pane's own back chevron is. The band still names what is open, which is
+ * what `crumb_parts` is TOTAL for.
+ *
+ * Measured after, on the same states and the same stack: `desktop-chat`'s
+ * `.chrome-heading` goes 268 -> 297 at 628, 329 -> 361 at 728 and 560 -> 604 at
+ * 971, and `desktop-recipes-detail`'s title becomes COMPLETE at 900 (471/490 ->
+ * 490/490) where it was a truncation before. The connection pill gets words
+ * back on the list states, which have short titles and were losing them to the
+ * same squeeze: `desktop-chats`'s `.conn-badge` goes 20 -> 50 at 728 and
+ * 71 -> 121 at 800.
+ *
+ * WHAT THIS DOES NOT FIX, so it is not mistaken for fixed: at 972 the crumb is
+ * back and still a truncation (22/35), because `50-band.css`'s
+ * `.plane-badge { margin-left: calc(var(--nav-w) + 16px - 46px - var(--traffic-w)) }`
+ * spends 162px of band the moment the third column arrives — `.chrome-title` is
+ * 604px at 971 and 451px at 972, so one pixel of window costs the title 153.
+ * That is a different cause in a file this change does not own, and #216
+ * records it. */
+@media (max-width: 971px) {
+  .chrome-parent,
+  .chrome-sep {
     display: none;
-    }
+  }
+}
 
-    .shell-chrome > .conn-badge {
+@media (max-width: 627px) {
+  .shell-chrome > .conn-badge {
     padding: 0 0.5rem;
     border-color: transparent;
-    }
+  }
 
   /* THE BAND'S LEFT CELL GOES WITH THE COLUMN. `50-band.css` draws a hairline
    * at x=267 across the band because the sidebar draws one under it; below
