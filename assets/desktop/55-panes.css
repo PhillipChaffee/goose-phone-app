@@ -133,3 +133,80 @@
   white-space: nowrap;
 }
 
+/* ── the content column's rows lead with a mark, not with a tile ────────
+ *
+ * `.session-tile` is a 40x40 filled square with a 12px radius, and it is the
+ * first thing in every row of Recipes, Skills, Scheduler, Extensions and the
+ * code plane's pull list. Measured against these sheets on
+ * `desktop-recipes-list` at 1440x860: the tile is 40x40 at x=547 holding a
+ * 13px glyph, and `.session-main` — the title, the meta line and the preview,
+ * the entire row — starts at x=599. Forty points of material and twelve of gap
+ * to introduce thirteen points of ink.
+ *
+ * THE COUNTERPART IS THIS COLUMN'S OWN MOCKUP, not a sidebar row, and that is
+ * what makes this a fidelity fix rather than a preference. `E-options/
+ * 10-home-chat.html`'s `.crow` IS the content column's list row — the same
+ * mockup `80-measure.css` §7 read the one-line clamp off — and it is
+ * `grid-template-columns: 14px minmax(0, 1fr) auto; gap: 12px;
+ * align-items: center`, with `.crow .mk` a bare `display: flex;
+ * justify-content: center` and no background, no radius and no border on it at
+ * all. A 14px column, a 12px gap, and the gap is already ours. The app agrees
+ * with itself here too: `.recent` on the chat home is `grid-template-columns:
+ * 14px minmax(0, 1fr) auto`, so the one content-column list that was drawn
+ * against the mockups already has this gutter and the four that inherited the
+ * phone's row do not.
+ *
+ * WHY THE FILL GOES, AND THE MEASUREMENT THAT MAKES IT SAFE. #223 gave
+ * `.session-tile` and `.session-quote` an `outline` hairline in
+ * `70-overrides.css` because the desktop's `--bg-secondary` remap left both
+ * fills 1.09:1 against the row they sit on — "a card the same colour as the
+ * page with no edge is not a card". That argument is about a CARD, and it is
+ * still right about `.session-quote`, which keeps its fill, its radius and its
+ * ring untouched. It stops applying to something that is no longer a box: with
+ * the fill gone there is no edge to draw, so the outline goes with it rather
+ * than being left ringing a 14px gutter.
+ *
+ * What is left is the glyph, and the glyph gets BRIGHTER, not dimmer. The fill
+ * was a rung of contrast in the wrong direction — it lightened the ink's
+ * ground in dark and darkened it in light. Measured on all six captured
+ * desktop states that hold a `.session-tile`, in both themes, against this
+ * sheet list:
+ *
+ *              glyph on tile   glyph on row
+ *   light        4.64:1          5.02:1
+ *   dark         5.66:1          6.17:1
+ *
+ * Both well past the 3:1 the audit holds a non-text mark to, and both better
+ * than what shipped. The 1.08:1 (light) and 1.09:1 (dark) fill that #223 had
+ * to ring is not made quieter here, it is gone.
+ *
+ * `align-self: center` IS THE MOCKUP'S `align-items: center`, reached without
+ * touching `.session-swipe`, which is shared and is `align-items: flex-start`
+ * for the phone's 40x40 tile. With `height: auto` the box collapses to the
+ * glyph's own 13px line, and left at the flex default that 13px box sits at
+ * the top of an 81px stack, which reads as a bullet that missed its line
+ * rather than as a mark for the row. Centred, it lands on the row's middle the
+ * way `.crow .mk` does.
+ *
+ * Scoped to `.pane-main` for `80-measure.css` §7's reason and it is the same
+ * reason: this is a statement about the CONTENT COLUMN. The sidebar has a row
+ * of its own — `.nav-row`, whose `.mark` already got this gutter in #181 — and
+ * the phone keeps the tile, which is a real 40pt object under a thumb.
+ * `.session-tile.attention` needs no rule beside this one: the badge is passed
+ * by `src/views/sessions.rs` and `src/views/code.rs` only, both of them plane
+ * ROOTS, and `mod.rs`'s pane switch takes its `on_home` arm before
+ * `dest.root` — so no captured desktop state contains it and none can.
+ *
+ * Here rather than in `70-overrides.css` because that file is about the
+ * affordances a phone row carries into a window it does not belong in — the
+ * swipe tray, the hover-revealed actions, the fills the ramp flattened. This
+ * one is not an affordance being corrected; it is the column's own geometry. */
+.pane-main .session-tile {
+  width: 0.875rem;
+  height: auto;
+  align-self: center;
+  background: none;
+  border-radius: 0;
+  outline: none;
+}
+

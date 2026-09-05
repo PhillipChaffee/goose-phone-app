@@ -288,6 +288,16 @@ pub(crate) fn SessionSettingsSheet(
     onclose: EventHandler<()>,
 ) -> Element {
     let mut open_row = use_signal(|| None::<String>);
+    // ONE QUERY FOR THE SHEET, NOT ONE PER ROW, and it is declared out here
+    // because hooks are positional: the drill-down is a match arm, and a
+    // `use_signal` inside it would run on some renders and not others.
+    //
+    // Cleared on the way OUT rather than on the way in, because the way out
+    // is where it can be enforced: there are exactly two exits and both are
+    // in this component, while the way in is `render_row`'s press handler,
+    // which knows nothing about a query. The signal starts empty, so a row
+    // opened after another row's search is opened against nothing.
+    let mut query = use_signal(String::new);
     let drilled = open_row()
         .and_then(|id| rows.iter().find(|r| r.id == id).cloned())
         .filter(SettingRow::drills);
@@ -295,16 +305,30 @@ pub(crate) fn SessionSettingsSheet(
     let body = match drilled {
         Some(row) => {
             let id = row.id.clone();
-            let list = choice_list(&row.choices, row.current.as_deref(), move |value| {
-                onchoose.call((id.clone(), value));
-                open_row.set(None);
-            });
+            // `None`, because this emptiness cannot be reached from here:
+            // `drilled` is filtered by `SettingRow::drills`, which is
+            // `!choices.is_empty()`. Writing a sentence for it would be copy
+            // no reader can ever see.
+            let list = searchable_choices(
+                &row.choices,
+                row.current.as_deref(),
+                query,
+                None,
+                move |value| {
+                    query.set(String::new());
+                    onchoose.call((id.clone(), value));
+                    open_row.set(None);
+                },
+            );
             rsx! {
                 div { class: "sheet-head",
                     button {
                         class: "icon-btn back",
                         title: "Back",
-                        onclick: move |_| open_row.set(None),
+                        onclick: move |_| {
+                            query.set(String::new());
+                            open_row.set(None);
+                        },
                         Icon { name: "chevron-left" }
                     }
                     h2 { "{row.name}" }
@@ -388,14 +412,18 @@ pub(crate) fn ChoicePickerSheet(
     onchoose: EventHandler<String>,
     onclose: EventHandler<()>,
 ) -> Element {
-    let mut query = use_signal(String::new);
-    let searchable = choices.len() > SEARCH_AT;
-    let shown = matching(&choices, &query());
+    let query = use_signal(String::new);
     let subtitle =
         subtitle.unwrap_or_else(|| format!("{backend} · applies from your next message"));
-    let list = choice_list(&shown, current.as_deref(), move |value| {
-        onchoose.call(value);
-    });
+    let list = searchable_choices(
+        &choices,
+        current.as_deref(),
+        query,
+        Some(empty),
+        move |value| {
+            onchoose.call(value);
+        },
+    );
     rsx! {
         div { class: "modal-backdrop", onclick: move |_| onclose.call(()),
             div {
@@ -412,33 +440,74 @@ pub(crate) fn ChoicePickerSheet(
                 if let Some(note) = note {
                     p { class: "hint", "{note}" }
                 }
-                if shown.is_empty() {
-                    // Two different emptinesses, and conflating them is how a
-                    // search that matched nothing came out reading like a
-                    // server that offered nothing.
-                    p { class: "empty",
-                        if choices.is_empty() { "{empty}" } else { "Nothing matches “{query}”." }
-                    }
-                }
                 {list}
-                // At the bottom, where a thumb is and where it stays put as
-                // the list moves under it — which is where the reference puts
-                // it, and what costs the sheet its single scrollbox (see
-                // .modal.sheet:has(.sheet-search) in shared.css).
-                if searchable {
-                    div { class: "sheet-search",
-                        Icon { name: "search" }
-                        input {
-                            class: "field",
-                            r#type: "text",
-                            placeholder: "Search",
-                            autocapitalize: "off",
-                            autocomplete: "off",
-                            spellcheck: "false",
-                            value: "{query}",
-                            oninput: move |e| query.set(e.value()),
-                        }
-                    }
+            }
+        }
+    }
+}
+
+/// The filtered list, whichever emptiness it landed in, and the field that
+/// produced it.
+///
+/// SHARED BY BOTH SHEETS, AND THAT IS THE FIX RATHER THAN A TIDY-UP. The same
+/// values are reachable two ways — the composer's Model chip opens
+/// [`ChoicePickerSheet`], and Session settings → Model drills into a row —
+/// and until #195 only the first of the two could be searched. Against a
+/// provider with a real catalogue that is not a missing convenience: the
+/// owner reported that the model could not be changed at all, because the
+/// list ran past the bottom of an 1150pt window and there was no field to
+/// type into. One helper is what stops the two answering "is this list long
+/// enough to need finding" differently again.
+///
+/// `empty` is what to say when the SERVER offered nothing, and `None` means
+/// this call site cannot reach that state — the settings sheet only ever
+/// drills into a row `SettingRow::drills` accepted, which is exactly a row
+/// with choices. Copy for a screen no reader can open is copy nobody can
+/// check.
+fn searchable_choices<F: FnMut(String) + Clone + 'static>(
+    choices: &[SettingChoice],
+    current: Option<&str>,
+    mut query: Signal<String>,
+    empty: Option<String>,
+    onpick: F,
+) -> Element {
+    let needle = query();
+    let shown = matching(choices, &needle);
+    // The field is decided by the WHOLE list, not by what survived the
+    // filter: a search that narrows forty models to one must not then take
+    // away the field that narrowed them.
+    let searchable = choices.len() > SEARCH_AT;
+    let list = choice_list(&shown, current, onpick);
+    rsx! {
+        if shown.is_empty() {
+            // Two different emptinesses, and conflating them is how a search
+            // that matched nothing came out reading like a server that
+            // offered nothing.
+            p { class: "empty",
+                if let Some(empty) = empty.filter(|_| choices.is_empty()) {
+                    "{empty}"
+                } else {
+                    "Nothing matches “{needle}”."
+                }
+            }
+        }
+        {list}
+        // At the bottom, where a thumb is and where it stays put as the list
+        // moves under it — which is where the reference puts it, and what
+        // costs the sheet its single scrollbox (see
+        // .modal.sheet:has(.sheet-search) in shared.css).
+        if searchable {
+            div { class: "sheet-search",
+                Icon { name: "search" }
+                input {
+                    class: "field",
+                    r#type: "text",
+                    placeholder: "Search",
+                    autocapitalize: "off",
+                    autocomplete: "off",
+                    spellcheck: "false",
+                    value: "{needle}",
+                    oninput: move |e| query.set(e.value()),
                 }
             }
         }
@@ -717,5 +786,190 @@ mod tests {
             "Claude Opus 5"
         );
         assert_eq!(choice_label("", "thinking_hard"), "Thinking hard");
+    }
+
+    // ---------------------------------------- the settings sheet's drill-down
+
+    /// A provider's catalogue, in the shape the owner reported it in #195:
+    /// forty full identifiers, long, sharing prefixes and differing only in
+    /// their tails. The five `MiniMax` names are the exact ones from that
+    /// report, because they are the case the filter has to answer — `m2.7`
+    /// must reach one row out of six that all begin `MiniMaxAI/MiniMax-M`.
+    fn catalogue() -> Vec<SettingChoice> {
+        let mut out: Vec<String> = [
+            "Hcompany/Holo3-35B-A3B",
+            "MiniMaxAI/MiniMax-M1-40k",
+            "MiniMaxAI/MiniMax-M1-80k",
+            "MiniMaxAI/MiniMax-M2",
+            "MiniMaxAI/MiniMax-M2.5-FP4",
+            "MiniMaxAI/MiniMax-M2.7",
+            "MiniMaxAI/MiniMax-M3",
+            "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
+            "Prism-ML/Ternary-Bonsai-27B",
+            "Qwen/QwQ-32B",
+            "Qwen/Qwen2-1.5B-Instruct",
+        ]
+        .map(str::to_owned)
+        .into();
+        // Padding to forty, so `SEARCH_AT` is passed by a real margin rather
+        // than by one row.
+        for n in 0..(40 - out.len()) {
+            out.push(format!("meta-llama/Llama-4-{n}B"));
+        }
+        out.into_iter()
+            .map(|id| SettingChoice::new(id.clone(), id))
+            .collect()
+    }
+
+    /// The sheet exactly as a chat mounts it, with one drilling row so that
+    /// pressing `setting-row` can only mean Model.
+    fn model_sheet() -> Element {
+        rsx! {
+            SessionSettingsSheet {
+                backend: "goose",
+                rows: vec![SettingRow::select(
+                    "model",
+                    "Model",
+                    Some("Qwen/QwQ-32B"),
+                    catalogue(),
+                    None,
+                )],
+                onchoose: move |_: (String, String)| {},
+                onclose: move |()| {},
+            }
+        }
+    }
+
+    /// Two values, which is a control and a drill-down and still nothing worth
+    /// a field.
+    fn mode_sheet() -> Element {
+        rsx! {
+            SessionSettingsSheet {
+                backend: "goose",
+                rows: vec![SettingRow::select(
+                    "mode",
+                    "Mode",
+                    Some("auto"),
+                    vec![
+                        SettingChoice::new("auto", "Auto"),
+                        SettingChoice::new("approve", "Manual approval"),
+                    ],
+                    None,
+                )],
+                onchoose: move |_: (String, String)| {},
+                onclose: move |()| {},
+            }
+        }
+    }
+
+    /// #195, and it is the whole issue: the composer's Model chip opened a
+    /// picker you could type into, and the SAME values reached through Session
+    /// settings opened a list you could only scroll. Against a real provider
+    /// that meant the model could not be changed at all.
+    #[test]
+    fn drilling_into_a_long_row_gets_the_field_the_picker_already_had() {
+        let _guard = crate::views::press::alone();
+        let mut screen = crate::views::press::Pressable::mount(|_| {}, model_sheet);
+        assert!(
+            !screen.markup().contains("sheet-search"),
+            "the row list itself is short and must not carry a field: {:.400}",
+            screen.markup()
+        );
+
+        screen.press("setting-row");
+        let opened = screen.markup();
+        assert!(
+            opened.contains("sheet-search"),
+            "a forty-model list drilled into from the settings sheet still \
+             has no way to type: {opened:.600}"
+        );
+        assert!(
+            opened.contains("MiniMaxAI/MiniMax-M2.7") && opened.contains("Qwen/QwQ-32B"),
+            "the unfiltered list is the whole catalogue: {opened:.600}"
+        );
+
+        screen.type_into("placeholder=\"Search\"", "m2.7");
+        let filtered = screen.markup();
+        assert!(
+            filtered.contains("MiniMaxAI/MiniMax-M2.7"),
+            "the needle from the issue finds its model: {filtered:.600}"
+        );
+        assert!(
+            !filtered.contains("Qwen/QwQ-32B"),
+            "a row the needle does not match is still on screen, so the field \
+             narrows nothing: {filtered:.600}"
+        );
+        assert!(
+            filtered.contains("sheet-search"),
+            "the field that narrowed the list took itself away with it: \
+             {filtered:.600}"
+        );
+    }
+
+    /// The other half of the same decision: `SEARCH_AT` is about the LIST, and
+    /// a two-value drill-down gets no chrome it cannot use.
+    #[test]
+    fn a_short_drill_down_is_left_alone() {
+        let _guard = crate::views::press::alone();
+        let mut screen = crate::views::press::Pressable::mount(|_| {}, mode_sheet);
+        screen.press("setting-row");
+        let opened = screen.markup();
+        assert!(
+            opened.contains("Manual approval"),
+            "the drill-down opened: {opened:.400}"
+        );
+        assert!(
+            !opened.contains("sheet-search"),
+            "a two-item list got a filter, which is a control that does \
+             nothing: {opened:.400}"
+        );
+    }
+
+    /// A needle that matches nothing has to read as a search that found
+    /// nothing, not as a server that offered nothing — and the sheet must not
+    /// name the state it cannot reach, which is why the drill-down passes
+    /// `None` for the server's own emptiness.
+    #[test]
+    fn a_needle_that_matches_nothing_blames_the_needle() {
+        let _guard = crate::views::press::alone();
+        let mut screen = crate::views::press::Pressable::mount(|_| {}, model_sheet);
+        screen.press("setting-row");
+        screen.type_into("placeholder=\"Search\"", "gpt-5");
+        let empty = screen.markup();
+        assert!(
+            empty.contains("Nothing matches"),
+            "an unmatched needle says so: {empty:.400}"
+        );
+        assert!(
+            !empty.contains("MiniMaxAI"),
+            "nothing survived the needle: {empty:.400}"
+        );
+    }
+
+    /// Backing out clears the query, so the next row you open is opened
+    /// against the whole of its own list. The query is one signal for the
+    /// whole sheet — the alternative was one per row, which hooks cannot be —
+    /// so without the reset a search for a model would silently hide most of
+    /// the next setting you looked at.
+    #[test]
+    fn backing_out_of_a_drill_down_forgets_what_was_typed() {
+        let _guard = crate::views::press::alone();
+        let mut screen = crate::views::press::Pressable::mount(|_| {}, model_sheet);
+        screen.press("setting-row");
+        screen.type_into("placeholder=\"Search\"", "m2.7");
+        screen.press("title=\"Back\"");
+        assert!(
+            !screen.markup().contains("sheet-search"),
+            "Back returned to the row list: {:.400}",
+            screen.markup()
+        );
+
+        screen.press("setting-row");
+        let again = screen.markup();
+        assert!(
+            again.contains("Qwen/QwQ-32B"),
+            "the row reopened still filtered by the last row's needle: \
+             {again:.600}"
+        );
     }
 }
