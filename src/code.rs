@@ -1324,6 +1324,12 @@ fn fold_part_into(
                 kind: "execute".to_string(),
                 status,
                 output,
+                // Empty on this plane, and structurally so. `contents` is
+                // ACP's `content` array, which only goose sends; `OpenCode`
+                // reports a tool's result as the one string read just above.
+                // An edit made here is visible on the Diff screen, off
+                // `session/:id/diff`, not inside the tool part.
+                contents: Vec::new(),
             });
         }
         "file" => fold_file_part(items, part_index, roles, part, gap),
@@ -2399,6 +2405,87 @@ mod tests {
         PullRequest, PullState, PullsState, Tab, Tick, SWEEP_FLOOR_SECS, SWEEP_MAX_CHATS,
     };
     use opencode_client::{Part, PendingAsk};
+
+    /// THE CACHE REACHES THE DISK, which is the whole of #2's A11 and was
+    /// false for as long as the feature existed.
+    ///
+    /// `use_persistent` — what this signal was built on until #220 — resolves
+    /// to an in-memory `HashMap` hung off the Dioxus root context on every
+    /// target this app ships to, so the cache was rebuilt empty at each launch
+    /// and "renders instantly from local cache, including offline" was a cold
+    /// fetch every time. Everything else about the cache typechecked and
+    /// passed, which is why this has to be a test about the FILE.
+    ///
+    /// Mounting is what asserts it: `save_to_storage_on_change` compares the
+    /// entry against `None` on its first pass, so any mount at all writes the
+    /// key once — and a `SessionStorage`-backed signal writes no file ever.
+    /// A file only, not its contents: `testkit::storage_dir` is one directory
+    /// for the whole binary and every other mounted test in it is writing this
+    /// same key, so an assertion about what is IN the file would be a race.
+    /// [`the_cached_transcript_survives_the_backing_it_is_stored_through`]
+    /// takes the value's half under a key of its own.
+    #[test]
+    fn the_transcript_cache_reaches_the_disk() {
+        use dioxus::prelude::*;
+        fn nothing() -> Element {
+            rsx! {}
+        }
+        let dir = crate::testkit::storage_dir();
+        let _ = crate::testkit::render_settled(|_| {}, nothing);
+        assert!(
+            dir.join("code_cache").is_file(),
+            "mounting the app wrote no code_cache file, so every launch opens \
+             a previously-read chat with a cold fetch and A11 is unmet"
+        );
+    }
+
+    /// And a cached transcript comes back out of that store whole.
+    ///
+    /// Under a key of its own for the reason above, and asserting on the one
+    /// thing the screen reads first: the items. `ChatItem` grew a field in
+    /// #241 and `CachedChat` is what carries it across a restart, so a diff
+    /// that survives the wire and the fold has one more boundary to cross.
+    #[test]
+    fn the_cached_transcript_survives_the_backing_it_is_stored_through() {
+        use dioxus_sdk_storage::StorageBacking as _;
+
+        let dir = crate::testkit::storage_dir();
+        let mut cache = super::CodeCache::default();
+        cache.chats.insert(
+            "probe-9f2c".to_owned(),
+            super::CachedChat {
+                title: "Tighten the composer".to_owned(),
+                session_id: Some("ses_probe".to_owned()),
+                items: vec![ChatItem::Tool {
+                    id: "t1".to_owned(),
+                    title: "edit".to_owned(),
+                    kind: "edit".to_owned(),
+                    status: "completed".to_owned(),
+                    output: "[diff: a.rs]".to_owned(),
+                    contents: vec![goose_acp_client::ToolCallContent::Diff(
+                        goose_acp_client::FileDiff {
+                            path: Some("a.rs".to_owned()),
+                            old_text: Some("was".to_owned()),
+                            new_text: Some("is".to_owned()),
+                        },
+                    )],
+                }],
+                diff_seen: HashMap::from([("a.rs".to_owned(), 42)]),
+                updated: 1_700_000_000,
+            },
+        );
+        crate::ask_journal::Backing::set("code_cache_probe".to_owned(), &cache);
+        assert!(
+            dir.join("code_cache_probe").is_file(),
+            "the cache's backing wrote no file"
+        );
+        let read: Option<super::CodeCache> =
+            crate::ask_journal::Backing::get(&"code_cache_probe".to_owned());
+        assert!(
+            read == Some(cache),
+            "a cached chat lost something on the way through the store"
+        );
+    }
 
     fn pull(state: PullState, draft: bool, mergeable: Option<bool>, checks: Checks) -> PullRequest {
         PullRequest {

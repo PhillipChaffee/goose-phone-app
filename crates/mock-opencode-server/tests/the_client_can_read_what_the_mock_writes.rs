@@ -168,6 +168,119 @@ async fn the_model_a_tree_names_is_one_the_catalogue_has() {
     );
 }
 
+/// BOTH BRANCHES OF THE THINKING-EFFORT ROW EXIST LOCALLY.
+///
+/// `code_setting_rows` renders a picker when `ModelInfo::efforts()` is
+/// non-empty and a fact row when it is not. Every model in this catalogue used
+/// to carry `variants: {}`, so the picker branch was unreachable against the
+/// whole local stack — no test, no gallery capture and no hand run could reach
+/// it, and the app truthfully quoting the fixture read from outside as the app
+/// refusing to offer a control.
+#[tokio::test]
+async fn the_catalogue_offers_a_model_with_tiers_and_one_without() {
+    let server = Server::start();
+    let client = server.client();
+    let chats = client.chats().await.expect("chats");
+    let chat = chats.first().expect("a tree");
+    let models = client.models(&chat.id).await.expect("the catalogue");
+
+    let with: Vec<&str> = models
+        .iter()
+        .filter(|m| !m.efforts().is_empty())
+        .map(|m| m.id.as_str())
+        .collect();
+    assert!(
+        with.len() >= 2,
+        "fewer than two models offer tiers, so switching model cannot be seen \
+         to re-list them: {with:?}"
+    );
+    assert!(
+        models.iter().any(|m| m.efforts().is_empty()),
+        "no model has an empty variants map, so the fact row — the honest \
+         empty case, which real OpenCode serves for the minimax family — has \
+         lost its only end-to-end coverage"
+    );
+
+    let sonnet = models
+        .iter()
+        .find(|m| m.id == "claude-sonnet-4-5")
+        .expect("the default model");
+    // Weakest first. Alphabetical, which is the order serde_json's map decodes
+    // into, would be high/low/medium — so this also pins that `efforts()` ran.
+    assert_eq!(sonnet.efforts(), ["low", "medium", "high"]);
+    let opus = models
+        .iter()
+        .find(|m| m.id == "claude-opus-4-1")
+        .expect("the second model with tiers");
+    assert_eq!(opus.efforts(), ["minimal", "low", "high", "xhigh"]);
+    assert_ne!(
+        sonnet.efforts(),
+        opus.efforts(),
+        "two models sharing one tier set cannot tell a picker that re-reads \
+         the model from one that never does"
+    );
+}
+
+/// THE TURN IS THE WRITE, which is what "applies from your next message" means.
+///
+/// `OpenCode` has no call that sets a session's model or tier: `prompt_async`
+/// carries both and the server copies them onto the session record. The mock
+/// dropped them, so the session always reported the fixture's model with no
+/// variant at all and the app's own reconcile — which adopts the server's
+/// value whenever the reader has not picked one this session — could never see
+/// a tier come back.
+#[tokio::test]
+async fn a_turn_writes_its_model_and_its_tier_onto_the_session() {
+    let server = Server::start();
+    let client = server.client();
+    let chat = client
+        .chats()
+        .await
+        .expect("chats")
+        .into_iter()
+        .find(|c| c.title.contains("code-agent ports"))
+        .expect("a fixture with no ask parked in it");
+    let before = client
+        .sessions(&chat.id)
+        .await
+        .expect("sessions")
+        .into_iter()
+        .next()
+        .expect("a session");
+    // `default` is what OpenCode records for a turn that named no tier, and
+    // `effort()` is the filter that keeps it off the chip.
+    assert_eq!(before.model.clone().unwrap_or_default().effort(), None);
+
+    client
+        .prompt_async(
+            &chat.id,
+            &before.id,
+            &[opencode_client::PromptPart::Text {
+                text: "notool please".to_owned(),
+            }],
+            Some("opencode/claude-opus-4-1"),
+            Some("xhigh"),
+            None,
+        )
+        .await
+        .expect("prompt");
+
+    let after = client
+        .sessions(&chat.id)
+        .await
+        .expect("sessions")
+        .into_iter()
+        .next()
+        .expect("a session")
+        .model
+        .unwrap_or_default();
+    assert_eq!(
+        after.reference().as_deref(),
+        Some("opencode/claude-opus-4-1")
+    );
+    assert_eq!(after.effort(), Some("xhigh"));
+}
+
 /// The strictest decode in the client: the body must be an object carrying an
 /// array, and an ask must name the chat it is parked in or the app cannot mark
 /// the row.

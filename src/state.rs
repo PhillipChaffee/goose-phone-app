@@ -15,7 +15,7 @@ use dioxus::prelude::*;
 use goose_acp_client::{
     AcpClient, AcpError, AcpEvent, ConfigOption, ConnectConfig, DisconnectCause, MessageChunk,
     PermissionRequest, SessionInfo, SessionKind, SessionListResponse, SessionQuery, SessionUpdate,
-    ToolCallUpdate,
+    ToolCallContent, ToolCallUpdate,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -49,6 +49,23 @@ pub(crate) enum Tab {
 /// `serde(default)` is load-bearing: settings persisted by older builds lack
 /// the code-agent fields, and a parse failure would silently wipe the saved
 /// goose server config (the storage layer falls back to `Default`).
+///
+/// # This is the one persisted key that is still in memory only
+///
+/// It holds `secret_key` and `code_password` in the clear, and `#220` is where
+/// what to do about that is being decided. Two things are already settled and
+/// are recorded at the hook (`use_app_ctx_provider`): a plain file with a
+/// credential in it is a change to the app's threat model rather than a bug
+/// fix, and serializing only the four non-secret fields — which is the obvious
+/// third way and does work — is blocked on the test harness rather than on the
+/// design, because every mounted test shares one storage directory and a saved
+/// working directory would leak from one test into the next.
+///
+/// If a stored value ever does arrive here, note that it REPLACES the default
+/// rather than merging with it: `dev_seed!` below lives in `Default`, so a
+/// merge that fills empty fields from a fresh `Settings::default()` has to come
+/// with it or the first save in a development build silently ends the
+/// documented local workflow.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Settings {
@@ -169,6 +186,30 @@ pub(crate) enum ChatItem {
         kind: String,
         status: String,
         output: String,
+        /// The same result, still structured — ACP's `content` array as
+        /// [`ToolCallContent`], which is where a file edit keeps its path and
+        /// BOTH halves of its text.
+        ///
+        /// ALONGSIDE `output`, not instead of it. `output` is
+        /// `content_text()`, byte for byte what it has always been, and the
+        /// `<pre>` under every other kind of tool result still renders it; it
+        /// is also not derivable from this field, because
+        /// [`apply_tool_update`] falls back to `raw_output` when the content
+        /// array is empty. Two views of one result, and the flat one is the
+        /// one that must not move.
+        ///
+        /// A diff is dropped TWICE on the way to a transcript when this is
+        /// missing: `content_text` flattens `{"type":"diff"}` to
+        /// `"[diff: path]"` plus the new text — #191 fixed that half in the
+        /// client — and then this item flattened it again. The deletions are
+        /// the half a reader opens a diff for, and nothing downstream could
+        /// recover them by parsing prose the server never promised.
+        ///
+        /// `serde(default)` for the reason it is on `User::attachments`: a
+        /// transcript cached by an older build carries no such field, and a
+        /// parse failure would take the whole cache down rather than one item.
+        #[serde(default)]
+        contents: Vec<ToolCallContent>,
     },
 }
 
@@ -575,27 +616,61 @@ pub(crate) struct AppCtx {
 }
 
 pub(crate) fn use_app_ctx_provider() -> AppCtx {
-    let settings = dioxus_sdk_storage::use_persistent("settings", Settings::default);
-    let code_cache =
-        dioxus_sdk_storage::use_persistent("code_cache", crate::code::CodeCache::default);
-    // `use_synced_storage::<LocalStorage, _>`, and NOT `use_persistent` like
-    // the two above, because `use_persistent` does not persist on this app's
-    // targets. It builds over `SessionStorage`, which on every non-wasm
-    // target is an in-memory `HashMap` hung off the root context
-    // (dioxus-sdk-storage `persistence.rs:34`, `client_storage/mod.rs:32-41`,
-    // `client_storage/memory.rs:13-28`); `LocalStorage` is the fs-backed one.
-    // Corroborated rather than merely read: `set_dir!()` in `main` points the
-    // backing at `~/Library/Application Support/goose-mobile` and `fs::set`
-    // does `create_dir_all` on its first write, and on a machine where this
-    // app has run — `~/Library/WebKit/goose-mobile` and
-    // `~/Library/Caches/goose-mobile` both exist — that directory does not.
+    // `settings` IS STILL IN MEMORY AND `code_cache` IS NOT ANY MORE (#220).
     //
-    // Which means `settings` and `code_cache` do not survive a restart
-    // either. That is a separate bug with separate consequences (a saved
-    // secret would start being written to disk), so it is deliberately NOT
-    // fixed in this change.
-    // The same fs-backed store the journal uses, and for the same reason —
-    // see the field's own note.
+    // `use_persistent` builds over `SessionStorage`, an in-memory `HashMap`
+    // hung off the Dioxus ROOT CONTEXT on every non-wasm target
+    // (dioxus-sdk-storage `persistence.rs:34`, `client_storage/mod.rs:32-41`,
+    // `memory.rs:13-28`). `LocalStorage` is the fs-backed one, and `set_dir!()`
+    // in `main` points it at `~/Library/Application Support/goose-mobile`.
+    // Measured rather than read: on a machine where this app had run, that
+    // directory held `inspector_open` and `lost_asks` — the two keys already on
+    // `LocalStorage` — and no `settings` and no `code_cache`. Never written,
+    // not stale. So #2's A11 ("a code chat previously opened renders from local
+    // cache instantly, including offline") missed at every launch, which is the
+    // only case the cache exists for at all.
+    //
+    // `use_storage` rather than `use_synced_storage`: syncing broadcasts to
+    // other subscribers of the same key and there is one reader of this one in
+    // a process. `LocalStorage::set` notifies only where a subscription exists
+    // (`fs.rs:64-73`), so a key nothing subscribes to costs no channel — and
+    // cannot reach the "send with no receiver panics" hazard that
+    // `testkit::anchor_subscriptions` exists for.
+    //
+    // WHY `settings` DID NOT MOVE WITH IT, in full, because "we did the easy
+    // one" is not a reason. Two costs, and the second is the one that decided
+    // it:
+    //
+    //  1. `secret_key` and `code_password` are in this struct in the clear.
+    //     Writing them to a plain file is a change to the app's threat model
+    //     and the standing rule here is that secrets move by reference; the
+    //     alternative, the platform Keychain for those two fields on three
+    //     platforms, is a store this app has never opened. Neither belongs
+    //     inside a fix for "the file was never written at all". Serializing
+    //     only the four non-secret fields is the obvious third way and it
+    //     works — it was written, and it is what turned up (2).
+    //  2. ONE PROCESS-WIDE FILE, NINE HUNDRED MOUNTS. Every mounted test calls
+    //     this function, and `testkit::storage_dir` is a single directory for
+    //     the whole test binary, so the moment `settings` is fs-backed one
+    //     test's saved working directory is the next test's starting state.
+    //     Measured: four tests went red immediately — including
+    //     `a_new_chat_with_nowhere_to_run_says_what_is_missing`, whose entire
+    //     subject is an EMPTY working directory — and which four depends on
+    //     the order the suite happens to run in. `code_cache` is keyed by chat
+    //     id and no test asserts on a chat another test cached, which is why
+    //     it can move and this cannot.
+    //
+    // So the fix for `settings` is not one attribute, it is per-mount storage
+    // isolation in `testkit`, and that is a change to the harness rather than
+    // to the app. #220 stays open on that half.
+    let settings = dioxus_sdk_storage::use_persistent("settings", Settings::default);
+    let code_cache = dioxus_sdk_storage::use_storage::<
+        crate::ask_journal::Backing,
+        crate::code::CodeCache,
+    >("code_cache".to_owned(), crate::code::CodeCache::default);
+    // The same fs-backed store, subscribed rather than plain, because the
+    // desktop shell can hold two windows on one process and these two are
+    // shell state rather than a plane's — see the field's own note.
     let inspector_open = dioxus_sdk_storage::use_synced_storage::<crate::ask_journal::Backing, bool>(
         "inspector_open".to_owned(),
         || true,
@@ -1011,6 +1086,7 @@ fn apply_update(ctx: &AppCtx, session_id: &str, update: SessionUpdate) {
                 kind: call.kind.clone().unwrap_or_else(|| "other".to_string()),
                 status: call.status.clone().unwrap_or_else(|| "pending".to_string()),
                 output: call.content_text(),
+                contents: call.contents(),
             });
         }
         SessionUpdate::ToolCallUpdate(update) if is_current => {
@@ -1145,6 +1221,7 @@ fn apply_tool_update(chat: &mut Signal<ChatState>, update: &ToolCallUpdate) {
         kind,
         status,
         output,
+        contents,
         ..
     }) = c
         .items
@@ -1163,6 +1240,14 @@ fn apply_tool_update(chat: &mut Signal<ChatState>, update: &ToolCallUpdate) {
     if let Some(s) = update.status.clone() {
         *status = s;
     }
+    // The structure accumulates the way the string does — an update carries
+    // the entries this beat added, not the whole result over again, so the
+    // last write must not be the only one that survives.
+    //
+    // `contents()` and `content_text()` are two pure reads of the same JSON
+    // and the second is written over the first, so they cannot disagree about
+    // what arrived; the cost is decoding a two-entry array twice per beat.
+    contents.extend(update.contents());
     let text = update.content_text();
     if !text.is_empty() {
         if !output.is_empty() {
@@ -2441,6 +2526,7 @@ mod tests {
                     kind,
                     status,
                     output,
+                    ..
                 } => format!("tool:{id}:{title}:{kind}:{status}:{output}"),
             })
             .collect()
@@ -3049,6 +3135,120 @@ mod tests {
                 "tool:call_1:tool:other:pending:",
                 "tool:call_2:shell:other:completed:Linux brain\n6.1.0"
             ]
+        );
+    }
+
+    /// A FILE EDIT KEEPS BOTH HALVES ALL THE WAY TO THE ITEM.
+    ///
+    /// `content_text` renders a diff as `[diff: path]` and the NEW text only —
+    /// that is what the phone's `<pre>` has always shown and it does not move
+    /// here. The deletions are what a reader opens a diff for, and until this
+    /// field existed they were decoded by the client (#191) and then dropped
+    /// again by the item, one layer from the view.
+    ///
+    /// Both arrival routes are exercised, because they are different code: the
+    /// call carries the array on the way in, and an update appends to it
+    /// beat by beat.
+    #[test]
+    fn a_tool_call_carrying_a_diff_keeps_the_old_side_of_it() {
+        let app = App::mount();
+        app.open_chat("s1", "Deploy");
+        pump_events(
+            &app,
+            vec![
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call", "toolCallId": "e1",
+                           "title": "edit", "kind": "edit", "status": "in_progress",
+                           "content": [{"type": "diff", "path": "src/scheduler.rs",
+                                        "oldText": "fn tick() {}",
+                                        "newText": "fn tick() { run(); }"}]}),
+                ),
+                notify(
+                    "s1",
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": "e1",
+                           "status": "completed",
+                           "content": [{"type": "diff", "path": "src/main.rs",
+                                        "newText": "fn main() {}"},
+                                       {"type": "terminal", "terminalId": "term_1"}]}),
+                ),
+            ],
+        );
+
+        let diffs = app.run(|ctx| {
+            let items = ctx.chat.peek().items.clone();
+            let ChatItem::Tool { contents, .. } = items.first().expect("the tool item") else {
+                panic!("the first item is not a tool call")
+            };
+            contents.clone()
+        });
+        assert_eq!(
+            diffs,
+            [
+                ToolCallContent::Diff(goose_acp_client::FileDiff {
+                    path: Some("src/scheduler.rs".to_owned()),
+                    old_text: Some("fn tick() {}".to_owned()),
+                    new_text: Some("fn tick() { run(); }".to_owned()),
+                }),
+                // A file that did not exist before: `old_text: None` is a
+                // different claim from `Some("")` and both survive.
+                ToolCallContent::Diff(goose_acp_client::FileDiff {
+                    path: Some("src/main.rs".to_owned()),
+                    old_text: None,
+                    new_text: Some("fn main() {}".to_owned()),
+                }),
+                ToolCallContent::Terminal,
+            ],
+            "the update replaced the call's entries instead of appending to them, \
+             or a half of an edit was dropped"
+        );
+        // And the flat string is byte for byte what it always was.
+        assert_eq!(
+            app.items(),
+            ["tool:e1:edit:edit:completed:[diff: src/scheduler.rs]\n\
+              fn tick() { run(); }\n[diff: src/main.rs]\nfn main() {}\n[terminal output]"]
+        );
+    }
+
+    /// A transcript cached by a build that predates `contents` still loads.
+    ///
+    /// The Code tab's cache holds `ChatItem`s as JSON, so an upgrade meets its
+    /// own older writes. Without `serde(default)` the missing field is a parse
+    /// error, and a parse error here takes the WHOLE cached transcript down,
+    /// not one item — the same reason the attribute is on `User::attachments`.
+    #[test]
+    fn a_tool_item_cached_before_this_field_existed_still_decodes() {
+        let older = json!({"Tool": {
+            "id": "a", "title": "read", "kind": "read",
+            "status": "completed", "output": "Cargo.toml"
+        }});
+        let item: ChatItem = serde_json::from_value(older).expect("an older cache entry");
+        assert_eq!(
+            transcript(std::slice::from_ref(&item)),
+            ["tool:a:read:read:completed:Cargo.toml"]
+        );
+        let ChatItem::Tool { contents, .. } = &item else {
+            panic!("an older cache entry decoded as something other than a tool")
+        };
+        assert!(contents.is_empty());
+        // And a round trip of the structured half is lossless, which is what
+        // makes caching one worth doing at all.
+        let with = ChatItem::Tool {
+            id: "b".to_owned(),
+            title: "edit".to_owned(),
+            kind: "edit".to_owned(),
+            status: "completed".to_owned(),
+            output: "[diff: a.rs]".to_owned(),
+            contents: vec![ToolCallContent::Diff(goose_acp_client::FileDiff {
+                path: Some("a.rs".to_owned()),
+                old_text: Some("was".to_owned()),
+                new_text: Some("is".to_owned()),
+            })],
+        };
+        let json = serde_json::to_string(&with).expect("serialize");
+        assert!(
+            serde_json::from_str::<ChatItem>(&json).expect("deserialize") == with,
+            "a cached edit lost a half on the way through the store: {json}"
         );
     }
 

@@ -87,6 +87,12 @@ pub(crate) fn ask(session_id: &str, a: &Ask) -> Value {
 
 /// `SessionMeta`. `time.created` / `time.updated` are integer MILLISECONDS,
 /// and `projectID` is camelCase.
+///
+/// `model.variant` is the tier the last turn asked for. `OpenCode` writes the
+/// literal string `default` when a turn asked for none, which is a value the
+/// app filters rather than a missing field — `SessionModel::effort` drops it
+/// — so the mock writes it too. Sending nothing there instead would make the
+/// one branch that filter exists for unreachable against this server.
 pub(crate) fn session(c: &Chat, s: &Session) -> Value {
     json!({
         "id": s.id,
@@ -98,7 +104,11 @@ pub(crate) fn session(c: &Chat, s: &Session) -> Value {
         "time": { "created": s.created_ms, "updated": s.updated_ms },
         "model": c.model.as_ref().map(|m| {
             let (provider, id) = m.split_once('/').unwrap_or(("opencode", m.as_str()));
-            json!({ "providerID": provider, "id": id })
+            json!({
+                "providerID": provider,
+                "id": id,
+                "variant": c.effort.clone().unwrap_or_else(|| "default".to_owned()),
+            })
         }),
         "agent": "build",
     })
@@ -182,28 +192,57 @@ pub(crate) fn pull(p: &Pull) -> Value {
 /// `providerID/id`, and matches it against `ChatMeta.model`. A `snake_case`
 /// `provider_id` here leaves the inspector's model row and its context-window
 /// fact silently absent.
+/// `variants` is the field this catalogue exists to get right, and it used to
+/// be `{}` on all three. `ModelInfo::efforts()` reads it, and
+/// `code_setting_rows` renders a picker when it is non-empty and a fact row
+/// saying "This model has no thinking-effort tiers" when it is not — so an
+/// all-empty catalogue made the picker branch unreachable in every local run,
+/// including every gallery capture, and turned the app correctly quoting the
+/// mock into a bug report against the app.
+///
+/// The tier NAMES come from the ladder `ModelInfo::efforts` documents; what
+/// this fixture is faithful about is the split. A reasoning model carries a
+/// non-empty map, and the minimax / qwen / glm / kimi / deepseek-v3 families
+/// carry none at all, so `minimax-m2.7` keeps `{}` — it is the honest empty
+/// case and the fact row's only end-to-end coverage.
+///
+/// The two non-empty maps are deliberately DIFFERENT sets: switching model
+/// has to re-list the tiers (`set_code_model` clears the effort for exactly
+/// that reason), and a single shared set could not tell that apart from a
+/// picker that never re-reads the model. Neither set is in ladder order here,
+/// which is what makes `efforts()`'s re-sort observable — `serde_json`'s map
+/// decodes alphabetically, and alphabetical puts `high` before `low`.
 pub(crate) fn providers() -> Value {
     json!({
         "providers": [{
             "id": "opencode",
             "name": "opencode",
             "models": {
-                "claude-sonnet-4-5": model("claude-sonnet-4-5", "Claude Sonnet 4.5", 200_000),
-                "claude-opus-4-1": model("claude-opus-4-1", "Claude Opus 4.1", 200_000),
-                "minimax-m2.7": model("minimax-m2.7", "MiniMax M2.7", 1_000_000),
+                "claude-sonnet-4-5":
+                    model("claude-sonnet-4-5", "Claude Sonnet 4.5", 200_000,
+                          &["low", "medium", "high"]),
+                "claude-opus-4-1":
+                    model("claude-opus-4-1", "Claude Opus 4.1", 200_000,
+                          &["minimal", "low", "high", "xhigh"]),
+                "minimax-m2.7":
+                    model("minimax-m2.7", "MiniMax M2.7", 1_000_000, &[]),
             },
         }],
         "default": { "opencode": "claude-sonnet-4-5" },
     })
 }
 
-fn model(id: &str, name: &str, context: u64) -> Value {
+/// A `variants` value is an options object in real `OpenCode` and the client
+/// types it as an opaque `Value` — only the KEY is read — so an empty object
+/// per tier is the whole of what the app can observe.
+fn model(id: &str, name: &str, context: u64, variants: &[&str]) -> Value {
     json!({
         "id": id,
         "providerID": "opencode",
         "name": name,
         "limit": { "context": context, "output": 64_000 },
-        "variants": {},
+        "variants": variants.iter().map(|v| ((*v).to_owned(), json!({})))
+            .collect::<serde_json::Map<_, _>>(),
     })
 }
 
