@@ -220,18 +220,38 @@
  * parks the identical button in the identical spot
  * (`ui/desktop/src/components/Layout/AppLayout.tsx:112`).
  *
- * A pill, per docs/design.md's tier: an icon button's shape is its identity. */
+ * NOT A PILL ANY MORE, and the rule it used to carry — "a pill, per
+ * docs/design.md's tier: an icon button's shape is its identity" — is answered
+ * rather than dropped. That tier is about the PHONE, where `.icon-btn` is a
+ * 44px circle among 44px circles. In a 34px window band the same shape was the
+ * largest painted object in the strip and the only round one: the plane badge
+ * is `--radius-sm`, the connection pill is a 24px lozenge, and the mockups'
+ * band has no circle in it anywhere. The identity the shape now carries is the
+ * mockups' chip, and it is carried by `::before` rather than by this box — see
+ * the block below, which is #208 and #207 together.
+ *
+ * WHAT IS LEFT HERE IS THE TARGET, and nothing painted. `border: 0` rather
+ * than the `1px solid transparent` this held: the edge is the chip's now, and
+ * a transparent border on a 32px box is what `docs/audit.js`'s SQUARE check
+ * calls "boxed" — it would report this control the moment the radius went. */
 .nav-toggle {
   flex: 0 0 auto;
   margin-top: var(--chrome-pad);
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* The chip is absolutely positioned inside this box. */
+  position: relative;
   width: 32px;
   height: 32px;
   padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--radius-full);
+  border: 0;
+  /* Only the focus ring is drawn on this box (`70-overrides.css`'s
+   * `:focus-visible`), and an `outline` follows the border-radius — so this
+   * matches the chip's corner rather than staying a circle around a rectangle
+   * nobody can see. */
+  border-radius: calc(var(--radius-sm) + 1px);
+  background: transparent;
   /* THE CONTROL IS AN OBJECT, and it was not one. Measured before this change
    * on `desktop-chats` at 1440x860 dark: `.nav-toggle` box 86,0 32x32 with
    * `bg rgba(0,0,0,0)` and all four border colours `rgba(0,0,0,0)` — a
@@ -258,8 +278,7 @@
    * spends the inset shadow, and it does not reset `border-color`. Two
    * mechanisms on one element means a shut toggle draws its border AND its
    * inset — two 1px lines, 2px of outline, on the control this whole pass is
-   * about not drawing stray lines around. The border is already reserved in the
-   * geometry (`border: 1px solid transparent`), so using it costs no layout.
+   * about not drawing stray lines around.
    *
    * Measured: the chip's fill is 1.18:1 on the dark band and 1.15:1 on the
    * light one, its border 1.33:1 and 1.42:1, and the glyph 5.66:1 and 4.01:1 on
@@ -267,18 +286,110 @@
    * not hold hairlines to 3:1 — `00-tokens.css` records the same position for
    * `--border-primary` at 1.29:1 against the mockups' own 1.23 — but the glyph
    * is what has to be seen and it clears the 3:1 an icon owes, twice over in
-   * dark. */
-  background: var(--surface-raise);
-  border-color: var(--shell-line);
+   * dark.
+   *
+   * ALL OF THAT STILL HOLDS AND NONE OF IT IS DECLARED HERE ANY MORE. The two
+   * values are handed to the chip below as `--chip-fill` and `--chip-line`, so
+   * that the four state rules on each toggle stay ONE rule each and say exactly
+   * what they said before. */
   color: var(--text-secondary);
   font-family: inherit;
   font-size: var(--icon-md);
   line-height: 1;
   cursor: pointer;
+  transition: color 120ms ease;
+}
+
+/* ── THE CHIP BOTH BAND TOGGLES ARE PAINTED WITH ────────────────────────
+ *
+ * #208 and #207 in one block, because they are one shape.
+ *
+ * #208: the resting control was a 32px filled CIRCLE around a 13px glyph — a
+ * disc 2.46x its own mark in each axis, painted in every state of every
+ * window, and reported from a real window as "a little round highlight bubble
+ * around them, whether you're clicking on them or not". It is not a focus
+ * ring: measured at rest on `desktop-chats` at 1440x860, `outline-style: none`
+ * and `box-shadow: none` on both toggles, and `70-overrides.css`'s
+ * `:focus-visible` does not match after a pointer click, which is what its own
+ * comment claims for it. The bubble was the resting state. The radius predates
+ * the fill by five commits — the circle was invisible for the whole life of the
+ * control while the control painted nothing, and #176 gave it a fill without
+ * anyone re-examining the shape it revealed.
+ *
+ * The mockups draw the pair as a rounded chip and have drawn it that way all
+ * along: `22-nav-disclosure` `.toggle` 26x22 radius 5, `30-collapse-left`
+ * `.tgl` and `31-collapse-right` `.tgl.r` 28x21 radius 5, all three with
+ * rgb(36,40,46) on 1px rgb(44,49,56) — the same two colours the app already
+ * uses, character for character. Only the box and the corner ever differed.
+ *
+ * A ::before AND NOT THE BUTTON'S OWN BOX, and that is the constraint that
+ * makes this also the answer to #207. `docs/audit.js`'s SMALL-TAP holds every
+ * `button` to 32x32 and `50-band.css` has already ruled once that "the floor
+ * wins over the picture" — so the target stays 32x32 and the PAINTED box
+ * shrinks inside it. 28x21 centred in 32x32 is `inset: 5.5px 2px`.
+ *
+ * #207: "these things still aren't perfectly centered". Measured before this
+ * change, every visible child of the band sat y0..32 with its centre on 16.00,
+ * in a 34px band whose own centre is 17.00 — so the two toggles, the only
+ * painted 32px objects in the strip, had ZERO clearance above them and 1px
+ * below, hard against the top edge of the window. There is no `--chrome-h` and
+ * no `align-items` that fixes that, because the constraint is the CONTROL'S
+ * SIZE. A 21px chip in the same 32px target has 6.5 points of clearance above
+ * it and 5.5 below, measured; `assets/platform/macos.css` moves the row onto
+ * the band's own centre line in the same pass, and the overrule is written
+ * there.
+ *
+ * TWO CUSTOM PROPERTIES RATHER THAN A SECOND RULE PER STATE. The ladder is
+ * eight rules — resting, hover, shut and shut-hover, twice — and moving the
+ * paint to a pseudo-element would have made it sixteen, half of them named
+ * `::before` and half not, with nothing holding the pair of them together. The
+ * state rules below are unchanged in structure and in value: they set
+ * `--chip-fill` and `--chip-line` where they used to set `background` and
+ * `border-color`, and every measurement written against them still describes
+ * the pixels this paints.
+ *
+ * The transition stays on the pseudo-element because that is where the two
+ * properties now compute: a `var()` is substituted at computed-value time, so
+ * a state rule changing `--chip-fill` changes this rule's `background-color`
+ * and the transition runs on it. */
+.nav-toggle,
+.shell-chrome > .insp-toggle {
+  --chip-fill: var(--surface-raise);
+  --chip-line: var(--shell-line);
+}
+
+.nav-toggle::before,
+.shell-chrome > .insp-toggle::before {
+  content: "";
+  position: absolute;
+  /* 28x21 in a 32x32 box: (32 - 28) / 2 and (32 - 21) / 2. */
+  inset: 5.5px 2px;
+  border: 1px solid var(--chip-line);
+  /* 5px, the mockups' own, derived from the rung beside it rather than typed:
+     `--radius-sm` is 4 and is what the plane badge two controls along takes. */
+  border-radius: calc(var(--radius-sm) + 1px);
+  background: var(--chip-fill);
   transition:
     background-color 120ms ease,
-    color 120ms ease,
     border-color 120ms ease;
+}
+
+/* THE GLYPH HAS TO PAINT OVER THE CHIP, and by default it does not. An
+ * absolutely-positioned pseudo-element is painted in the positioned phase,
+ * after the in-flow content of its own box — so an untouched `<svg>` flex item
+ * would be covered by the chip that is meant to sit behind it. Positioning the
+ * glyph puts the two in the same phase, where tree order decides and `::before`
+ * comes first.
+ *
+ * `position: relative` and not `z-index: -1` on the chip: a negative index
+ * escapes to the nearest ancestor stacking context, which is the root here —
+ * `.shell-chrome` creates none — and a negative-index descendant is painted
+ * before the in-flow backgrounds of that context, so the band's own fill would
+ * cover the chip instead. That version was worked through and is why this is
+ * one declaration on the glyph rather than two on the button. */
+.nav-toggle > .icon,
+.shell-chrome > .insp-toggle > .icon {
+  position: relative;
 }
 
 .nav-toggle:hover {
@@ -298,9 +409,9 @@
    * A small step by construction, because the resting chip is itself a small
    * step — so the fill is not the whole of hover's answer and never was. The
    * border goes 1.33 -> 1.69 in dark, and the glyph 5.66 -> 10.73. */
-  background: color-mix(in srgb, var(--text-tertiary) 16%, var(--surface-raise));
+  --chip-fill: color-mix(in srgb, var(--text-tertiary) 16%, var(--surface-raise));
+  --chip-line: var(--border-secondary);
   color: var(--text-primary);
-  border-color: var(--border-secondary);
 }
 
 .shell[data-nav="closed"] .nav-toggle {
@@ -334,7 +445,9 @@
    * 26x22 (22-nav-disclosure) and 28x21 (30-collapse-left) are both under the
    * 32 docs/audit.js:1163 holds every `button` to. The 32x32 the control
    * already is stays; the floor wins over the picture, as it did for the send
-   * button's diameter.
+   * button's diameter. That is still true of the TARGET and is no longer true
+   * of the PAINT: #208 takes the mockups' 28x21 as a `::before` inside the
+   * unchanged 32x32 button, which is the branch #56 offered and deferred.
    *
    * Specificity is 0,3,0 against `.nav-toggle:hover`'s 0,2,0, so this wins
    * wherever it is placed — but it is written after the hover rule anyway, and
@@ -349,9 +462,10 @@
    * mechanism per element. The value is unchanged: `--border-secondary`, the
    * mockups' #383e47 rung, and the reason the shut state outlines at all —
    * "--bg-tertiary is 1.13:1 on the light card and a non-text indicator owes
-   * 3:1" — is unaffected by which property draws it. */
-  background: var(--bg-tertiary);
-  border-color: var(--border-secondary);
+   * 3:1" — is unaffected by which property draws it, and it is the chip's
+   * border that draws it now. */
+  --chip-fill: var(--bg-tertiary);
+  --chip-line: var(--border-secondary);
   color: var(--text-primary);
 }
 
@@ -361,8 +475,8 @@
    * mixed rather than fixed for `.drawer-item:hover`'s reason — the card paints
    * a different rung per theme, so a literal is a step in one and a smudge in
    * the other. */
-  background: color-mix(in srgb, var(--text-tertiary) 12%, var(--bg-tertiary));
-  border-color: var(--border-secondary);
+  --chip-fill: color-mix(in srgb, var(--text-tertiary) 12%, var(--bg-tertiary));
+  --chip-line: var(--border-secondary);
 }
 
 /* WHAT THE WINDOW HAS OPEN, said once, in the window's own bar.
@@ -652,25 +766,27 @@
  * would put the nav toggle's ladder here and the inspector toggle's there, with
  * nothing to hold them equal; the whole ladder is in one block below for that
  * reason. When the inspector lane is done, the base rule should move here and
- * these four should collapse into it. */
+ * these four should collapse into it.
+ *
+ * THE RESTING PAIR HAS NOW COLLAPSED, half way: the chip's two default values
+ * are declared once for both toggles, in the `::before` block above, so the
+ * pair cannot drift on the state that is on screen in every window. What is
+ * left here is the trailing margin and the three variants, which have no
+ * counterpart on the left because the left toggle has no gutter to give back
+ * and its shut state is `data-nav` rather than `data-insp`. */
 .shell-chrome > .insp-toggle {
   margin-right: 0;
-  /* The same two declarations `.nav-toggle` takes, for the same measurement:
-     the mockups' `.tgl.r` (31-collapse-right, box 1398,12 28x21) is the left
-     toggle's chip character for character, and this control measured
-     `bg rgba(0,0,0,0)` with four transparent border colours until now. */
-  background: var(--surface-raise);
-  border-color: var(--shell-line);
 }
 
 .shell-chrome > .insp-toggle:hover {
   /* `.nav-toggle:hover`'s note has the arithmetic and the caveat. Written out
      rather than shared with a comma, because `90-inspector.css`'s own
-     `.insp-toggle:hover` would otherwise win the `background` on file order and
-     hand back the no-op this rule exists to prevent. */
-  background: color-mix(in srgb, var(--text-tertiary) 16%, var(--surface-raise));
+     `.insp-toggle:hover` would otherwise win on file order and hand back the
+     no-op this rule exists to prevent — a caveat that is now belt and braces,
+     since that rule has been reduced to the geometry it owns. */
+  --chip-fill: color-mix(in srgb, var(--text-tertiary) 16%, var(--surface-raise));
+  --chip-line: var(--border-secondary);
   color: var(--text-primary);
-  border-color: var(--border-secondary);
 }
 
 /* THE SHUT STATE THE INSPECTOR TOGGLE HAS NEVER HAD, where the nav toggle has
@@ -689,8 +805,8 @@
  * state). Border rather than inset shadow, for the nav toggle's reason: one
  * mechanism per element, or the shut chip draws two lines. */
 .shell[data-insp="closed"] .shell-chrome > .insp-toggle {
-  background: var(--bg-tertiary);
-  border-color: var(--border-secondary);
+  --chip-fill: var(--bg-tertiary);
+  --chip-line: var(--border-secondary);
   color: var(--text-primary);
 }
 
@@ -698,6 +814,6 @@
   /* Or the shut toggle answers nothing to the pointer, since the rule above
      out-specifies the hover rules on both sides of it. One step past the shut
      fill, mixed for the reason stated twice already. */
-  background: color-mix(in srgb, var(--text-tertiary) 12%, var(--bg-tertiary));
-  border-color: var(--border-secondary);
+  --chip-fill: color-mix(in srgb, var(--text-tertiary) 12%, var(--bg-tertiary));
+  --chip-line: var(--border-secondary);
 }

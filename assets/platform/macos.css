@@ -32,22 +32,28 @@
    *   its lights at y 16 and its first nav row at 78 (AppLayout.tsx)."
    *
    * The gap is real; the band was the wrong place to spend it. `--chrome-pad`
-   * is 0 here BECAUSE the row has to centre on the lights, which AppKit paints
-   * at y 9..22.5 — so the row is pinned to 0..32 and every point of band past
-   * 34 falls BELOW it, not around it. Measured on `desktop-chats` at 1440x860
-   * before this change: `.shell-chrome` box 0,0 1440x52 with every visible
-   * child at y0..32, centre 16, against the band's own content-box centre of
-   * 25.5. Nothing above the row, 19px of empty panel under it. That is the
-   * thing the owner saw first, and no amount of `align-items` fixes it while
-   * the lights own the row's y.
+   * was 0 when this landed, BECAUSE the row had to centre on the lights, which
+   * AppKit paints at y 9..22.5 — so the row was pinned to 0..32 and every point
+   * of band past 34 fell BELOW it, not around it. Measured on `desktop-chats`
+   * at 1440x860 before this change: `.shell-chrome` box 0,0 1440x52 with every
+   * visible child at y0..32, centre 16, against the band's own content-box
+   * centre of 25.5. Nothing above the row, 19px of empty panel under it. That
+   * is the thing the owner saw first, and no amount of `align-items` fixes it
+   * while the lights own the row's y.
+   *
+   * The pad is 1 now and the row is 1..33, which is #207 and is argued at the
+   * token itself. It does not disturb this height: 34 was derived from the
+   * ROW's size and the row has not changed size.
    *
    * 34 = the 32pt control the row is made of, plus the 1px hairline the band
    * carries at its bottom edge, plus 1. `--chrome-h` is spent on `flex: 0 0`
    * with `box-sizing: border-box` (`00-tokens.css`), so the content box is 33
-   * and the 32px row sits 0..32 inside it with the border under it. The
+   * and the 32px row sits 1..33 inside it with the border under it. The
    * mockups' band is 46 with 11.5 clear each side of a 22px chip; ours cannot
-   * be, because our controls are 32 — `docs/audit.js`'s tap-target floor — and
-   * a 32px row centred in 46 would be 7 points below the lights.
+   * be, because our TARGETS are 32 — `docs/audit.js`'s tap-target floor. What
+   * the mockups' clearance buys is available all the same, and #208 is where it
+   * comes from: the target stays 32 and the painted chip inside it is 21, so a
+   * 34pt band does hold a 21pt object with room around it.
    *
    * It has exactly two other consumers and both track it: `65-responsive.css`
    * puts the narrow-window sidebar overlay at `top: var(--chrome-h)`, and
@@ -58,12 +64,51 @@
    * header indent when the nav is shut are both derived from this one number
    * rather than guessed twice. */
   --traffic-w: 76px;
-  /* Zero, so a 32pt control's centre lands at 16 — which is where AppKit's
-   * close button already is (measured: the disc spans logical 9..22.5). This
-   * is the token's whole reason for existing, and it is unchanged by the
-   * height above: the row's y is the lights' y, and the band is now sized to
-   * the row instead of the row being pushed around inside the band. */
-  --chrome-pad: 0px;
+  /* ONE POINT, AND IT WAS ZERO. That is an overrule of this sheet's own
+   * argument, and the argument is worth stating before it goes:
+   *
+   *   "Zero, so a 32pt control's centre lands at 16 — which is where AppKit's
+   *   close button already is (measured: the disc spans logical 9..22.5).
+   *   This is the token's whole reason for existing."
+   *
+   * The reason was real and it belonged to a 52px band. At 52 the two answers
+   * — centre the row on the LIGHTS, or centre it in the BAND — were ten points
+   * apart, so the token had to choose one, and it chose the lights. At 34 the
+   * same two answers are one point apart. There is no longer a choice being
+   * made, and the residue of insisting on the old one was the whole of #207,
+   * reported from a real window as "these things still aren't perfectly
+   * centered".
+   *
+   * Measured on `desktop-chats` at 1440x860 before this change: every visible
+   * child of `.shell-chrome` sat with its centre on 16.00 against the band's
+   * own 17.00, and the two toggles — the only painted 32px objects in the strip
+   * — ran y0..32 with ZERO clearance above them and 1px below, hard against the
+   * top edge of the window. There is no `--chrome-h` and no `align-items` that
+   * fixes that while the control is 32px tall, which is why the other half of
+   * the fix is in `50-band.css`: the target stays 32 and the PAINT shrinks to
+   * the mockups' 28x21 chip, which then has 6.5 points of clearance above it
+   * and 5.5 below.
+   *
+   * 1 IS NOT A NEW NUMBER — IT IS THE ONE THE FULLSCREEN BLOCK BELOW ALREADY
+   * HAD, and that is the cleanest form of this change. `docs/audit.js`'s
+   * FULLSCREEN check asks that `(toggle.top - band.top)` equal
+   * `(band.bottom - toggle.bottom)` to half a pixel, on the BORDER boxes — so
+   * for a 34px band holding a 32px row it has been asserting `--chrome-pad: 1px`
+   * all along, and passing, because fullscreen was the only cell it ran in.
+   * The windowed value was the odd one out and nothing ever asked it.
+   *
+   * So the two states now agree, which is #207's separable defect: the whole
+   * row used to move a point on ⌃⌘F — measured with the attribute flipped,
+   * `.nav-toggle` 0..32 -> 1..33, the badge 6.5..25.5 -> 7.5..26.5, the pill
+   * 4..28 -> 5..29 — because it was pinned to the lights when they existed and
+   * centred in the band when they did not.
+   *
+   * Everything derived from this still derives: `.plane-badge` and
+   * `.shell-chrome > .conn-badge` add their own `(32 - h) / 2` to it, so all
+   * four boxes stay on ONE centre line, which is the property the token has
+   * always been for. It is now 17.00 — the band's own centre — in both window
+   * states, where it was 16.00 windowed and 17.00 full screen. */
+  --chrome-pad: 1px;
 }
 
 /* FULLSCREEN TAKES THE LIGHTS WITH IT, so their slot has to go too.
@@ -87,17 +132,37 @@
   /* The bar stays — it holds the toggle on every platform — but the room the
    * lights needed goes back to the layout. */
   --traffic-w: 0px;
-  /* RE-DERIVED WITH THE HEIGHT, and this is the load-bearing half of that
-   * edit. This said 10px, which was `(52 - 32) / 2` — centring a 32pt row in
-   * the 51px content box of a 52px band, right for as long as the band was 52.
-   * Against a 33px content box it is a 32px control starting at y=10 and
-   * ending at 42, nine points past the bottom of the band that contains it.
+  /* AND `--chrome-pad` NOW SAYS WHAT THE BLOCK ABOVE SAYS, which is the second
+   * half of #207 and was a defect in its own right.
    *
-   * Measured rather than reasoned: `--chrome-h: 34px` with this left at 10px
-   * makes `node docs/audit.js both` report 468 findings, every one of them in
-   * a `fullscreen` cell. At 1px it reports Clean. 1 is `(34 - 32) / 2` rounded
-   * to the pixel the layout can actually use — the content box is 33 and the
-   * row is 32, so the one spare point goes above it and the row sits flush to
-   * the hairline, which is where the lights would have put it. */
+   * This said 1px against a windowed 0px, so every control in the band moved
+   * down one point the instant somebody pressed ⌃⌘F — measured on the same
+   * document with the attribute flipped: `.nav-toggle` 0..32 became 1..33, the
+   * badge 6.5..25.5 became 7.5..26.5, the pill 4..28 became 5..29, and the
+   * whole row's centre went 16.00 -> 17.00. The band's arrangement depended on
+   * whether the window was full screen, and neither state was answering the
+   * same question: windowed 0 was "pin the row to the traffic lights",
+   * fullscreen 1 was "centre the row in the band", since macOS hides the lights
+   * in fullscreen and there is nothing left to pin to.
+   *
+   * THIS ONE WAS THE RIGHT ANSWER AND IT DID NOT MOVE. What changed is the
+   * windowed value, which now agrees with it — see the overrule at the token
+   * above. So the row is on the band's own centre line in both states and the
+   * band no longer shifts on ⌃⌘F.
+   *
+   * WHY IT IS STILL WRITTEN OUT rather than simply deleted as a restatement of
+   * the value already inherited: `the_fullscreen_pad_is_derived_from_the_band_
+   * height` (`src/shell/desktop/mod.rs`) strips this file's comments and reads
+   * `--chrome-pad` out of THIS BLOCK BY NAME, holding it to `(--chrome-h - 32)
+   * / 2`. That is a good check and the derivation is still the reason for the
+   * number; it simply predates the two blocks agreeing. The test should widen
+   * to read the windowed value too and assert the pair are equal — it is a file
+   * another lane owns in this campaign, so it is named here rather than edited.
+   *
+   * The measurement that check records is still the reason the value is small:
+   * `--chrome-h: 34px` with `--chrome-pad: 10px` — what this block held when
+   * the band was 52 — makes `node docs/audit.js both` report 468 findings,
+   * every one in a `fullscreen` cell, because a 32px row starting at y=10 ends
+   * nine points past the band that contains it. */
   --chrome-pad: 1px;
 }
