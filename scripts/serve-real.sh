@@ -40,7 +40,18 @@ BRAIN="${1:-${BRAIN_HOST:-}}"
 KEYCHAIN_SERVICE="${KEYCHAIN_SERVICE:-personal-ai}"
 GOOSE_PORT="${GOOSE_PORT:-3284}"
 CODE_PORT="${CODE_PORT:-4300}"
-REMOTE_WORKDIR="${REMOTE_WORKDIR:-/data/goose}"
+# A directory that EXISTS ON THE SERVER and that new chats start in. goose
+# rejects one that does not with "invalid directory path", and it says so at
+# session creation rather than at connect — so the app connects, lists history
+# and looks entirely healthy right up until the first message fails.
+#
+# It is not `GOOSE_PATH_ROOT`. That is where goose keeps sessions and schedules;
+# the two are unrelated, and reading a path root out of a deployment doc and
+# passing it here is how this default was wrong to begin with. The honest source
+# is the server's own history — on the tailnet this was written against,
+# `SELECT working_dir, COUNT(*) FROM sessions GROUP BY 1` answers /home/agent
+# (70) and /home/agent/personal-ai-setup (61), so the home directory it is.
+REMOTE_WORKDIR="${REMOTE_WORKDIR:-/home/agent}"
 
 # THE TWO HALVES DO NOT HAVE TO LIVE ON THE SAME BOX, and today they usually do
 # not. `goose serve` is one systemd unit on the brain; the code-agent manager is
