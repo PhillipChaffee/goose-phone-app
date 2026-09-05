@@ -1,16 +1,28 @@
-.home-lede {
-  margin: 0 0 24px;
-    max-width: 38rem;
-    color: var(--text-secondary);
-    font-family: var(--font-serif);
-    font-size: var(--text-md);
-    line-height: var(--lh-md);
-}
-
-.home-lede b {
-  color: var(--text-primary);
-    font-weight: 500;
-}
+/* ── the schedule row ───────────────────────────────────────────────────
+ *
+ * THE LEDE AND THE FOOTNOTE ARE GONE FROM THIS FILE (#200), and the four rules
+ * that styled them went with them rather than being left dead: `.home-lede`,
+ * `.home-lede b`, `.home-footnote` and `.home-footnote > .icon`. The owner cut
+ * both blocks of prose on the chat home — "I don't think this text is really
+ * necessary" and "this doesn't seem necessary either" — and a rule with nothing
+ * to match is the same staleness one layer down.
+ *
+ * The 12-line note explaining why `.home-footnote .d` had been deleted went
+ * too: it argued about the colour of a separator inside an element that no
+ * longer exists. The decision it recorded survives where it is still live, on
+ * `.home-chip + .home-chip::before` in `40-home-chat.css`.
+ *
+ * WHAT THE COLUMN LOST WITH THEM IS ITS BOTTOM EDGE. The hairline was
+ * `.home-footnote`'s `border-top`, so the chat home now ends at the dashed pill
+ * below — which `margin-top: auto` already pushes to the column's bottom edge,
+ * and which is therefore the ending rather than a page that stops. Nothing
+ * replaces the rule: a hairline with nothing under it is a line to nowhere.
+ *
+ * Measured on the captured `desktop-chats` at 1440x860, with the composer at
+ * the `rows="2"` that has shipped since #170: `.home-inner`'s natural height
+ * falls 792px -> 675px, and `main.home` goes from 836/826 — overflowing by
+ * 10px — to 826/826. 117px, split 68 (the lede's 608x44 box and its 24px
+ * bottom margin) and 49 (the footnote's 712x35 box and its 14px top margin). */
 
 .home-sched {
   display: flex;
@@ -88,35 +100,3 @@
     line-height: var(--lh-sm);
     white-space: nowrap;
 }
-
-.home-footnote {
-  display: flex;
-    align-items: center;
-    gap: 9px;
-    margin: 14px 0 0;
-    padding: 16px 0 0;
-    border-top: 1px solid var(--shell-line);
-    color: var(--text-secondary);
-    font-size: var(--text-xs);
-    line-height: var(--lh-sm);
-}
-
-.home-footnote > .icon {
-  flex: 0 0 auto;
-    align-self: flex-start;
-    margin-top: 2px;
-    font-size: 12px;
-}
-
-/* `.home-footnote .d` IS DELETED RATHER THAN LEFT DEAD.
- *
- * It styled the mockups' `<span class="d">·</span>`, the dimmed middot between
- * the footnote's two sentences, and nothing in `src/` has ever emitted a
- * `class="d"`. The separator now ships — as a character in the string, see
- * `src/shell/desktop/home.rs` — and it is deliberately NOT dimmed: the rule's
- * value was `--text-tertiary`, which `40-home-chat.css` measures at 2.03:1 on
- * the light card and 2.91:1 on the dark one and refuses for the identical
- * element eight rules up (`.home-chip + .home-chip::before`), because a
- * separator is a non-text indicator and owes 3:1. `.home-footnote` is already
- * `--text-secondary`, so the middot inherits the rung this sheet has already
- * decided it should have and there is nothing left for a class to carry. */

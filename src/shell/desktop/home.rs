@@ -325,68 +325,22 @@ pub(crate) fn code_board(ctx: &AppCtx, now: i64) -> Vec<RepoGroup> {
     groups
 }
 
-/// The chat home's three-sentence lede.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Lede {
-    /// A statement about what the plane IS, true by construction and needing
-    /// no source. The mockup's own first sentence, verbatim.
-    pub opening: &'static str,
-    pub before: String,
-    /// The host, which the mockup sets in bold.
-    pub host: Option<String>,
-    pub after: String,
-}
-
-/// The lede, or `None` over a dead socket.
-///
-/// `None` rather than a disconnected variant, because `standing` already says
-/// that sentence and saying it twice in two voices is worse than saying it
-/// once — the component falls back to `.home-standing`.
-///
-/// TWO CLAUSES OF THE MOCKUP'S ARE DROPPED and both for the same reason. "one
-/// still streaming SINCE 09:14" needs a start time: `running_sessions` is a
-/// bare `HashSet<String>` with no stamp anywhere near it, and
-/// `SessionInfo.updated_at` is when the session last CHANGED, not when the
-/// current turn began. "When a thread needs to change files, hand it across to
-/// Code" describes a feature that does not exist — grepped, there is no
-/// hand-across in `src/` — and a lede that instructs the reader to do a thing
-/// the app cannot do is worse than one clause shorter.
-pub(crate) fn lede(ctx: &AppCtx, connected: bool) -> Option<Lede> {
-    if !connected {
-        return None;
-    }
-    let count = (ctx.sessions)().len();
-    let host = host_of(&ctx.settings.peek().server_url);
-    let running = (ctx.running_sessions)().len();
-    let waiting = (ctx.permission)()
-        .iter()
-        .map(|p| p.session_id.clone())
-        .collect::<std::collections::HashSet<String>>()
-        .len();
-
-    let head = match count {
-        0 => "No conversations yet".to_owned(),
-        1 => "One conversation".to_owned(),
-        n => format!("{n} conversations"),
-    };
-    let before = if host.is_some() {
-        format!("{head} with the goose server on ")
-    } else {
-        format!("{head} with the goose server")
-    };
-    let tail = match (running, waiting) {
-        (0, 0) => " \u{2014} nothing running, and none of them waiting on you.".to_owned(),
-        (0, w) => format!(" \u{2014} nothing running, and {w} waiting on you."),
-        (r, 0) => format!(" \u{2014} {r} still streaming, and none of them waiting on you."),
-        (r, w) => format!(" \u{2014} {r} still streaming, and {w} waiting on you."),
-    };
-    Some(Lede {
-        opening: "Nothing on this side touches a repo.",
-        before,
-        host,
-        after: tail,
-    })
-}
+// THE LEDE IS GONE, AND IT WAS THE MOCKUP'S OWN THREE SENTENCES.
+//
+// The owner's call, against a real server: "I don't think this text is really
+// necessary. Let's remove it." Recorded as a comment rather than dropped
+// silently, because what it deletes is a deliberate divergence from the
+// reference — `Lede::opening` carried "Nothing on this side touches a repo."
+// verbatim from `10-home-chat.html` — and #148 should hold it as a decision
+// rather than as a gap somebody later closes back the other way.
+//
+// WHAT WENT WITH IT. The only sentence on the screen saying what the Chat half
+// is FOR: the plane badge and the segmented control both say "Chat" and neither
+// says what that means. And 68px of the column — a 608x44 box plus its 24px
+// bottom margin, measured on the captured `desktop-chats` at 1440x860.
+//
+// `host_of` survives because `compose_chips` still reads it: the host is a chip
+// under the composer, which is the one place on this screen it is still named.
 
 /// The scheduled recipe worth naming, and how many others there are.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -427,28 +381,17 @@ pub(crate) fn sched_line(ctx: &AppCtx, now: i64) -> Option<Sched> {
     })
 }
 
-/// The hairline at the bottom of the chat column.
-///
-/// Sentence one is the mockup's and needs no source: it is a statement about
-/// what this half is. Sentence two is its "⌘2 for Code and its six working
-/// trees" with the keycap taken out and the count kept — the desktop wires
-/// three chords and ⌘2 is not one of them, so the keycap would be a promise
-/// nothing keeps. The count is gated on the code plane having answered: until
-/// this window has been to the Code half once, `code_chats` is empty for want
-/// of a fetch rather than for want of trees, and "Code has 0 working trees"
-/// would be a wrong number rather than an empty one.
-pub(crate) fn footnote(ctx: &AppCtx) -> (&'static str, Option<String>) {
-    let second = (ctx.code_conn)()
-        .is_connected()
-        .then(|| match (ctx.code_chats)().len() {
-            1 => "Code has 1 working tree.".to_owned(),
-            n => format!("Code has {n} working trees."),
-        });
-    (
-        "Chat talks only to the goose server \u{2014} no containers, no branches, no diffs.",
-        second,
-    )
-}
+// AND THE FOOTNOTE, on the same call: "this doesn't seem necessary either. We
+// can just remove that." Its first sentence was the mockups' too.
+//
+// THREE THINGS WENT WITH IT, and the first is the one to notice. The column's
+// bottom hairline lived on `.home-footnote`'s `border-top`, so the chat home now
+// ends at the dashed schedule pill that `margin-top: auto` pushes to the bottom
+// edge — a rule with nothing under it would be a line to nowhere, so nothing
+// replaces it. The second was the only cross-plane count anywhere on this
+// screen: the band's counts are per-half, the segmented control carries none,
+// and the sidebar shows one plane's list at a time. The third is 49px, a 712x35
+// box plus its 14px top margin.
 
 /// WHAT THE READER WAS LAST DOING, offered back.
 ///
@@ -961,26 +904,20 @@ pub(crate) fn Home(plane: Plane) -> Element {
                 if plane == Plane::Chat {
                     h1 { class: "home-greeting", "{part_of_day(hour_now())}." }
                 }
-                // THE LEDE, three clauses of it, in the reading face — and the
-                // CHAT half's only. It counts `ctx.sessions` and names the
-                // goose server, so on the code plane it read "No conversations
-                // yet with the goose server on 127.0.0.1:3285" over a board of
-                // five working trees: the wrong half's facts, confidently. The
-                // code half has no lede in the mockups either, because its
-                // board is the answer to the same question.
-                if let Some(lede) = lede(&ctx, connected).filter(|_| plane == Plane::Chat) {
-                    p { class: "home-lede",
-                        "{lede.opening} {lede.before}"
-                        if let Some(host) = lede.host.clone() {
-                            b { class: "home-lede-host", "{host}" }
-                        }
-                        "{lede.after}"
-                    }
-                } else if !connected {
-                    // Connected, the code half says nothing here: the tiles and
-                    // the board below are the standing line, and a sentence
-                    // over them would be the count said twice. Disconnected,
-                    // both halves owe the reader the reason.
+                // ONE SENTENCE UNDER THE GREETING, AND ONLY WHEN IT IS OWED.
+                //
+                // This was the `else` of the lede's `if let`; with the lede
+                // gone it stands on its own, and the branch it lost is the
+                // decision #200 left open. CONNECTED, BOTH HALVES NOW SAY
+                // NOTHING HERE, which was already the code half's rule and its
+                // reason carries over: the tiles and the board are that half's
+                // standing line, and on this one the count is on the section
+                // heading three inches down — `.home-section-meta` reads "12
+                // threads" beside "Pick up where you left off". A sentence here
+                // would be the same number said twice, which is what the owner
+                // called unnecessary. Disconnected, both halves still owe the
+                // reader the reason, and nothing else on the screen gives it.
+                if !connected {
                     p { class: "home-standing", "{standing(plane, connected, count)}" }
                 }
 
@@ -1306,10 +1243,13 @@ pub(crate) fn Home(plane: Plane) -> Element {
                     }
                 }
 
-                // THE TWO BLOCKS THAT CLOSE THE CHAT COLUMN. Without them the
-                // page simply stops after its last card; the mockups end with
-                // a dashed schedule row pushed to the bottom and a hairline
-                // footnote under it, which is what gives the column an edge.
+                // THE BLOCK THAT CLOSES THE CHAT COLUMN, and it is one now
+                // rather than two. The mockups end with a dashed schedule row
+                // pushed to the bottom and a hairline footnote under it; the
+                // footnote is the owner's cut (#200), so the pill on the
+                // column's bottom edge is the whole ending. `margin-top: auto`
+                // in `98-home-sched.css` is what puts it there, and that only
+                // works because `.home-inner` is `min-height: 100%`.
                 if plane == Plane::Chat {
                     if let Some(sched) = sched_line(&ctx, crate::state::now_secs()) {
                         button {
@@ -1327,60 +1267,6 @@ pub(crate) fn Home(plane: Plane) -> Element {
                             }
                         }
                     }
-                    {
-                        let (first, second) = footnote(&ctx);
-                        rsx! {
-                            p { class: "home-footnote",
-                                // THE GLYPH THE SHEET HAS ALWAYS RESERVED ROOM
-                                // FOR. `.home-footnote` is a flex row with
-                                // `gap: 9px` and a `.home-footnote > .icon`
-                                // rule beside it, both taken from the mockups'
-                                // `.footnote`, and neither had anything to lay
-                                // out: this paragraph emitted two strings and
-                                // no icon, so the rule was dead and the note
-                                // began flush against the hairline above it.
-                                //
-                                // THE CHAT PLANE'S OWN MARK, and not the
-                                // mockups' generic info circle, because
-                                // `src/icons.rs` has no info glyph and adding
-                                // one is another lane's file. "message" is
-                                // what `nav::Plane::Chat` already flies in the
-                                // sidebar's segmented control, and this
-                                // sentence is about what the Chat plane IS —
-                                // so the substitution says something true
-                                // rather than something generic. Swap it if a
-                                // circled `i` ever lands.
-                                Icon { name: "message" }
-                                "{first}"
-                                if let Some(second) = second {
-                                    // A MIDDOT, and it is the separator the
-                                    // mockups draw between these two
-                                    // sentences: without it the footnote reads
-                                    // as one run-on pair, "…no diffs. Code has
-                                    // 2 working trees."
-                                    //
-                                    // A character in the string rather than
-                                    // the mockups' `<span class="d">`, and
-                                    // that span is now deleted from the sheet
-                                    // rather than left dead. Its whole job was
-                                    // to dim the glyph to a third tier, and
-                                    // this sheet has already refused that once
-                                    // for the identical element: the note on
-                                    // `.home-chip + .home-chip::before` in
-                                    // `40-home-chat.css` measures
-                                    // `--text-tertiary` at 2.03:1 light and
-                                    // 2.91:1 dark and takes `--text-secondary`
-                                    // instead, because a separator is a
-                                    // non-text indicator and owes 3:1. The
-                                    // footnote is already set in
-                                    // `--text-secondary`, so an undimmed
-                                    // middot IS that decision, and it needs no
-                                    // markup to carry it.
-                                    " \u{b7} {second}"
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -1395,8 +1281,8 @@ pub(crate) fn Home(plane: Plane) -> Element {
 )]
 mod tests {
     use super::{
-        code_board, code_tiles, compose_chips, compose_placeholder, footnote, lede, part_of_day,
-        recent_for, sched_line, standing, starter_kinds, Home, RecentState, Starter, TreeState,
+        code_board, code_tiles, compose_chips, compose_placeholder, part_of_day, recent_for,
+        sched_line, standing, starter_kinds, Home, RecentState, Starter, TreeState,
     };
     use crate::nav::Plane;
     use crate::views::press::Pressable;
@@ -1864,49 +1750,6 @@ mod tests {
         assert_eq!(groups[0].trees.len(), 1);
     }
 
-    /// THE LEDE SAYS NOTHING OVER A DEAD SOCKET, and never says "since".
-    ///
-    /// The mockup's third clause is "one still streaming since 09:14", and
-    /// there is no source for the "since": `running_sessions` is a bare
-    /// `HashSet<String>` with no stamp near it, and `updated_at` is when the
-    /// session last CHANGED rather than when the turn began.
-    ///
-    /// REPRODUCED: drop the `connected` guard and the first assertion fails
-    /// with a count over a socket nobody opened.
-    #[test]
-    fn the_lede_is_silent_when_there_is_nothing_to_report() {
-        let offline = crate::testkit::with_ctx(
-            |ctx| {
-                let mut sessions = ctx.sessions;
-                sessions.set(vec![bare("s1"), bare("s2")]);
-            },
-            |ctx| lede(ctx, false),
-        );
-        assert!(offline.is_none(), "the lede counted over a dead socket");
-
-        let online = crate::testkit::with_ctx(
-            |ctx| {
-                let mut sessions = ctx.sessions;
-                sessions.set(vec![bare("s1"), bare("s2")]);
-                let mut settings = ctx.settings;
-                settings.write().server_url = "http://tail-mini:3285".to_owned();
-                let mut running = ctx.running_sessions;
-                running.write().insert("s1".to_owned());
-            },
-            |ctx| lede(ctx, true),
-        );
-        let lede = online.expect("connected, so there is a lede");
-        assert_eq!(lede.host.as_deref(), Some("tail-mini:3285"));
-        assert!(lede.before.contains("2 conversations"), "{}", lede.before);
-        assert!(lede.after.contains("1 still streaming"), "{}", lede.after);
-        assert!(
-            !lede.after.contains("since"),
-            "the lede claimed to know when a turn started, which nothing \
-             records: {}",
-            lede.after
-        );
-    }
-
     /// A RUNNING JOB OUTRANKS THE SERVER'S ORDER, because it is the only fact
     /// on that row about this moment. And the row never claims a next-run
     /// time: `ScheduledJob` has no such field and this app has no timezone to
@@ -1943,38 +1786,6 @@ mod tests {
         assert!(sched.is_none());
     }
 
-    /// THE FOOTNOTE COUNTS THE OTHER HALF ONLY ONCE IT HAS ANSWERED.
-    ///
-    /// Until this window has been to the Code half, `code_chats` is empty for
-    /// want of a fetch rather than for want of trees — so "Code has 0 working
-    /// trees" would be a wrong number rather than an empty one.
-    ///
-    /// REPRODUCED: drop the `is_connected()` gate and the first assertion
-    /// fails.
-    #[test]
-    fn the_footnote_counts_the_other_half_only_once_it_has_answered() {
-        let (first, second) = crate::testkit::with_ctx(|_| {}, footnote);
-        assert!(!first.is_empty());
-        assert_eq!(
-            second, None,
-            "the footnote reported the code half's tree count over a socket \
-             nothing has dialled"
-        );
-
-        let (_, second) = crate::testkit::with_ctx(
-            |ctx| {
-                let mut conn = ctx.code_conn;
-                conn.set(crate::state::ConnState::Connected {
-                    agent: "opencode".to_owned(),
-                });
-                let mut chats = ctx.code_chats;
-                chats.set(vec![meta("c1", "r", "stopped", 1.0)]);
-            },
-            footnote,
-        );
-        assert_eq!(second.as_deref(), Some("Code has 1 working tree."));
-    }
-
     fn meta(id: &str, repo: &str, status: &str, last: f64) -> opencode_client::ChatMeta {
         opencode_client::ChatMeta {
             id: id.to_owned(),
@@ -1992,16 +1803,6 @@ mod tests {
         opencode_client::ChatMeta {
             base: base.to_owned(),
             ..meta(id, repo, "stopped", 1.0)
-        }
-    }
-
-    fn bare(id: &str) -> goose_acp_client::SessionInfo {
-        goose_acp_client::SessionInfo {
-            session_id: id.to_owned(),
-            cwd: None,
-            title: Some(id.to_owned()),
-            updated_at: None,
-            meta: None,
         }
     }
 
@@ -2526,13 +2327,25 @@ mod tests {
     /// The source check above says the fetches are written down; this says the
     /// closure they are written in runs. Nothing observable comes back —
     /// `refresh` peeks `ctx.client`, which is `None` without a loopback goose —
-    /// so what is asserted is the guard: over a live connection this screen
-    /// draws the lede, which is the same `connected` the effect branches on.
-    /// `render_settled` rather than `render`, because an effect has not run
-    /// when the first pass ends.
+    /// so what is asserted is the guard: the screen branches on the same
+    /// `connected` the effect does, so a rendering that differs between the two
+    /// fixtures is that boolean being read. `render_settled` rather than
+    /// `render`, because an effect has not run when the first pass ends.
+    ///
+    /// RE-POINTED FOR #200, and it is the load-bearing half of that change.
+    /// The needle was `html.contains("home-lede")` and the lede is gone, so the
+    /// assertion would have passed over an effect that never ran — the only
+    /// guard on four fetches, and the fix for #91.
+    ///
+    /// BOTH FIXTURES ARE RENDERED, which the old test did not do and which is
+    /// what keeps the new needle from being vacuous. `.home-standing` is absent
+    /// on a screen that rendered nothing at all, so its absence proves nothing
+    /// on its own; the disconnected render is the control that says this
+    /// component emits it whenever the flag is false, and the greeting is what
+    /// says a chat home was drawn at all.
     #[test]
     fn a_connected_chat_home_runs_its_mount_fetch() {
-        let html = crate::testkit::render_settled(
+        let connected = crate::testkit::render_settled(
             |ctx| {
                 let mut conn = ctx.conn;
                 conn.set(crate::state::ConnState::Connected {
@@ -2541,15 +2354,26 @@ mod tests {
             },
             || rsx! { Home { plane: Plane::Chat } },
         );
+        let offline =
+            crate::testkit::render_settled(|_| {}, || rsx! { Home { plane: Plane::Chat } });
+
         assert!(
-            html.contains("home-lede"),
-            "the connected home did not render its lede, so the effect's own \
-             guard was false and nothing in it ran: {}",
-            &html[..html.len().min(400)]
+            offline.contains("home-standing"),
+            "the disconnected home does not say why it is empty, so the \
+             assertion below has no control and proves nothing: {}",
+            &offline[..offline.len().min(400)]
         );
         assert!(
-            !html.contains("home-standing"),
-            "the connected home is still showing the disconnected sentence"
+            connected.contains("home-greeting"),
+            "the connected home rendered nothing at all, so the absence below \
+             is vacuous: {}",
+            &connected[..connected.len().min(400)]
+        );
+        assert!(
+            !connected.contains("home-standing"),
+            "the connected home is still showing the disconnected sentence, so \
+             the effect's own guard was false and nothing in it ran: {}",
+            &connected[..connected.len().min(400)]
         );
     }
 
@@ -2652,52 +2476,6 @@ mod tests {
             "the \"Ways to start\" heading has no meta, so the two section \
              headings on this screen are asymmetric — one carries a value and \
              one carries nothing: {html}"
-        );
-    }
-
-    /// THE FOOTNOTE IS LED BY A GLYPH AND SEPARATED BY A MIDDOT.
-    ///
-    /// Both are the mockups' and neither was emitted, which made
-    /// `.home-footnote > .icon` and the row's `gap: 9px` dead rules and left
-    /// the two sentences reading as one run-on pair.
-    #[test]
-    fn the_footnote_is_led_by_a_glyph() {
-        let html = crate::testkit::render(|| rsx! { Home { plane: Plane::Chat } });
-        let note = html
-            .split(r#"<p class="home-footnote">"#)
-            .nth(1)
-            .expect("the chat home renders a footnote");
-        assert!(
-            note.starts_with("<svg class=\"icon\""),
-            "the footnote does not open with a glyph, so the sheet's own \
-             `.home-footnote > .icon` rule and its 9px gap lay out nothing: {}",
-            &note[..note.len().min(200)]
-        );
-    }
-
-    /// …AND THE MIDDOT ONLY APPEARS WHEN THERE IS A SECOND SENTENCE.
-    ///
-    /// `footnote`'s second string is gated on the code plane having answered,
-    /// so a window that has never been to the Code half gets one sentence —
-    /// and a separator with nothing after it would be a dangling middot.
-    #[test]
-    fn the_footnote_separates_two_sentences_and_never_dangles() {
-        let (first, second) = crate::testkit::with_ctx(|_| {}, footnote);
-        assert!(
-            second.is_none(),
-            "the disconnected fixture already has a second sentence, so the \
-             half of this test about one sentence proves nothing"
-        );
-        assert!(
-            !first.contains('\u{b7}'),
-            "the first sentence carries the separator itself, so a window that \
-             has not been to the Code half shows a middot with nothing after it"
-        );
-
-        let html = crate::testkit::render(|| rsx! { Home { plane: Plane::Chat } });
-        assert!(
-            !html.contains(&format!("{first} \u{b7}")),
-            "a middot rendered with no second sentence behind it"
         );
     }
 
