@@ -56,7 +56,7 @@ that stops being needed fails the build instead of rotting.
 Styling: [`docs/design.md`](docs/design.md) is the design guide — where the
 look comes from and the rules that produce it (floating chrome, tiered
 rounding, borders vs shadows, tap targets). Read it before changing
-`assets/main.css`, which is the whole design system: semantic tokens, light
+`assets/shared.css`, which is the whole design system: semantic tokens, light
 and dark, with `data-theme` on the root element overriding the system
 preference.
 

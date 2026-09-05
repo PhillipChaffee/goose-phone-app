@@ -138,7 +138,7 @@
  * a new chat button when the big chat box is visible in the middle."
  *
  * A bordered card rather than a bare field, matching `.composer` in
- * assets/main.css: the thing you type into is the primary object on this
+ * assets/shared.css: the thing you type into is the primary object on this
  * screen and an underline would read as one more form row. */
 .home-compose {
   display: flex;
@@ -177,7 +177,7 @@
   border-radius: var(--radius-xl);
   /* THE CARD RUNG, AND NOT THE MOCKUPS'. `.launch{background:their --surface}`
    * is #24282e, which is --surface-raise here. Taking it would be right in dark
-   * and wrong in light, where --surface-raise resolves to main.css's
+   * and wrong in light, where --surface-raise resolves to shared.css's
    * --bg-tertiary (#e3e6ea) and the placeholder — `.input::placeholder` is
    * --text-secondary, #6f6f6f — measures 4.01:1 on it, under the 4.5 it owes.
    * On --surface-card the same placeholder is 4.64:1 light and 5.95:1 dark.
@@ -218,7 +218,7 @@
   font: inherit;
   /* SERIF, `.launch .field{font-family:their --serif}`. It is the one place in
    * this sheet a control takes the reading voice, and it is consistent rather
-   * than an exception: assets/main.css already sets the serif on
+   * than an exception: assets/shared.css already sets the serif on
    * `.bubble.user .bubble-text`, so what the reader writes is serif everywhere
    * in this app. `.recent-quote` two sections down is the same decision. */
   font-family: var(--font-serif);
@@ -262,7 +262,7 @@
   border-top: 1px solid var(--shell-line-soft);
 }
 
-/* THE HOME COMPOSER'S SEND, and it is `assets/main.css`'s `.send` with two
+/* THE HOME COMPOSER'S SEND, and it is `assets/shared.css`'s `.send` with two
  * numbers changed rather than a control of its own. The transcript's composer
  * already has this circle; making the home screen's a different shape would
  * teach the reader two answers to "how do I send this" in one app.
@@ -284,7 +284,7 @@
 
 /* …AND AT REST IT IS AN OUTLINE, not the same circle at 35% opacity.
  *
- * `assets/main.css` gives every `.send` `opacity: 0.35` while it is disabled,
+ * `assets/shared.css` gives every `.send` `opacity: 0.35` while it is disabled,
  * and the home screen's is disabled for as long as the draft is empty — which
  * is the entire time a home screen is at rest. Measured on the captured
  * `desktop-chats`: `background rgb(19, 187, 175)` at `opacity 0.35`. So the
@@ -333,7 +333,7 @@
 
 /* WHAT THE SESSION WILL BE, before it exists — model, host, extensions.
  *
- * One line and never more, which is `.chip-row`'s rule in assets/main.css and
+ * One line and never more, which is `.chip-row`'s rule in assets/shared.css and
  * its reason: a composer that grows a row under the pointer is worse than a
  * value you can read in full by widening the window. It shrinks and scrolls
  * rather than wrapping, and the button beside it never moves. */

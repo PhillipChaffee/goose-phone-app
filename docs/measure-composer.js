@@ -56,7 +56,7 @@ const path = require('path');
 const os = require('os');
 const { chromium } = require('playwright');
 
-const CSS = fs.readFileSync(path.join(__dirname, '..', 'assets', 'main.css'), 'utf8');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'assets', 'shared.css'), 'utf8');
 // More than one width in a single run, because the failure below that no
 // single width can see is a *comparison* between two of them. 390 and 393 are
 // in the default list for that reason: they are the two the earlier list

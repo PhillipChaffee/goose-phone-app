@@ -980,7 +980,7 @@ pub(crate) fn Home(plane: Plane) -> Element {
                         // ship: nothing in this app grows a textarea. There is
                         // no `field-sizing`, no `scrollHeight` read and no
                         // resize hook anywhere in `src/`, and
-                        // `assets/main.css`'s `max-height` only CAPS a field
+                        // `assets/shared.css`'s `max-height` only CAPS a field
                         // that grows by this attribute. At one row a second
                         // line of a prompt would scroll inside a box the
                         // height of a single line, which is worse than the
@@ -1015,7 +1015,7 @@ pub(crate) fn Home(plane: Plane) -> Element {
                         // `.send`, the circle, and NOT `.btn primary`.
                         //
                         // It is the same control the transcript's composer
-                        // already uses (`assets/main.css`), which is the point:
+                        // already uses (`assets/shared.css`), which is the point:
                         // the thing you press to send is one shape everywhere
                         // in the app, and the reader meets it here first. A
                         // 131x40 rectangle reading "Start a chat" was saying

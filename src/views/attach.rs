@@ -4,7 +4,7 @@
 //! Deliberately one small module. The look of a chip and a thumbnail is the
 //! part of this feature that is still provisional — it is built plainly, in
 //! the existing chip grammar, so restyling it means editing `.attach-*` in
-//! `assets/main.css` and these three components and nothing else.
+//! `assets/shared.css` and these three components and nothing else.
 
 use dioxus::prelude::*;
 

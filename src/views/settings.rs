@@ -600,7 +600,7 @@ mod tests {
     /// Both arms asserted here rather than through the render, because only one
     /// of them can ever be rendered in a `cargo test`: the host build is
     /// `Shell::Desktop`, so a render-only check would leave the phone's
-    /// wording — the one that shipped, and the one `assets/main.css` states
+    /// wording — the one that shipped, and the one `assets/shared.css` states
     /// nothing about — verified by nothing at all. The render half below is
     /// then the other question: that the screen consumes the function rather
     /// than carrying a second, frozen copy of the sentence.

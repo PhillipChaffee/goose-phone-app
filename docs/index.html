@@ -31,7 +31,7 @@
      copied from the markup in docs/gallery-states.json. -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%233f434b'/%3E%3Cpath d='M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.9-.9L3 21l1.9-5.1A8.4 8.4 0 0 1 4 11.5 8.4 8.4 0 0 1 12.5 3 8.4 8.4 0 0 1 21 11.5z' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' transform='translate(12 12) scale(0.72) translate(-12 -12)'/%3E%3C/svg%3E">
 <style>
-/* This page is styled from the app's own design system — assets/main.css.
+/* This page is styled from the app's own design system — assets/shared.css.
  * The tokens below are copied from it, both themes, so the site and the app
  * agree; the rules they serve are written down in docs/design.md.
  *
@@ -543,7 +543,7 @@ footer ul a { display: inline-flex; align-items: center; min-height: 44px; font-
       </div>
       <!-- The style gallery is linked to its file on GitHub rather than to
            style-gallery.html here, and it is deliberate. Its frames load
-           ../assets/main.css, which sits outside this folder — so when Pages
+           ../assets/shared.css, which sits outside this folder — so when Pages
            publishes /docs as the site root that stylesheet 404s and every
            frame renders unstyled (measured, not assumed). If the site is ever
            published from the repository root instead, point the three gallery
@@ -845,7 +845,7 @@ dx serve --desktop</code></pre>
         <div class="card">
           <h3>A written design language</h3>
           <p>
-            <code>assets/main.css</code> is the whole system — semantic tokens in both themes,
+            <code>assets/shared.css</code> is the whole system — semantic tokens in both themes,
             tiered rounding, borders that separate and shadows that float.
             <a href="https://github.com/PhillipChaffee/goose-phone-app/blob/main/docs/design.md">docs/design.md</a>
             records each rule and the measurement behind it.

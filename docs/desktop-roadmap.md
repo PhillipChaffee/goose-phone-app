@@ -517,7 +517,7 @@ shipping binary and only the call site is missing.
 | Global hotkey (quick-launcher chord) | reachable, already paid | `use_global_shortcut` (`hooks.rs:114`); a tray menu plus one `use_global_shortcut` call compiled clean on the first try, and the only two diagnostics in the whole attempt were `redundant clone` and `redundant closure`. The `GlobalHotKeyManager` construction is on the un-`cfg`'d path in `App::new` and its Carbon imports are in the linked binary — not observed at runtime. macOS uses Carbon `RegisterEventHotKey`, so no TCC prompt | trivial code |
 | Menu bar (replace, not adopt) | already shipping | `src/main.rs` never calls `with_menu` anywhere (`grep -n with_menu src/main.rs` is empty — the `Config` is built at `:111-113` and carries only `with_window`), so `MenuBuilderState::Unset` resolves to `default_menu_bar()` (`config.rs:45-52`) and Window+Edit menus with ⌘C/⌘V/⌘W/⌘Q are on screen now. Replacing it is `Config::with_menu` | small |
 | Frameless, always-on-top overlay window | reachable | `tao` safe builders: `with_decorations(false)` (`window.rs:493`), `with_always_on_top` (:516), `with_transparent` (:482), `with_visible_on_all_workspaces` (:589). The repo already uses this API at `src/main.rs:93-110` | small |
-| Window vibrancy | reachable, no unsafe, **compiled** | One line enabling `objc2-app-kit`'s `NSVisualEffectView` feature (measured: 44 → 45 features, 599 → 599 packages, two lines of `Cargo.lock`), then `NSVisualEffectView::new`/`setMaterial`/`setBlendingMode`/`setState` + `addSubview`, all of which pass `-D warnings` with `unsafe_code = "forbid"` and link. Side cost: the feature union recompiles `tao`, `wry`, `muda`, `rfd`, `tray-icon` and `dioxus-desktop`. **The real cost is still CSS**: `assets/main.css` surfaces are opaque tokens, so this means desktop-only tokens and a deliberate gallery re-capture | medium (CSS, not objc) |
+| Window vibrancy | reachable, no unsafe, **compiled** | One line enabling `objc2-app-kit`'s `NSVisualEffectView` feature (measured: 44 → 45 features, 599 → 599 packages, two lines of `Cargo.lock`), then `NSVisualEffectView::new`/`setMaterial`/`setBlendingMode`/`setState` + `addSubview`, all of which pass `-D warnings` with `unsafe_code = "forbid"` and link. Side cost: the feature union recompiles `tao`, `wry`, `muda`, `rfd`, `tray-icon` and `dioxus-desktop`. **The real cost is still CSS**: `assets/shared.css` surfaces are opaque tokens, so this means desktop-only tokens and a deliberate gallery re-capture | medium (CSS, not objc) |
 | Window level / collection behaviour (true floating panel) | reachable, no unsafe, **compiled** | `NSWindow::setLevel` (:1327), `setCollectionBehavior` (:1446) via `sharedApplication(mtm).keyWindow()`. Both compiled and linked under `-F unsafe_code`; the `ns_window()` pointer route does not compile and cannot be excepted | trivial |
 | Dock: activation policy, visibility, badge, hide/show | reachable | All safe `fn` on tao's `EventLoopWindowTargetExtMacOS` (`platform/macos.rs:397`, `:403`, `:406`, `:387`, `:389`). A tao-event path, so no synchronous-XHR cost | trivial |
 | Dock: replace the icon image | **blocked by our lint policy** | `setApplicationIconImage` is `pub unsafe fn` (`NSApplication.rs:737`). Needs `crates/goose-native/` | small, after the seam |
@@ -824,7 +824,7 @@ to none of this.
 
 This document is mostly about a desktop shell, and the phone is the product. So:
 
-**The phone's rendering must not change.** `assets/main.css` is the shared
+**The phone's rendering must not change.** `assets/shared.css` is the shared
 design system and nothing here re-renders it. Vibrancy is the one item that
 touches tokens, and the correct form is desktop-only tokens plus a deliberate
 gallery re-capture — which is precisely why Stage 2 comes before Stage 4 and not
@@ -841,7 +841,7 @@ while #148 is open, read "desktop-only tokens" as *ask the token PR*, not as
 that is a signal to reconsider the capability, not the token.
 
 That constraint has since been met once and the way it was met is the pattern
-to copy. The desktop stage says of itself that `assets/main.css` is untouched
+to copy. The desktop stage says of itself that `assets/shared.css` is untouched
 across the whole of it, that all 49 captured phone states came back
 byte-identical with none removed and 14 desktop keys added, and that both
 `docs/audit.js both` and `docs/measure-composer.js` were clean — asserted as a
@@ -933,7 +933,7 @@ remote command execution reachable from a phone, and "it was needed for the
 hints editor" is not a decision.
 
 **7. Does vibrancy actually look right against this design system?**
-`assets/main.css` surfaces are opaque by construction and its shadow ramp
+`assets/shared.css` surfaces are opaque by construction and its shadow ramp
 assumes them. *Recommendation:* prototype it after Stage 2 exists, so the answer
 is a captured state somebody can look at rather than an argument.
 

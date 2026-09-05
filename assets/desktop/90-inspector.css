@@ -152,7 +152,7 @@
 }
 
 /* A CONTROL TAKES THE RAISE RUNG, and a chip and a keycap are controls. The
- * argument is `00-tokens.css`'s own, at the dark remap: main.css spends
+ * argument is `00-tokens.css`'s own, at the dark remap: shared.css spends
  * `--bg-secondary` on controls as well as cards, "the mockups draw the same
  * distinction: their card is rgba(255,255,255,.013) and their controls are
  * --surface with a hairline", and these two landed on the card side of that
@@ -224,7 +224,7 @@
 
 /* ── THE COLUMN'S THREE RADII ARE ITS OWN ──────────────────────────────
  *
- * `--radius-sm/-lg` are main.css's 4/8/12 ladder, composed for a phone where
+ * `--radius-sm/-lg` are shared.css's 4/8/12 ladder, composed for a phone where
  * the smallest rounded thing is a chip you can hit with a thumb. The mockups'
  * inspector runs 5, 7 and 11 — this rule 12 -> 11, `.insp-file` 4 -> 7 and
  * `.insp-key` 4 -> 5 — and the one a reader sees is the file row, whose pill
@@ -233,7 +233,7 @@
  * Literals rather than tokens, because these are three numbers in one column
  * and not a new rung of the app's ladder; `.insp-file-tick { width: 0.875rem
  * }` is the same call already made in this file. `--radius-*` belong to
- * main.css and the phone and are not touched. The `.insp-tag` 4 and the two
+ * shared.css and the phone and are not touched. The `.insp-tag` 4 and the two
  * `--radius-full` pills already agree with the mockups and are left alone. */
 .insp-card {
   display: block;
@@ -574,7 +574,7 @@
 }
 
 /* THE ONE HEADING IN THIS COLUMN THAT WAS NOT A HEADING. `.insp-keys-title`
- * had no rule anywhere — not in this sheet, not in main.css — so "Keys"
+ * had no rule anywhere — not in this sheet, not in shared.css — so "Keys"
  * inherited the shell's 13px body and rendered as the biggest, heaviest,
  * brightest string in the inspector, outranking the six 10.5px tracked
  * uppercase titles above it and sitting 0.2px off the first keycap row.

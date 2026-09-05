@@ -2,7 +2,7 @@
 
 /* Three rules. The banner is .banner, the dots are .dot, the facts are
  * .setting-row.fact, the buttons are .btn-row and the run history is the
- * chats list — this screen is mostly main.css doing its job. */
+ * chats list — this screen is mostly shared.css doing its job. */
 
 /* The line under a job's title is a sentence — "Runs every weekday at
  * 9:00 AM", "running 4m" — where .session-meta was built for ids and counts
@@ -11,7 +11,7 @@
  *
  * Deliberately the same two declarations as .recipe-meta rather than a shared
  * class: a third screen wanting this is the signal to promote it into
- * main.css, which is PR 0's to widen and not a feature's to fork again. */
+ * shared.css, which is PR 0's to widen and not a feature's to fork again. */
 .job-meta {
   font-family: var(--font-sans);
   align-items: baseline;

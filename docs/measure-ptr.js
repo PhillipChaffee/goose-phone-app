@@ -17,7 +17,7 @@ const path = require('path');
 const os = require('os');
 const { chromium } = require('playwright');
 
-const CSS = fs.readFileSync(path.join(__dirname, '..', 'assets', 'main.css'), 'utf8');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'assets', 'shared.css'), 'utf8');
 
 const SPINNER = '<div class="ptr"><svg viewBox="0 0 24 24" fill="none"'
   + ' stroke="currentColor" stroke-width="2" stroke-linecap="round"'

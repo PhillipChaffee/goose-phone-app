@@ -338,7 +338,7 @@ fn waiting_chat(t: f64) -> Chat {
                             tool: Some(Tool {
                                 name: "read".to_owned(),
                                 status: "completed".to_owned(),
-                                title: "assets/main.css".to_owned(),
+                                title: "assets/shared.css".to_owned(),
                                 output: "3140 lines".to_owned(),
                             }),
                         },

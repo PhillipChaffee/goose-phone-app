@@ -374,7 +374,7 @@ fn plane_host(ctx: &AppCtx, plane: Plane) -> Option<String> {
 
 /// The connection, as the mockups draw it: a dot, a word, and the host in mono.
 ///
-/// NOT `views::ConnBadge`, and `assets/main.css` is not edited for it: that
+/// NOT `views::ConnBadge`, and `assets/shared.css` is not edited for it: that
 /// component is the phone's and reads `ctx.conn` outright, which is right on a
 /// phone where there is one connection on screen at a time. It keeps the
 /// `conn-badge` class, so `.pane .topbar > .conn-badge` goes on hiding every
@@ -1019,7 +1019,7 @@ pub(crate) fn AppShell() -> Element {
             // to be fought rather than reused; `src/domdump.rs` files any dump
             // containing `.drawer.open` under a `-drawer` suffix, so every
             // desktop capture would be named as if a panel were over it; and
-            // nothing has to move out of `assets/main.css`, because
+            // nothing has to move out of `assets/shared.css`, because
             // `.drawer-brand`, `.drawer-nav`, `.drawer-item` and
             // `.drawer-group` are all independent of `.drawer` itself.
             //
@@ -1399,7 +1399,7 @@ mod tests {
     ///
     /// Found by writing four of them at once. The home screen was drafted
     /// against `--text-3xl`, `--lh-3xl` and `--lh-2xl`, none of which exist:
-    /// `assets/main.css`'s scale stops at `--text-2xl` and its own comment
+    /// `assets/shared.css`'s scale stops at `--text-2xl` and its own comment
     /// explains why there is no `--lh-lg`. The greeting would have rendered at
     /// whatever it inherited, on every window, and nothing would have said so.
     ///
@@ -1409,7 +1409,7 @@ mod tests {
     /// one form where an undefined name is deliberate.
     #[test]
     fn the_desktop_sheet_spends_no_token_that_does_not_exist() {
-        let main = include_str!("../../../assets/main.css");
+        let main = include_str!("../../../assets/shared.css");
         let desktop = crate::css::SHELL;
         let macos = include_str!("../../../assets/platform/macos.css");
 
@@ -2609,7 +2609,7 @@ mod tests {
     /// So the check is on the VALUES and on their being different from each
     /// other, not on any rule spending them. Light is exempt by construction
     /// and says so on `--surface-panel`: it separates its columns with fills
-    /// that main.css already provides, and the 1.3% wash that makes a card in
+    /// that shared.css already provides, and the 1.3% wash that makes a card in
     /// dark makes an invisible one on white.
     ///
     /// REPRODUCED four ways, one per rung: set any one of the four dark
@@ -2635,7 +2635,7 @@ mod tests {
             assert!(
                 !decl.is_empty(),
                 "the dark shell block gives no value for `{rung}`, so it falls back to \
-                 the light declaration — which is main.css's own two backgrounds, and \
+                 the light declaration — which is shared.css's own two backgrounds, and \
                  the window goes back to one fill from edge to edge"
             );
             painted.push((rung, decl.split(';').next().unwrap_or_default().trim()));
@@ -2696,7 +2696,7 @@ mod tests {
     ///
     /// Asserted on `nav_card()` rather than on the file, because the question
     /// is which ELEMENT is first in that column and a file-wide `contains`
-    /// cannot see order. `assets/main.css` keeps the rule; the phone still
+    /// cannot see order. `assets/shared.css` keeps the rule; the phone still
     /// renders it.
     ///
     /// REPRODUCED: put the `h2` back and this fails; take it out and it is

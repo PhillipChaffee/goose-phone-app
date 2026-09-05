@@ -23,7 +23,7 @@
  *    reads that attribute. It is now the ONLY such attribute: `data-detail`
  *    went with the list column. Width still tells Rust nothing.
  *
- * It is additive: assets/main.css is not edited by this branch, and every
+ * It is additive: assets/shared.css is not edited by this branch, and every
  * colour here is a token that exists in light and in dark.
  *
  * NOT in assets/features/, deliberately. docs/audit.js links that whole
@@ -132,7 +132,7 @@
 
   /* ── THE SURFACE RAMP ─────────────────────────────────────────────────
    *
-   * `assets/main.css` gives three background tokens, and they were composed
+   * `assets/shared.css` gives three background tokens, and they were composed
    * for a phone: one page, one card, one pressed state, on a screen with no
    * columns to tell apart. A window has columns, and the difference between
    * this shell and its mockups was mostly here — one fill doing three jobs.
@@ -163,7 +163,7 @@
    * than an exception to it: light already separates its columns, because
    * `--nav-fill` was `--bg-secondary` and the pane is white. What light must
    * NOT do is take the wash — #fafbfc on #ffffff is a card you cannot see,
-   * and main.css's buttons paint `--bg-secondary` too, so they would vanish
+   * and shared.css's buttons paint `--bg-secondary` too, so they would vanish
    * with it. Light separates with fills, dark separates with a ramp. */
   --surface-panel: var(--bg-secondary);
   --surface-canvas: var(--bg-primary);
@@ -203,7 +203,7 @@
 
   /* ── THE ACCENT, and it is desktop-only on purpose ────────────────────
    *
-   * `assets/main.css` has no accent token and should not gain one: it is the
+   * `assets/shared.css` has no accent token and should not gain one: it is the
    * PHONE's design system, and this is a colour the phone's surfaces were
    * never composed against. Declared here, where the desktop already declares
    * `--nav-w`, `--shell-gap` and `--nav-fill`, so the phone is untouched by
@@ -251,7 +251,7 @@
 
   /* ── THE INK LADDER, AND THE ONE LINE THAT MAKES IT REACHABLE ─────────
    *
-   * `assets/main.css:391` is `body { color: var(--text-primary) }`, and a
+   * `assets/shared.css:391` is `body { color: var(--text-primary) }`, and a
    * custom property substitutes WHERE IT IS USED — at `body`, on `:root`'s own
    * value. So remapping `--text-primary` on this shell moves nothing that
    * inherits its colour, which in this window is almost every string in it.
@@ -262,7 +262,7 @@
    * written up in this file: `--text-md` at the type scale below, and
    * `--text-code`, which is restated verbatim for the same reason. Three is a
    * pattern rather than an accident — a token this shell remaps is only
-   * remapped for rules INSIDE the shell, and anything main.css declares on
+   * remapped for rules INSIDE the shell, and anything shared.css declares on
    * `body` or `:root` keeps the phone's value until the shell restates it.
    *
    * The ladder itself: the mockups paint four rungs and this window painted
@@ -271,7 +271,7 @@
    * 6.66/6.17/5.95/5.66 on panel/canvas/card/raise), replacing the phone's
    * #ffffff and #b8b8b8 — which were composed for a phone's own two surfaces
    * and read as halation and as a flat neutral grey against a blue-black
-   * window. Light keeps main.css's #3f434b and #6f6f6f: the mockups have no
+   * window. Light keeps shared.css's #3f434b and #6f6f6f: the mockups have no
    * light mode and light's ink was never the complaint.
    *
    * THE THIRD RUNG IS A NAME AND, TODAY, NOT A THIRD COLOUR. The mockups'
@@ -319,7 +319,7 @@
    * a phone binary does not contain this file (src/css.rs, SHELL).
    *
    * THE ROOT DECLARATION IS THE SHELL'S OWN, and it is not optional.
-   * `body { font-size: var(--text-md) }` in assets/main.css was substituted at
+   * `body { font-size: var(--text-md) }` in assets/shared.css was substituted at
    * `:root`, where --text-md is 1rem — a custom property resolves on the
    * element that DECLARES it, not on the one that uses the rule. So
    * re-pointing --text-md alone would leave every `font: inherit` control in
@@ -351,7 +351,7 @@
    * `--insp-w` is the mockups' third column, identical in all eight files.
    *
    * The two inks are NOT called `--diff-add` / `--diff-del`, and the rename is
-   * the whole point: those two names already exist in `assets/main.css` and
+   * the whole point: those two names already exist in `assets/shared.css` and
    * are deliberately theme-INVARIANT, because they are painted on `--code-bg`,
    * which is the same colour in both themes. Declaring them here would put a
    * light value on the app's real diff screen — #2f6b3d measures 2.19:1 on
@@ -440,7 +440,7 @@
    *
    * This app shipped both of those a step the OTHER way: `95-transcript.css`
    * puts the desktop user bubble on `--text-sm` (12.5px) and the composer
-   * inherits `.input { font-size: var(--text-sm) }` from main.css, which the
+   * inherits `.input { font-size: var(--text-sm) }` from shared.css, which the
    * shell re-resolves to the same 12.5 — half a point under the sidebar labels
    * beside them and a full point under the mockups, in the two places the
    * reader reads and writes their own words.
@@ -461,7 +461,7 @@
 
   /* 15px, THE READING RUNG, and it is deliberately larger than the chrome —
    * that inversion is the mockups' whole typographic move. Three exact matches:
-   * `.prose{font-size:15px}` (the transcript, which assets/main.css sets from
+   * `.prose{font-size:15px}` (the transcript, which assets/shared.css sets from
    * this token on `.md`, so it re-scales with no rule of its own),
    * `.launch.calm .field{font-size:15px}` (the home composer) and the send
    * glyph, whose 13/28 ratio in the mockups is 15/32 here. */
@@ -469,7 +469,7 @@
 
   /* 16px. The mockups use it once (`.pal-in .q`) and this app spends it on
    * `.md h3` and `.pane-empty-line`; it exists to keep the markdown ladder
-   * monotone — h1 27, h2 20 (main.css's one literal), h3 16, h4/body 15. */
+   * monotone — h1 27, h2 20 (shared.css's one literal), h3 16, h4/body 15. */
   --text-lg: 1rem;
 
   /* 21px, `.st-t .n` verbatim — the tile numeral, and the only user. */
@@ -496,7 +496,7 @@
   --lh-sm: 1.125rem;
 
   /* 22px. --text-md 1.47, --text-lg 1.375. NOT prose's line-height: `.md`
-   * declares a unitless 1.65 of its own in assets/main.css, one hundredth off
+   * declares a unitless 1.65 of its own in assets/shared.css, one hundredth off
    * the mockups' `.prose{line-height:1.6}`, and is left alone. */
   --lh-md: 1.375rem;
 
@@ -510,7 +510,7 @@
   --lh-3xl: 2.375rem;
 
   /* RESTATED VERBATIM, and that is the entire point: these two expressions live
-   * on `:root` in assets/main.css, where `var(--text-xs)` was substituted
+   * on `:root` in assets/shared.css, where `var(--text-xs)` was substituted
    * against :root's 0.75rem and froze at 12px. Repeating the identical text
    * here re-resolves it against this block's --text-xs, giving 11.5px on a
    * 19.17px line — `.fcard pre{font-size:11.5px;line-height:1.7}`. The min()
@@ -519,11 +519,11 @@
   --text-code: min(var(--text-xs), 20px);
   --lh-code: calc(var(--text-code) * 5 / 3);
 
-  /* ICONS ARE NOT TEXT and have a scale of their own (see main.css), but that
+  /* ICONS ARE NOT TEXT and have a scale of their own (see shared.css), but that
    * scale was composed against a 16px body. Against a 12.5px one a 20px glyph
    * is 1.6x its label; the mockups draw 12-13px glyphs beside 12.5px text.
    *
-   * THE FIRST RE-SCALE UNDER-DELIVERED, and the clamp is why. main.css is
+   * THE FIRST RE-SCALE UNDER-DELIVERED, and the clamp is why. shared.css is
    * `clamp(20px, 1.25rem, 26px)` and this line was `clamp(16px, 1rem, 20px)`,
    * which does pull 20 down to 16 — but 16 is the clamp's own FLOOR, and at
    * the fixed 16px root a macOS build has (`assets/platform/macos.css` sets no
@@ -538,7 +538,7 @@
    * twice over: `.conn-badge` does NOT read this token — `50-band.css` pins its
    * own 24px height and its glyph measures 11.5px — and three more DO. The
    * seven users, all of them: `.nav-toggle` (`50-band.css`), `.insp-toggle`
-   * (`90-inspector.css`), `.row-action` (`70-overrides.css`), and main.css's
+   * (`90-inspector.css`), `.row-action` (`70-overrides.css`), and shared.css's
    * `.icon-btn`, `.send`, `.scroll-bottom` and `.session-tile`. Everything else
    * is `1em` and already scales with its label. `.swipe-action .icon` reads it
    * too and is not counted: there is no swipe tray at any width in this shell.
@@ -546,7 +546,7 @@
    * --icon-lg IS STILL NOT TOUCHED, but not for the reason written here
    * before. That reason — "its users are 44px circles whose glyph is meant to
    * dominate them, and nothing in this shell renders one" — was false when it
-   * was written: main.css's `.icon-btn.back` reads `--icon-lg`, and a sweep of
+   * was written: shared.css's `.icon-btn.back` reads `--icon-lg`, and a sweep of
    * the thirteen captured desktop states finds a 28px chevron in a 44px circle
    * in SIX of them (chat, chat-menu, extensions-detail, recipes-detail,
    * scheduler-detail, skill), roughly twice the ink of anything else on screen
@@ -579,7 +579,7 @@
    * heavier than the rule under the window band, and the window has no line
    * hierarchy at all.
    *
-   * `--border-primary` cannot simply move down to meet it: main.css has
+   * `--border-primary` cannot simply move down to meet it: shared.css has
    * controls whose only edge is a border and 1.09:1 would erase them, which is
    * the argument recorded at the dark block below and it still stands. The
    * missing rung is a THIRD token, spent only on pure dividers and on cards
@@ -681,7 +681,7 @@
  * word of prose kept out here where it cannot drift between the copies.
  *
  * WHAT THE INK LINES ARE DOING IN A SURFACE BLOCK. Four rungs of ink and the
- * six status tokens are main.css's PHONE dark values, which the shell's remap
+ * six status tokens are shared.css's PHONE dark values, which the shell's remap
  * skipped while remapping every background beside them. #ffffff and #b8b8b8
  * for a four-rung mockup ladder; lemon #ffd966 where the mockups use amber
  * #f0b429, yellow-green #a3d795 for mint #68d391, salmon #ff8080/#ff6b6b for
@@ -700,7 +700,7 @@
  * lists — on the ramp without one desktop-only view or one branch in Rust.
  *
  * `--bg-secondary` gets `--surface` (#24282e) and NOT the card wash, because
- * main.css spends that token on CONTROLS as well as cards (`.btn.secondary`,
+ * shared.css spends that token on CONTROLS as well as cards (`.btn.secondary`,
  * `.icon-btn.action`, `.chip`), and the wash is 1.04:1 against the canvas —
  * a card you can see the edge of, but a button that is gone. The mockups draw
  * the same distinction: their card is `rgba(255,255,255,.013)` and their
@@ -708,7 +708,7 @@
  * name `--surface-card` directly rather than going through `--bg-secondary`.
  *
  * The two border tokens soften but do not go to the mockups' `--line-soft`
- * (1.09:1), because main.css has controls whose only edge is a border and
+ * (1.09:1), because shared.css has controls whose only edge is a border and
  * they would have vanished. #2f343b is 1.29:1 on the canvas against the
  * mockups' 1.23:1 and the old 1.63:1 — most of the way, with nothing lost. */
 @media (prefers-color-scheme: dark) {
@@ -786,7 +786,7 @@
 }
 
 /* The one control whose only separation was the fill that just softened.
- * `.icon-btn.action` (main.css:830-839) is `--bg-secondary` with no border at
+ * `.icon-btn.action` (shared.css:830-839) is `--bg-secondary` with no border at
  * all — 1.63:1 against the old page, 1.09:1 against the canvas. It gets the
  * hairline every other control in the mockups already has, rather than the
  * ramp getting a louder rung for its sake. */

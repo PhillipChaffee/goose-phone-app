@@ -102,7 +102,7 @@
    * one, which is why it is corrected here rather than left to be reasoned
    * from.
    *
-   * It is also the consistent answer. `.drawer-item` in assets/main.css is
+   * It is also the consistent answer. `.drawer-item` in assets/shared.css is
    * `color: var(--text-primary)`, so as secondary these two segments were
    * DIMMER than the destinations they contain — the labels for the app's two
    * halves, quieter than the rows inside one of them. Selection is carried by
@@ -115,7 +115,7 @@
   cursor: pointer;
 }
 
-/* WHICH HALF YOU ARE IN, in the token main.css already proved reads as
+/* WHICH HALF YOU ARE IN, in the token shared.css already proved reads as
  * selected — `--bg-tertiary`, the same one `.drawer-item.active` and
  * `.session-item.on` spend. Three levels of "you are here" in one window
  * sounds like too many until you notice they are nested: which half, which
@@ -128,7 +128,7 @@
 /* `color` is not restated here: both segments are --text-primary now, for the
  * contrast reason above. Selection is the fill plus the outline.
  *
- * --bg-tertiary is the token main.css already proved reads as selected (see
+ * --bg-tertiary is the token shared.css already proved reads as selected (see
  * `.drawer-item.active`), and the outline is that rule's, for its reason
  * verbatim: --bg-tertiary is 1.60:1 on the dark card and 1.13:1 on the light
  * one, and a non-text indicator owes a 3:1 boundary. `box-shadow: inset`

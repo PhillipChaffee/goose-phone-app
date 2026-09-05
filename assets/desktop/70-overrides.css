@@ -81,7 +81,7 @@
   /* AND ITS STACKING GOES WITH ITS POSITIONING, which is the half this rule
    * missed and it cost the app its only way to change halves.
    *
-   * `assets/main.css` gives `.topbar` `position: absolute` and
+   * `assets/shared.css` gives `.topbar` `position: absolute` and
    * `z-index: var(--z-chrome)` — 20 — because on the phone it floats over the
    * scroller. Taking the positioning away above does NOT take the z-index with
    * it: `.pane` is `display: flex`, so `.topbar` is a flex item, and CSS
@@ -111,7 +111,7 @@
  * Measured: `.icon-btn.back` renders a 28px glyph in a 44px circle in six of
  * the thirteen captured desktop states, roughly twice the ink of anything else
  * on screen, sitting 30px below a 16px sidebar toggle — so the least important
- * control in the window was the loudest. main.css gives it `--icon-lg`
+ * control in the window was the loudest. shared.css gives it `--icon-lg`
  * (`clamp(28px, 1.75rem, 34px)`) and says why: "a whole navigation gesture on
  * one thin glyph, so it gets the size to look deliberate". That is a phone
  * argument — there the chevron is one of four things on the screen.
@@ -123,7 +123,7 @@
  * The selector rather than pulling `--icon-lg` down on `.app > .shell`: that
  * token's declaration is in `00-tokens.css`, which is closed, and this is the
  * only user of it the shell renders — a re-scale there would be a blanket
- * answer to a question with one asker. `main.css:851` is the phone's and
+ * answer to a question with one asker. `shared.css:851` is the phone's and
  * stays. `width`/`min-height` and not `height`, because `.icon-btn` uses
  * `min-height` on purpose (`.icon-btn.action` inherits the rule and is a
  * labelled button). */
@@ -146,7 +146,7 @@
 
 /* The fourth property the reset above was missing, and the one that showed.
  *
- * `.titlegroup` is a flex column with `align-items: center` in assets/main.css,
+ * `.titlegroup` is a flex column with `align-items: center` in assets/shared.css,
  * which is right for a title that is itself centred on the screen's centre
  * line. Taking the centring off the GROUP and leaving it on its items left the
  * subtitle centred under the title instead of sharing its left edge — "Review"
@@ -320,7 +320,7 @@
 
 /* ── 4. the pointer tier ────────────────────────────────────────────────
  *
- * assets/main.css contains no `:hover` and no `:focus-visible` rule at all —
+ * assets/shared.css contains no `:hover` and no `:focus-visible` rule at all —
  * the design system is `:active`-only, because it was written for a thumb.
  * Every one of them is here, which is also what stops iOS inheriting sticky
  * hover: the sheet is not in that binary.
@@ -357,7 +357,7 @@
 
 /* Hover gets a step of its own, and `--bg-tertiary` is not available for it.
  *
- * That token is what `.drawer-item.active` paints with in assets/main.css, and
+ * That token is what `.drawer-item.active` paints with in assets/shared.css, and
  * the comment above that rule is the reason it cannot be spent twice: "at
  * 1.08:1 against the light page the selected destination was indistinguishable
  * from the unselected ones". Tertiary was chosen BECAUSE it is the one value
@@ -393,7 +393,7 @@
  * as a selected pill rather than a smudge.
  *
  * `box-shadow: inset` rather than `border`, because `.drawer-item` is
- * `border: 0; padding: 0 12px` in assets/main.css: a real border would push
+ * `border: 0; padding: 0 12px` in assets/shared.css: a real border would push
  * every label and icon in the nav 1px inward on exactly the row that is
  * highlighted, so the selected destination would visibly shift as you arrived
  * at it. */
@@ -408,7 +408,7 @@
  * to mark. Here they are side by side, and an unmarked list is a list that does
  * not say where the pane beside it came from. It is the mockups' `.card.on`.
  *
- * `--bg-tertiary` because that is the token main.css already proved reads as
+ * `--bg-tertiary` because that is the token shared.css already proved reads as
  * selected (see `.drawer-item.active`), and it is free here in a way it is not
  * in the nav: rows sit on `--bg-primary`, and hover on a row is a border rather
  * than a fill, so nothing else in a list is wearing it. */
@@ -424,7 +424,7 @@
    * both under the 4.5 body text owes. It fires on the timestamp, the meta
    * line and `.ext-tools`, which is every small string a row carries, and
    * only ever on the ONE row the detail pane came from. Exactly the shape
-   * main.css's own note over `.session-age` reasons in ("secondary, not
+   * shared.css's own note over `.session-age` reasons in ("secondary, not
    * tertiary: tertiary measured 2.2:1 in light"); this is that argument
    * arriving one surface later.
    *

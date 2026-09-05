@@ -179,7 +179,7 @@ pub fn ChatView() -> Element {
             }
             div { class: "composer-row",
                 // This box is one line and never more (`.chip-row` in
-                // main.css). The send button is outside it, which is what
+                // shared.css). The send button is outside it, which is what
                 // keeps it pinned to the trailing edge whatever the chips
                 // inside do — and what it used to be outside a *wrapping* box
                 // for. The wrap is gone: a composer that grows a row under

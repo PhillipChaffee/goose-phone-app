@@ -1,6 +1,6 @@
 /* Session history: searching the chats list, and renaming a chat.
  *
- * Two rules, both spacing, both for a shape main.css has never had to lay out
+ * Two rules, both spacing, both for a shape shared.css has never had to lay out
  * before. Everything else this feature draws is the design system as it
  * stands — the rows are .session-*, the sheet is .modal.sheet, the field is
  * .field. */
