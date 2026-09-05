@@ -454,6 +454,25 @@ pub(crate) const CHORDS: [Chord; 4] = [
     },
 ];
 
+/// THE TWO PANEL CHORDS, NAMED, because the band draws them as well (#138).
+///
+/// This legend is the only on-screen record of ⌘/ and ⌘⌥/, and it is inside
+/// the panel ⌘⌥/ hides — so shut the inspector and the app stops documenting
+/// the chord that would bring it back. `mod.rs` puts a keycap for a COLLAPSED
+/// panel in the window's bar, which is the one strip neither chord can take
+/// away.
+///
+/// Indices into [`CHORDS`] rather than a second pair of literals, and that is
+/// the whole reason these two lines exist. A band that spelled its own `⌘⌥/`
+/// would be a copy, and a copy of a chord is how a legend comes to promise a
+/// key the shell rebound — which is the failure
+/// `the_legend_promises_only_chords_the_shell_binds` already refuses from the
+/// other side. `the_panel_chords_are_the_two_this_legend_lists` below holds
+/// the indices against what the rows say they are, so reordering the array
+/// relabels nothing silently.
+pub(crate) const NAV_CHORD: Chord = CHORDS[0];
+pub(crate) const INSP_CHORD: Chord = CHORDS[1];
+
 /// The three tag colours, chosen off the dot class the two existing label
 /// functions already return — so the inspector cannot disagree with the list
 /// rows about what a passing check looks like.
@@ -814,6 +833,38 @@ mod tests {
                  shell tests for {needle}"
             );
         }
+    }
+
+    /// THE TWO THE BAND ALSO DRAWS ARE THE TWO THIS LEGEND LISTS. #138.
+    ///
+    /// `NAV_CHORD` and `INSP_CHORD` are indices into [`CHORDS`], so a reorder
+    /// of that array — adding a fifth chord at the top, say — would silently
+    /// relabel both keycaps in the window's bar. Nothing else in the repo can
+    /// see that: the band's markup would still be valid, the capture store
+    /// would still hold the class, and `docs/audit.js` would measure a chip
+    /// whose text is a chord that does something else.
+    ///
+    /// REPRODUCED: swap the first two rows of `CHORDS` and both assertions
+    /// fail at once.
+    #[test]
+    fn the_panel_chords_are_the_two_this_legend_lists() {
+        assert!(
+            super::NAV_CHORD.what.contains("sidebar"),
+            "`NAV_CHORD` is now \"{}\", so the band's left keycap names \
+             something other than the panel beside it",
+            super::NAV_CHORD.what
+        );
+        assert!(
+            super::INSP_CHORD.what.contains("inspector"),
+            "`INSP_CHORD` is now \"{}\", so the band's right keycap names \
+             something other than the panel beside it",
+            super::INSP_CHORD.what
+        );
+        assert_ne!(
+            super::NAV_CHORD.keys,
+            super::INSP_CHORD.keys,
+            "both keycaps in the band now read the same chord"
+        );
     }
 
     /// THE ONE METER WITH A SOURCE, and a zero limit is not one.

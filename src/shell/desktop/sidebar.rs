@@ -18,8 +18,9 @@
 //! only reaches today's parity at about 390. The design's sidebar is 268.
 //!
 //! So this is the mockup's row instead: a status mark, a title, a subtitle,
-//! and an age — no tile, no action gutter, no fab, nothing that assumes a
-//! pane. The full screens stay exactly as they are and remain the phone's.
+//! an age, and — on a tree some server has measured — how big it is. No tile,
+//! no action gutter, no fab, nothing that assumes a pane. The full screens
+//! stay exactly as they are and remain the phone's.
 //!
 //! The grouping is pure and lives at the top of this file, because that is the
 //! part worth testing hardest: a row landing under the wrong heading is the
@@ -123,6 +124,33 @@ pub(crate) struct Row {
     /// branch. This sheet's own rule — a value the reader COMPARES or COPIES
     /// is mono — and a chat's last message is language, so it is not.
     pub subtitle_mono: bool,
+    /// `(added, removed)` for the tree this row is, where a server measured
+    /// it — the mockups' `+34 −11` (#83).
+    ///
+    /// THE ABSENCE IS THE COMMON CASE AND IT IS STRUCTURAL. An `Option` and
+    /// not a `(u32, u32)` that defaults to `(0, 0)`, because the three ways a
+    /// row has no numbers all mean "nobody measured" and none of them mean
+    /// "nothing changed" — the row draws nothing at all rather than a `+0 −0`
+    /// that claims a clean tree:
+    ///
+    /// 1. the tree has **no open pull request**, which is where the manager
+    ///    reads a size from — `personal-ai-setup#29` part 1 is the
+    ///    container-free `compare/<base>...<branch>` that would answer for a
+    ///    bare branch, and it does not exist;
+    /// 2. the row is past the 24th, so `refresh_plane_pulls`' sweep never
+    ///    asked about it (`SWEEP_MAX_CHATS`);
+    /// 3. the manager's per-pull detail call raised, so all four size counts
+    ///    went missing together with `mergeable`.
+    ///
+    /// A number that IS here can be up to `SWEEP_FLOOR_SECS` (five minutes)
+    /// old, the same freshness the mark beside it already ships with (#84).
+    /// All four limits are written where the numbers come from —
+    /// `crate::code::PullsState::plane_pull` — and this field is the shape
+    /// that makes them harmless rather than a caveat.
+    ///
+    /// `None` on every chat row, and that is not an omission either: a
+    /// conversation is not a working tree and has no diff to be the size of.
+    pub stat: Option<(u32, u32)>,
     /// The age badge, already formatted.
     pub age: Option<String>,
     /// HOW LONG AN ASK HAS BEEN WAITING, where that is knowable at all.
@@ -249,6 +277,11 @@ pub(crate) fn chat_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
                         })
                     }),
                 subtitle_mono: false,
+                // See the field: a conversation has no working tree, so there
+                // is nothing here to be the size of. The chat half is where
+                // this stays `None` for a reason rather than for want of a
+                // wire.
+                stat: None,
                 blocked_for: waiting
                     .contains(&info.session_id)
                     .then(|| asked_at.get(&info.session_id).copied().map(relative_time))
@@ -295,6 +328,16 @@ pub(crate) fn code_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
         .map(|(chat, _)| chat.clone())
         .collect();
 
+    // THE PLANE'S PULL REQUESTS, READ ONCE. `refresh_plane_pulls` already
+    // sweeps this map plane-wide for the mark's build state (#84), so a row's
+    // `+N −M` is a lookup in state the app is already holding — no request per
+    // row, no container woken, nothing widened.
+    //
+    // Read here rather than inside the `map` for `open_chat`'s reason one line
+    // up: `ctx.code_pulls` is a signal and reading it per row would be one
+    // subscription and one clone of the whole index per row.
+    let pulls = (ctx.code_pulls)();
+
     let mut rows: Vec<Row> = (ctx.code_chats)()
         .iter()
         .map(|chat| Row {
@@ -317,6 +360,14 @@ pub(crate) fn code_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
                 }
             },
             subtitle_mono: true,
+            // HOW BIG THE TREE IS, and only where a server said so. See
+            // `Row::stat` for the three ways this is `None` and why each of
+            // them draws nothing instead of `+0 −0`; `PullRequest::diffstat`
+            // is the last of the three, refusing a pair only half of which
+            // arrived.
+            stat: pulls
+                .plane_pull(&chat.id)
+                .and_then(opencode_client::PullRequest::diffstat),
             // NO TIMESTAMP EXISTS on this wire. The row still says it is
             // blocked — that is the one state a reader must not miss — and
             // says nothing about how long, rather than reaching into
@@ -554,6 +605,36 @@ pub(crate) fn SidebarList(plane: Plane) -> Element {
                                                 "nav-row-sub"
                                             },
                                             "{subtitle}"
+                                        }
+                                    }
+                                    // HOW BIG THE TREE IS, between where it
+                                    // lives and how old it is — the mockups'
+                                    // `+34 −11`, in the slot their own sheet
+                                    // caps the branch at 132px to leave. It
+                                    // is not capped by a number here: the
+                                    // subtitle is `flex: 1 1 auto` with
+                                    // `min-width: 0`, so it yields to this
+                                    // and to the age and ellipsises, which is
+                                    // the same property expressed at a
+                                    // sidebar width the mockups did not have.
+                                    //
+                                    // NO `else`, and that is the whole of
+                                    // "the row draws nothing rather than a
+                                    // zero". Most rows have no numbers — see
+                                    // `Row::stat` — and the absence has to be
+                                    // an absence rather than a `+0 −0` that
+                                    // claims the tree is clean.
+                                    //
+                                    // `add` and `del` are the names this app
+                                    // already spends its two diff inks under
+                                    // (`inspector.rs`'s `.insp-file-count`),
+                                    // so a reader who has learnt one cell has
+                                    // learnt the other and the row gains one
+                                    // new class rather than three.
+                                    if let Some((plus, minus)) = row.stat {
+                                        span { class: "nav-row-stat",
+                                            span { class: "add", "+{plus}" }
+                                            span { class: "del", "\u{2212}{minus}" }
                                         }
                                     }
                                     if let Some(age) = row.age.clone() {
@@ -943,6 +1024,162 @@ mod tests {
                 .any(|s| s.contains(" \u{b7} ") && s.split(" \u{b7} ").any(str::is_empty)),
             "a separator was painted with nothing on one side of it: {subs:?}"
         );
+    }
+
+    /// The rows' sizes, and the three ways of not having one. #83.
+    ///
+    /// A `+0 −0` is the failure this is written against: it is a claim that a
+    /// branch changed nothing, and none of the three absences say that. Only
+    /// the first row here was measured, and the other three have to come back
+    /// `None` — a row past `SWEEP_MAX_CHATS`, a tree with no pull request at
+    /// all, and a pull request whose detail form the manager never got.
+    ///
+    /// REPRODUCED: give `stat` an `.or(Some((0, 0)))` in `code_rows` and the
+    /// loop fails on the first of the three — "`unmeasured` was never
+    /// measured, and a row that draws `+0 −0` for it is claiming a branch
+    /// changed nothing".
+    #[test]
+    fn a_tree_says_how_big_it_is_only_where_a_server_measured_it() {
+        let rows = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    tree("measured", "goose-phone-app", "agent/measured"),
+                    tree("unmeasured", "goose-phone-app", "agent/unmeasured"),
+                    tree("no-pull", "goose-phone-app", "agent/no-pull"),
+                    tree("unswept", "goose-phone-app", "agent/unswept"),
+                ]);
+                let mut pulls = ctx.code_pulls;
+                pulls.write().by_chat = [
+                    ("measured".to_owned(), vec![sized_pull(Some((23, 2)))]),
+                    // The pull the manager could not fetch a detail form for:
+                    // it is there, it is open, and all four size counts went
+                    // missing with `mergeable`.
+                    ("unmeasured".to_owned(), vec![sized_pull(None)]),
+                    // Swept, answered, and the branch has none.
+                    ("no-pull".to_owned(), vec![]),
+                    // "unswept" is deliberately absent from the map: past the
+                    // 24th row, or simply not reached yet.
+                ]
+                .into_iter()
+                .collect();
+            },
+            |ctx| code_rows(ctx, NOW),
+        );
+        let stat = |id: &str| {
+            rows.iter()
+                .find(|r| r.id == id)
+                .and_then(|r| r.stat)
+                .map(|(p, m)| format!("+{p} \u{2212}{m}"))
+        };
+        assert_eq!(stat("measured").as_deref(), Some("+23 \u{2212}2"));
+        for id in ["unmeasured", "no-pull", "unswept"] {
+            assert_eq!(
+                stat(id),
+                None,
+                "`{id}` was never measured, and a row that draws `+0 −0` for it \
+                 is claiming a branch changed nothing"
+            );
+        }
+    }
+
+    /// A MEASURED ZERO IS A MEASUREMENT and has to survive as one. The mock's
+    /// merged `notes-public` pull is `additions: 84, deletions: 0`, and a row
+    /// that dropped the `−0` would be indistinguishable from the three rows
+    /// above that were never asked.
+    #[test]
+    fn a_measured_zero_is_not_an_absence() {
+        let rows = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![tree("c1", "notes-public", "agent/c1")]);
+                let mut pulls = ctx.code_pulls;
+                pulls
+                    .write()
+                    .by_chat
+                    .insert("c1".to_owned(), vec![sized_pull(Some((84, 0)))]);
+            },
+            |ctx| code_rows(ctx, NOW),
+        );
+        assert_eq!(rows[0].stat, Some((84, 0)));
+    }
+
+    /// The chat half has no working tree, so it has no size — and the field is
+    /// on the shared `Row`, which is exactly where a stray `Some` would go
+    /// unnoticed.
+    #[test]
+    fn a_conversation_has_no_diff_to_be_the_size_of() {
+        let rows = crate::testkit::with_ctx(
+            |ctx| {
+                let mut sessions = ctx.sessions;
+                sessions.set(vec![session(
+                    "s1",
+                    "First thread",
+                    Some("2026-08-31T09:00:00Z"),
+                )]);
+            },
+            |ctx| chat_rows(ctx, NOW),
+        );
+        assert_eq!(rows[0].stat, None);
+    }
+
+    /// AND THE ROW PAINTS IT, which is the half `code_rows` cannot answer for.
+    ///
+    /// Both directions in one render: the measured tree puts `+23` and `−2` on
+    /// screen, and the unmeasured one beside it puts nothing — no `+0`, and no
+    /// empty `.nav-row-stat` box taking the gap its siblings sit in.
+    #[test]
+    fn the_measured_row_draws_its_size_and_the_others_draw_nothing() {
+        let html = crate::testkit::render_seeded(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    tree("measured", "goose-phone-app", "agent/measured"),
+                    tree("unmeasured", "goose-phone-app", "agent/unmeasured"),
+                ]);
+                let mut pulls = ctx.code_pulls;
+                pulls.write().by_chat = [
+                    ("measured".to_owned(), vec![sized_pull(Some((23, 2)))]),
+                    ("unmeasured".to_owned(), vec![sized_pull(None)]),
+                ]
+                .into_iter()
+                .collect();
+            },
+            || rsx! { SidebarList { plane: Plane::Code } },
+        );
+        assert!(
+            html.contains(&format!(
+                "<span class=\"nav-row-stat\"><span class=\"add\">+23</span>\
+                 <span class=\"del\">{}2</span></span>",
+                '\u{2212}'
+            )),
+            "the measured tree drew no size, or drew the removed half with an \
+             ASCII hyphen where the app's diff cells use U+2212: {html}"
+        );
+        assert_eq!(
+            html.matches("nav-row-stat").count(),
+            1,
+            "two rows are on screen and one was measured, so there is exactly \
+             one size box: {html}"
+        );
+        assert!(
+            !html.contains(">+0<") && !html.contains("\u{2212}0<"),
+            "the unmeasured row drew a zero, which is a claim that its branch \
+             changed nothing: {html}"
+        );
+    }
+
+    /// A pull request with, or without, the four counts the manager sends off
+    /// GitHub's detail form. `None` is the shape the fake's `#126` fixture has
+    /// and the shape an older manager sends on every pull.
+    fn sized_pull(size: Option<(u32, u32)>) -> opencode_client::PullRequest {
+        opencode_client::PullRequest {
+            number: 118,
+            state: opencode_client::PullState::Open,
+            additions: size.map(|(plus, _)| plus),
+            deletions: size.map(|(_, minus)| minus),
+            ..opencode_client::PullRequest::default()
+        }
     }
 
     fn tree(id: &str, repo: &str, branch: &str) -> opencode_client::ChatMeta {
