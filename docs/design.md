@@ -1175,10 +1175,16 @@ contains. The direction matters and only one of the two is decidable: the source
 is authoritative for what the app emits, so "the app renders `.tree-branch` and
 the store has never seen it" is answerable, while "the store holds a class the
 app has dropped" is exactly the question `src/selfscan.rs` records as
-unanswerable from a photograph. Its `UNCAPTURED` list is the gap as it stood
-when the check landed — 53 class names, nearly all of them the Code plane and
-the inspector with a live subject, because `desktop-code-list` was captured
-against a gateway that was not connected — and that list **may only shrink**.
+unanswerable from a photograph. Its `UNCAPTURED` list is the gap, and that list
+**may only shrink**. It landed at 53 class names — nearly all of them the Code
+plane and the inspector with a live subject, because `desktop-code-list` had
+been captured against a gateway that was not connected — and the capture that
+took the desktop store from 13 states to 20 drove that gateway connected and
+left **four**. What is left is unreachable rather than undriven: `pane-empty`
+and its two children belong to an arm of `empty_detail` that nothing can take
+(Settings is the one `root: None` destination and its detail is
+unconditional), and `insp-empty` needs a plane whose server URL is *unset*,
+which a `dev_seed!` build does not have. The reasons are written on the list.
 
 What the gallery still cannot tell you: safe-area insets are zero in a
 browser, so the floating chrome sits higher than it does on a device.

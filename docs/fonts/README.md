@@ -1,6 +1,6 @@
 # Fonts the audit measures with
 
-**Nothing here ships in the app.** These four files exist so that
+**Nothing here ships in the app.** These five files exist so that
 `docs/audit.js` lays text out in the same glyphs on every machine. Before they
 existed, `-apple-system` / `ui-serif` / `ui-monospace` resolved to `.SF NS`,
 Charter and Menlo on a Mac and to Liberation Sans, Serif and Mono on
@@ -19,7 +19,8 @@ string this app puts on screen — macOS only, since only macOS has them.
 | `inter-latin-standard-normal.woff2` | Inter | San Francisco (`--font-sans`) | OFL 1.1 |
 | `literata-latin-standard-normal.woff2` | Literata | New York (`--font-serif`) | OFL 1.1 |
 | `jetbrains-mono-latin-wght-normal.woff2` | JetBrains Mono | SF Mono (`--font-mono`) | OFL 1.1 |
-| `noto-sans-math-U22EF.woff2` | Noto Sans Math, one glyph | nothing — see below | OFL 1.1 |
+| `noto-sans-math-marks.woff2` | Noto Sans Math, three glyphs | nothing — see below | OFL 1.1 |
+| `noto-sans-symbols2-keys.woff2` | Noto Sans Symbols 2, two glyphs | nothing — see below | OFL 1.1 |
 
 Licence texts are beside them, as OFL 1.1 requires.
 
@@ -49,29 +50,45 @@ passed.
 2c295d99e26dcf357d4d01bcf270fd6924b600c9a13dd8c363ef114f4c6976fa  inter-latin-standard-normal.woff2
 29de894c768689feef6ab4ef274a9a16d19bfc5b0c3cbfcdac80ef220816210c  literata-latin-standard-normal.woff2
 18be452724bfdc236c074ca94a249a7f41a86752c7d04ab258ce9ed5651f6a7e  jetbrains-mono-latin-wght-normal.woff2
-82799209d8c2701cd5d129ac3cfa24db1fe503799ed7af06926739bd5ec7c2b3  noto-sans-math-U22EF.woff2
+88601da0cf3262c1cff28df0459bdf606f7e7e535b8970e3bd46faf3bbe98122  noto-sans-math-marks.woff2
+df10042bb34dfcc527ac7b2ad063d07da690bd53f0a20b5facb10f5dcc1b51a3  noto-sans-symbols2-keys.woff2
 ```
 
-## The fourth file
+## The two leftover files
 
-The three above are Latin subsets, and this app puts exactly one character
-outside that on screen: `⋯` (U+22EF), the "N unchanged lines" marker on the
-review screen. Measured: none of Inter, Literata, JetBrains Mono, Source Serif
-4, Noto Serif, Charis SIL or Liberation has it even in its full build, so
-shipping bigger files would not have helped. Left alone it is one glyph
+The three above are Latin subsets, and this app puts five characters outside
+that on screen. `⋯` (U+22EF) is the "N unchanged lines" marker on the review
+screen; `⌘` (U+2318) and `⌥` (U+2325) are the inspector's keyboard legend; and
+`→` (U+2192) and `✓` (U+2713) are the inspector's branch arrow and its reviewed
+tick, which only reached a captured state once the Code plane was driven
+connected. Measured: none of Inter, Literata, JetBrains Mono, Source Serif 4,
+Noto Serif, Charis SIL or Liberation has `⋯` even in its full build, so
+shipping bigger files would not have helped. Left alone each is a glyph
 answered by the host — PingFang SC here, something else on a runner — which is
-the whole problem in miniature, so it is named as the next family after each
-of the three and the run fails if anything reaches past it.
+the whole problem in miniature, so they are named as the next families after
+each of the three and the run fails if anything reaches past them.
 
-796 bytes: Google Fonts' `css2` API will cut a face down to a given string.
+Under 2KB for both: Google Fonts' `css2` API will cut a face down to a given
+string. No one free family has all five — Noto Sans Math has `⋯`, `→` and `✓`
+and neither key; Noto Sans Symbols 2 has both keys and `✓` but not `→`.
 
 ```sh
-curl -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
-  AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36' \
-  'https://fonts.googleapis.com/css2?family=Noto+Sans+Math&text=%E2%8B%AF'
-# then fetch the src: url() it answers with
+ua='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
+  AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36'
+curl -H "User-Agent: $ua" \
+  'https://fonts.googleapis.com/css2?family=Noto+Sans+Math&text=%E2%8B%AF%E2%9C%93%E2%86%92'
+curl -H "User-Agent: $ua" \
+  'https://fonts.googleapis.com/css2?family=Noto+Sans+Symbols+2&text=%E2%8C%98%E2%8C%A5'
+# then fetch the src: url() each answers with
 ```
+
+**Check the file, not the CSS.** `text=` is answered with a `unicode-range`
+listing the codepoints you *asked for*, whether or not the family has them: a
+Symbols 2 subset requested with `→` comes back declaring `U+2192` and still
+renders it out of the host's font. The question is only answerable by
+rendering — Chrome DevTools' `CSS.getPlatformFontsForNode` reports
+`isCustomFont` per family, which is the same call `docs/audit.js` makes.
 
 If `node docs/audit.js both` ever stops with *"the measurement faces do not
 cover this app's text"*, a new character has appeared on a screen. Regenerate
-this file with the new string in `text=`; do not silence the check.
+with the new string in `text=`; do not silence the check.
