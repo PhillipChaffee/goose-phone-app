@@ -190,9 +190,11 @@ const NOT_SCANNED: &[&str] = &["src/shell/mobile.rs"];
 /// desktop width.
 const UNDECIDED: &[&str] = &[
     // src/views/code.rs — the diff viewer, the review actions, the code
-    // plane's own lists. 44, the largest single block.
+    // plane's own lists. 43, the largest single block, and one shorter than it
+    // was: `.action-row` came off it when `80-measure.css` put the code chat's
+    // Diff/Pull-requests row on the same gutter as the composer it sits above
+    // (#201).
     "action-chip",
-    "action-row",
     "banner",
     "bare",
     "btn-row",
@@ -281,10 +283,11 @@ const UNDECIDED: &[&str] = &[
     // src/views/chrome.rs — the session row's parts. `session-tile` came off
     // this list in #223: `70-overrides.css` gives it and `.session-quote` the
     // hairline the desktop's `--bg-secondary` remap left them without.
+    // `session-title` came off in #224, when `80-measure.css` §7 took the
+    // content column's row down to one line of title over one of preview.
     "attention",
     "session-age",
     "session-main",
-    "session-title",
     "subtitle",
     // src/views/recipes.rs — the recipe chooser.
     "choice",
