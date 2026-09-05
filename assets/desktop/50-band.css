@@ -962,3 +962,111 @@
   --chip-fill: color-mix(in srgb, var(--text-tertiary) 12%, var(--bg-tertiary));
   --chip-line: var(--border-secondary);
 }
+
+/* ═══ THE PANEL CHORDS, WHERE NEITHER PANEL CAN HIDE THEM ═════════════════
+ *
+ * #138. ⌘/ hides the sidebar and ⌘⌥/ hides the inspector, and the only place
+ * either was written down is `.insp-keys` — inside the `<aside class="insp">`
+ * that ⌘⌥/ takes away. `src/shell/desktop/mod.rs`'s `PanelChord` has the whole
+ * argument; the rule it settles on is the four selectors below.
+ *
+ * A PANEL THAT IS NOT ON SCREEN HAS ITS CHORD NAMED IN THE BAND. The markup is
+ * unconditional and this decides, which is the same split `.nav-row-actions`
+ * takes and it is load-bearing twice: `data-nav` and `data-insp` are already
+ * on `.shell`, so no Rust listens for anything new; and `docs/audit.js`'s four
+ * DESKTOP_SHELL cells flip exactly those two attributes on captured markup, so
+ * a chip whose presence was decided in Rust would be photographed in one arm
+ * and unmeasurable in the other three. Decided here, all four cells render the
+ * rule.
+ *
+ * A LABEL AND NOT A CONTROL, which is why this takes `.plane-badge.chat`'s
+ * face rather than the toggle chip's: no fill, a `--shell-line` hairline and
+ * `--text-secondary` ink. Two filled 32px objects already sit in this strip
+ * and a third filled object between them would be read as a button and
+ * pressed — a keycap has nothing to do when it is clicked. `.insp-key` in the
+ * legend IS filled, and the difference is its neighbours: a list of keycaps
+ * with no buttons in it has nothing to be mistaken for.
+ *
+ * The measurement is the badge's own, because the tokens and the surface are,
+ * and it was re-read off this chip rather than copied: `--text-secondary` on
+ * `--surface-panel` is 6.66:1 in dark and 4.64:1 in light, against the 4.5 a
+ * 10.5px string owes. The hairline is 1.33:1 and 1.42:1 and is meant to be —
+ * the same "barely there" edge the chat badge draws.
+ *
+ * WHAT IT COSTS THE TITLE, measured on `desktop-chat` with the longest heading
+ * this app holds, over six widths x four shell cells x two themes: the chip is
+ * 26.66x19 for ⌘/ and 32.97x19 for ⌘⌥/, and the band's heading gives up 30.65
+ * and 36.97 respectively — less than the plane badge's 54, and both only in the
+ * cell that draws them. `docs/audit.js`'s TITLE-OUTBID rule recomputed over the
+ * whole grid finds nothing: the narrowest cut title in the run is 180.34px at
+ * 480 with the sidebar shut, against a 26.66px chip. No OVERFLOW-X anywhere.
+ *
+ * NO `font-family` HERE. The element is a `<kbd>`, and `assets/shared.css:445`
+ * sets `code, kbd, samp, pre { font-family: var(--font-mono) }` — the tag was
+ * chosen for that and for the semantics, so restating the token would be one
+ * more literal for a value the element already carries.
+ *
+ * THE HEIGHT AND THE MARGIN ARE THE BADGE'S SUM, quoted rather than
+ * re-derived: `(32 - 19) / 2 = 6.5px = 0.40625rem` on top of `--chrome-pad`,
+ * so the chip's centre line is the toggle's, the pill's and the badge's.
+ * `.shell-chrome` is `align-items: flex-start`, so a box that does not carry
+ * this pins to y=0 and sits high of everything beside it. Measured on macOS's
+ * `--chrome-pad: 1px`: the chip lands at y=7.5 with a height of 19, centre 17,
+ * against the toggle's y=1 height 32, centre 17. */
+.chrome-kbd {
+  flex: 0 0 auto;
+  /* THE RESTING STATE IS ABSENT. Both chips are always in the markup and the
+     two rules below are the whole of when either is on screen. */
+  display: none;
+  align-items: center;
+  margin-top: calc(var(--chrome-pad) + 0.40625rem);
+  height: 1.1875rem;
+  /* 6px either side, two under the plane badge's inset: the string is two or
+     three glyphs at 10.5px, and at 8px the chip reads as an empty box with a
+     mark in it. */
+  padding: 0 6px;
+  border: 1px solid var(--shell-line);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  /* 1, not --lh-xs: the box is a declared 19px and `align-items: center` puts
+     the line box on its centre, so a line-height above 1 only makes the text's
+     own box taller than the chip it is centred in. */
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* THE SIDEBAR'S, and it stays at every width. Below 628 the sidebar is an
+ * overlay over the whole window rather than a column beside it, which makes
+ * ⌘/ more useful there and not less. */
+.shell[data-nav="closed"] .nav-kbd {
+  display: inline-flex;
+}
+
+/* THE INSPECTOR'S, and this is also exactly the state its legend is off screen
+ * in — `.shell[data-insp="closed"] .insp` is `display: none` at the top of
+ * `90-inspector.css`. So ⌘⌥/ is documented in one place at all times and never
+ * in two. */
+.shell[data-insp="closed"] .insp-kbd {
+  display: inline-flex;
+}
+
+/* AND NOT WHERE THE CHORD DOES NOTHING. `90-inspector.css` hides `.insp` under
+ * 972 and restores it only in 704..971; under 704 it hides the toggle as well.
+ * So at 480..703 ⌘⌥/ flips `data-insp` and nothing on screen moves, and a chip
+ * naming it would be the band promising a key that does nothing — which is
+ * `inspector::CHORDS`' own standing rule ("a legend that lists a chord nothing
+ * binds is worse than an invented number, because the reader presses it")
+ * applied to a width instead of to a listener. It is also the one thing this
+ * change does NOT give the issue: at 480..703 the inspector chord stays
+ * undiscoverable, because down there it is not a chord.
+ *
+ * Same breakpoint as the toggle's, and the same specificity as the rule it
+ * overrules — (0,3,0) both — so this wins on being later in the file, which is
+ * why it is in this file and not in `90-inspector.css` two regions along. */
+@media (max-width: 703px) {
+  .shell[data-insp="closed"] .insp-kbd {
+    display: none;
+  }
+}

@@ -344,6 +344,72 @@ const fn nav_toggle_label(open: bool) -> &'static str {
     }
 }
 
+/// A COLLAPSED PANEL'S CHORD, in the one strip neither chord can hide. #138.
+///
+/// THE DEFECT. ⌘/ hides the sidebar and ⌘⌥/ hides the inspector, and the only
+/// place either is written down is `inspector::CHORDS`, rendered as
+/// `.insp-keys` INSIDE `<aside class="insp">`. So shutting the inspector took
+/// both chords off screen, including the one that brings the inspector back —
+/// the legend hidden by the thing it documents.
+///
+/// THE RULE THIS SETTLES ON: **a panel that is not on screen has its chord
+/// named in the band, beside the control that also opens it.** One sentence,
+/// symmetric, and it is the mockups' own behaviour stated rather than copied —
+/// 30, 31 and 32 are the collapse states and each carries a `.kbd` chip beside
+/// its toggle, while the uncollapsed 10-home-chat carries neither. The chips
+/// are introduced BY the collapse, and this is what that means as a rule.
+///
+/// WHAT IT COSTS AND WHY THAT IS THE PRICE THAT WAS AFFORDABLE. A permanent
+/// legend spends band width in every state, and #244 has just finished
+/// arguing over that width — the crumb at 972 is a truncation because the
+/// badge takes 162px, and #216 records it. Scoped to the collapse, a chip is
+/// on screen only where it has something to say, and the state the issue is
+/// actually about (inspector shut, nothing documenting ⌘⌥/) is exactly the
+/// state that draws one.
+///
+/// THE ALTERNATIVE THAT WAS REJECTED, and it was rejected once before in this
+/// issue's own comments: putting the chord in the toggles' `title`. It reads
+/// well and adds no class, and it is not this — a tooltip is not on screen at
+/// rest, `docs/audit.js` renders a static DOM and can never hover one, and the
+/// width where the issue says the loss is worst is the width where the toggle
+/// itself is gone and has no tooltip to show.
+///
+/// AND THE BAND DOES NOT NAME ⌘⌥/ BELOW 704px, which corrects the issue rather
+/// than satisfying it. `90-inspector.css` hides `.insp` outright under 972 and
+/// restores it only in 704..971; under 704 the toggle is hidden too. So down
+/// there the chord is not merely undiscoverable, it is INERT — it flips
+/// `data-insp` and nothing moves — and a band that named it would be promising
+/// a key that does nothing. `50-band.css` takes the inspector's chip away at
+/// the same breakpoint the toggle goes, and the sidebar's stays, because ⌘/
+/// works at every width and below 628 the sidebar it opens is an overlay over
+/// the whole window.
+///
+/// THE CHORD IS NOT SPELLED HERE. `inspector::NAV_CHORD` and
+/// `INSP_CHORD` are the legend's own rows, so the two records of one chord
+/// cannot drift; the class is derived from which chord it is for the same
+/// reason. NOT a `class: "{…}"` interpolation, which would take this markup
+/// out of `every_class_the_desktop_shell_renders_is_in_the_captured_store`'s
+/// scan — dodging that gate rather than meeting it is the ground `.plane-badge`
+/// rejected a `data-plane` attribute on.
+///
+/// `aria-hidden`, and this is the one part of the chip that is a judgement
+/// rather than a rule. The chord is an accelerator for a control that is
+/// already there, and that control's `aria-label` is its whole identity to a
+/// screen reader — "Show inspector", eleven characters, immediately followed
+/// by a keycap read as "command option slash" is noise in front of the name
+/// that matters. The reader who needs the chip is the one who can see the
+/// panel is gone.
+#[component]
+fn PanelChord(chord: inspector::Chord) -> Element {
+    rsx! {
+        kbd {
+            class: if chord == inspector::INSP_CHORD { "chrome-kbd insp-kbd" } else { "chrome-kbd nav-kbd" },
+            "aria-hidden": "true",
+            "{chord.keys}"
+        }
+    }
+}
+
 /// THE CONNECTION THAT BELONGS TO THIS HALF.
 ///
 /// `home::Home` already switches on exactly this and the band did not, so the
@@ -891,6 +957,14 @@ pub(crate) fn AppShell() -> Element {
                     Icon { name: "sidebar" }
                 }
 
+                // AND WHAT BRINGS THE SIDEBAR BACK, while it is away. See
+                // `PanelChord`: rendered in every state and shown by the sheet
+                // in one, so that `data-nav` decides this the same way it
+                // decides the column itself — and so the audit's four shell
+                // cells exercise the rule rather than photographing one arm
+                // of it.
+                PanelChord { chord: inspector::NAV_CHORD }
+
                 // WHAT THE WINDOW HAS OPEN, in the window's own bar.
                 //
                 // The reference does exactly this and nothing more: its band
@@ -1029,6 +1103,12 @@ pub(crate) fn AppShell() -> Element {
                 // `ConnBadge` reads `ctx.conn` and nothing else, so the shell
                 // can ask for it as it stands.
                 PlaneConn { plane }
+
+                // AND WHAT BRINGS THE INSPECTOR BACK. Before the toggle, the
+                // way the mockups' `.band-right` puts its chip before the
+                // right-hand control — the chord is read on the way to the
+                // button, not after it.
+                PanelChord { chord: inspector::INSP_CHORD }
 
                 button {
                     class: "insp-toggle",
@@ -3129,6 +3209,180 @@ mod tests {
     fn the_collapse_control_is_named_for_its_action() {
         assert_eq!(super::nav_toggle_label(true), "Hide sidebar");
         assert_eq!(super::nav_toggle_label(false), "Show sidebar");
+    }
+
+    /// THE BAND CARRIES BOTH PANEL CHORDS, AND CARRIES THEM AS THE LEGEND'S
+    /// OWN ROWS. #138.
+    ///
+    /// The chip is rendered from `inspector::NAV_CHORD` / `INSP_CHORD` rather
+    /// than from a literal, so this asks the markup what came out: the keycap
+    /// beside the sidebar's toggle has to say what the inspector's legend says
+    /// about the sidebar, character for character. A band that spelled its own
+    /// `⌘⌥/` would pass every other test in this file and be wrong the day the
+    /// listener moved.
+    ///
+    /// REPRODUCED: write the chord out as a literal in `PanelChord` and change
+    /// one character of it — this fails, naming both strings.
+    fn nav_keycap() -> Element {
+        rsx! { super::PanelChord { chord: super::inspector::NAV_CHORD } }
+    }
+
+    fn insp_keycap() -> Element {
+        rsx! { super::PanelChord { chord: super::inspector::INSP_CHORD } }
+    }
+
+    #[test]
+    fn the_bands_keycaps_are_the_legends_own_chords() {
+        let keycap = |view: fn() -> Element, chord: super::inspector::Chord, class: &str| {
+            let html = crate::testkit::render(view);
+            assert!(
+                html.contains(&format!("class=\"{class}\"")),
+                "the chip for \"{}\" no longer carries `{class}`, so the sheet \
+                 that reveals it when its panel collapses matches nothing: \
+                 {html}",
+                chord.what
+            );
+            assert!(
+                html.contains(chord.keys),
+                "the band's keycap for \"{}\" does not read `{}`: {html}",
+                chord.what,
+                chord.keys
+            );
+        };
+        keycap(
+            nav_keycap,
+            super::inspector::NAV_CHORD,
+            "chrome-kbd nav-kbd",
+        );
+        keycap(
+            insp_keycap,
+            super::inspector::INSP_CHORD,
+            "chrome-kbd insp-kbd",
+        );
+    }
+
+    /// AND THE BAND ACTUALLY RENDERS BOTH OF THEM, each beside its own
+    /// control.
+    ///
+    /// The test above proves the chip is right; this proves it is there. The
+    /// slice is the band's own source, so a `PanelChord` that drifted into the
+    /// sidebar or out of the tree altogether fails here rather than passing as
+    /// a component nobody mounts.
+    #[test]
+    fn the_band_puts_a_keycap_beside_each_panels_control() {
+        let band = chrome_band();
+        let nav = band
+            .find("PanelChord { chord: inspector::NAV_CHORD }")
+            .unwrap_or(usize::MAX);
+        let insp = band
+            .find("PanelChord { chord: inspector::INSP_CHORD }")
+            .unwrap_or(usize::MAX);
+        assert!(
+            nav != usize::MAX && insp != usize::MAX,
+            "the window's bar no longer renders both panel chords, so a shut \
+             panel is again a panel with nothing on screen saying how to bring \
+             it back"
+        );
+        assert!(
+            nav < insp,
+            "the two keycaps have swapped ends of the band: the sidebar's \
+             belongs beside the sidebar's toggle and the inspector's beside \
+             the inspector's, or each one names the panel it is furthest from"
+        );
+        // The chip is not a control and must not become one. A `<kbd>` with an
+        // `onclick` would be the second thing in this strip that looks like a
+        // button and does nothing when pressed — the reason it takes the
+        // plane badge's outline rather than the toggle's fill.
+        let chip = block(
+            &band,
+            "PanelChord { chord: inspector::NAV_CHORD }",
+            "PanelChord { chord: inspector::INSP_CHORD }",
+        );
+        assert!(
+            !chip.contains("onclick"),
+            "something between the two keycaps gained a click handler"
+        );
+    }
+
+    /// A CHIP IS ON SCREEN ONLY WHILE ITS PANEL IS NOT, and the sheet is the
+    /// whole of that decision.
+    ///
+    /// Both chips are in the markup unconditionally, which is what lets
+    /// `docs/audit.js` measure all four of its shell cells — it flips
+    /// `data-nav` and `data-insp` on captured markup and cannot add an element
+    /// Rust declined to render. So the rules below are load-bearing in a way
+    /// nothing else can check: without them the band names both chords in
+    /// every state, which is the permanent legend #244's width argument
+    /// rejected.
+    ///
+    /// REPRODUCED: delete the `display: none` from `.chrome-kbd` and the first
+    /// assertion fails; delete either reveal rule and its own does.
+    #[test]
+    fn a_keycap_shows_only_while_its_panel_is_collapsed() {
+        let sheet = crate::css::SHELL;
+        let base = sheet
+            .split_once(".chrome-kbd {")
+            .and_then(|(_, rest)| rest.split_once('}'))
+            .map(|(body, _)| body)
+            .expect("assets/desktop/ no longer declares `.chrome-kbd` at all");
+        assert!(
+            base.contains("display: none"),
+            "`.chrome-kbd` no longer rests hidden, so the band names both \
+             chords in every state and spends the width #244 measured"
+        );
+        for rule in [
+            ".shell[data-nav=\"closed\"] .nav-kbd {",
+            ".shell[data-insp=\"closed\"] .insp-kbd {",
+        ] {
+            assert!(
+                sheet.contains(rule),
+                "assets/desktop/ never mentions `{rule}`, so that panel's \
+                 chord is in the markup and on screen in no state at all"
+            );
+        }
+    }
+
+    /// AND IT DOES NOT NAME A CHORD THE WIDTH HAS TAKEN AWAY.
+    ///
+    /// Under 704px `90-inspector.css` hides `.insp` and the toggle both, so
+    /// ⌘⌥/ flips an attribute and nothing moves. A band that went on naming it
+    /// there would be doing the thing `inspector::CHORDS` refuses on the other
+    /// axis — listing a chord that does nothing — so the chip goes at exactly
+    /// the breakpoint the control does.
+    ///
+    /// The two numbers are read out of the sheet rather than typed here, which
+    /// is what makes this a test about them AGREEING rather than a second copy
+    /// of one of them.
+    #[test]
+    fn the_inspector_keycap_goes_at_the_width_its_control_does() {
+        let sheet = crate::css::SHELL;
+        // The `@media (max-width: N)` a rule sits directly inside, or `None`
+        // when it sits in none. `rfind` finds the nearest one BEFORE the rule,
+        // and a `\n}` between the two is a media block that has already closed
+        // — which is what tells "inside this query" from "after it".
+        let breakpoint = |needle: &str| -> Option<String> {
+            const OPEN: &str = "@media (max-width: ";
+            let at = sheet.find(needle)?;
+            let query = sheet[..at].rfind(OPEN)? + OPEN.len();
+            if sheet[query..at].contains("\n}") {
+                return None;
+            }
+            Some(sheet[query..].split(')').next()?.to_owned())
+        };
+        let toggle = breakpoint(".shell-chrome > .insp-toggle {\n    display: none;");
+        let chip = breakpoint(".shell[data-insp=\"closed\"] .insp-kbd {\n    display: none;");
+        assert!(
+            toggle.is_some() && chip.is_some(),
+            "one of the two rules is gone or is no longer inside a width \
+             query: the inspector's control is {toggle:?} and its keycap is \
+             {chip:?}"
+        );
+        assert_eq!(
+            chip, toggle,
+            "the inspector's keycap and the control it names now disappear at \
+             different widths, so there is a band of window sizes where the \
+             band promises ⌘⌥/ and pressing it moves nothing"
+        );
     }
 
     /// The glyph the toggle asks for has to exist. `Icon` renders nothing at
