@@ -231,7 +231,16 @@ impl FileDiff {
 /// not a [`ContentBlock`], yields nothing at all. That is the same silence
 /// [`ToolCallUpdate::content_text`] has always kept, and it is deliberate — a
 /// tool result must not be emptied by one entry a newer goose added to it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serde derives for [`FileDiff`]'s reason, one level up: `ChatItem::Tool` in
+/// the app now carries a `Vec<Self>` beside the flat string, and that item is
+/// what the Code tab's on-device transcript cache holds. **These derive the
+/// CACHE's shape, not the wire's** — externally tagged, because the wire's own
+/// tag is `type` and [`ContentBlock`] has already claimed that key inside the
+/// `Content` variant; an internal tag here would collide with it. The decode
+/// from the wire stays hand-written in [`ToolCallUpdate::contents`] and does
+/// not go through this impl.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolCallContent {
     /// `{"type":"content"}` — a message block the tool produced.
     Content(ContentBlock),
@@ -723,6 +732,36 @@ mod tests {
             "file",
             "a pathless diff is still shown, under the one name content_text \
              has always given it"
+        );
+    }
+
+    /// Every shape survives the store the app keeps it in.
+    ///
+    /// `ChatItem::Tool` carries a `Vec<ToolCallContent>` and that item is what
+    /// the Code tab's on-device transcript cache holds, so these three go to
+    /// disk and come back. The serde here is the CACHE's, not the wire's — the
+    /// decode from a `content` array is [`ToolCallUpdate::contents`], by hand
+    /// and per field — which is why this asserts a round trip rather than a
+    /// spelling.
+    #[test]
+    fn every_content_shape_survives_a_round_trip_through_a_cache() {
+        let items = vec![
+            ToolCallContent::Content(ContentBlock::Text {
+                text: "Linux brain".to_string(),
+                annotations: None,
+                meta: None,
+            }),
+            ToolCallContent::Diff(FileDiff {
+                path: Some("a.rs".to_string()),
+                old_text: Some("was".to_string()),
+                new_text: Some("is".to_string()),
+            }),
+            ToolCallContent::Terminal,
+        ];
+        let json = serde_json::to_string(&items).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Vec<ToolCallContent>>(&json).unwrap(),
+            items
         );
     }
 

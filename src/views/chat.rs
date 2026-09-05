@@ -399,6 +399,17 @@ fn mode_choices(option: &ConfigOption) -> Vec<SettingChoice> {
 /// it as unknown before the first turn has produced one, because a row that
 /// appears partway through a conversation reads as the app having found
 /// something rather than as the agent having said it.
+///
+/// **Confirmed rather than assumed, at #205.** The number is the server's own
+/// — it is the `limit` off `usage_update` — so the standing rule that nothing
+/// may display a number no server sends is met by reporting it, and would be
+/// broken by hiding it. Making it a control is not an app change at all: it
+/// starts upstream with a fifth id on `session/set_config_option`, and until
+/// that exists a chevron here could only open a list whose every entry the
+/// agent answers `-32602` to. The row stays a fact.
+///
+/// What that decision leaves behind is [`GOOSE_CONTEXT_ID`], which is the
+/// price of the sheet being open to an option this app has never heard of.
 fn goose_setting_rows(
     config: &[ConfigOption],
     usage: Option<Usage>,
@@ -431,22 +442,45 @@ fn goose_setting_rows(
             option.description.clone(),
         )
     }));
-    rows.push(match usage {
-        Some((_, limit)) => SettingRow::fact(
-            "context_length",
-            "Context length",
-            format!("{} tokens", format_tokens(limit)),
-            "Fixed by the model. Nothing a message carries changes it.",
-        ),
-        None => SettingRow::fact(
-            "context_length",
-            "Context length",
-            "—",
-            "The agent reports this with the first turn of the session.",
-        ),
-    });
+    // THE AGENT'S OWN ROW WINS, and this guard is why the sheet can stay open
+    // to an id nobody here has heard of.
+    //
+    // Every option the agent sends is rendered above, by id, whatever it is —
+    // that is the design, and a fifth option upstream reaches the sheet with no
+    // app change. `context_length` is the one id where that meets a row this
+    // file appends on its own, and appending it anyway would put TWO rows
+    // keyed `context_length` in the list: `render_row` builds its Dioxus key
+    // from `row.id`, so it would be a duplicate key as well as a duplicate row,
+    // and Dioxus reuses nodes by key.
+    //
+    // Skipping ours is the right way round rather than merely the easy one.
+    // goose sending this id at all would mean it had grown the route the
+    // paragraph above says does not exist, and the agent's version carries its
+    // own choices and its own description — a real control, where ours is a
+    // fact whose whole content is "you cannot change this here".
+    if !config.iter().any(|o| o.config_id == GOOSE_CONTEXT_ID) {
+        rows.push(match usage {
+            Some((_, limit)) => SettingRow::fact(
+                GOOSE_CONTEXT_ID,
+                "Context length",
+                format!("{} tokens", format_tokens(limit)),
+                "Fixed by the model. Nothing a message carries changes it.",
+            ),
+            None => SettingRow::fact(
+                GOOSE_CONTEXT_ID,
+                "Context length",
+                "—",
+                "The agent reports this with the first turn of the session.",
+            ),
+        });
+    }
     rows
 }
+
+/// The id of the context-length row, named because two places now have to
+/// agree about it: the row this file appends, and the guard that stands down
+/// when goose sends an option of its own under the same name.
+const GOOSE_CONTEXT_ID: &str = "context_length";
 
 /// The tail of the transcript: asks this chat lost, and what that cost.
 ///
@@ -740,21 +774,24 @@ pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
                     // puts one on the wire for a prompt containing "diff", so
                     // the shape is reachable without a real server.
                     //
-                    // WHAT IS STILL MISSING IS ONE FIELD, and it is not in
-                    // this file: `ChatItem::Tool` (`src/state.rs`) carries the
-                    // tool result as a flat `output: String`, so the structure
-                    // is thrown away a second time on the way here. A diff
-                    // card needs `ChatItem::Tool` to hold the decoded
-                    // `Vec<ToolCallContent>` — or at least its diffs —
-                    // alongside the string the `<pre>` below still renders for
-                    // every other kind of result. Faking one from what IS here
-                    // would mean a diff card that cannot show a deletion,
-                    // which is the half of a diff people open one for.
+                    // THE FIELD ARRIVED (#241). `ChatItem::Tool` now carries
+                    // `contents: Vec<ToolCallContent>` beside the flat
+                    // `output`, so an edit reaches this match arm with its
+                    // path and BOTH halves of its text, cached and all. It is
+                    // deliberately not destructured above: binding it here
+                    // with nothing to render it would be an unused variable,
+                    // and the `..` is what says the data is one line away.
                     //
+                    // WHAT IS LEFT IS A DESIGN DECISION, not a missing value.
                     // The app already owns a real diff renderer, on the Diff
                     // screen (`.scroll.diff` / `.diff-code`, reached through
-                    // `load_code_diff` in `views/code.rs`). Nothing puts one in
-                    // the transcript, so today an edit is this disclosure with
+                    // `load_code_diff` in `views/code.rs`), and whether this
+                    // card reuses those classes or takes its own is the
+                    // question — either way the desktop needs a rule in
+                    // `assets/desktop/`, since `src/inherit.rs` lists the
+                    // `diff-*` family as undecided at desktop width, and this
+                    // file is shared so the phone's markup must not move.
+                    // Until that is taken, an edit is this disclosure with
                     // `[diff: src/scheduler.rs]` at the top of it.
                     if has_output {
                         details { class: "tool-output",
@@ -1167,6 +1204,43 @@ mod tests {
         );
     }
 
+    /// AND IT IS STATED ONCE. A goose that grows a `context_length` option of
+    /// its own must not produce two rows under one id.
+    ///
+    /// The sheet renders every option the agent sends, by id, so a fifth one
+    /// upstream arrives with no app change — and this is the id where that
+    /// meets a row this file appends on its own. `render_row` keys a row by
+    /// `row.id`, so the collision is a duplicate Dioxus key as well as a
+    /// duplicate row, and Dioxus reuses nodes by key. The agent's version
+    /// wins: it carries choices and a description, where ours is a fact whose
+    /// content is that there is nothing to choose.
+    ///
+    /// Nothing in goose sends this today (#205: `session/set_config_option`
+    /// routes four ids and rejects the rest), which is exactly why the hazard
+    /// needs a test rather than a demonstration.
+    #[test]
+    fn a_context_length_the_agent_sends_replaces_the_one_this_sheet_appends() {
+        let config = [
+            option("model", Some("model"), &["opus", "sonnet"]),
+            option("context_length", None, &["200k", "1M"]),
+        ];
+        assert_eq!(row_ids(&config), ["model", "context_length"]);
+        // Not merely deduped — it is the AGENT's row that survived, with the
+        // choices this app could not have invented.
+        let rows = goose_setting_rows(&config, Some((1_000, 200_000)), None);
+        assert_eq!(rows[1].value, "200k");
+        assert_eq!(
+            rows[1]
+                .choices
+                .iter()
+                .map(|c| c.value.as_str())
+                .collect::<Vec<_>>(),
+            ["200k", "1M"],
+            "the agent's own control was replaced by the app's fact, so an id \
+             goose grew a route for reads as unchangeable"
+        );
+    }
+
     /// Nothing to report is nothing to open: with no config, no turn yet and
     /// no session to name, the sheet has no rows and the composer has no chip.
     #[test]
@@ -1558,6 +1632,7 @@ mod tests {
             kind: kind.to_owned(),
             status: status.to_owned(),
             output: String::new(),
+            contents: Vec::new(),
         }
     }
 
@@ -1766,6 +1841,7 @@ mod tests {
                             kind: "execute".to_owned(),
                             status: "completed".to_owned(),
                             output: "Darwin".to_owned(),
+                            contents: Vec::new(),
                         },
                     ],
                     ..ChatState::default()
@@ -3513,6 +3589,7 @@ pub(crate) mod pressing {
                             kind: "read".to_owned(),
                             status: "completed".to_owned(),
                             output: "fn main".to_owned(),
+                            contents: Vec::new(),
                         },
                         ChatItem::Tool {
                             id: "b".to_owned(),
@@ -3520,6 +3597,7 @@ pub(crate) mod pressing {
                             kind: "read".to_owned(),
                             status: "completed".to_owned(),
                             output: String::new(),
+                            contents: Vec::new(),
                         },
                     ],
                     ..ChatState::default()

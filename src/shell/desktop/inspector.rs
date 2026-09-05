@@ -1238,6 +1238,7 @@ mod tests {
                         kind: "execute".to_owned(),
                         status: "completed".to_owned(),
                         output: String::new(),
+                        contents: Vec::new(),
                     })
                     .collect();
             },
@@ -1260,6 +1261,7 @@ mod tests {
                     kind: "execute".to_owned(),
                     status: "in_progress".to_owned(),
                     output: String::new(),
+                    contents: Vec::new(),
                 }];
             },
             |ctx| tool_timeline(ctx, 8),

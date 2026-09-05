@@ -303,10 +303,14 @@ pub(crate) fn storage_dir() -> std::path::PathBuf {
 /// and did not. Subscribing here instead makes the sender's receiver count
 /// permanently non-zero, so `send` cannot fail whoever writes and whenever.
 ///
-/// `lost_asks` is the whole list: it is the one key reached through
-/// `use_synced_storage` (`src/state.rs`), which is the only API that
-/// subscribes. `settings` and `code_cache` go through `use_persistent`, which
-/// is an in-memory map with no channel at all.
+/// `lost_asks` is the whole list, and the rule that decides it is
+/// `use_synced_storage` — the only API that subscribes — rather than which
+/// store a key is on. `inspector_open` goes through it too and would belong
+/// here if anything wrote it after its dom was dropped. `code_cache` is
+/// fs-backed since #220 but reaches it through plain `use_storage`, so
+/// `LocalStorage::set` finds no subscription for that key and sends on no
+/// channel (`client_storage/fs.rs:64-73`); `settings` is still
+/// `use_persistent`, an in-memory map with no channel at all.
 fn anchor_subscriptions() {
     use dioxus_sdk_storage::StorageSubscriber;
     // Leaked on purpose: the receiver has to outlive every test in the binary,

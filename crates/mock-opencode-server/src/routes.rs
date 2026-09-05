@@ -228,9 +228,31 @@ pub(crate) fn chat_server(
         // The turn's output arrives on the SSE stream; this only has to be 2xx.
         ("POST", ["session", _sid, "prompt_async"]) => {
             let text = prompt_text(body);
+            let asked = prompt_model(body);
+            let variant = body
+                .get("variant")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
             let steps = crate::turn::script(&text);
             state.pending.insert(chat_id.clone(), steps);
             if let Some(c) = state.chat_mut(&chat_id) {
+                // THE TURN IS THE WRITE. `OpenCode` has no "set this session's
+                // model" call: whatever `prompt_async` names is copied onto the
+                // session record, which is why both sheets say the pick applies
+                // from the next message and mean it literally. Ignoring these
+                // two left `GET /session` reporting the fixture's model for
+                // ever, so a pick the app had already sent came back as a
+                // disagreement the next time it reconciled.
+                //
+                // A turn that names neither leaves both alone rather than
+                // clearing them — an unnamed model means "keep using this
+                // chat's", not "forget it".
+                if let Some(m) = asked {
+                    c.model = Some(m);
+                }
+                if let Some(v) = variant {
+                    c.effort = Some(v).filter(|v| !v.is_empty() && v != "default");
+                }
                 c.status = "running".to_owned();
                 c.last_active = now();
                 let n = c.session.messages.len() + 1;
@@ -344,6 +366,18 @@ fn prompt_text(body: &Value) -> String {
                 .map(ToOwned::to_owned)
         })
         .unwrap_or_default()
+}
+
+/// The model a prompt asked for, as `provider/id`.
+///
+/// The body carries it as `{"providerID": ..., "modelID": ...}` — note
+/// `modelID` on the way in against `id` on the way back out in
+/// `wire::session`, which is `OpenCode`'s own asymmetry and not a typo here.
+fn prompt_model(body: &Value) -> Option<String> {
+    let m = body.get("model")?;
+    let provider = m.get("providerID").and_then(Value::as_str)?;
+    let id = m.get("modelID").and_then(Value::as_str)?;
+    (!provider.is_empty() && !id.is_empty()).then(|| format!("{provider}/{id}"))
 }
 
 /// `%XX` back to bytes. Only `/api/repos/<name>/branches` is encoded by the

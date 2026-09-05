@@ -61,6 +61,15 @@ pub(crate) struct Chat {
     pub(crate) branch: String,
     pub(crate) base: String,
     pub(crate) model: Option<String>,
+    /// The thinking-effort tier the last turn asked for, as
+    /// `SessionMeta.model.variant`. `None` is "no turn has named one", which
+    /// goes out as `OpenCode`'s literal `default`.
+    ///
+    /// It lives beside `model` because the real server keeps it there: both
+    /// ride `prompt_async` and both are copied onto the session record by the
+    /// turn, which is the mechanism behind the sheet's "applies from your next
+    /// message".
+    pub(crate) effort: Option<String>,
     /// `running` | `stopped` | `absent` — the CONTAINER's lifecycle, not a
     /// turn's. The app's own `code::status_label` calls a running container
     /// with no turn in flight "idle".
@@ -312,6 +321,7 @@ fn waiting_chat(t: f64) -> Chat {
         branch: format!("agent/{id}"),
         base: "main".to_owned(),
         model: Some("opencode/claude-sonnet-4-5".to_owned()),
+        effort: None,
         status: "running".to_owned(),
         created: t - 3.0 * 3600.0,
         last_active: t - 240.0,
@@ -373,6 +383,7 @@ fn awake_chat(t: f64) -> Chat {
         branch: format!("agent/{id}"),
         base: "main".to_owned(),
         model: Some("opencode/claude-sonnet-4-5".to_owned()),
+        effort: None,
         status: "running".to_owned(),
         created: t - 40.0 * 60.0,
         last_active: t - 35.0,
@@ -415,6 +426,7 @@ fn reviewed_chat(t: f64) -> Chat {
         branch: format!("agent/{id}"),
         base: "main".to_owned(),
         model: Some("opencode/claude-sonnet-4-5".to_owned()),
+        effort: None,
         status: "stopped".to_owned(),
         created: t - 30.0 * 3600.0,
         last_active: t - 2.0 * 3600.0,
@@ -499,6 +511,7 @@ fn asleep_chat(t: f64, repo: &str, title: &str, ago: f64, mut pulls: Vec<Pull>) 
         branch: format!("agent/{id}"),
         base: "main".to_owned(),
         model: Some("opencode/claude-sonnet-4-5".to_owned()),
+        effort: None,
         status: "stopped".to_owned(),
         created: t - ago - 600.0,
         last_active: t - ago,
@@ -616,6 +629,7 @@ pub(crate) fn new_chat(repo: &str, task: &str, base: &str, model: Option<&str>) 
         branch: format!("agent/{id}"),
         base: base.to_owned(),
         model: model.map(ToOwned::to_owned),
+        effort: None,
         status: "running".to_owned(),
         created: t,
         last_active: t,

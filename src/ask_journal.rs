@@ -33,13 +33,16 @@ use serde::{Deserialize, Serialize};
 /// Where the journal is kept, named here rather than written at the one call
 /// site in `crate::state` so that a test in this file can hold it to account.
 ///
-/// It has to be `LocalStorage`. `use_persistent`, which `settings` and
-/// `code_cache` use, resolves to `SessionStorage` — an in-memory `HashMap`
-/// hung off the root context on every non-wasm target (dioxus-sdk-storage
-/// `persistence.rs:34`, `client_storage/mod.rs:32-41`, `memory.rs:13-28`) —
-/// and a journal kept there would evaporate on exactly the event it exists to
-/// survive. `the_journals_storage_backing_really_reaches_the_disk` is the
-/// gate: swap this alias and that test fails.
+/// It has to be `LocalStorage`. `use_persistent`, which `settings` still uses,
+/// resolves to `SessionStorage` — an in-memory `HashMap` hung off the root
+/// context on every non-wasm target (dioxus-sdk-storage `persistence.rs:34`,
+/// `client_storage/mod.rs:32-41`, `memory.rs:13-28`) — and a journal kept
+/// there would evaporate on exactly the event it exists to survive.
+/// `the_journals_storage_backing_really_reaches_the_disk` is the gate: swap
+/// this alias and that test fails.
+///
+/// It is named here rather than inlined at the call site because three keys
+/// now share it: this journal, `inspector_open`, and `code_cache` since #220.
 pub(crate) type Backing = dioxus_sdk_storage::LocalStorage;
 
 /// How many entries are kept. The storage backing rewrites a key's whole file
@@ -467,8 +470,8 @@ mod tests {
     /// the process that wrote it is gone.
     ///
     /// This is a gate and not a demonstration. The obvious backing —
-    /// `use_persistent`, which `settings` and `code_cache` use — resolves to
-    /// an in-memory `HashMap` on every target this app builds for. Everything
+    /// `use_persistent`, which `settings` still uses — resolves to an
+    /// in-memory `HashMap` on every target this app builds for. Everything
     /// else in this file would still typecheck and still pass with it, and
     /// the journal would evaporate on exactly the event it exists to survive.
     /// So the alias is what `crate::state` is required to name, and this is
