@@ -361,6 +361,25 @@ const coverage = (states) => {
       + '`data-insp: closed` cell would collapse nothing there and INSP-SHUT would'
       + ' pass on an empty question');
   }
+  // AND SOME STATE IN EACH SHELL MUST STILL CARRY A JUMP-TO-LATEST DISC.
+  //
+  // #250's axis below flips `body.away-from-bottom` so the disc is in the hit
+  // test, and it walks the states that have one. A store with none left is the
+  // same silence one level down: the axis runs over nothing, the summary goes
+  // on naming it, and the only element in the app that is `pointer-events:
+  // none` until JS says otherwise is unwalked again.
+  //
+  // PER SHELL, because the two discs are different rules. `assets/shared.css`
+  // centres it on the reading column and `assets/desktop/80-measure.css` takes
+  // it off that column and off `--z-chrome` (#209) — so a phone transcript in
+  // the store says nothing about the rule the desktop actually ships.
+  for (const [half, list] of [['phone', phone], ['desktop', desktop]]) {
+    if (list.some((state) => stateIsAway(state.body))) continue;
+    gaps.push(`no ${half} state carries a \`.scroll-bottom\`, so the`
+      + ' away-from-bottom axis walked nothing in that half — the jump-to-latest'
+      + ' disc is `pointer-events: none` until that class is on, which is the whole'
+      + ' reason the OCCLUDED walk could not see it before #250');
+  }
   return gaps;
 };
 
@@ -1001,6 +1020,98 @@ const SHELL_ATTRS = ['data-nav', 'data-fullscreen', 'data-insp'];
 const AT_REST_CSS = '*, *::before, *::after { transition: none !important;'
   + ' animation: none !important; }';
 
+// ── the scroller's own state, which is the fourth thing this walk drives ──
+//
+// `body.away-from-bottom` is the class src/viewport.rs adds when a transcript
+// is scrolled up, and it is the whole of what makes the jump-to-latest disc
+// exist: `assets/shared.css` gives `.scroll-bottom` `opacity: 0;
+// pointer-events: none` until the class is on. A `pointer-events: none` box is
+// not in the hit test, and the OCCLUDED walk says so in as many words where it
+// skips one — so the disc was invisible to this file in every cell, at every
+// size, in both shells, for the whole life of the check. #209 was found by a
+// human hand-injecting the class for exactly that reason.
+//
+// AN AXIS AND NOT A CAPTURE, which is #250 and is the same argument
+// `data-nav`, `data-insp` and `data-fullscreen` are already here on. Those
+// three are states of the SHELL rather than states of the app; this is a state
+// of a SCROLLER, and it is the same shape — one class, on one element, set by
+// JS, describing where something is rather than what the app has.
+// scripts/capture-gallery.py emits 1500ms after the last mutation and
+// docs/design.md says every state is photographed at rest, so reaching this
+// cell by capture means leaving a transcript scrolled up and still for a second
+// and a half and hoping nothing scrolls it back. Driving it is possible; it is
+// just a worse instrument than the one this file already has.
+//
+// ONLY THE STATES THAT HAVE A DISC, which is 14 of the 69 (9 phone, 5 desktop)
+// and is measured rather than assumed — `stateIsAway` reads the markup for the
+// button rather than naming the keys, so a capture that adds a transcript gets
+// the cell for free. In a state with no `.scroll-bottom` the class changes
+// nothing at all, and a second identical walk of the same frame is exactly the
+// fiction the SHELL_ATTRS check below exists to stop this file telling.
+//
+// BOTH CELLS, and the reason is smaller than it looks. The disc's box moves 8px
+// between them, so this is not a walk of the same frame twice — but everything
+// else in the document is untouched, because the disc hangs out of a zero-height
+// slot and takes no room in flow. Measured on this tree with the axis walking
+// both: the `away` cell reports everything the resting cell does and one thing
+// more, which is the disc.
+//
+// REPRODUCED, three ways, because an axis that is not doing anything is exactly
+// what this one was added to end:
+//
+//   the axis   Cut AWAY_CELLS to `[false]` and the run fails on the ledger's
+//              reverse check — "1 ledger entry names a defect this run did not
+//              find: button.scroll-bottom >> summary". So the entry below is
+//              this axis' own product and nothing else's.
+//   the class  Delete `pointer-events: auto` from assets/shared.css's
+//              `body.away-from-bottom .scroll-bottom` and the check below stops
+//              the run on `chat` with "it is still `pointer-events: none` with
+//              the class on".
+//   the rest   Change the same sheet's resting `translate(-50%, 8px)` to 10px
+//              and it stops on "the disc sits at translateY(10.00px) where the
+//              sheet puts it at 8", which is the transition trap's own alarm
+//              reading a real element rather than a constant.
+const AWAY_CLASS = 'away-from-bottom';
+const AWAY_CELLS = [false, true];
+// Read off the markup, so the list cannot go stale against the store. Tokens
+// rather than a substring: `scroll-bottom-slot` is a different element — the
+// zero-height box the disc hangs out of, which every transcript has whether or
+// not it has a disc — and a `contains` would claim the cell for states with no
+// button in them.
+const stateIsAway = (body) => [...body.matchAll(/class="([^"]*)"/g)]
+  .some(([, value]) => value.split(/\s+/).includes('scroll-bottom'));
+
+// THE TRAP #165 WROTE UP, ONE PROPERTY PAIR OVER, and the reason this returns a
+// number instead of a boolean. Flipping a class starts every transition the
+// sheet declares on it and `getComputedStyle` then answers with an interpolated
+// value; `.scroll-bottom` transitions `opacity` AND `transform`, and #240 gave
+// the desktop's its own `translateY(8px)` at rest, so this is precisely the
+// pair that trap applies to. AT_REST_CSS is linked into both frame lists and
+// should make the flip instantaneous — SHOULD, which is not a measurement. So
+// the axis asks the disc where it actually is: at rest the sheet puts it 8px
+// down, with the class on it puts it on 0, and anything strictly between the
+// two is a transition this run caught in flight. `pointer-events` is asked in
+// the same breath for the SHELL_ATTRS reason — it is the whole of what this
+// cell buys, and a cell that buys nothing must say so rather than report Clean.
+const AWAY_SETTLED = ({ cls, on }) => {
+  document.body.classList.toggle(cls, on);
+  const el = document.querySelector('.scroll-bottom');
+  if (!el) return ['it renders no `.scroll-bottom` at this size'];
+  const cs = getComputedStyle(el);
+  const m = new DOMMatrixReadOnly(cs.transform === 'none' ? '' : cs.transform);
+  const problems = [];
+  const want = on ? 0 : 8;
+  if (Math.abs(m.f - want) > 0.01) {
+    problems.push(`the disc sits at translateY(${m.f.toFixed(2)}px) where the sheet`
+      + ` puts it at ${want} — a transition read in flight, or a rule that has moved`);
+  }
+  if (on && cs.pointerEvents !== 'auto') {
+    problems.push(`it is still \`pointer-events: ${cs.pointerEvents}\` with the class on,`
+      + ' so it is not in the hit test and the OCCLUDED walk cannot see it');
+  }
+  return problems;
+};
+
 // CONTRAST runs at the reference size alone, so that flag is not a label: it
 // is the entire scope of one of this script's two walks. Drop the key while
 // rewriting the list and the colour walk stops running while the summary goes
@@ -1054,7 +1165,7 @@ for (const [desktop, found] of Object.entries(REFERENCE)) {
 //                  628 and again in 704..971 while the inspector is open, and
 //                  it has neither a scrim nor a dismissal — so it is not a
 //                  panel you open and close, it is 268px permanently over the
-//                  content column. 25 of these 28 pairs are that one panel, and
+//                  content column. 25 of these 29 pairs are that one panel, and
 //                  the fix deletes all 25 at once. Measured: it fires at 480,
 //                  627, 704 and 971 and at no other window size, which is
 //                  exactly the two bands the sheet makes it an overlay in.
@@ -1082,6 +1193,21 @@ for (const [desktop, found] of Object.entries(REFERENCE)) {
 //   div.toast      A toast is `position: fixed; z-index: 60` and at AX5 it is
 //                  440px tall on a 568px phone, so it reaches the bar: 7px of
 //                  the 44px back chevron on `recipes-detail-toast` at 320x568.
+//   button
+//     .scroll-bottom
+//                  #261, and it is the entry #250's axis was added to find.
+//                  The jump-to-latest disc is `pointer-events: none` until
+//                  `body.away-from-bottom` is on, so until that axis existed
+//                  this walk skipped it in every cell — see where it does, in
+//                  GEOMETRY. With the class driven it fires on the PHONE, on
+//                  the tool card's output disclosure: `code-chat` at 375x667
+//                  root 16 (disc 165.5,467 44x44 over `summary` 17,453.6
+//                  341x28) and at 390x844 root 23 (disc 173,635.3 over
+//                  `summary` 17,633.4 356x35, which is 33 of its 35 points).
+//                  The DESKTOP produces nothing, which is #209 having been
+//                  fixed: `assets/desktop/80-measure.css` took the disc off
+//                  the reading column and off `--z-chrome`, and
+//                  `assets/shared.css` still centres the phone's on it.
 const OCCLUSION_KNOWN = [
   'aside.navpane >> button.action-chip',
   'aside.navpane >> button.btn.danger-outline',
@@ -1110,6 +1236,7 @@ const OCCLUSION_KNOWN = [
   'aside.navpane >> textarea.input',
   'button.fab >> button.btn.secondary.grow',
   'button.fab >> button.drawer-item',
+  'button.scroll-bottom >> summary',
   'div.toast >> button.icon-btn.back',
 ];
 
@@ -2164,10 +2291,12 @@ const GEOMETRY = ({ mark, ledger }) => {
     // — that is a different fault and this walk would only ever report it as
     // "covered by everything". `.scroll-bottom` is the live example: it is
     // `opacity: 0; pointer-events: none` until src/viewport.rs adds
-    // `body.away-from-bottom`, a class no capture contains, so #209 is out of
-    // this walk's reach until a capture carries one — not because the check
-    // cannot see it, and the PR that added this proved that by adding the class
-    // to a state and watching it fire.
+    // `body.away-from-bottom`, a class no capture contains — so for the whole
+    // life of this check the disc was skipped here in every cell, which is why
+    // #209 had to be found by hand. THE AXIS IS WHAT ANSWERS THAT, not a
+    // softening of this line: AWAY_CLASS above drives the class the way the
+    // shell attributes are driven, the skip below then stops applying, and the
+    // run reports `button.scroll-bottom >> summary` (#261) on the phone.
     if (cs.pointerEvents === 'none' || el.disabled) continue;
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) continue;
@@ -2617,7 +2746,15 @@ const compareFonts = async (states) => {
     const page = await browser.newPage({
       viewport: { width: SIZES[0].width, height: SIZES[0].height },
     });
-    await page.emulateMedia({ colorScheme: theme });
+    // The theme is a parameter of the run; the motion preference is not, and
+    // until this line it came from whatever the host had set. It reaches this
+    // file's numbers through exactly one rule — assets/shared.css's
+    // `@media (prefers-reduced-motion: reduce)` block puts `.scroll-bottom` at
+    // its revealed position AT REST — so a developer with Reduce Motion on
+    // would read the disc 8px from where CI reads it and the `away` axis below
+    // would report a transition it did not catch. Pinned for the reason the
+    // fonts are: a number that depends on the machine is not a number.
+    await page.emulateMedia({ colorScheme: theme, reducedMotion: 'no-preference' });
 
     for (const [i, state] of states.entries()) {
       const file = path.join(tmp, `state-${i}.html`);
@@ -2669,6 +2806,11 @@ const compareFonts = async (states) => {
       const sizes = state.desktop ? DESKTOP_SIZES : SIZES;
       const scales = state.desktop ? DESKTOP_SCALES : SCALES;
       const navs = state.desktop ? DESKTOP_SHELL : [null];
+      // The disc is the app's, not the shell's, so this axis is asked of both
+      // grids — and of the states that have one, which is what `stateIsAway`
+      // reads off the markup.
+      const disc = stateIsAway(state.body);
+      const aways = disc ? AWAY_CELLS : [false];
       for (const size of sizes) {
         await page.setViewportSize({ width: size.width, height: size.height });
         // A resize is a reflow like the font-size below, with one exception
@@ -2764,6 +2906,24 @@ const compareFonts = async (states) => {
                 process.exit(1);
               }
             }
+            for (const away of aways) {
+            // WHERE THE SCROLLER IS, which is #250 and is the fourth thing
+            // this walk drives. See AWAY_CLASS above for why it is an axis
+            // rather than a capture; the check here is the one the shell
+            // attributes get, for the same reason — an axis that is not
+            // there is a fact about the instrument, and a broken instrument
+            // does not get to return a number.
+            if (disc) {
+              const unsettled = await page.evaluate(AWAY_SETTLED, { cls: AWAY_CLASS, on: away });
+              if (unsettled.length) {
+                console.error(`${state.label} carries a \`.scroll-bottom\` but ${unsettled.join('; ')}`
+                  + ` — so the \`${away ? 'scrolled up' : 'at the bottom'}\` cell of the`
+                  + ' away-from-bottom axis is not the frame it claims to be. Has'
+                  + " assets/shared.css's `body.away-from-bottom .scroll-bottom` been"
+                  + ' renamed, or src/viewport.rs stopped writing that class?');
+                process.exit(1);
+              }
+            }
             // Contrast at the smallest scale and the reference size only. It
             // is a walk over computed colours: the 18.66px large-text
             // threshold makes every larger scale strictly more permissive,
@@ -2842,8 +3002,9 @@ const compareFonts = async (states) => {
             if (issues.length) {
               findings += issues.length;
               console.log(`\n${state.label}  [${theme}, ${size.width}x${size.height}, root ${scale}px`
-                + `${nav ? `, ${nav.label}` : ''}]`);
+                + `${nav ? `, ${nav.label}` : ''}${away ? ', scrolled up' : ''}]`);
               issues.forEach((str) => console.log(`  ${str}`));
+            }
             }
           }
         }
@@ -2868,9 +3029,14 @@ const compareFonts = async (states) => {
   // scale coverage the desktop half has.
   const themeCount = `${themes.length} theme${themes.length > 1 ? 's' : ''}`;
   const count = (desktop) => states.filter((z) => !!z.desktop === desktop).length;
+  // The away axis is not a multiplier over the whole half — it is asked of the
+  // states that have a disc — so it is stated as the subset it is. A count
+  // dressed up as a factor would claim twice the coverage this run has.
+  const discs = (desktop) => states.filter((z) => !!z.desktop === desktop && stateIsAway(z.body)).length;
   const grid = (desktop) => {
     const sizes = desktop ? DESKTOP_SIZES : SIZES;
     const scales = desktop ? DESKTOP_SCALES : SCALES;
+    const n = discs(desktop);
     return `${count(desktop)} ${desktop ? 'desktop' : 'phone'} states x ${themeCount}`
       + ` x ${sizes.length} ${desktop ? 'window' : 'phone'} sizes (${sizes.map((z) => `${z.width}x${z.height}`).join('/')})`
       + ` x ${scales.length} text size${scales.length > 1 ? 's' : ''} (${scales.join('/')}px)`
@@ -2879,7 +3045,9 @@ const compareFonts = async (states) => {
           // ' / ' and not '/': every label names two collapses now and carries
           // a comma of its own, so the tighter separator ran them together.
           + `${DESKTOP_SHELL.map((c) => c.label).join(' / ')})`
-        : '');
+        : '')
+      + (n ? `, of which the ${n} that hold a jump-to-latest disc are walked in`
+        + ' both of the scroller\'s states (at the bottom / `body.away-from-bottom`)' : '');
   };
   const shells = [false, ...(count(true) ? [true] : [])];
   const scope = shells.map(grid).join(', and ');

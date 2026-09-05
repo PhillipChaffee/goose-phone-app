@@ -3,7 +3,8 @@
 //! Every step is cancellable, because the Stop button is the thing this
 //! script exists to exercise. Prompt keywords: "slow" = a long stream (time
 //! to hit Stop), "notool" = skip the tool call and its permission prompt,
-//! "diff" = add a file edit that carries both halves of its diff.
+//! "diff" = add a file edit that carries both halves of its diff, "nokind" =
+//! add a tool call with no `kind` field on it at all.
 //!
 //! A prompt is a `ContentBlock` array, not a string: the text is the first
 //! *text* block, and anything else in the array is an attachment, which the
@@ -202,6 +203,54 @@ impl Turn {
         Ok(())
     }
 
+    /// A tool call with NO `kind` on it, which is the one shape neither fake
+    /// could produce.
+    ///
+    /// `src/views/chat.rs` gives a tool card one leading mark and picks which
+    /// by asking whether the kind has a word: the eight it knows get
+    /// `.tool-kind`, and everything else — `other`, an extension's own verb,
+    /// or the field simply not being there — gets `.tool-icon` with a glyph.
+    /// Every tool `mock-goose-server` and `mock-opencode-server` put on the
+    /// wire carries `execute`, `edit` or `read`, so the icon arm was
+    /// unreachable by driving: `.tool-icon` appears in two captured states and
+    /// both are phone keys, while all twenty `desktop-` states render
+    /// `.tool-kind`. `assets/desktop/95-transcript.css`'s
+    /// `.pane-main .scroll.chat .tool-icon` — the 38px column #211 put the two
+    /// marks on — was measured by nothing on the half it was written for
+    /// (#248).
+    ///
+    /// THE FIELD ABSENT AND NOT `"kind":"other"`, which are the same card and
+    /// different wires. `ToolCall.kind` is `Option<String>` in
+    /// `goose-acp-client` and `src/state.rs` resolves `None` to `"other"`, so
+    /// the app cannot tell them apart — but nothing on either wire has ever
+    /// made that `None`, so the `unwrap_or_else` was decoded only by unit
+    /// tests over hand-written JSON. Same reasoning as the diff above: a
+    /// client type nothing on the wire can reach is a client type nobody is
+    /// testing.
+    ///
+    /// A THIRD CALL RATHER THAN THE SECOND ONE'S KIND DROPPED. #248 offers
+    /// both; this is the one that leaves a transcript holding BOTH card
+    /// shapes, which is the comparison #211 was arguing about and the reason
+    /// the capture wants this keyword rather than a quieter edit.
+    ///
+    /// No permission round-trip, for `edit_call`'s reason: the shell call
+    /// scripts that path already and this is here to put a shape on the wire.
+    async fn plain_call(&mut self) -> Result<(), Cancelled> {
+        self.step().await?;
+        self.emit(
+            json!({"sessionUpdate":"tool_call","toolCallId":"tc_3",
+                   "title":"memory: remember_memory","status":"in_progress",
+                   "_meta":{"goose":{"toolCall":{"toolName":"memory__remember_memory","extensionName":"memory"}}}}),
+        );
+        self.step().await?;
+        self.emit(
+            json!({"sessionUpdate":"tool_call_update","toolCallId":"tc_3","status":"completed",
+                   "content":[{"type":"content","content":{"type":"text",
+                               "text":"Remembered: the box is Linux x86_64."}}]}),
+        );
+        Ok(())
+    }
+
     /// Assistant message stream (markdown showcase).
     async fn answer(&mut self, slow: bool) -> Result<(), Cancelled> {
         if self.attachments > 0 {
@@ -237,23 +286,70 @@ impl Turn {
         Ok(())
     }
 
-    /// The scripted turn in order: thinking, the optional tool call, the
+    /// The scripted turn in order: thinking, the optional tool calls, the
     /// answer. Stops at the first step the client cancelled.
-    async fn script(
-        &mut self,
-        pending: &Pending,
-        with_tool: bool,
-        with_diff: bool,
-        slow: bool,
-    ) -> Result<(), Cancelled> {
+    async fn script(&mut self, pending: &Pending, script: &Script) -> Result<(), Cancelled> {
         self.think().await?;
-        if with_tool {
-            self.tool_call(pending).await?;
+        for step in &script.steps {
+            match *step {
+                Step::Shell => self.tool_call(pending).await?,
+                Step::Edit => self.edit_call().await?,
+                Step::Plain => self.plain_call().await?,
+            }
         }
-        if with_diff {
-            self.edit_call().await?;
+        self.answer(script.slow).await
+    }
+}
+
+/// A card the scripted turn puts on the wire, and the keyword that asks for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    /// The shell call and its permission round-trip. IN by default and taken
+    /// out by "notool", because it is the path most of this fake exists for.
+    Shell,
+    /// "diff": a file edit carrying both halves of its diff (#191).
+    Edit,
+    /// "nokind": a tool call with no `kind` field at all (#248).
+    Plain,
+}
+
+/// What this prompt's keywords asked the turn to do.
+///
+/// A LIST AND NOT A ROW OF FLAGS, which is clippy's own advice at
+/// `struct_excessive_bools` and is the better model anyway: the steps have an
+/// ORDER, that order is what a transcript ends up looking like, and four
+/// parallel `if`s over four bools said nothing about it. It also puts every
+/// keyword in one place, which is a list the module comment, `main.rs`,
+/// `README.md` and `CLAUDE.md` all repeat.
+struct Script {
+    /// The cards, in the order the turn plays them.
+    steps: Vec<Step>,
+    /// "slow": forty chunks at 400ms, which is time to press Stop.
+    slow: bool,
+}
+
+impl Script {
+    /// OPT-IN FOR EVERYTHING BUT THE SHELL CALL, and that asymmetry is the
+    /// point rather than an accident: the scripted turn is what every
+    /// app-level test and every captured gallery state is built out of, so a
+    /// second card appearing in it unasked would change all of them to make
+    /// one wire shape reachable.
+    fn from_prompt(user_text: &str) -> Self {
+        let text = user_text.to_lowercase();
+        let mut steps = Vec::new();
+        if !text.contains("notool") {
+            steps.push(Step::Shell);
         }
-        self.answer(slow).await
+        if text.contains("diff") {
+            steps.push(Step::Edit);
+        }
+        if text.contains("nokind") {
+            steps.push(Step::Plain);
+        }
+        Self {
+            steps,
+            slow: text.contains("slow"),
+        }
     }
 }
 
@@ -297,18 +393,12 @@ pub(crate) async fn run_turn(
         return;
     }
 
-    let slow = user_text.to_lowercase().contains("slow");
-    let with_tool = !user_text.to_lowercase().contains("notool");
-    // Opt-in rather than always on, the way every other keyword here is: the
-    // scripted turn is what every app-level test and every captured gallery
-    // state is built out of, and a second tool call in it would change all of
-    // them to make one wire shape reachable.
-    let with_diff = user_text.to_lowercase().contains("diff");
+    let script = Script::from_prompt(&user_text);
     let mut turn = Turn {
         out,
         sid,
         cancel,
-        delay: Duration::from_millis(if slow { 400 } else { 150 }),
+        delay: Duration::from_millis(if script.slow { 400 } else { 150 }),
         record: Vec::new(),
         attachments,
     };
@@ -343,11 +433,7 @@ pub(crate) async fn run_turn(
         &json!({"sessionId": turn.sid, "update": {"sessionUpdate":"usage_update","used":18432,"contextLimit":128_000}}),
     );
 
-    let stop_reason = if turn
-        .script(&pending, with_tool, with_diff, slow)
-        .await
-        .is_ok()
-    {
+    let stop_reason = if turn.script(&pending, &script).await.is_ok() {
         // Auto-title + final usage, then resolve the prompt.
         turn.emit(
             json!({"sessionUpdate":"session_info_update","title":auto_title(&user_text),

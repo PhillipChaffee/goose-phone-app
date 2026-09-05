@@ -935,7 +935,24 @@ pub(crate) fn AppShell() -> Element {
                 // renders `class="icon"`, which
                 // `every_class_the_desktop_shell_renders_is_in_the_captured_store`
                 // already has.
-                span { class: "plane-badge",
+                //
+                // AND WHICH HALF IT IS DECIDES THE CHIP'S FACE, which is #57.
+                // The mockups spend the accent FILL on the Code plane and
+                // outline the Chat one — 10-home-chat.html is the only Chat
+                // file among them and it is the only one that emits
+                // `class="plane-badge chat"` — so a badge that is teal in both
+                // halves says which app you are in rather than which half,
+                // which is the one thing it exists to say.
+                //
+                // No new class here either, and that is checked rather than
+                // hoped: `attribute_value` below walks BOTH arms of a
+                // `class: if … { "a" } else { "b" }` on purpose, so this
+                // yields the tokens `plane-badge` and `chat`, and the store's
+                // twenty `desktop-` states already carry both — `chat` as
+                // `class="scroll chat"` on the transcript. The rule that reads
+                // it is `assets/desktop/50-band.css`'s `.plane-badge.chat`.
+                span {
+                    class: if plane == Plane::Chat { "plane-badge chat" } else { "plane-badge" },
                     Icon { name: plane.icon() }
                     "{plane.label()}"
                 }
@@ -2358,7 +2375,11 @@ mod tests {
         // Bounded to the span, not asked of the band: `Icon { … }` appears
         // three times in this bar and a file-wide `contains` would be answered
         // by the nav toggle's.
-        let badge = block(&band, "span { class: \"plane-badge\",", "crumb_parts(");
+        //
+        // The anchor is the badge's own `class:` line, which is the modifier
+        // #57 put there — the span used to open `span { class: "plane-badge",`
+        // and that literal is gone.
+        let badge = block(&band, "class: if plane == Plane::Chat", "crumb_parts(");
         assert!(
             badge.contains("Icon { name: plane.icon() }"),
             "the window's bar names its half in words alone, so the one strip \
@@ -2388,6 +2409,99 @@ mod tests {
             rule.contains("gap:"),
             "`.plane-badge` is a flex box with two items in it and no gap, so \
              the branch mark touches the C of CODE: {rule}"
+        );
+    }
+
+    /// THE FILL IS THE CODE HALF'S, AND THE CHAT HALF WEARS AN OUTLINE — #57.
+    ///
+    /// The mockups are unanimous: 10-home-chat is the only Chat-plane file
+    /// among them and the only one that emits `class="plane-badge chat"`, and
+    /// every Code-plane file emits the bare class and takes the accent fill.
+    /// The app painted the fill in both halves — byte-identical on
+    /// `desktop-chats` and `desktop-code-list` — so the badge named the APP
+    /// rather than the HALF, which is the one thing it is there to say.
+    ///
+    /// THE LAST TWO ASSERTIONS ARE THE POINT, and they are here because the
+    /// declarations they name look deletable and are not. `chat` is also the
+    /// app's transcript: `assets/shared.css` styles `.chat` as a flex COLUMN
+    /// with a `::before` that grows a conversation upward from the composer,
+    /// and both rules land on this chip the moment it carries that name.
+    /// Measured against the real sheet list with only the three face
+    /// declarations in place: the chip laid out glyph-over-word, 49.58x19
+    /// against the Code chip's 65.97x19, with 28px of content in a 19px box.
+    /// With the two guards: 67.58x19 against 65.97x19, one row, one gap — and
+    /// with the same word in both chips, 67.97 against 65.97, which is the
+    /// hairline and nothing else.
+    ///
+    /// IT FAILS IN BOTH DIRECTIONS, which is what stops the guards rotting
+    /// into cargo cult. The last assertion asks `assets/shared.css` whether
+    /// the collision is still there; if `.chat` ever stops being a column, it
+    /// names the guards and says to delete them.
+    ///
+    /// REPRODUCED: drop either arm of the `class:` and the first assertion
+    /// fails; drop any of the four declarations from `.plane-badge.chat` and
+    /// the one that names it does.
+    #[test]
+    fn the_chat_halfs_badge_is_outlined_where_the_code_halfs_is_filled() {
+        let band = chrome_band();
+        let badge = block(&band, "class: if plane == Plane::Chat", "crumb_parts(");
+        assert!(
+            band.contains("\"plane-badge chat\"") && badge.contains("\"plane-badge\""),
+            "the window's bar flies the same chip in both halves, so the one \
+             strip that is present at every width says which app you are in \
+             rather than which half of it: {badge}"
+        );
+
+        // Comments out first, for `the_bands_badge_wears_its_halfs_glyph`'s
+        // reason one test up: this rule is argued for in prose that quotes the
+        // mockups' own declarations, so a `contains` over the raw sheet is
+        // answered by the paragraph rather than by the rule.
+        let sheet = crate::css::without_comments(crate::css::SHELL);
+        let rule = sheet
+            .split_once("\n.plane-badge.chat {")
+            .and_then(|(_, rest)| rest.split_once("\n}"))
+            .map_or("", |(body, _)| body);
+        for (decl, why) in [
+            (
+                "background: none",
+                "the Chat chip keeps the accent fill the mockups reserve for Code",
+            ),
+            (
+                "border: 1px solid var(--shell-line)",
+                "the Chat chip has no outline, so with no fill it is a word floating in the band",
+            ),
+            (
+                "color: var(--text-secondary)",
+                "the Chat chip keeps --accent-ink, which is near-black on nothing",
+            ),
+            (
+                "flex-direction: row",
+                "assets/shared.css's `.chat` is a flex COLUMN and this chip now carries that name, \
+                 so the glyph stacks over the word inside a 19px box",
+            ),
+        ] {
+            assert!(
+                rule.contains(decl),
+                "`.plane-badge.chat` has no `{decl}`: {why}. The rule reads: {rule}"
+            );
+        }
+        assert!(
+            sheet.contains(".plane-badge.chat::before"),
+            "assets/shared.css's `.chat::before` joins this chip's flex row as \
+             a zero-width item and spends one of its 5px gaps on nothing — \
+             `assets/desktop/` has to cancel it, and does not"
+        );
+
+        let shared = crate::css::without_comments(crate::css::SHARED);
+        let transcript = shared
+            .split_once("\n.chat {")
+            .and_then(|(_, rest)| rest.split_once("\n}"))
+            .map_or("", |(body, _)| body);
+        assert!(
+            transcript.contains("flex-direction: column"),
+            "`assets/shared.css`'s `.chat` is no longer a column, so the two \
+             guards above are cancelling a rule that has gone: delete them \
+             rather than leaving declarations nobody can explain"
         );
     }
 

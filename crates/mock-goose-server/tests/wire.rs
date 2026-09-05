@@ -209,6 +209,81 @@ async fn an_edit_arrives_with_the_text_it_replaced_still_on_it() {
     );
 }
 
+/// THE ONE CARD SHAPE NOTHING ON EITHER WIRE COULD REACH — #248.
+///
+/// `src/views/chat.rs` gives a tool card exactly one leading mark: the eight
+/// kinds it has a word for get `.tool-kind`, and everything else gets
+/// `.tool-icon` with a glyph. Every tool either fake sent carried `execute`,
+/// `edit` or `read`, so the icon arm could not be reached by driving —
+/// `.tool-icon` is in two captured states and both are the phone's, while all
+/// twenty `desktop-` states render `.tool-kind`, which left
+/// `assets/desktop/95-transcript.css`'s 38px column (#211) measured by nothing
+/// on the half it was written for.
+///
+/// THE FIELD ABSENT, WHICH IS THE ASSERTION. `ToolCall.kind` is an `Option`
+/// and `src/state.rs` resolves `None` to `"other"`, so the app cannot tell
+/// this from a tool that says `"kind":"other"` — but the wire can, and until
+/// this keyword nothing ever made that `Option` `None`. Asserting `is_none`
+/// rather than "renders a glyph" is what keeps the check on the fixture rather
+/// than on the renderer.
+///
+/// IT ADDS A CARD RATHER THAN REPLACING ONE, which is what a capture needs:
+/// #211's argument is about the two marks sharing a 38px column, and a
+/// transcript holding only one of them cannot show it. Driven here with
+/// "notool" for the diff test's reason one test up — the shell call parks on a
+/// permission ask and waits for an answer, and this test has nobody to give
+/// one — so what it asserts is the composition: the keyword adds `tc_3`, and
+/// `tc_3` alone is what is left when the shell call is taken out.
+#[tokio::test]
+async fn a_tool_can_arrive_with_no_kind_on_it_at_all() {
+    let (mut server, client) = common::spawn_mock().await;
+    let sid = client
+        .session_new("/home/demo")
+        .await
+        .unwrap()
+        .session_id
+        .clone();
+    client
+        .prompt(&sid, &[ContentBlock::text("notool nokind remember this")])
+        .await
+        .unwrap();
+
+    let updates = drain_updates(&mut server.events);
+    let kinds: Vec<(&str, Option<&str>)> = updates
+        .iter()
+        .filter_map(|update| match update {
+            SessionUpdate::ToolCall(call) => {
+                Some((call.tool_call_id.as_str(), call.kind.as_deref()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [("tc_3", None)],
+        "\"nokind\" must put exactly one card on the wire and it must carry no \
+         `kind` field at all — `Some(\"other\")` is a different wire that the \
+         app happens to render the same way: {updates:?}"
+    );
+
+    // AND IT SAYS SOMETHING, because a card with no kind AND no result is two
+    // holes and this fixture is only meant to be one.
+    let shown: Vec<String> = updates
+        .iter()
+        .filter_map(|update| match update {
+            SessionUpdate::ToolCallUpdate(call) if !call.content_text().is_empty() => {
+                Some(call.content_text())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        ["Remembered: the box is Linux x86_64."],
+        "got {updates:?}"
+    );
+}
+
 /// Every `session/update` queued so far, in arrival order. Draining to empty
 /// is enough because the call that produced them has already resolved and the
 /// mock writes them down the same socket ahead of its reply — and it has to
