@@ -20,7 +20,9 @@
 //!
 //! Prompt keywords: "slow" = long stream (time to hit Stop);
 //! "notool" = skip the tool call / permission prompt; "diff" = add a file
-//! edit whose tool result carries both halves of its diff.
+//! edit whose tool result carries both halves of its diff; "nokind" = add a
+//! tool call with no `kind` field, which is the only way to reach the card
+//! that draws a glyph instead of a word.
 //!
 //! This file is the transport and nothing else: the HTTP head parse that lets
 //! one listener serve both HTTP and WebSocket, auth, and the frame loop.

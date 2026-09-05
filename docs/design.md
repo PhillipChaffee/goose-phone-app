@@ -1096,6 +1096,13 @@ that rather than silently becoming a second copy of the first. Both measure what
 a screenshot would have shown: hidden when it should be, present and in the
 right place when it should be, in both themes.
 
+The audit's own `away-from-bottom` axis (#250) does not replace either of them
+and they do not overlap: this script drives the button's *rule* against markup
+it writes itself, and the audit drives one class against **captured** markup so
+that the disc is in the occlusion walk's hit test in the states the app really
+produces. The first found what makes the disc appear; the second found what it
+appears **on top of**.
+
 The scroll-to-bottom check goes one further and drives the button's *rule*,
 because placement was never the half that broke. It reads the three scripts
 out of `src/viewport.rs` — restating a script would let the copy drift while
@@ -1193,7 +1200,14 @@ heights: the **keyboard-up viewport**
 is a real height this app renders at and no headless browser reports it, and
 every state is captured and measured **at rest** — `scripts/capture-gallery.py`
 records markup at the top of its scroller and no offset, so a screen scrolled
-under the chrome is a state that would have to be captured as one. (Headless
+under the chrome is a state that would have to be captured as one. One
+consequence of that has since been bought back rather than captured:
+`body.away-from-bottom` is a class about where a scroller is rather than what
+the app holds, and `docs/audit.js` now drives it the way it drives `data-nav`,
+so the jump-to-latest disc — `pointer-events: none` until that class is on, and
+therefore skipped by the occlusion walk in every cell of its life — is in the
+hit test at every size in both shells (#250). The rest of the sentence stands:
+a scrolled transcript is still a state nothing photographs. (Headless
 Chromium *does* composite `backdrop-filter` — a controlled test measured a
 stdev of 7.03 with the blur against 47.11 without, so a tint tuned as if the
 blur were absent comes out flat on a device.)

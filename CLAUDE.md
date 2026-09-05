@@ -44,9 +44,13 @@ The fields arrive filled; press **Save & Connect** once per launch, because the
 app deliberately starts disconnected. `MOCK_FIXTURES=empty` on either fake
 gives the connected-and-empty state every empty-list message is written for,
 and the code fake takes `slow`, `ask`, `fail` and `notool` as prompt keywords
-the way the goose one takes `slow`, `notool` and `diff` — that last one adds a
+the way the goose one takes `slow`, `notool`, `diff` and `nokind`. `diff` adds a
 file edit whose tool result carries BOTH halves of its diff, which is the one
-`ToolCallContent` shape no fixture in this repo could produce until #191.
+`ToolCallContent` shape no fixture in this repo could produce until #191;
+`nokind` adds a tool call with **no `kind` field at all**, which is the only way
+to reach the tool card that draws a glyph instead of a word — every tool either
+fake sent carried a kind, so `.tool-icon` had never been in a desktop frame
+(#248).
 
 Lint policy: `[workspace.lints]` in the root `Cargo.toml` turns on clippy's
 pedantic, nursery and cargo groups plus restriction picks (`unwrap_used`,

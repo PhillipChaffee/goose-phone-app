@@ -191,7 +191,9 @@ cargo run -p mock-goose-server     # http://127.0.0.1:3285, secret "mock-secret"
 ```
 
 Point the app at it with working directory `/home/demo`. Prompt keywords: `slow`
-streams long enough to try the Stop button, `notool` skips the tool call.
+streams long enough to try the Stop button, `notool` skips the tool call, `diff`
+adds a file edit carrying both halves of its diff, and `nokind` adds a tool call
+with no `kind` on it — the card that draws a glyph rather than a word.
 
 ## Development
 

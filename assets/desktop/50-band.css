@@ -146,6 +146,77 @@
   white-space: nowrap;
 }
 
+/* THE FILL IS THE CODE PLANE'S, AND THE CHAT PLANE WEARS AN OUTLINE. #57.
+ *
+ * The mockups are unanimous and the app was not: 11-home-code, 20, 21, 22, 30,
+ * 31 and 32 all emit the bare `class="plane-badge"` and take the base rule's
+ * their `--accent` fill, while 10-home-chat — the one Chat-plane file among
+ * them — emits `class="plane-badge chat"` and gets a transparent background,
+ * a 1px `--line` border and `--dim` ink.
+ * The app shipped the fill in both halves, byte-identical on `desktop-chats`
+ * and `desktop-code-list`, so the badge said which APP you were in rather than
+ * which HALF — the one thing it exists to say — and it said it in the app's
+ * only saturated colour, on the half the window opens on.
+ *
+ * The accent-economy argument is written twelve rules down on the nav toggle
+ * ("a colour this shell spends on exactly one thing per screen") and #251 has
+ * since spent it on the primary action. A static label was outbidding a button.
+ *
+ * THE TOKENS ARE THE MOCKUP'S OWN VALUES RATHER THAN NEAR ONES.
+ * `--shell-line` is #2c3138 in dark, which is `.plane-badge.chat`'s border
+ * exactly, and `--text-secondary` is #98a1ac, which is its ink exactly — an
+ * identity, not the substitution the finding was filed as. Measured on the
+ * band's own surface: 6.66:1 in dark and 4.64:1 in light, against the 4.5 a
+ * 10px/650 string owes (the large-text relaxation needs 14px AND 700, or
+ * 18.66px, so it does not apply here any more than it does to the fill above).
+ * The outline itself is 1.33:1 and is meant to be — the mockup draws a chip
+ * that is barely there.
+ *
+ * `background: none` and not `transparent`: the base rule sets `background`,
+ * so the override has to reset the same shorthand or the fill survives in the
+ * longhands it also wrote.
+ *
+ * THE BORDER COSTS THE HEIGHT NOTHING AND THE WIDTH 2px, which is not the same
+ * sentence and was measured rather than assumed. `box-sizing: border-box` is
+ * global (`assets/shared.css:377-378`, the `*` rule), but it only caps a
+ * DECLARED length: `height: 1.1875rem` is one, so the hairline comes out of the
+ * 19px; the width is `auto`, so there is nothing to come out of and the chip
+ * grows. Measured with the same word in both chips, dark, 1440x860: 65.97x19
+ * filled against 67.97x19 outlined, and every other computed property that
+ * differs between them is one of the three declarations below or a colour
+ * derived from `color`.
+ *
+ * THE MODIFIER'S NAME COLLIDES, AND THE TWO DECLARATIONS BELOW ARE THAT AND
+ * NOTHING ELSE — do not delete them as redundant. `chat` is the mockups' own
+ * modifier and it is also the app's TRANSCRIPT: `assets/shared.css:1841` is
+ * `.chat { display: flex; flex-direction: column; padding-bottom: 24px }` with
+ * `.chat::before { content: ""; margin-top: auto }` under it, the rule that
+ * grows a conversation upward from the composer. Both are (0,1,0), so
+ * `.plane-badge` wins every declaration the two share by coming later — but a
+ * declaration the base rule never makes has nothing to beat it. Measured with
+ * only the three face declarations above: the chip laid out as a COLUMN, glyph
+ * stacked over the word, 49.58x19 against the Code chip's 65.97x19 and its own
+ * content 28px tall in a 19px box; and the pseudo-element joined the flex row
+ * as a zero-width item, spending one of the 5px `gap`s on nothing.
+ *
+ * Restating the direction and cancelling the pseudo is the whole of the fix,
+ * and it is scoped to `.plane-badge.chat` (0,2,0) rather than to the base rule
+ * because the collision is the modifier's, not the chip's. A `data-plane`
+ * attribute would dodge it and was rejected on other grounds — it would slip
+ * past `every_class_the_desktop_shell_renders_is_in_the_captured_store` rather
+ * than satisfy it, where `chat` is a name twenty captured desktop states
+ * already carry. */
+.plane-badge.chat {
+  background: none;
+  border: 1px solid var(--shell-line);
+  color: var(--text-secondary);
+  flex-direction: row;
+}
+
+.plane-badge.chat::before {
+  content: none;
+}
+
 /* THE MARK IS NOT SET AT THE LABEL'S SIZE, which is the one place the usual
  * idiom cannot be used. Everywhere else in this band the glyph's box comes
  * from `font-size: var(--icon-md)` on the BUTTON — `.nav-toggle` and
@@ -195,13 +266,55 @@
  * the 96px drag strip, the pill and the inspector toggle. 972 is the width at
  * which the third column appears and is the breakpoint `55-panes.css` already
  * turns the pill's host on, for the same sentence — "the band is too tight to
- * spend 90px on an address". Below it the crumb starts where it always did and
- * the line still marks the column's edge; they simply do not line up, which is
- * a smaller wrong than a 61px title. */
-@media (min-width: 972px) {
-  .shell[data-nav="open"] .shell-chrome > .plane-badge {
-    margin-left: calc(var(--nav-w) + 16px - 46px - var(--traffic-w));
-  }
+ * spend 90px on an address".
+ *
+ * RAMPED IN OVER THE 154px IT COSTS, RATHER THAN SWITCHED ON AT 972, and that
+ * is #244: as a media query this rule made the band's title NON-MONOTONIC in
+ * the window's width. Measured on `desktop-chat` against the sheet list
+ * `docs/audit.js` links, light, `data-nav="open" data-insp="open"`, with a
+ * heading long enough to overflow at every width so the box IS the room the
+ * band has to give — `.chrome-title` went 533 at 900, 604 at 971 and **451 at
+ * 972**, and did not reach 604 again until about 1126. One pixel of window cost
+ * the title 153, and the crumb that `65-responsive.css` hides below 972
+ * precisely because a fragment is not worth the room came back at 972 as a
+ * fragment.
+ *
+ * No breakpoint can fix that, which is why this is an expression and not a
+ * larger number. Below the switch the title is `W - k`; above it, `W - k -
+ * 154`. The step down is 154 wherever the step is put, so the only monotonic
+ * arrangement is one where the indent ARRIVES at the rate the window grows —
+ * `clamp` of `100vw` past 972, so every pixel the window gains is spent on the
+ * indent until the indent is whole, and the title is flat across that stretch
+ * instead of falling off a cliff at the start of it. It saturates at 1126
+ * (972 + the 154 this costs), and from there up nothing about this rule has
+ * moved: `.chrome-title` is 919 at 1440 and 1079 at 1600 before and after, so
+ * the reference window every gallery frame and every mockup comparison is taken
+ * in is untouched.
+ *
+ * What it buys the badge is the same continuity one control over. The chip
+ * used to JUMP from x=130 to x=284 at 972; it now slides, which is the
+ * arrangement below 972 extended rather than a new one — the badge has sat
+ * inside the left cell at every width from 628 up since #50, and that was
+ * taken there deliberately ("they simply do not line up, which is a smaller
+ * wrong than a 61px title"). This spends 154px of window on lining them up
+ * instead of one pixel.
+ *
+ * NO MEDIA QUERY AT ALL, because the clamp's own lower bound is the 8px the
+ * base rule above declares: at 971 `100vw - 964px` is 7px and the clamp floors
+ * it at 8, which is what the `@media (min-width: 972px)` wrapper was for. Two
+ * ways of saying 972 in one rule is one of them going stale.
+ *
+ * `100vw` and not a container query: the band spans the window, the window IS
+ * the viewport for a `fullsize_content_view` build, and `--traffic-w` — which
+ * this sum already reads — is the only thing in the band that is not. It comes
+ * out of both sides, so fullscreen (traffic 0, indent 238) ramps over its own
+ * 238 and lands the badge at 284 exactly as the 76 case does. */
+.shell[data-nav="open"] .shell-chrome > .plane-badge {
+  margin-left: clamp(
+    8px,
+    calc(100vw - 972px + 8px),
+    calc(var(--nav-w) + 16px - 46px - var(--traffic-w))
+  );
 }
 
 /* THE FOOTER'S RULE SPANS THE COLUMN, and it could not while the card existed.
