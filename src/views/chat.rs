@@ -608,21 +608,57 @@ fn tool_run_summary(run: &[ChatItem]) -> String {
     kinds.dedup();
     let n = run.len();
     match kinds.as_slice() {
-        [one] => format!("Used {n} tools · {}", tool_kind_phrase(one, n)),
+        [one] => tool_kind_phrase(one, n).map_or_else(
+            || format!("Used {n} tools"),
+            |phrase| format!("Used {n} tools · {phrase}"),
+        ),
         _ => format!("Used {n} tools"),
     }
 }
 
-fn tool_kind_phrase(kind: &str, n: usize) -> String {
+/// What a run of `n` tools of one kind DID, or `None` when the kind names no
+/// tool.
+///
+/// `None` IS AN ANSWER, the same way it is in [`tool_kind_word`], and the
+/// caller already knows what to do with it: "Used 2 tools" is the sentence a
+/// mixed run gets, and a run whose one kind is not a name is in exactly that
+/// position — it has a count and nothing else that is true.
+///
+/// THE KIND THAT IS NOT A NAME IS `other`, and it arrives by two routes.
+/// `src/state.rs` manufactures it — `call.kind.clone().unwrap_or_else(|| "other"
+/// .to_string())` — when the wire carries no kind at all, which is what a real
+/// goose does for an `extensionmanager` call; and base ACP's own `ToolKind`
+/// enum has `other` as its catch-all, so a server can send the string too. Both
+/// routes mean "none of the above". Neither is a tool, and the fallback arm
+/// below printed whichever one arrived as though it were: **"Used 2 tools ·
+/// other x2"**, which is the app quoting its own placeholder back at the
+/// reader in a line every other kind answers in the app's voice ("read 3
+/// files", "ran 2 searches"). The empty string is the same claim written a
+/// third way — a transcript cached by an older build could hold one — and gets
+/// the same answer.
+///
+/// UNREACHABLE FROM THE WHOLE LOCAL STACK, which is why a screenshot was the
+/// first sighting: `crates/mock-goose-server` sends `"kind":"execute"` on every
+/// call it emits and `src/code.rs` hard-codes the same, so nothing here can
+/// produce a kind-less tool call. The tests below are the only thing that can.
+///
+/// A KIND THIS APP HAS NEVER HEARD OF IS STILL REPORTED, because a goose that
+/// grows a tool should not make the fold lie about it — but it is reported as a
+/// word and not as a wire enum. `switch_mode` is a real `ToolKind` with no
+/// phrase of its own, and `switch_mode x2` reads as debug output for the reason
+/// [`tool_status_label`] gives about `IN_PROGRESS`; underscores come out there
+/// and they come out here.
+fn tool_kind_phrase(kind: &str, n: usize) -> Option<String> {
     let plural = if n == 1 { "" } else { "s" };
-    match kind {
+    Some(match kind {
         "execute" => format!("ran {n} command{plural}"),
         "read" => format!("read {n} file{plural}"),
         "edit" => format!("edited {n} file{plural}"),
         "search" => format!("ran {n} search{}", if n == 1 { "" } else { "es" }),
         "fetch" => format!("fetched {n} URL{plural}"),
-        other => format!("{other} x{n}"),
-    }
+        "other" | "" => return None,
+        other => format!("{} x{n}", other.replace('_', " ")),
+    })
 }
 
 /// Shared transcript renderer — the Code tab reuses it (views/code.rs).
@@ -1010,8 +1046,8 @@ fn permission_label(name: Option<&str>, option_id: &str) -> String {
 mod tests {
     use super::{
         clock_label, crowding, format_tokens, goose_setting_rows, is_mode_chip, mode_choices,
-        permission_button_class, permission_label, tool_icon, tool_kind_word, tool_run_summary,
-        tool_status_label, ConfigOption,
+        permission_button_class, permission_label, tool_icon, tool_kind_phrase, tool_kind_word,
+        tool_run_summary, tool_status_label, ConfigOption,
     };
     use crate::ask_journal::{AskRecord, AskState, LostCause};
     use crate::shell::Shell;
@@ -1265,6 +1301,50 @@ mod tests {
                 tool("b", "?", "screenshot", "completed"),
             ]),
             "Used 2 tools · screenshot x2"
+        );
+    }
+
+    /// THE APP'S OWN PLACEHOLDER IS NOT A TOOL NAME, and the fold used to
+    /// print it as one: "Used 2 tools · other x2", seen against a real goose
+    /// server and reproducible from nothing in this repo.
+    ///
+    /// `other` reaches here two ways and both mean "none of the above" —
+    /// `src/state.rs` substitutes it when the wire carries no kind (which is
+    /// what goose does for an `extensionmanager` call), and base ACP's own
+    /// `ToolKind` has it as the catch-all, so a server can send the word. The
+    /// summary line every other kind answers in the app's voice was answering
+    /// this one by quoting the app back at itself.
+    ///
+    /// What it says instead is the sentence a MIXED run already gets, which is
+    /// the same claim: there were two tool calls and nothing true to add.
+    #[test]
+    fn a_run_the_app_has_no_name_for_is_a_count_and_not_a_placeholder() {
+        for nameless in ["other", ""] {
+            assert_eq!(
+                tool_run_summary(&[
+                    tool("a", "extensionmanager", nameless, "completed"),
+                    tool("b", "extensionmanager", nameless, "completed"),
+                ]),
+                "Used 2 tools",
+                "the fold printed {nameless:?} as though it were a tool name, \
+                 which is the app's own placeholder read back to the reader in \
+                 the one line that is supposed to say what the tools did"
+            );
+        }
+        assert_eq!(
+            tool_kind_phrase("other", 2),
+            None,
+            "a kind that names no tool has no phrase, and the caller — not \
+             this function — decides what a run with no phrase reads as"
+        );
+        // And the wire's underscored enum names are not UI copy either, the
+        // same way `IN_PROGRESS` is not: `switch_mode` is a real ToolKind.
+        assert_eq!(
+            tool_run_summary(&[
+                tool("a", "?", "switch_mode", "completed"),
+                tool("b", "?", "switch_mode", "completed"),
+            ]),
+            "Used 2 tools · switch mode x2"
         );
     }
 
