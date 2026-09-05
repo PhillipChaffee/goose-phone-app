@@ -104,7 +104,7 @@ FEATURES = sorted(p.name for p in (ROOT / "assets" / "features").glob("*.css"))
 # ships.
 #
 # AND THE SHELL HALF IS ITSELF ORDERED. `src/css.rs` `concat!`s
-# `assets/desktop/`'s fifteen region files in filename order, so the sort below
+# `assets/desktop/`'s thirteen region files in filename order, so the sort below
 # IS the cascade: the prefixes are zero-padded so that Python's `sorted`,
 # `readdirSync().sort()` in `docs/audit.js` and the const list in `src/css.rs`
 # all agree, and a sheet that lands in a different slot here is a different

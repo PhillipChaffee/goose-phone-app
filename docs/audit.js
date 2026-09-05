@@ -106,7 +106,7 @@ const STYLESHEETS = [
 // window nobody ships and report it clean.
 //
 // THE SHELL HALF IS A DIRECTORY NOW, AND SORTED IS THE CASCADE. src/css.rs
-// concatenates assets/desktop/'s fifteen region files in filename order, so
+// concatenates assets/desktop/'s thirteen region files in filename order, so
 // this list must be that same order or the audit measures a cascade the app
 // never emits — two rules of equal specificity, and whichever comes last wins.
 // The prefixes are zero-padded precisely so that readdirSync().sort() here,

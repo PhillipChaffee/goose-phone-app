@@ -1509,7 +1509,7 @@ mod tests {
     /// own prose quotes rules — and a counter that read them would answer
     /// about the wrong thing.
     ///
-    /// PART BY PART, not over the concatenation. `crate::css::SHELL` is fifteen
+    /// PART BY PART, not over the concatenation. `crate::css::SHELL` is thirteen
     /// files joined, so an unbalanced one reported against the whole string
     /// names 165k characters and a line number that belongs to no file on disk.
     /// Walking [`crate::css::SHELL_PARTS`] costs nothing and names the file —
@@ -1927,7 +1927,7 @@ mod tests {
     fn every_class_the_shell_renders_is_styled_somewhere() {
         let shell = shell_code();
         // `format!` and not `concat!`: `concat!` takes literals only, and the
-        // desktop sheet is now fifteen files joined by a `concat!` of its own
+        // desktop sheet is now thirteen files joined by a `concat!` of its own
         // in `src/css.rs`, which is a const rather than a literal.
         let sheets = format!(
             "{}{}",

@@ -143,13 +143,19 @@ window. The name travels as data on `nav::Destination` (`Detail`'s `Crumb`),
 because Dioxus has no portal.
 
 **The desktop's sheet is a directory, and the sort is the cascade.**
-`assets/desktop/` holds fifteen region files — `00-tokens.css` through
-`98-home-sched.css` — that `src/css.rs`'s `SHELL` `concat!`s in filename order,
+`assets/desktop/` holds thirteen region files — `00-tokens.css` through
+`97-home-code.css` — that `src/css.rs`'s `SHELL` `concat!`s in filename order,
 the same way `STYLES` assembles the phone's. One 4278-line sheet was one file
 every branch of a wide redesign appended to at once, and parallel appends had
 already left it carrying the same declaration twice; a region that needs rules
-of its own now brings its own file and nothing else in the list moves. The
-prefixes are zero-padded because **three** places produce that order and all
+of its own now brings its own file and nothing else in the list moves. It was
+fifteen: `60-sidebar-extra.css` and `98-home-sched.css` were named for where
+their rules sat rather than for a region, and #154 and #155 folded them into
+`30-sidebar-list.css` and `40-home-chat.css`. **A move between region files is
+a move in the cascade**, so each of those had to prove nothing changed — a
+computed-style diff over every element of all 69 captured states at every size,
+theme and shell state the audit walks, not a Clean audit. The prefixes are
+zero-padded because **three** places produce that order and all
 three must agree: the `concat!` in `src/css.rs`, `readdirSync().sort()` in
 `docs/audit.js`, and `sorted()` in `scripts/capture-gallery.py`. A sheet that
 sorts into a different slot in any one of them is a different cascade from the

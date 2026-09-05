@@ -1248,7 +1248,7 @@ pub(crate) fn Home(plane: Plane) -> Element {
                 // pushed to the bottom and a hairline footnote under it; the
                 // footnote is the owner's cut (#200), so the pill on the
                 // column's bottom edge is the whole ending. `margin-top: auto`
-                // in `98-home-sched.css` is what puts it there, and that only
+                // in `40-home-chat.css` is what puts it there, and that only
                 // works because `.home-inner` is `min-height: 100%`.
                 if plane == Plane::Chat {
                     if let Some(sched) = sched_line(&ctx, crate::state::now_secs()) {
