@@ -330,13 +330,45 @@ impl State {
     }
 }
 
+/// THE FIRST REPO'S BRANCH LIST IS LONG ON PURPOSE.
+///
+/// `ChoicePickerSheet` grows a filter above eight choices (`SEARCH_AT` in
+/// `src/views/session_settings.rs`), and until #79 the only screen that opened
+/// a branch picker was the phone's new-session composer — where two branches
+/// was enough to prove the picker works and nothing in the development loop
+/// could reach the field that finds one. The Code home's base picker is now on
+/// a screen the desktop opens on, so the list has to be long enough for the
+/// filter to be visible: ten here, one of which is the default, which is nine
+/// rows plus the marked default and two past the threshold.
+///
+/// The names are the shapes a real repo has — long-lived branches, an agent's
+/// own `agent/…`, a release line — because a filter over ten names that all
+/// begin with the same word tests the field and not the search.
+fn goose_phone_app_branches() -> Vec<String> {
+    [
+        "main",
+        "desktop-match-the-designs",
+        "agent/goose-phone-app-9f2c1a",
+        "agent/goose-phone-app-4b71de",
+        "release-4",
+        "release-3",
+        "spike/push-notifications",
+        "spike/tailscale-funnel",
+        "fix/composer-chip-row",
+        "docs/design-guide",
+    ]
+    .iter()
+    .map(|&b| b.to_owned())
+    .collect()
+}
+
 fn repos() -> Vec<Repo> {
     vec![
         Repo {
             name: "goose-phone-app".to_owned(),
             url: "https://github.com/PhillipChaffee/goose-phone-app.git".to_owned(),
             default_branch: "main".to_owned(),
-            branches: vec!["main".to_owned(), "desktop-match-the-designs".to_owned()],
+            branches: goose_phone_app_branches(),
             public_throwaway: false,
         },
         Repo {

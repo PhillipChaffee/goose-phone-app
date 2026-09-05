@@ -688,7 +688,7 @@ fn compose_placeholder(repo: &str, branch: Option<&str>) -> String {
 /// carries a branch, and the owner is the half that is the same for every repo
 /// you own. It is not lost: the picker states it under the name, and the
 /// placeholder sentence above spells the whole thing out.
-fn repo_chip_label(name: &str) -> &str {
+pub(crate) fn repo_chip_label(name: &str) -> &str {
     let bare = name.rsplit('/').next().unwrap_or(name);
     if bare.is_empty() {
         name
@@ -700,7 +700,7 @@ fn repo_chip_label(name: &str) -> &str {
 /// The branch pill's face. `Default` — not "Default branch" — when none has
 /// been resolved: it is what `create_chat` with no base branch does, so it is
 /// a value rather than a placeholder, and it fits a pill.
-fn branch_chip_label(branch: Option<&str>) -> &str {
+pub(crate) fn branch_chip_label(branch: Option<&str>) -> &str {
     branch.filter(|b| !b.is_empty()).unwrap_or("Default")
 }
 
@@ -741,7 +741,7 @@ fn can_start(repo: &str, model: Option<&str>, task: &str) -> bool {
 /// puts it: this app's grammar is name-then-explanation everywhere else (the
 /// mode picker, every settings row), and inverting one list would make the
 /// same component read two ways.
-fn repo_choices(repos: &[RepoEntry]) -> Vec<SettingChoice> {
+pub(crate) fn repo_choices(repos: &[RepoEntry]) -> Vec<SettingChoice> {
     repos
         .iter()
         .map(|r| {
@@ -764,7 +764,7 @@ fn repo_choices(repos: &[RepoEntry]) -> Vec<SettingChoice> {
 /// The manager already sorts and already puts the default first, so this only
 /// has to mark it; filtering it out of the tail is what stops it appearing
 /// twice.
-fn branch_choices(list: &BranchList) -> Vec<SettingChoice> {
+pub(crate) fn branch_choices(list: &BranchList) -> Vec<SettingChoice> {
     let mut rows: Vec<SettingChoice> = Vec::with_capacity(list.names.len());
     if let Some(default) = list.default.as_deref() {
         rows.push(SettingChoice::new(default, default).with_note(Some("Default".to_owned())));
@@ -932,12 +932,30 @@ pub fn CodeNewView() -> Element {
     });
     let mut sheet = use_signal(|| None::<NewPill>);
 
-    // Default to the first allowlisted repo, as the form did — through
-    // `choose_repo`, so the branch fetch it starts happens here too and the
-    // pill can say `main` before anything is tapped.
+    // WHERE THE READER ALREADY SAID, IF THEY SAID IT — else the first
+    // allowlisted repo, as the form did.
+    //
+    // Both arms go through `choose_repo`, so the branch fetch it starts happens
+    // here too and the pill can say `main` before anything is tapped. The
+    // carried arm then puts the base back, because `choose_repo` clears it by
+    // design: it cannot know the branch it is handed belongs to the repo it is
+    // being pointed at, and here it does.
+    //
+    // The carrier is READ, not taken (`crate::code::NewWhere`): stepping into
+    // this screen and back out must leave the home composer's chips saying what
+    // they said. `new_task` beside it is taken, because a sentence is spent
+    // when it is sent and a repo is a standing preference.
     if repo.peek().is_empty() {
-        if let Some(first) = repos.first() {
-            choose_repo(&ctx, &first.name, repo, branch, model);
+        let carried = ctx.new_where.peek().clone();
+        if carried.repo.is_empty() {
+            if let Some(first) = repos.first() {
+                choose_repo(&ctx, &first.name, repo, branch, model);
+            }
+        } else {
+            choose_repo(&ctx, &carried.repo, repo, branch, model);
+            if carried.base.is_some() {
+                branch.set(carried.base);
+            }
         }
     }
     // Seeded from the answer rather than fetched by the pill: the sentence in
@@ -3434,6 +3452,74 @@ mod tests {
             "the carrier still holds the task after the screen seeded itself \
              from it, so opening New a second time resurrects a sentence that \
              was already sent"
+        );
+    }
+
+    /// …AND IT OPENS WHERE THE HOME SCREEN SAID, not on the first repo of the
+    /// allowlist — #79's other half.
+    ///
+    /// The Code home's composer now has a repo and a base picker of its own,
+    /// and the objection to bringing them forward was that a picker which still
+    /// routes onward "leaves two places to choose a repo and ignores the one
+    /// you used". `ctx.new_where` is what stops that being true: this screen
+    /// seeds from it and only falls back to `repos.first()` when it is empty.
+    ///
+    /// BOTH HALVES, because `choose_repo` clears the base by design — it
+    /// cannot know a branch it is handed belongs to the repo it is being
+    /// pointed at, and here it does. The seed puts it back after.
+    ///
+    /// READ AND NOT TAKEN, unlike the task above: a sentence is spent when it
+    /// is sent, and a repo is a standing preference the home composer's own
+    /// chips go on displaying.
+    ///
+    /// REPRODUCED: delete the carried arm and the first assertion fails naming
+    /// `personal-ai-setup`, which is `repos.first()`; drop the `branch.set` and
+    /// the second fails on `main`.
+    #[test]
+    fn the_new_screen_opens_where_the_home_screen_pointed_it() {
+        let html = render_seeded(
+            |ctx| {
+                seed_repos(ctx);
+                let mut carried = ctx.new_where;
+                carried.set(crate::code::NewWhere {
+                    repo: "PhillipChaffee/scratch".to_owned(),
+                    base: Some("release-4".to_owned()),
+                });
+            },
+            || rsx! { CodeNewView {} },
+        );
+        assert!(
+            html.contains("scratch") && !html.contains("personal-ai-setup"),
+            "the new-session screen opened on the first allowlisted repo over \
+             the one the home composer had been pointed at, so the reader is \
+             asked the same question twice and their answer is discarded: \
+             {html:.400}"
+        );
+        assert!(
+            html.contains("release-4"),
+            "the base branch chosen on the home screen did not survive the \
+             screen change, so the session would be cut from the repo's \
+             default with nothing saying so: {html:.400}"
+        );
+
+        let _guard = crate::views::press::alone();
+        let screen = crate::views::press::Pressable::mount(
+            |ctx| {
+                seed_repos(ctx);
+                let mut carried = ctx.new_where;
+                carried.set(crate::code::NewWhere {
+                    repo: "PhillipChaffee/scratch".to_owned(),
+                    base: Some("release-4".to_owned()),
+                });
+            },
+            CodeNewView,
+        );
+        assert_eq!(
+            screen.with(|ctx| (ctx.new_where)().repo),
+            "PhillipChaffee/scratch",
+            "this screen emptied the carrier as it seeded itself, so stepping \
+             back to the home composer would find its chips reset to a repo \
+             nobody chose"
         );
     }
 

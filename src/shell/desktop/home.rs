@@ -28,10 +28,12 @@
 
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
+use goose_acp_client::ConfigOption;
 
 use crate::icons::Icon;
 use crate::nav::Plane;
 use crate::state::AppCtx;
+use crate::views::session_settings::{option_choices, ChoicePickerSheet};
 
 /// The part of the day, for the greeting.
 ///
@@ -619,6 +621,41 @@ fn one_line(text: &str) -> Option<String> {
     (!line.is_empty()).then(|| line.to_owned())
 }
 
+/// WHAT A CHIP OPENS, for the ones that are controls rather than facts.
+///
+/// `assets/desktop/40-home-chat.css` states the grammar this belongs to and
+/// used to state it as a permanent rule: the mockups draw two visual classes in
+/// a composer bar — a bordered box with a chevron for a thing you can CHANGE
+/// and bare text for a thing you can only READ — and *"every chip this app puts
+/// here is the second kind"*. That paragraph named its own expiry: *"the moment
+/// either becomes a picker, the bordered form has to come back."* This is that
+/// moment (#79, #194), and the form comes back with it.
+///
+/// Three, and no fourth. The mode belongs to a turn rather than to a session
+/// about to exist, the host and the extension count are genuinely read-only,
+/// and a context window is a fact about a model rather than a choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Pick {
+    /// The chat half's model, chosen before the session exists. #194.
+    Model,
+    /// The code half's repo, out of the manager's allowlist. #79.
+    Repo,
+    /// The ref the working tree's own branch is cut from. #79.
+    Base,
+}
+
+impl Pick {
+    /// The control's accessible name — what `views::press` locates it by, and
+    /// the only name it has once the face is a value and a chevron.
+    pub(crate) const fn title(self) -> &'static str {
+        match self {
+            Self::Model => "Model",
+            Self::Repo => "Repository",
+            Self::Base => "Base branch",
+        }
+    }
+}
+
 /// One fact under the composer, said in as few characters as it takes.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Chip {
@@ -628,6 +665,35 @@ pub(crate) struct Chip {
     /// character by character, and a proportional face makes that harder for
     /// no gain. It is the one place this shell reaches for `--font-mono`.
     pub mono: bool,
+    /// What pressing it opens, or `None` for a fact. A fact is a `span`; a
+    /// control is a `button` wearing `.picker`.
+    pub pick: Option<Pick>,
+    /// A leading glyph, and only the controls have one — it is what the
+    /// mockups' `.picker` puts in front of the value, and what tells two
+    /// bordered boxes apart at a glance before either is read.
+    pub icon: Option<&'static str>,
+}
+
+impl Chip {
+    /// A thing you can only read.
+    const fn fact(text: String, mono: bool) -> Self {
+        Self {
+            text,
+            mono,
+            pick: None,
+            icon: None,
+        }
+    }
+
+    /// A thing you can change.
+    const fn control(text: String, pick: Pick, icon: Option<&'static str>) -> Self {
+        Self {
+            text,
+            mono: false,
+            pick: Some(pick),
+            icon,
+        }
+    }
 }
 
 /// What the composer knows about the session it is about to start.
@@ -644,57 +710,101 @@ pub(crate) struct Chip {
 /// only once a `usage_update` has arrived, which is honest: before the first
 /// turn the app genuinely does not know the window, and a guessed 200k would
 /// be the wrong kind of confident.
-pub(crate) fn compose_chips(ctx: &AppCtx, plane: Plane) -> Vec<Chip> {
+/// `picked` is what the reader chose on this screen and the server has not been
+/// told about yet — the chat half's model, which cannot be written through
+/// [`crate::state::set_config_option`] because that needs a session that does
+/// not exist. It outranks `current_value` for exactly as long as that is true.
+pub(crate) fn compose_chips(ctx: &AppCtx, plane: Plane, picked: Option<&str>) -> Vec<Chip> {
     let mut out = Vec::new();
     match plane {
         Plane::Chat => {
-            if let Some(model) = (ctx.config_options)()
+            let option = (ctx.config_options)()
                 .iter()
                 .find(|o| o.config_id == "model")
-                .and_then(goose_acp_client::ConfigOption::current_label)
-            {
-                out.push(Chip {
-                    text: model.to_owned(),
-                    mono: false,
+                .cloned();
+            // THE MODEL IS A CONTROL NOW, and only where choosing would decide
+            // something: `is_adjustable` is false for a one-value select, and
+            // offering that as a menu is design rule 11's control that does
+            // nothing. With no option at all — a cold launch, before any
+            // session has said what the agent offers — there is no chip, which
+            // is what shipped and stays true.
+            let adjustable = option.as_ref().is_some_and(ConfigOption::is_adjustable);
+            let label = picked
+                .map(|value| model_label(value, option.as_ref()))
+                .or_else(|| {
+                    option
+                        .as_ref()
+                        .and_then(ConfigOption::current_label)
+                        .map(str::to_owned)
+                });
+            if let Some(label) = label {
+                out.push(if adjustable {
+                    Chip::control(label, Pick::Model, None)
+                } else {
+                    Chip::fact(label, false)
                 });
             }
             if let Some(host) = host_of(&ctx.settings.peek().server_url) {
-                out.push(Chip {
-                    text: host,
-                    mono: true,
-                });
+                out.push(Chip::fact(host, true));
             }
             let loaded = (ctx.extensions.list)().items.len();
             if loaded > 0 {
-                out.push(Chip {
-                    text: format!("{loaded} extensions"),
-                    mono: false,
-                });
+                out.push(Chip::fact(format!("{loaded} extensions"), false));
             }
             if let Some((_, limit)) = (ctx.usage)().filter(|(_, limit)| *limit > 0) {
-                out.push(Chip {
-                    text: format!("{} context", crate::views::chat::format_tokens(limit)),
-                    mono: true,
-                });
+                out.push(Chip::fact(
+                    format!("{} context", crate::views::chat::format_tokens(limit)),
+                    true,
+                ));
             }
         }
         Plane::Code => {
-            if let Some(host) = host_of(&ctx.settings.peek().code_server_url) {
-                out.push(Chip {
-                    text: host,
-                    mono: true,
-                });
+            // WHERE THE TREE GETS CUT, as two controls — #79. They lead the row
+            // because they are the only two facts on it the reader decides, and
+            // because the send button below cannot act on the sentence without
+            // them: `views::code::can_start` wants a repo before it wants
+            // anything else.
+            //
+            // AND ONLY WITH AN ALLOWLIST TO PICK FROM. A picker over an empty
+            // manager list is a control that opens a sheet saying there is
+            // nothing in it, on a screen whose standing line is already saying
+            // the gateway is not connected. `N repos` was the fact these two
+            // replace, and it was gated on the same count.
+            let where_ = (ctx.new_where)();
+            if !(ctx.code_repos)().is_empty() {
+                out.push(Chip::control(
+                    if where_.repo.is_empty() {
+                        Pick::Repo.title().to_owned()
+                    } else {
+                        crate::views::code::repo_chip_label(&where_.repo).to_owned()
+                    },
+                    Pick::Repo,
+                    Some("repo"),
+                ));
+                out.push(Chip::control(
+                    crate::views::code::branch_chip_label(where_.base.as_deref()).to_owned(),
+                    Pick::Base,
+                    Some("git-branch"),
+                ));
             }
-            let repos = (ctx.code_repos)().len();
-            if repos > 0 {
-                out.push(Chip {
-                    text: format!("{repos} repos"),
-                    mono: false,
-                });
+            if let Some(host) = host_of(&ctx.settings.peek().code_server_url) {
+                out.push(Chip::fact(host, true));
             }
         }
     }
     out
+}
+
+/// A model reference as the catalogue names it, or the reference itself.
+///
+/// [`ConfigOption::current_label`] does exactly this for the value the SERVER
+/// holds, and cannot be asked about one it has not been told yet — which is
+/// every model picked on the home screen, right up until the session exists.
+fn model_label(value: &str, option: Option<&ConfigOption>) -> String {
+    option
+        .and_then(|o| o.options.iter().find(|c| c.value == value))
+        .map_or(value, |c| c.name.as_str())
+        .to_owned()
 }
 
 /// The host and port out of a configured URL, or `None` if there is not one.
@@ -763,7 +873,6 @@ fn CodeDial() -> Element {
 #[component]
 pub(crate) fn Home(plane: Plane) -> Element {
     let ctx = crate::state::use_app_ctx();
-    let mut draft = use_signal(String::new);
 
     let connected = match plane {
         Plane::Chat => (ctx.conn)().is_connected(),
@@ -832,6 +941,384 @@ pub(crate) fn Home(plane: Plane) -> Element {
         }
     });
 
+    rsx! {
+        // `home-code` ON THE `main` THAT ALREADY CARRIES `home` — #76, and the
+        // whole of it. Seven rules in `assets/desktop/97-home-code.css` have
+        // been correct and emitted by nothing since `c5db8a0`: the code half
+        // wore the chat half's geometry because it had no class of its own to
+        // hang a rule on, and no CSS could fix that.
+        //
+        // TWO TOP-LEVEL BRANCHES, and it is the shape rather than a preference.
+        // The mockup's code home is three rows — a board that scrolls, and a
+        // composer welded to the bottom edge that never does — and the chat
+        // home is one column with the composer THIRD. rsx has no conditional
+        // wrapper, so the composer is a component (`HomeCompose`) and each half
+        // says where it goes. What the two branches share is the shape this
+        // file's header names: a thing you type into, and what you might pick
+        // up. They never shared an order.
+        main {
+            class: if plane == Plane::Code { "scroll home home-code" } else { "scroll home" },
+            div { class: "home-inner",
+                if plane == Plane::Code {
+                    // THE BOARD IS ITS OWN SCROLL REGION, which is what the
+                    // dock is for: with nine trees the column measured 1133px
+                    // in an 826px pane and the last working-tree row sat 307px
+                    // below the fold, while the box you type into was the first
+                    // thing on screen. Now the rows scroll under a composer
+                    // that does not move.
+                    div { class: "home-board",
+                        // THE CODE HALF HAS TO DIAL ITSELF, and nothing on the
+                        // desktop ever did: `views::code::CodeSessionsView` is
+                        // the only thing in the app that calls `code_connect`,
+                        // and this shell renders `Home` where that view would
+                        // be. So the board, the sidebar's tree list and every
+                        // tile read an empty `code_chats` forever, with the
+                        // standing line correctly reporting a socket nobody had
+                        // tried to open.
+                        CodeDial {}
+                        // Disconnected, the reason — and on this half the sheet
+                        // draws it as the amber banner `.home-code
+                        // .home-standing` has been holding for it, rather than
+                        // as 22px of grey body text.
+                        if !connected {
+                            p { class: "home-standing", "{standing(plane, connected, count)}" }
+                        }
+                        div { class: "home-tiles",
+                            for tile in code_tiles(&ctx) {
+                                div {
+                                    key: "{tile.label}",
+                                    class: if tile.urgent {
+                                        "home-tile urgent"
+                                    } else if tile.live {
+                                        "home-tile live"
+                                    } else {
+                                        "home-tile"
+                                    },
+                                    div { class: "home-tile-value", "{tile.value}" }
+                                    div { class: "home-tile-label", "{tile.label}" }
+                                    if let Some(sub) = tile.sub.clone() {
+                                        div { class: "home-tile-sub", "{sub}" }
+                                    }
+                                }
+                            }
+                        }
+
+                        // THE BOARD: what is actually in each repo. Every child
+                        // of a row is a span — the mockup puts an "Answer"
+                        // button on three of its six rows, and a button inside a
+                        // button makes the parser hoist the inner one, which
+                        // re-parents everything after it. That shape produced
+                        // 1600 audit findings the one time it shipped here. The
+                        // whole row is the target and it opens the chat, where
+                        // the permission modal offers the same two answers with
+                        // the ask beside them.
+                        for group in code_board(&ctx, crate::state::now_secs()) {
+                            div { key: "{group.repo}", class: "repo-group",
+                                div { class: "repo-head",
+                                    Icon { name: "repo" }
+                                    span { class: "repo-head-name", "{group.repo}" }
+                                    span { class: "repo-head-base",
+                                        if let Some(base) = group.base.clone() {
+                                            "{base} \u{b7} {group.trees.len()} trees"
+                                        } else {
+                                            "{group.trees.len()} trees"
+                                        }
+                                    }
+                                    span { class: "repo-head-facts",
+                                        if group.waiting > 0 {
+                                            span { class: "warn", "{group.waiting} waiting" }
+                                        }
+                                        if group.awake > 0 {
+                                            span { class: "live", "{group.awake} awake" }
+                                        }
+                                    }
+                                }
+                                for tree in group.trees {
+                                    button {
+                                        key: "{tree.id}",
+                                        class: tree.state.class(),
+                                        title: "{tree.title}",
+                                        // Enter the plane first —
+                                        // `open_code_chat` sets `code_screen`
+                                        // and not `tab`, and `nav::current`
+                                        // reads the tab first. The bug
+                                        // `sidebar.rs` writes up at length.
+                                        onclick: {
+                                            let id = tree.id.clone();
+                                            move |_| {
+                                                (crate::nav::primary(Plane::Code).go)(&ctx);
+                                                if let Some(meta) =
+                                                    (ctx.code_chats)().iter().find(|c| c.id == id)
+                                                {
+                                                    crate::code::open_code_chat(&ctx, meta.clone());
+                                                }
+                                            }
+                                        },
+                                        span {
+                                            class: "tree-mark",
+                                            "aria-label": tree.state.word(),
+                                        }
+                                        span { class: "tree-text",
+                                            span { class: "tree-title", "{tree.title}" }
+                                            if let Some(say) = tree.say.clone() {
+                                                span { class: "tree-say q", "{say}" }
+                                            }
+                                        }
+                                        span { class: "tree-branch",
+                                            if let Some(branch) = tree.branch.clone() {
+                                                span { class: "tree-branch-name", "{branch}" }
+                                            }
+                                            if let Some(base) = tree.base.clone() {
+                                                span { class: "tree-branch-base", "{base}" }
+                                            }
+                                        }
+                                        span { class: "tree-state", {tree.state.word()} }
+                                        if let Some(age) = tree.age.clone() {
+                                            span { class: "tree-age", "{age}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // WELDED TO THE BOTTOM EDGE, and LAST. `flex: 0 0 auto`
+                    // over a board that takes the slack, which is the mockup's
+                    // three-row `.main`. On the chat half the composer is third
+                    // in one scrolling column; here it is a region.
+                    div { class: "home-dock",
+                        HomeCompose { plane }
+                    }
+                } else {
+                    // NO GREETING ON THE CODE HALF, which is why this is inside
+                    // the chat branch rather than guarded. The mockup has none
+                    // — that side opens on a board, because what a working tree
+                    // is doing is the question, and `hour_now` is UTC and says
+                    // so.
+                    h1 { class: "home-greeting", "{part_of_day(hour_now())}." }
+                    // ONE SENTENCE UNDER THE GREETING, AND ONLY WHEN IT IS OWED.
+                    //
+                    // This was the `else` of the lede's `if let`; with the lede
+                    // gone it stands on its own, and the branch it lost is the
+                    // decision #200 left open. CONNECTED, BOTH HALVES SAY
+                    // NOTHING HERE, which was already the code half's rule and
+                    // its reason carries over: the tiles and the board are that
+                    // half's standing line, and on this one the count is on the
+                    // section heading three inches down — `.home-section-meta`
+                    // reads "12 threads" beside "Pick up where you left off". A
+                    // sentence here would be the same number said twice, which
+                    // is what the owner called unnecessary. Disconnected, both
+                    // halves still owe the reader the reason, and nothing else
+                    // on the screen gives it.
+                    if !connected {
+                        p { class: "home-standing", "{standing(plane, connected, count)}" }
+                    }
+
+                    // THE COMPOSER IS THE NEW-SESSION AFFORDANCE, which is why
+                    // the sidebar's New button hides while this is on screen.
+                    // The owner's words: "I don't think we need a new chat
+                    // button when the big chat box is visible in the middle."
+                    HomeCompose { plane }
+
+                    // PICK UP WHERE YOU LEFT OFF.
+                    //
+                    // See `Recent` for why this is here after being cut once.
+                    // The short version: the sidebar's row and this one are not
+                    // the same row, and the mockups render both.
+                    if !recent.is_empty() {
+                        div { class: "home-recent",
+                            h2 { class: "home-section",
+                                "Pick up where you left off"
+                                span { class: "home-section-meta",
+                                    {
+                                        let n = (ctx.sessions)().len();
+                                        if n == 1 { "1 thread".to_owned() } else { format!("{n} threads") }
+                                    }
+                                }
+                            }
+                            for row in recent {
+                                button {
+                                    key: "{row.id}",
+                                    class: row.state.class(),
+                                    title: "{row.title}",
+                                    // The sidebar row's sequence, and it has to
+                                    // be this order: `open_session` sets
+                                    // `screen`, not `tab`, and `nav::current`
+                                    // reads the tab first — so a row pressed
+                                    // from any other destination would open a
+                                    // session the window was not looking at.
+                                    // Entering the plane first is what makes the
+                                    // press land.
+                                    onclick: {
+                                        let id = row.id;
+                                        move |_| {
+                                            (crate::nav::primary(Plane::Chat).go)(&ctx);
+                                            // Looked up rather than carried:
+                                            // `Recent` is what the row DRAWS,
+                                            // and `open_session` needs the whole
+                                            // `SessionInfo` — its cwd, its kind,
+                                            // the fields a summary has no
+                                            // business holding a stale copy of.
+                                            if let Some(info) =
+                                                (ctx.sessions)().iter().find(|s| s.session_id == id)
+                                            {
+                                                crate::state::open_session(&ctx, info.clone());
+                                            }
+                                        }
+                                    },
+                                    span { class: "recent-dot" }
+                                    span { class: "recent-text",
+                                        span { class: "recent-title", "{row.title}" }
+                                        if let Some(quote) = row.quote.clone() {
+                                            span { class: "recent-quote", "{quote}" }
+                                        }
+                                    }
+                                    span { class: "recent-facts",
+                                        if let Some(turns) = row.turns.clone() {
+                                            span { class: "recent-fact", "{turns}" }
+                                        }
+                                        if let Some(word) = row.state.word() {
+                                            span { class: "recent-state", "{word}" }
+                                        } else if let Some(age) = row.age.clone() {
+                                            span { class: "recent-fact", "{age}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // WAYS TO START, and only on the chat half.
+                    //
+                    // Recipes and skills are the two things this half can begin
+                    // with that are not a blank prompt, and the sidebar keeps
+                    // them behind the Library disclosure — so this is the one
+                    // place they are visible without a click. Named from the
+                    // server's own list rather than invented.
+                    if !starters.is_empty() {
+                        div { class: "home-starters",
+                            h2 { class: "home-section",
+                                "Ways to start"
+                                if let Some(kinds) = starter_kinds(&starters) {
+                                    span { class: "home-section-meta", "{kinds}" }
+                                }
+                            }
+                            div { class: "home-starter-grid",
+                                for starter in starters {
+                                    button {
+                                        key: "{starter.kind}-{starter.name}",
+                                        class: "home-starter",
+                                        title: "{starter.name}",
+                                        onclick: move |_| {
+                                            let mut tab = ctx.tab;
+                                            tab.set(starter.tab);
+                                        },
+                                        Icon { name: starter.icon }
+                                        span { class: "home-starter-text",
+                                            span { class: "home-starter-name", "{starter.name}" }
+                                            // The taxonomy word AND the
+                                            // sentence, in that order and
+                                            // separated by a middot — the
+                                            // mockups' own "recipe · summarises
+                                            // overnight runs". The word alone
+                                            // was the whole second line, which
+                                            // told the reader what the card IS
+                                            // and nothing about what it would
+                                            // do.
+                                            span { class: "home-starter-kind",
+                                                "{starter.kind}"
+                                                if let Some(what) = starter.description.clone() {
+                                                    span { class: "home-starter-what", " · {what}" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // THE BLOCK THAT CLOSES THE CHAT COLUMN, and it is one now
+                    // rather than two. The mockups end with a dashed schedule
+                    // row pushed to the bottom and a hairline footnote under it;
+                    // the footnote is the owner's cut (#200), so the pill on the
+                    // column's bottom edge is the whole ending. `margin-top:
+                    // auto` in `40-home-chat.css` is what puts it there, and
+                    // that only works because `.home-inner` is
+                    // `min-height: 100%`.
+                    if let Some(sched) = sched_line(&ctx, crate::state::now_secs()) {
+                        button {
+                            class: "home-sched",
+                            title: "Open the scheduler",
+                            onclick: move |_| {
+                                let mut tab = ctx.tab;
+                                tab.set(crate::state::Tab::Scheduler);
+                            },
+                            Icon { name: "clock" }
+                            span { class: "home-sched-name", "{sched.name}" }
+                            span { class: "home-sched-what", "{sched.what}" }
+                            if sched.more > 0 {
+                                span { class: "home-sched-more", "+{sched.more} more" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// THE THING YOU TYPE INTO, on either half.
+///
+/// Its own component because #76 moved it: the chat home renders it third, in
+/// one scrolling column, and the code home renders it LAST, inside a
+/// `.home-dock` that does not scroll. rsx has no conditional wrapper, so the
+/// two orders are two branches, and a block that appears in both has to be a
+/// component rather than a copy.
+///
+/// It owns the draft as well, which `Home` used to. Nothing outside the
+/// composer ever read that signal, and a lifted first message has to be given
+/// back to the field it was lifted from — a scope that unmounts under the
+/// round trip is the one thing `state::give_back`'s `try_write` exists for.
+#[component]
+fn HomeCompose(plane: Plane) -> Element {
+    let ctx = crate::state::use_app_ctx();
+    let mut draft = use_signal(String::new);
+    // THE MODEL, HELD HERE UNTIL THERE IS A SESSION TO PUT IT ON — #194.
+    //
+    // `state::set_config_option` needs a `session_id` and the home screen's
+    // whole premise is that there is not one, so a picker that wrote through it
+    // would have been a control that silently did nothing. The choice waits in
+    // this signal, the chip shows it, and `state::new_session_sending` applies
+    // it to the session it creates before the first word goes out.
+    let model = use_signal(|| None::<String>);
+    let mut sheet = use_signal(|| None::<Pick>);
+
+    // WHERE THE TREE GETS CUT, seeded the way `CodeNewView` seeds its own
+    // pills, and for its reason rather than by copying it: the chip has to be
+    // able to say `goose-phone-app` and `main` before either is opened, or the
+    // reader is told to choose something that already has an answer.
+    //
+    // A write during render, which `CodeNewView` also does and which cannot
+    // loop here: `choose_new_repo` returns early when the repo is unchanged,
+    // and the base is only written once, when a fetched default arrives for the
+    // repo now chosen.
+    if plane == Plane::Code {
+        let where_ = (ctx.new_where)();
+        if where_.repo.is_empty() {
+            if let Some(first) = (ctx.code_repos)().first() {
+                crate::code::choose_new_repo(&ctx, &first.name);
+            }
+        } else if where_.base.is_none() {
+            let branches = (ctx.code_branches)();
+            if branches.repo == where_.repo {
+                if let Some(default) = branches.default {
+                    crate::code::choose_new_base(&ctx, Some(default));
+                }
+            }
+        }
+    }
+
     // START, and on the chat half it SENDS.
     //
     // It did not, and this file argued that it could not: "`send_prompt`
@@ -859,8 +1346,11 @@ pub(crate) fn Home(plane: Plane) -> Element {
             Plane::Chat => {
                 // The composer itself, handed over: it is emptied at once so a
                 // second press cannot make a second session while the create is
-                // in flight, and refilled by whichever path fails.
-                crate::state::new_session_sending(&ctx, draft);
+                // in flight, and refilled by whichever path fails. The model
+                // goes with it, because it is the one thing about the session
+                // that has to be decided before its first turn runs and the
+                // only channel for it is this call (#194).
+                crate::state::new_session_sending(&ctx, draft, model.peek().clone());
             }
             Plane::Code => {
                 // `new_task`, AND IT USED TO BE `code_draft`, WHICH DESTROYED
@@ -880,11 +1370,34 @@ pub(crate) fn Home(plane: Plane) -> Element {
                 // own shape for the tray's own reason — see the field.
                 let mut new_task = ctx.new_task;
                 new_task.set(draft.peek().trim().to_owned());
-                // The code half has no "create and send": a session needs a
-                // repo and a base branch before it can exist, which is what
-                // `CodeNewView` is for. So this carries the text and opens
-                // that screen — the same shape as the chat side, one screen
-                // further along.
+                // AND IT STILL OPENS THE NEW-SESSION SCREEN, which is #79's one
+                // open decision taken and written down rather than left.
+                //
+                // The chips above now say WHERE — repo and base travel on
+                // `ctx.new_where` and `CodeNewView` seeds from them, so the
+                // thing this issue actually reported ("the destination the
+                // session will land in is not visible while you type", and a
+                // second screen asking again for what you already chose) is
+                // gone. What the arrow does NOT do is create the tree outright,
+                // and that was measured before it was decided:
+                //
+                //   - `views::code::can_start` wants a MODEL, and its own note
+                //     says why it may not be defaulted into — "the one parameter
+                //     that decides what the work costs, how good it is, and,
+                //     through privacy hard rule 1, who gets to see the code". A
+                //     one-step send would need a fourth picker here or a send
+                //     that refuses with three pills' worth of reasons and no
+                //     room to say which.
+                //   - `CodeNewView` is reachable from NOWHERE else on this
+                //     shell. `grep -rn 'CodeScreen::New' src` finds three
+                //     writers: the sessions list's FAB and the code chat's
+                //     topbar, neither of which the desktop mounts, and this
+                //     line. It owns the only attach tray a new code session has
+                //     and the only mode picker, so creating from here would take
+                //     both off the desktop with nothing to replace them.
+                //
+                // So this half is two steps on purpose, and the second one now
+                // opens on the answers the first gave.
                 let mut screen = ctx.code_screen;
                 screen.set(crate::code::CodeScreen::New);
                 // Blanked here and not by a give-back, because this arm cannot
@@ -896,377 +1409,228 @@ pub(crate) fn Home(plane: Plane) -> Element {
     };
 
     rsx! {
-        main { class: "scroll home",
-            div { class: "home-inner",
-                // NO GREETING ON THE CODE HALF. The mockup has none — that
-                // side opens on a board, because what a working tree is doing
-                // is the question, and `hour_now` is UTC and says so.
-                if plane == Plane::Chat {
-                    h1 { class: "home-greeting", "{part_of_day(hour_now())}." }
-                }
-                // ONE SENTENCE UNDER THE GREETING, AND ONLY WHEN IT IS OWED.
+        div { class: "home-compose",
+            textarea {
+                class: "input",
+                placeholder: compose_placeholder(plane),
+                value: "{draft}",
+                // TWO, AND NOT THREE, AND NOT ONE.
                 //
-                // This was the `else` of the lede's `if let`; with the lede
-                // gone it stands on its own, and the branch it lost is the
-                // decision #200 left open. CONNECTED, BOTH HALVES NOW SAY
-                // NOTHING HERE, which was already the code half's rule and its
-                // reason carries over: the tiles and the board are that half's
-                // standing line, and on this one the count is on the section
-                // heading three inches down — `.home-section-meta` reads "12
-                // threads" beside "Pick up where you left off". A sentence here
-                // would be the same number said twice, which is what the owner
-                // called unnecessary. Disconnected, both halves still owe the
-                // reader the reason, and nothing else on the screen gives it.
-                if !connected {
-                    p { class: "home-standing", "{standing(plane, connected, count)}" }
-                }
-
-                // THE COMPOSER IS THE NEW-SESSION AFFORDANCE, which is why the
-                // sidebar's New button hides while this is on screen. The
-                // owner's words: "I don't think we need a new chat button when
-                // the big chat box is visible in the middle."
-                div { class: "home-compose",
-                    textarea {
-                        class: "input",
-                        placeholder: compose_placeholder(plane),
-                        value: "{draft}",
-                        // TWO, AND NOT THREE, AND NOT ONE.
-                        //
-                        // Three made the resting composer a 148px slab with
-                        // two empty lines under the placeholder, against the
-                        // mockups' 100px — measured, `.home-compose` was
-                        // 640x148 where `.launch.calm` is 712x100, with the
-                        // 17/18/15 field padding identical on both sides and
-                        // only the line count different. It is 48px of the
-                        // 110px by which this column ran off the bottom of the
-                        // window.
-                        //
-                        // One would be the mockups' own number and cannot
-                        // ship: nothing in this app grows a textarea. There is
-                        // no `field-sizing`, no `scrollHeight` read and no
-                        // resize hook anywhere in `src/`, and
-                        // `assets/shared.css`'s `max-height` only CAPS a field
-                        // that grows by this attribute. At one row a second
-                        // line of a prompt would scroll inside a box the
-                        // height of a single line, which is worse than the
-                        // slab. Two is the smallest count that still shows the
-                        // reader the line they just wrapped.
-                        rows: 2,
-                        oninput: move |e| draft.set(e.value()),
-                        onkeydown: move |e: Event<KeyboardData>| {
-                            if e.key() == Key::Enter && !e.modifiers().contains(Modifiers::SHIFT) {
-                                e.prevent_default();
-                                if !draft.peek().trim().is_empty() {
-                                    start();
-                                }
-                            }
-                        },
-                    }
-                    div { class: "home-compose-row",
-                        // WHAT THE SESSION WILL BE, before it exists.
-                        //
-                        // The mockup puts six facts here; three of them have
-                        // no source on the wire and are absent rather than
-                        // guessed. See `compose_chips`.
-                        div { class: "home-chips",
-                            for chip in compose_chips(&ctx, plane) {
-                                span {
-                                    key: "{chip.text}",
-                                    class: if chip.mono { "home-chip mono" } else { "home-chip" },
-                                    "{chip.text}"
-                                }
-                            }
-                        }
-                        // `.send`, the circle, and NOT `.btn primary`.
-                        //
-                        // It is the same control the transcript's composer
-                        // already uses (`assets/shared.css`), which is the point:
-                        // the thing you press to send is one shape everywhere
-                        // in the app, and the reader meets it here first. A
-                        // 131x40 rectangle reading "Start a chat" was saying
-                        // out loud what an arrow in a circle says by being
-                        // where it is — and, being `--bg-inverse` when live and
-                        // `--bg-tertiary` when not, it was also the reason a
-                        // resting home screen had no accent on it anywhere.
-                        button {
-                            class: "send",
-                            // A name of its own, so the control is findable by
-                            // something other than the words inside it — which
-                            // is what a screen reader needs and what
-                            // `views::press` locates by. It carries the whole
-                            // label now that the face is a glyph.
-                            title: match plane {
-                                Plane::Chat => "Start a chat",
-                                Plane::Code => "Start a session",
-                            },
-                            "aria-label": match plane {
-                                Plane::Chat => "Start a chat",
-                                Plane::Code => "Start a session",
-                            },
-                            // AN EMPTY COMPOSER STARTS NOTHING. Without this a
-                            // stray press makes a session on the server — a
-                            // real object with a real id that nobody asked for
-                            // and someone now has to delete.
-                            disabled: draft().trim().is_empty(),
-                            onclick: move |_| start(),
-                            Icon { name: "arrow-up" }
+                // Three made the resting composer a 148px slab with two empty
+                // lines under the placeholder, against the mockups' 100px —
+                // measured, `.home-compose` was 640x148 where `.launch.calm` is
+                // 712x100, with the 17/18/15 field padding identical on both
+                // sides and only the line count different. It is 48px of the
+                // 110px by which this column ran off the bottom of the window.
+                //
+                // One would be the mockups' own number and cannot ship: nothing
+                // in this app grows a textarea. There is no `field-sizing`, no
+                // `scrollHeight` read and no resize hook anywhere in `src/`, and
+                // `assets/shared.css`'s `max-height` only CAPS a field that
+                // grows by this attribute. At one row a second line of a prompt
+                // would scroll inside a box the height of a single line, which
+                // is worse than the slab. Two is the smallest count that still
+                // shows the reader the line they just wrapped.
+                rows: 2,
+                oninput: move |e| draft.set(e.value()),
+                onkeydown: move |e: Event<KeyboardData>| {
+                    if e.key() == Key::Enter && !e.modifiers().contains(Modifiers::SHIFT) {
+                        e.prevent_default();
+                        if !draft.peek().trim().is_empty() {
+                            start();
                         }
                     }
-                }
-
-                // PICK UP WHERE YOU LEFT OFF.
+                },
+            }
+            div { class: "home-compose-row",
+                // WHAT THE SESSION WILL BE, before it exists — and two of these
+                // are now controls rather than facts.
                 //
-                // See `Recent` for why this is here after being cut once. The
-                // short version: the sidebar's row and this one are not the
-                // same row, and the mockups render both.
-                if plane == Plane::Chat && !recent.is_empty() {
-                    div { class: "home-recent",
-                        h2 { class: "home-section",
-                            "Pick up where you left off"
-                            span { class: "home-section-meta",
-                                {
-                                    let n = (ctx.sessions)().len();
-                                    if n == 1 { "1 thread".to_owned() } else { format!("{n} threads") }
-                                }
-                            }
-                        }
-                        for row in recent {
+                // The mockup puts six facts here; three of them have no source
+                // on the wire and are absent rather than guessed. Of the ones
+                // that are left, the model (#194) and the code half's repo and
+                // base (#79) are things you CHANGE, and `assets/desktop/40-home-
+                // chat.css` has always said what that means: a bordered box with
+                // a chevron, because a chip that is pressable and drawn like the
+                // read-only chips beside it is worse than either.
+                div { class: "home-chips",
+                    for chip in compose_chips(&ctx, plane, model().as_deref()) {
+                        if let Some(pick) = chip.pick {
                             button {
-                                key: "{row.id}",
-                                class: row.state.class(),
-                                title: "{row.title}",
-                                // The sidebar row's sequence, and it has to be
-                                // this order: `open_session` sets `screen`, not
-                                // `tab`, and `nav::current` reads the tab
-                                // first — so a row pressed from any other
-                                // destination would open a session the window
-                                // was not looking at. Entering the plane first
-                                // is what makes the press land.
-                                onclick: {
-                                    let id = row.id;
-                                    move |_| {
-                                        (crate::nav::primary(Plane::Chat).go)(&ctx);
-                                        // Looked up rather than carried: `Recent`
-                                        // is what the row DRAWS, and `open_session`
-                                        // needs the whole `SessionInfo` — its cwd,
-                                        // its kind, the fields a summary has no
-                                        // business holding a stale copy of.
-                                        if let Some(info) =
-                                            (ctx.sessions)().iter().find(|s| s.session_id == id)
-                                        {
-                                            crate::state::open_session(&ctx, info.clone());
-                                        }
+                                key: "{chip.text}",
+                                class: "home-chip picker",
+                                // The control's only name once its face is a
+                                // value: `views::press` locates by this, and a
+                                // screen reader reads it.
+                                title: pick.title(),
+                                "aria-label": pick.title(),
+                                onclick: move |_| {
+                                    // Asked on the press rather than on the
+                                    // render, exactly as `CodeNewView`'s branch
+                                    // pill asks: the manager answers this from
+                                    // GitHub with its own credential, so it
+                                    // wakes no container, but it is still a
+                                    // round trip nobody has asked for until the
+                                    // sheet is opened. `ensure_code_branches`
+                                    // returns at once when the list is in hand.
+                                    if pick == Pick::Base {
+                                        let repo = ctx.new_where.peek().repo.clone();
+                                        crate::code::ensure_code_branches(&ctx, &repo);
                                     }
+                                    sheet.set(Some(pick));
                                 },
-                                span { class: "recent-dot" }
-                                span { class: "recent-text",
-                                    span { class: "recent-title", "{row.title}" }
-                                    if let Some(quote) = row.quote.clone() {
-                                        span { class: "recent-quote", "{quote}" }
-                                    }
+                                if let Some(icon) = chip.icon {
+                                    Icon { name: icon }
                                 }
-                                span { class: "recent-facts",
-                                    if let Some(turns) = row.turns.clone() {
-                                        span { class: "recent-fact", "{turns}" }
-                                    }
-                                    if let Some(word) = row.state.word() {
-                                        span { class: "recent-state", "{word}" }
-                                    } else if let Some(age) = row.age.clone() {
-                                        span { class: "recent-fact", "{age}" }
-                                    }
-                                }
+                                "{chip.text}"
+                                Icon { name: "chevron-down" }
+                            }
+                        } else {
+                            span {
+                                key: "{chip.text}",
+                                class: if chip.mono { "home-chip mono" } else { "home-chip" },
+                                "{chip.text}"
                             }
                         }
                     }
                 }
-
-                // WAYS TO START, and only on the chat half.
+                // `.send`, the circle, and NOT `.btn primary`.
                 //
-                // Recipes and skills are the two things this half can begin
-                // with that are not a blank prompt, and the sidebar keeps them
-                // behind the Library disclosure — so this is the one place
-                // they are visible without a click. Named from the server's
-                // own list rather than invented.
-                if plane == Plane::Chat && !starters.is_empty() {
-                    div { class: "home-starters",
-                        h2 { class: "home-section",
-                            "Ways to start"
-                            if let Some(kinds) = starter_kinds(&starters) {
-                                span { class: "home-section-meta", "{kinds}" }
-                            }
-                        }
-                        div { class: "home-starter-grid",
-                            for starter in starters {
-                                button {
-                                    key: "{starter.kind}-{starter.name}",
-                                    class: "home-starter",
-                                    title: "{starter.name}",
-                                    onclick: move |_| {
-                                        let mut tab = ctx.tab;
-                                        tab.set(starter.tab);
-                                    },
-                                    Icon { name: starter.icon }
-                                    span { class: "home-starter-text",
-                                        span { class: "home-starter-name", "{starter.name}" }
-                                        // The taxonomy word AND the sentence,
-                                        // in that order and separated by a
-                                        // middot — the mockups' own
-                                        // "recipe · summarises overnight
-                                        // runs". The word alone was the whole
-                                        // second line, which told the reader
-                                        // what the card IS and nothing about
-                                        // what it would do.
-                                        span { class: "home-starter-kind",
-                                            "{starter.kind}"
-                                            if let Some(what) = starter.description.clone() {
-                                                span { class: "home-starter-what", " · {what}" }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                // It is the same control the transcript's composer already uses
+                // (`assets/shared.css`), which is the point: the thing you press
+                // to send is one shape everywhere in the app, and the reader
+                // meets it here first. A 131x40 rectangle reading "Start a chat"
+                // was saying out loud what an arrow in a circle says by being
+                // where it is — and, being `--bg-inverse` when live and
+                // `--bg-tertiary` when not, it was also the reason a resting
+                // home screen had no accent on it anywhere.
+                button {
+                    class: "send",
+                    // A name of its own, so the control is findable by something
+                    // other than the words inside it — which is what a screen
+                    // reader needs and what `views::press` locates by. It
+                    // carries the whole label now that the face is a glyph.
+                    title: match plane {
+                        Plane::Chat => "Start a chat",
+                        Plane::Code => "Start a session",
+                    },
+                    "aria-label": match plane {
+                        Plane::Chat => "Start a chat",
+                        Plane::Code => "Start a session",
+                    },
+                    // AN EMPTY COMPOSER STARTS NOTHING. Without this a stray
+                    // press makes a session on the server — a real object with a
+                    // real id that nobody asked for and someone now has to
+                    // delete.
+                    disabled: draft().trim().is_empty(),
+                    onclick: move |_| start(),
+                    Icon { name: "arrow-up" }
                 }
+            }
+        }
+        {home_sheet(&ctx, sheet, model)}
+    }
+}
 
-                // THE CODE HALF'S COUNTS. Chat has no equivalent worth a tile:
-                // a conversation count is already the lede's first clause, and
-                // everything else the mockup tiles there is spend and latency,
-                // which have no source.
-                // THE CODE HALF HAS TO DIAL ITSELF, and nothing on the
-                // desktop ever did: `views::code::CodeSessionsView` is the
-                // only thing in the app that calls `code_connect`, and this
-                // shell renders `Home` where that view would be. So the board,
-                // the sidebar's tree list and every tile read an empty
-                // `code_chats` forever, with the standing line correctly
-                // reporting a socket nobody had tried to open.
-                if plane == Plane::Code {
-                    CodeDial {}
+/// Whichever chip's sheet is open.
+///
+/// [`ChoicePickerSheet`] and nothing of this screen's own, which is #194's
+/// instruction in its own words: *"reuse it rather than inventing a second one,
+/// so the two screens cannot drift."* The repo and branch rows are
+/// `views::code`'s too — the same `repo_choices` and `branch_choices` the
+/// new-session screen builds, so a repo is described the same way in both
+/// places and the filter that arrived for one arrives for both.
+fn home_sheet(
+    ctx: &AppCtx,
+    mut sheet: Signal<Option<Pick>>,
+    mut model: Signal<Option<String>>,
+) -> Element {
+    let ctx = *ctx;
+    match sheet() {
+        None => rsx! {},
+        Some(Pick::Model) => {
+            let option = (ctx.config_options)()
+                .iter()
+                .find(|o| o.config_id == "model")
+                .cloned();
+            // What this screen has settled outranks what the server holds, for
+            // as long as the two can differ — which is until the session exists.
+            let current = model().or_else(|| option.as_ref().and_then(|o| o.current_value.clone()));
+            let choices = option.as_ref().map(option_choices).unwrap_or_default();
+            rsx! {
+                ChoicePickerSheet {
+                    title: "Select model",
+                    backend: "goose",
+                    // NOT "applies from your next message", which is the default
+                    // and is false here: there is no next message on this screen,
+                    // there is a first one, and this is the same distinction
+                    // `ChoicePickerSheet::subtitle` was added for.
+                    subtitle: "the chat you start runs on this from its first message",
+                    choices,
+                    current,
+                    // Unreachable while the chip renders only for an adjustable
+                    // option, and stated anyway, by the rule `views::chat`'s mode
+                    // sheet states it under: an empty picker with nothing in it
+                    // and nothing to say is the one outcome a reader cannot act
+                    // on.
+                    empty: "This agent offers no other model.",
+                    onchoose: move |value: String| {
+                        model.set(Some(value));
+                        sheet.set(None);
+                    },
+                    onclose: move |()| sheet.set(None),
                 }
-
-                if plane == Plane::Code {
-                    div { class: "home-tiles",
-                        for tile in code_tiles(&ctx) {
-                            div {
-                                key: "{tile.label}",
-                                class: if tile.urgent {
-                                    "home-tile urgent"
-                                } else if tile.live {
-                                    "home-tile live"
-                                } else {
-                                    "home-tile"
-                                },
-                                div { class: "home-tile-value", "{tile.value}" }
-                                div { class: "home-tile-label", "{tile.label}" }
-                                if let Some(sub) = tile.sub.clone() {
-                                    div { class: "home-tile-sub", "{sub}" }
-                                }
-                            }
-                        }
-                    }
-
-                    // THE BOARD: what is actually in each repo. Every child of
-                    // a row is a span — the mockup puts an "Answer" button on
-                    // three of its six rows, and a button inside a button makes
-                    // the parser hoist the inner one, which re-parents
-                    // everything after it. That shape produced 1600 audit
-                    // findings the one time it shipped here. The whole row is
-                    // the target and it opens the chat, where the permission
-                    // modal offers the same two answers with the ask beside
-                    // them.
-                    for group in code_board(&ctx, crate::state::now_secs()) {
-                        div { key: "{group.repo}", class: "repo-group",
-                            div { class: "repo-head",
-                                Icon { name: "repo" }
-                                span { class: "repo-head-name", "{group.repo}" }
-                                span { class: "repo-head-base",
-                                    if let Some(base) = group.base.clone() {
-                                        "{base} \u{b7} {group.trees.len()} trees"
-                                    } else {
-                                        "{group.trees.len()} trees"
-                                    }
-                                }
-                                span { class: "repo-head-facts",
-                                    if group.waiting > 0 {
-                                        span { class: "warn", "{group.waiting} waiting" }
-                                    }
-                                    if group.awake > 0 {
-                                        span { class: "live", "{group.awake} awake" }
-                                    }
-                                }
-                            }
-                            for tree in group.trees {
-                                button {
-                                    key: "{tree.id}",
-                                    class: tree.state.class(),
-                                    title: "{tree.title}",
-                                    // Enter the plane first — `open_code_chat`
-                                    // sets `code_screen` and not `tab`, and
-                                    // `nav::current` reads the tab first. The
-                                    // bug `sidebar.rs` writes up at length.
-                                    onclick: {
-                                        let id = tree.id.clone();
-                                        move |_| {
-                                            (crate::nav::primary(Plane::Code).go)(&ctx);
-                                            if let Some(meta) =
-                                                (ctx.code_chats)().iter().find(|c| c.id == id)
-                                            {
-                                                crate::code::open_code_chat(&ctx, meta.clone());
-                                            }
-                                        }
-                                    },
-                                    span {
-                                        class: "tree-mark",
-                                        "aria-label": tree.state.word(),
-                                    }
-                                    span { class: "tree-text",
-                                        span { class: "tree-title", "{tree.title}" }
-                                        if let Some(say) = tree.say.clone() {
-                                            span { class: "tree-say q", "{say}" }
-                                        }
-                                    }
-                                    span { class: "tree-branch",
-                                        if let Some(branch) = tree.branch.clone() {
-                                            span { class: "tree-branch-name", "{branch}" }
-                                        }
-                                        if let Some(base) = tree.base.clone() {
-                                            span { class: "tree-branch-base", "{base}" }
-                                        }
-                                    }
-                                    span { class: "tree-state", {tree.state.word()} }
-                                    if let Some(age) = tree.age.clone() {
-                                        span { class: "tree-age", "{age}" }
-                                    }
-                                }
-                            }
-                        }
-                    }
+            }
+        }
+        Some(Pick::Repo) => {
+            let repos = (ctx.code_repos)();
+            let count = repos.len();
+            rsx! {
+                ChoicePickerSheet {
+                    title: "Repositories ({count})",
+                    backend: "code agent",
+                    subtitle: "from the brain's allowlist",
+                    choices: crate::views::code::repo_choices(&repos),
+                    current: Some((ctx.new_where)().repo),
+                    empty: "The manager's allowlist is empty — nothing to start a session on.",
+                    onchoose: move |value: String| {
+                        crate::code::choose_new_repo(&ctx, &value);
+                        sheet.set(None);
+                    },
+                    onclose: move |()| sheet.set(None),
                 }
-
-                // THE BLOCK THAT CLOSES THE CHAT COLUMN, and it is one now
-                // rather than two. The mockups end with a dashed schedule row
-                // pushed to the bottom and a hairline footnote under it; the
-                // footnote is the owner's cut (#200), so the pill on the
-                // column's bottom edge is the whole ending. `margin-top: auto`
-                // in `40-home-chat.css` is what puts it there, and that only
-                // works because `.home-inner` is `min-height: 100%`.
-                if plane == Plane::Chat {
-                    if let Some(sched) = sched_line(&ctx, crate::state::now_secs()) {
-                        button {
-                            class: "home-sched",
-                            title: "Open the scheduler",
-                            onclick: move |_| {
-                                let mut tab = ctx.tab;
-                                tab.set(crate::state::Tab::Scheduler);
-                            },
-                            Icon { name: "clock" }
-                            span { class: "home-sched-name", "{sched.name}" }
-                            span { class: "home-sched-what", "{sched.what}" }
-                            if sched.more > 0 {
-                                span { class: "home-sched-more", "+{sched.more} more" }
-                            }
-                        }
-                    }
+            }
+        }
+        Some(Pick::Base) => {
+            let branches = (ctx.code_branches)();
+            rsx! {
+                ChoicePickerSheet {
+                    title: "Choose base branch",
+                    backend: "code agent",
+                    subtitle: "the session's own branch is cut from this one",
+                    // The manager stops at 500. Said above the rows, because
+                    // with a filter over a list that has been cut short,
+                    // "Nothing matches" about a branch that exists is a lie the
+                    // reader has no way to catch.
+                    note: branches.truncated.then(|| {
+                        format!(
+                            "{} branches — this repo has more than the manager will \
+                             read, so one that is missing here may still exist.",
+                            branches.names.len(),
+                        )
+                    }),
+                    choices: crate::views::code::branch_choices(&branches),
+                    current: (ctx.new_where)().base,
+                    empty: if branches.loading {
+                        "Asking GitHub for this repo's branches…"
+                    } else {
+                        "This manager cannot list branches — the session starts on the repo's default."
+                    },
+                    onchoose: move |value: String| {
+                        crate::code::choose_new_base(&ctx, Some(value));
+                        sheet.set(None);
+                    },
+                    onclose: move |()| sheet.set(None),
                 }
             }
         }
@@ -1919,7 +2283,7 @@ mod tests {
                 let mut ext = ctx.extensions.list;
                 ext.write().items = vec![extension("developer"), extension("memory")];
             },
-            |ctx| compose_chips(ctx, Plane::Chat),
+            |ctx| compose_chips(ctx, Plane::Chat, None),
         );
         let text: Vec<&str> = chips.iter().map(|c| c.text.as_str()).collect();
         assert!(
@@ -1960,7 +2324,7 @@ mod tests {
                 let mut usage = ctx.usage;
                 usage.set(Some((83_000, 1_000_000)));
             },
-            |ctx| compose_chips(ctx, Plane::Chat),
+            |ctx| compose_chips(ctx, Plane::Chat, None),
         );
         let text: Vec<&str> = chips.iter().map(|c| c.text.as_str()).collect();
         assert!(
@@ -1982,7 +2346,7 @@ mod tests {
                 let mut usage = ctx.usage;
                 usage.set(Some((0, 0)));
             },
-            |ctx| compose_chips(ctx, Plane::Chat),
+            |ctx| compose_chips(ctx, Plane::Chat, None),
         );
         assert!(
             !chips.iter().any(|c| c.text.contains("context")),
@@ -2000,7 +2364,7 @@ mod tests {
                 let mut ext = ctx.extensions.list;
                 ext.write().items = vec![extension("developer")];
             },
-            |ctx| compose_chips(ctx, Plane::Chat),
+            |ctx| compose_chips(ctx, Plane::Chat, None),
         );
         for chip in &chips {
             assert_eq!(
@@ -2476,6 +2840,490 @@ mod tests {
             "the \"Ways to start\" heading has no meta, so the two section \
              headings on this screen are asymmetric — one carries a value and \
              one carries nothing: {html}"
+        );
+    }
+
+    /// One allowlisted repo, as the manager sends it.
+    fn allowed(name: &str) -> opencode_client::RepoEntry {
+        opencode_client::RepoEntry {
+            name: name.to_owned(),
+            url: String::new(),
+            edit_only: false,
+            allow_push: false,
+            public_throwaway: false,
+        }
+    }
+
+    /// One goose config option with `values` to choose between.
+    fn option(id: &str, current: &str, values: &[(&str, &str)]) -> goose_acp_client::ConfigOption {
+        serde_json::from_value(serde_json::json!({
+            "configId": id,
+            "name": id,
+            "type": "select",
+            "currentValue": current,
+            "options": values
+                .iter()
+                .map(|(value, name)| serde_json::json!({"value": value, "name": name}))
+                .collect::<Vec<_>>(),
+        }))
+        .expect("a config option this test wrote")
+    }
+
+    /// THE CODE HOME HAS A SHELL OF ITS OWN, AND THE COMPOSER IS UNDER THE
+    /// BOARD — #76, which is the whole reason this wave exists.
+    ///
+    /// Seven rules in `assets/desktop/97-home-code.css` were correct and
+    /// emitted by nothing from `c5db8a0` until now, because `home.rs` rendered
+    /// one `main { class: "scroll home" }` for both halves: the code half wore
+    /// the chat half's geometry and no CSS could fix that, since there was no
+    /// class on the element to hang a rule on.
+    ///
+    /// ORDER IS HALF THE ASSERTION and it is the half a `contains` check would
+    /// miss. `.home-dock` is `flex: 0 0 auto` under a `.home-board` that takes
+    /// the slack, so the dock is only welded to the bottom edge if it comes
+    /// LAST. Emitted first — which is where the composer was — it is a region
+    /// pinned to the top with the board under it, which is the shipped layout
+    /// wearing new class names.
+    ///
+    /// REPRODUCED: swap the two `div`s in the `Plane::Code` branch and the
+    /// third assertion fails; drop the `home-code` from the `main`'s class and
+    /// the first does.
+    #[test]
+    fn the_code_home_docks_its_composer_under_its_own_board() {
+        let html = crate::testkit::render(|| rsx! { Home { plane: Plane::Code } });
+        for needle in ["home-board", "home-dock", "home-tiles", "home-compose"] {
+            assert!(
+                html.contains(needle),
+                "the code home renders no `{needle}`, so the ordering \
+                 assertions below would be about nothing: {html}"
+            );
+        }
+        // Safe against the loop above, which is why it runs first: a needle
+        // that is not there fails there rather than comparing two sentinels.
+        let at = |needle: &str| html.find(needle).unwrap_or(usize::MAX);
+        assert!(
+            html.contains("scroll home home-code"),
+            "the code half's `main` does not carry `home-code`, so every rule \
+             in `97-home-code.css` that scopes to it paints nothing: {html}"
+        );
+        assert!(
+            at("home-board") < at("home-tiles"),
+            "the counts are outside the board, so they do not scroll with the \
+             rows they count"
+        );
+        assert!(
+            at("home-board") < at("home-dock"),
+            "the dock is emitted before the board, so `flex: 0 0 auto` pins the \
+             composer to the TOP of the pane and the board scrolls under it — \
+             which is the layout this issue is about, wearing new names"
+        );
+        assert!(
+            at("home-dock") < at("home-compose"),
+            "the composer is not inside the dock"
+        );
+    }
+
+    /// AND THE CHAT HOME WEARS NONE OF IT.
+    ///
+    /// The two screens share a shape and not an order — the chat column is one
+    /// scroller with the composer third, and the code half is a board over a
+    /// dock. A `home-board` on the chat half would put `overflow-y: auto` round
+    /// a greeting.
+    #[test]
+    fn the_chat_home_is_one_column_and_says_so() {
+        let html = crate::testkit::render(|| rsx! { Home { plane: Plane::Chat } });
+        for class in ["home-code", "home-board", "home-dock"] {
+            assert!(
+                !html.contains(class),
+                "the chat home rendered the code half's `{class}`, so it takes \
+                 that half's geometry: {html}"
+            );
+        }
+        assert!(
+            html.contains("home-compose"),
+            "no composer on the chat home"
+        );
+    }
+
+    /// THE CODE COMPOSER NAMES WHERE THE TREE GETS CUT — #79.
+    ///
+    /// Two bare facts became two controls: the repo the session runs on and
+    /// the ref its own branch is cut from. The `N repos` chip they replace was
+    /// a count of a list the reader could not open — it said how many choices
+    /// there were and offered none of them.
+    ///
+    /// `render_settled` rather than `render`, because the first pass is where
+    /// the composer writes the default repo into the carrier: rendered once,
+    /// the chip still reads `Repository`.
+    #[test]
+    fn the_code_composer_offers_the_repo_and_the_base_rather_than_counting_them() {
+        let html = crate::testkit::render_settled(
+            |ctx| {
+                let mut repos = ctx.code_repos;
+                repos.set(vec![allowed("acme/infra"), allowed("acme/web")]);
+            },
+            || rsx! { Home { plane: Plane::Code } },
+        );
+        assert!(
+            html.contains("home-chip picker"),
+            "the composer's chips are all still facts, so nothing on this \
+             screen says where the session will be cut: {html}"
+        );
+        assert!(
+            html.contains(r#"aria-label="Repository""#)
+                && html.contains(r#"aria-label="Base branch""#),
+            "one of the two controls #79 asks for is missing: {html}"
+        );
+        assert!(
+            html.contains("infra"),
+            "the repo control does not name the repo it is pointed at, so the \
+             destination is still invisible while you type: {html}"
+        );
+        assert!(
+            !html.contains("2 repos"),
+            "the count chip the two controls replace is still on the row, so \
+             the same fact is said twice and one of the two is not pressable"
+        );
+    }
+
+    /// WITH NO ALLOWLIST THERE ARE NO CONTROLS, only the reason.
+    ///
+    /// A picker over an empty manager list opens a sheet saying there is
+    /// nothing in it, on a screen whose standing line is already saying the
+    /// gateway is not connected. `N repos` was gated on the same count.
+    #[test]
+    fn an_empty_allowlist_offers_nothing_to_pick() {
+        let html = crate::testkit::render_settled(|_| {}, || rsx! { Home { plane: Plane::Code } });
+        assert!(
+            !html.contains("picker"),
+            "the code home offered a repo picker with no repos to pick: {html}"
+        );
+        assert!(
+            html.contains("home-standing"),
+            "and it did not say why either: {html}"
+        );
+    }
+
+    /// WHAT YOU PICK ON THE HOME SCREEN IS WHERE THE NEW SESSION OPENS — the
+    /// half of #79 that makes the two-step honest.
+    ///
+    /// The issue's own objection to a picker that still routes onward is that
+    /// it "leaves two places to choose a repo and ignores the one you used".
+    /// `ctx.new_where` is what stops that being true, and this is the
+    /// assertion on it: `views::code::CodeNewView` seeds from the carrier and
+    /// only falls back to the first allowlisted repo when it is empty.
+    ///
+    /// The needle is `class="choice"` WITH its closing quote, which is the
+    /// only way to name the second row: the first is `class="choice selected"`
+    /// because it is the repo the composer defaulted to, and a press on that
+    /// would assert nothing.
+    ///
+    /// REPRODUCED: point the sheet's `onchoose` at a local signal instead of
+    /// `choose_new_repo` and the first assertion fails with `acme/infra`.
+    #[test]
+    fn the_repo_picked_on_the_home_screen_is_the_one_carried_forward() {
+        let _guard = crate::views::press::alone();
+        let mut screen = Pressable::mount(
+            |ctx| {
+                let mut repos = ctx.code_repos;
+                repos.set(vec![allowed("acme/infra"), allowed("acme/web")]);
+            },
+            CodeHome,
+        );
+        screen.settle();
+
+        screen.press("Repository");
+        screen.settle();
+        assert!(
+            screen.markup().contains("Repositories (2)"),
+            "the repo control did not open a picker: {}",
+            screen.markup()
+        );
+
+        screen.press(r#"class="choice""#);
+        screen.settle();
+
+        assert_eq!(
+            screen.with(|ctx| (ctx.new_where)().repo),
+            "acme/web",
+            "the repo chosen on the home screen was not written to the carrier \
+             the new-session screen seeds from, so that screen will open on the \
+             first repo of the allowlist and ask again"
+        );
+        assert!(
+            !screen.markup().contains("Repositories (2)"),
+            "the sheet stayed open over the choice it had just taken"
+        );
+        assert!(
+            screen.markup().contains("web"),
+            "the chip still names the old repo: {}",
+            screen.markup()
+        );
+    }
+
+    /// CHANGING THE REPO DROPS THE BASE WITH IT.
+    ///
+    /// `views::code::choose_repo` draws the same line for the same reason: a
+    /// branch of the repo you just left does not exist on the one you just
+    /// chose, and carrying the name over would put a base on the wire that the
+    /// manager has to refuse.
+    #[test]
+    fn choosing_another_repo_does_not_keep_the_old_ones_branch() {
+        let (repo, base) = crate::testkit::with_ctx(
+            |ctx| {
+                crate::code::choose_new_repo(ctx, "acme/infra");
+                crate::code::choose_new_base(ctx, Some("release-4".to_owned()));
+                crate::code::choose_new_repo(ctx, "acme/web");
+            },
+            |ctx| {
+                let held = (ctx.new_where)();
+                (held.repo, held.base)
+            },
+        );
+        assert_eq!(repo, "acme/web");
+        assert_eq!(
+            base, None,
+            "the base branch of the repo the reader just left is still selected"
+        );
+    }
+
+    /// THE MODEL IS A CONTROL ON THE HOME COMPOSER — #194, reported by the
+    /// owner against a real server: "i can't actually change the model or
+    /// anything else from this thing."
+    ///
+    /// And it is drawn as one. `assets/desktop/40-home-chat.css` states the
+    /// rule this satisfies: a chip that is clickable but drawn like the
+    /// read-only chips beside it is worse than either, because nothing on the
+    /// row says what responds.
+    #[test]
+    fn the_model_can_be_changed_before_the_conversation_exists() {
+        let html = crate::testkit::render_settled(
+            |ctx| {
+                let mut config = ctx.config_options;
+                config.set(vec![option(
+                    "model",
+                    "gpt-5.2",
+                    &[("gpt-5.2", "GPT-5.2"), ("claude-opus-5", "Claude Opus 5")],
+                )]);
+            },
+            || rsx! { Home { plane: Plane::Chat } },
+        );
+        assert!(
+            html.contains(r#"aria-label="Model""#) && html.contains("home-chip picker"),
+            "the model is still a read-only chip on the one screen where \
+             choosing one is the natural thing to do: {html}"
+        );
+        assert!(html.contains("GPT-5.2"), "the chip does not name the model");
+    }
+
+    /// A SETTING WITH ONE VALUE IS A FACT, not a menu.
+    ///
+    /// `ConfigOption::is_adjustable` is the same guard `views::chat`'s mode
+    /// chip applies, for design rule 11's reason: offering a list of one is a
+    /// control that decides nothing.
+    #[test]
+    fn a_model_with_nothing_to_choose_between_stays_bare() {
+        let chips = crate::testkit::with_ctx(
+            |ctx| {
+                let mut config = ctx.config_options;
+                config.set(vec![option("model", "gpt-5.2", &[("gpt-5.2", "GPT-5.2")])]);
+            },
+            |ctx| compose_chips(ctx, Plane::Chat, None),
+        );
+        assert_eq!(chips.len(), 1);
+        assert_eq!(chips[0].text, "GPT-5.2");
+        assert!(
+            chips[0].pick.is_none(),
+            "a one-value select was offered as a picker"
+        );
+    }
+
+    /// AND THE CHIP SAYS WHAT WAS JUST PICKED, not what the server still holds.
+    ///
+    /// The two can differ for exactly as long as there is no session to write
+    /// the choice to — which is the whole of the home screen. A chip that went
+    /// on naming `currentValue` after a pick would be a control the reader
+    /// pressed with nothing visibly happening, which is the defect #194 is
+    /// about arriving one layer down.
+    #[test]
+    fn the_chip_names_the_model_the_reader_just_chose() {
+        let chips = crate::testkit::with_ctx(
+            |ctx| {
+                let mut config = ctx.config_options;
+                config.set(vec![option(
+                    "model",
+                    "gpt-5.2",
+                    &[("gpt-5.2", "GPT-5.2"), ("claude-opus-5", "Claude Opus 5")],
+                )]);
+            },
+            |ctx| compose_chips(ctx, Plane::Chat, Some("claude-opus-5")),
+        );
+        assert_eq!(
+            chips[0].text, "Claude Opus 5",
+            "the chip is still reporting the server's model over the one the \
+             reader chose, and the catalogue's own name is what it should say"
+        );
+    }
+
+    /// A REFERENCE THE CATALOGUE DOES NOT CARRY IS PRINTED AS IT IS.
+    ///
+    /// `current_label` falls back the same way for the server's own value.
+    /// Empty is not a special case: nothing offers it, and inventing a word
+    /// for it here would be a name for a model that has none.
+    #[test]
+    fn a_model_the_server_has_not_described_is_named_by_its_reference() {
+        let chips = crate::testkit::with_ctx(
+            |ctx| {
+                let mut config = ctx.config_options;
+                config.set(vec![option(
+                    "model",
+                    "gpt-5.2",
+                    &[("gpt-5.2", "GPT-5.2"), ("claude-opus-5", "Claude Opus 5")],
+                )]);
+            },
+            |ctx| compose_chips(ctx, Plane::Chat, Some("qwen3-coder-480b")),
+        );
+        assert_eq!(chips[0].text, "qwen3-coder-480b");
+    }
+
+    /// BEFORE ANYTHING IS CHOSEN THE CONTROL ASKS FOR THE THING IT SETS.
+    ///
+    /// The one render where the carrier is still empty — the composer seeds it
+    /// on its first pass — and the one place a chip in this app may name its
+    /// own control rather than a value. `views::code`'s model pill draws the
+    /// same distinction in the same words.
+    ///
+    /// The host is on this row too, and it is the one fact the code half keeps:
+    /// which gateway the tree will be built on is not something this screen can
+    /// change, and it is the only thing left saying which brain is answering.
+    #[test]
+    fn the_code_controls_name_themselves_until_they_have_a_value() {
+        let chips = crate::testkit::with_ctx(
+            |ctx| {
+                let mut repos = ctx.code_repos;
+                repos.set(vec![allowed("acme/infra")]);
+                let mut settings = ctx.settings;
+                settings.write().code_server_url = "http://brain.ts.net:4399".to_owned();
+            },
+            |ctx| compose_chips(ctx, Plane::Code, None),
+        );
+        let text: Vec<&str> = chips.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(text, ["Repository", "Default", "brain.ts.net:4399"]);
+        assert!(
+            chips[2].mono && chips[2].pick.is_none(),
+            "the gateway is not something this screen can change, and an \
+             address is compared character by character"
+        );
+    }
+
+    /// THE MODEL PICKER OPENS AND WHAT IT PICKS STICKS — #194 end to end.
+    ///
+    /// The sheet is `ChoicePickerSheet`, which is `views::chat`'s and
+    /// `views::code`'s, so this asserts the wiring rather than the widget: that
+    /// the chip opens it, that it is built from the agent's own catalogue, and
+    /// that choosing writes somewhere the send button will read.
+    ///
+    /// The needle is `class="choice"` WITH its closing quote, which is the only
+    /// way to name a row that is not the current one: the model the server
+    /// holds renders as `class="choice selected"`.
+    #[test]
+    fn the_model_picked_on_the_home_screen_is_the_one_the_chip_then_names() {
+        let _guard = crate::views::press::alone();
+        let mut screen = Pressable::mount(
+            |ctx| {
+                let mut config = ctx.config_options;
+                config.set(vec![option(
+                    "model",
+                    "gpt-5.2",
+                    &[("gpt-5.2", "GPT-5.2"), ("claude-opus-5", "Claude Opus 5")],
+                )]);
+            },
+            ChatHome,
+        );
+        screen.settle();
+
+        screen.press("Model");
+        screen.settle();
+        assert!(
+            screen.markup().contains("Select model") && screen.markup().contains("Claude Opus 5"),
+            "the model chip did not open a picker over the agent's own \
+             catalogue: {}",
+            screen.markup()
+        );
+
+        screen.press(r#"class="choice""#);
+        screen.settle();
+        assert!(
+            !screen.markup().contains("Select model"),
+            "the sheet stayed open over the choice it had just taken"
+        );
+        assert!(
+            screen
+                .markup()
+                .contains(r#"aria-label="Model">Claude Opus 5"#),
+            "the chip is still naming the model the server holds after a \
+             choice was made, so the control looks like it did nothing: {}",
+            screen.markup()
+        );
+    }
+
+    /// AND SO DOES THE BASE BRANCH — the second half of #79.
+    ///
+    /// The sheet is `views::code`'s own: the same `branch_choices`, the same
+    /// `Default` marking, and the same note about a list the manager cut short
+    /// at 500. With a filter over a truncated list, "Nothing matches" about a
+    /// branch that exists is a lie the reader has no way to catch, so it is
+    /// said above the rows on both screens or on neither.
+    #[test]
+    fn the_base_branch_can_be_changed_from_the_home_composer() {
+        let _guard = crate::views::press::alone();
+        let mut screen = Pressable::mount(
+            |ctx| {
+                let mut repos = ctx.code_repos;
+                repos.set(vec![allowed("acme/infra")]);
+                let mut branches = ctx.code_branches;
+                branches.set(crate::code::BranchList {
+                    repo: "acme/infra".to_owned(),
+                    default: Some("main".to_owned()),
+                    names: vec!["main".to_owned(), "release-4".to_owned()],
+                    truncated: true,
+                    loading: false,
+                });
+            },
+            CodeHome,
+        );
+        screen.settle();
+        assert!(
+            screen.markup().contains(r#"aria-label="Base branch">"#),
+            "no base control: {}",
+            screen.markup()
+        );
+
+        screen.press("Base branch");
+        screen.settle();
+        assert!(
+            screen.markup().contains("Choose base branch") && screen.markup().contains("release-4"),
+            "the base chip did not open the repo's branch list: {}",
+            screen.markup()
+        );
+        assert!(
+            screen.markup().contains("more than the manager will"),
+            "a list the manager cut short is being presented as complete, so a \
+             filter over it would report a branch that exists as missing: {}",
+            screen.markup()
+        );
+
+        screen.press(r#"class="choice""#);
+        screen.settle();
+        assert_eq!(
+            screen.with(|ctx| (ctx.new_where)().base),
+            Some("release-4".to_owned()),
+            "the base chosen on the home screen was not written to the carrier \
+             the new-session screen seeds from"
+        );
+        assert!(
+            !screen.markup().contains("Choose base branch"),
+            "the sheet stayed open over the choice it had just taken"
         );
     }
 

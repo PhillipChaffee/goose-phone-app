@@ -119,6 +119,7 @@ fn Probe() -> Element {
         code_attachments: use_signal(Vec::new),
         new_attachments: use_signal(Vec::new),
         new_task: use_signal(String::new),
+        new_where: use_signal(crate::code::NewWhere::default),
         extensions: crate::extensions::use_ctx(),
         skills: crate::skills::use_ctx(),
         recipes: crate::recipes::use_recipes(),

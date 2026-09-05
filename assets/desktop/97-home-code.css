@@ -14,38 +14,44 @@
  * 40rem.
  *
  * KEYED ON `.home-tiles`, and that is a deliberate refusal of source order.
- * #76 will put `.home-code` on the `main` that already carries `.home`, which
- * would give this rule and the chat home's equal specificity on one element
- * and leave the outcome to `40-` sorting before `97-` — the cascade working by
- * filename, which nothing in the repo can see and nothing checks. `.home-tiles`
- * is emitted by `src/shell/desktop/home.rs` under `if plane == Plane::Code`
- * and nowhere else, so it identifies the same element by something the markup
- * already says, and the chat home's rule excludes it by name. The two are
- * mutually exclusive; order decides nothing.
+ * #76 has now put `.home-code` on the `main` that already carries `.home`, so
+ * keying this on `.home-code` would give this rule and the chat home's equal
+ * specificity on one element and leave the outcome to `40-` sorting before
+ * `97-` — the cascade working by filename, which nothing in the repo can see
+ * and nothing checks. `.home-tiles` is emitted by `src/shell/desktop/home.rs`
+ * under `if plane == Plane::Code` and nowhere else, so it identifies the same
+ * element by something the markup already says, and the chat home's rule
+ * excludes it by name. The two are mutually exclusive; order decides nothing.
  *
- * WHEN #76 LANDS, this becomes `.pane-main:has(.home-code)` and the chat
- * home's `:not()` becomes `:not(:has(.home-code))` — one edit each, and the
- * exclusivity has to survive it. */
+ * SO THE RE-KEY #76 PROPOSED IS DECLINED rather than forgotten. `.home-tiles`
+ * moved one level down when the board arrived — it is inside `.home-board` now
+ * — and `:has()` does not care: it is a descendant match either way, and
+ * `the_two_home_screens_cannot_take_each_others_measure` pins both halves of
+ * the exclusivity. */
 .pane-main:has(.home-tiles) {
   --measure: 48.5rem;
 }
 
-/* THE SEVEN RULES BELOW ARE STILL DEAD, and that is not this file's doing.
+/* AND THE RULES BELOW ARE LIVE, which they had not been since `c5db8a0`.
  *
- * `.home-code`, `.home-board` and `.home-dock` are emitted by nothing:
- * `src/shell/desktop/home.rs` renders `main { class: "scroll home" }` for both
- * halves and the code half's composer is the FIRST thing in it, above the
+ * `.home-code`, `.home-board` and `.home-dock` were emitted by nothing:
+ * `src/shell/desktop/home.rs` rendered `main { class: "scroll home" }` for both
+ * halves and the code half's composer was the FIRST thing in it, above the
  * tiles and the board, where the mockup docks it under them. #76 is that
- * restructure and it is blocked, not skipped —
+ * restructure, and it was blocked rather than skipped —
  * `every_class_the_desktop_shell_renders_is_in_the_captured_store`
  * (`src/shell/desktop/mod.rs`) fails on any class name the shell renders and
  * `docs/gallery-states.json` does not hold, and a capture is operator-only.
  *
- * They are left in place rather than deleted because they are directionally
- * right — the 16px top pad is `.board{padding:16px 26px 6px}`, and the flex
- * column with an `overflow-y` board over a `flex: 0 0 auto` dock is the
- * mockup's three-row `.main`. What is corrected here is the one line of them
- * that was measurably a no-op wherever it was emitted. */
+ * They were left in place rather than deleted because they were directionally
+ * right, and that held: the 16px top pad is `.board{padding:16px 26px 6px}`,
+ * and the flex column with an `overflow-y` board over a `flex: 0 0 auto` dock
+ * is the mockup's three-row `.main`. Two lines of them did not survive contact.
+ * One was the `--measure: 64rem` corrected above, a no-op wherever it was
+ * emitted. The other was `.home-code .home-standing .btn`, which #76 itself
+ * predicted would stay dead — `home.rs` emits no button in that paragraph and
+ * the amber banner it styled says its whole piece in a sentence — so it is gone
+ * rather than left as staleness one layer down. */
 .home.home-code {
   display: flex;
     flex-direction: column;
@@ -88,12 +94,6 @@
     color: var(--text-primary);
     font-size: var(--text-sm);
     line-height: var(--lh-sm);
-}
-
-.home-code .home-standing .btn {
-  flex: 0 0 auto;
-    margin-left: auto;
-    min-height: 2rem;
 }
 
 .home-code .home-tiles {

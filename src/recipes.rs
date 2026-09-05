@@ -1269,6 +1269,7 @@ mod tests {
             code_attachments: use_signal(Vec::new),
             new_attachments: use_signal(Vec::new),
             new_task: use_signal(String::new),
+            new_where: use_signal(crate::code::NewWhere::default),
             recipes: use_recipes(),
             skills: crate::skills::use_ctx(),
             scheduler: crate::scheduler::use_ctx(),

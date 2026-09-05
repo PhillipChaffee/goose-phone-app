@@ -600,6 +600,18 @@ pub(crate) struct AppCtx {
     /// TAKEN, NOT READ. `CodeNewView` empties it as it seeds its field, so a
     /// second visit to that screen does not resurrect a sentence already sent.
     pub new_task: Signal<String>,
+    /// WHERE that session gets cut — the repo and the base branch the home
+    /// composer's own pickers settled.
+    ///
+    /// Beside `new_task` because it is the same journey: the desktop's Code
+    /// home is where the reader now says which repo and which base, and the
+    /// screen that can act on it is one change away. Without a carrier the
+    /// new-session screen would open on the first repo of the allowlist
+    /// whatever had just been chosen — two places to pick a repo, and the one
+    /// you used ignored, which is the defect #79 names.
+    ///
+    /// READ, NOT TAKEN, unlike `new_task`. See [`crate::code::NewWhere`].
+    pub new_where: Signal<crate::code::NewWhere>,
     // ---- one field per feature, each a Copy struct from its own module ----
     //
     // A feature's state is a struct it defines and this holds, rather than a
@@ -740,6 +752,7 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         code_attachments: use_signal(Vec::new),
         new_attachments: use_signal(Vec::new),
         new_task: use_signal(String::new),
+        new_where: use_signal(crate::code::NewWhere::default),
 
         extensions: crate::extensions::use_ctx(),
         // One line per feature, each calling its own module's hook. There was
@@ -1546,7 +1559,7 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
 
 /// Create a fresh session in the configured working directory and open it.
 pub(crate) fn new_session(ctx: &AppCtx) {
-    create_session(ctx, Value::Null, None);
+    create_session(ctx, Value::Null, None, None);
 }
 
 /// Create a session that exists for a reason, and say what the reason is.
@@ -1556,7 +1569,7 @@ pub(crate) fn new_session(ctx: &AppCtx) {
 /// the app cannot fake it after the fact by prompting the session into
 /// character. `Value::Null` means "no reason", which is [`new_session`].
 pub(crate) fn new_session_with(ctx: &AppCtx, meta: Value) {
-    create_session(ctx, meta, None);
+    create_session(ctx, meta, None, None);
 }
 
 /// Create a session AND send what is in `composer` as its first turn.
@@ -1592,8 +1605,18 @@ pub(crate) fn new_session_with(ctx: &AppCtx, meta: Value) {
                   takes itself out"
     )
 )]
-pub(crate) fn new_session_sending(ctx: &AppCtx, composer: Signal<String>) {
-    create_session(ctx, Value::Null, Some(composer));
+/// `model` IS THE ONE THING THE HOME SCREEN COULD NOT SAY, and #194 is that
+/// report: *"i can't actually change the model or anything else from this
+/// thing."* The composer's chip row names the model and could not change it,
+/// because [`set_config_option`] needs a `session_id` and the home screen's
+/// whole point is that there is not one yet. So the choice travels here as a
+/// value and is applied to the session this call makes, on the round trip
+/// between creating it and sending the first word — see [`create_session`].
+///
+/// `None` means "whatever the server starts the session on", which is every
+/// caller that is not that chip.
+pub(crate) fn new_session_sending(ctx: &AppCtx, composer: Signal<String>, model: Option<String>) {
+    create_session(ctx, Value::Null, Some(composer), model);
 }
 
 /// Put a lifted first message back where it was typed.
@@ -1611,7 +1634,12 @@ fn give_back(composer: Option<Signal<String>>, text: String) {
     }
 }
 
-fn create_session(ctx: &AppCtx, meta: Value, composer: Option<Signal<String>>) {
+fn create_session(
+    ctx: &AppCtx,
+    meta: Value,
+    composer: Option<Signal<String>>,
+    model: Option<String>,
+) {
     // THE FIRST MESSAGE IS LIFTED BEFORE THE ROUND TRIP AND PUT BACK BY EVERY
     // PATH THAT FAILS, which is the second half of #198 and was the undocumented
     // one. The home screen used to blank its own composer unconditionally the
@@ -1655,6 +1683,7 @@ fn create_session(ctx: &AppCtx, meta: Value, composer: Option<Signal<String>>) {
                 let mut usage = ctx.usage;
                 ctx.config_options.clone().set(resp.config_options);
                 ctx.attachments.clone().set(Vec::new());
+                let session_id = resp.session_id.clone();
                 chat.set(ChatState {
                     marks: Vec::new(),
                     last_at: 0,
@@ -1668,6 +1697,29 @@ fn create_session(ctx: &AppCtx, meta: Value, composer: Option<Signal<String>>) {
                 });
                 usage.set(None);
                 screen.set(Screen::Chat);
+                // THE MODEL THE HOME COMPOSER CHOSE, APPLIED BEFORE THE FIRST
+                // WORD GOES OUT — which is the whole of #194's second half.
+                //
+                // Here rather than at the chip, because `set_config_option`
+                // needs a `session_id` and on the home screen there is not one:
+                // a picker that wrote through it would have been a control that
+                // silently did nothing, which is worse than the read-only chip
+                // it replaced. Here rather than after `send_prompt`, because a
+                // model applied to the session AFTER its first turn has already
+                // run is a model that did not answer the message it was chosen
+                // for.
+                //
+                // A refusal is said out loud and the send still happens. The
+                // session exists, the reader's sentence is in hand, and losing
+                // it to a model the server would not take would be spending
+                // their message on the app's own bookkeeping.
+                if let Some(model) = model.filter(|m| !m.trim().is_empty()) {
+                    match client.set_config_option(&session_id, "model", &model).await {
+                        Ok(opts) if !opts.is_empty() => ctx.config_options.clone().set(opts),
+                        Ok(_) => {}
+                        Err(e) => show_toast(&ctx, format!("Could not start on {model}: {e}")),
+                    }
+                }
                 // AND HERE IS THE ID THE OLD COMMENT SAID ONLY ARRIVED LATER.
                 // No files: the screens that send from here have no attach
                 // control, and `send_prompt` takes what the CALLER decides
@@ -5256,7 +5308,7 @@ mod tests {
             ctx.chat_draft
                 .clone()
                 .set("  rotate the tailscale cert  ".to_owned());
-            new_session_sending(ctx, ctx.chat_draft);
+            new_session_sending(ctx, ctx.chat_draft, None);
         });
         app.settle_until(Duration::from_secs(5), |ctx| {
             matches!(*ctx.screen.peek(), Screen::Chat)
@@ -5291,6 +5343,141 @@ mod tests {
         });
     }
 
+    /// AND THE MODEL THE HOME COMPOSER CHOSE IS ON THE SESSION BEFORE THE
+    /// FIRST WORD IS — #194.
+    ///
+    /// The owner's report, against a real server: *"i can't actually change the
+    /// model or anything else from this thing."* The chip named the model and
+    /// could not change it, because [`set_config_option`] needs a `session_id`
+    /// and the home screen's whole premise is that there is not one — so the
+    /// choice has to travel as a value and be applied to the session this call
+    /// makes.
+    ///
+    /// THE ORDER IS THE ASSERTION. A model applied after `session/prompt` is a
+    /// model that did not answer the message it was chosen for, and the traffic
+    /// is the only place that shows: both requests go out either way, and both
+    /// succeed.
+    ///
+    /// REPRODUCED: move the `set_config_option` block below the `send_prompt`
+    /// call and this fails on the order; drop it entirely and it fails with
+    /// `["session/new", "session/prompt"]`.
+    #[test]
+    fn the_model_the_home_composer_chose_is_set_before_the_first_prompt() {
+        fn sending(method: &str, params: &Value) -> Reply {
+            if method == "session/prompt" {
+                return ok(json!({"stopReason": "end_turn"}));
+            }
+            happy(method, params)
+        }
+        let mut app = App::mount();
+        let server = serve(sending);
+        let _events = app.attach(&server);
+        app.run(|ctx| {
+            ctx.settings.clone().set(Settings {
+                working_dir: "/srv/work".to_owned(),
+                ..Settings::default()
+            });
+            ctx.chat_draft.clone().set("summarise the run".to_owned());
+            new_session_sending(ctx, ctx.chat_draft, Some("claude-opus-5".to_owned()));
+        });
+        app.settle_until(Duration::from_secs(5), |ctx| {
+            matches!(*ctx.screen.peek(), Screen::Chat)
+        });
+        app.settle();
+
+        assert_eq!(
+            server.methods(),
+            ["session/new", "session/set_config_option", "session/prompt"],
+            "the model chosen on the home screen never reached the session, or \
+             reached it after the turn it was chosen for had already run"
+        );
+        let sent = server.params("session/set_config_option", 0);
+        assert_eq!(sent["configId"], "model");
+        assert_eq!(sent["value"], "claude-opus-5");
+        assert_eq!(
+            sent["sessionId"], "s_new",
+            "the option was set on some other session than the one just created"
+        );
+    }
+
+    /// NO CHOICE, NO ROUND TRIP.
+    ///
+    /// Every caller that is not that chip passes `None`, and a session that
+    /// starts on whatever the server starts it on must not pay for a request
+    /// saying so. An empty string is the same answer: nothing offers one, and
+    /// setting `model` to `""` is a value the agent would have to refuse.
+    #[test]
+    fn a_session_started_without_a_model_asks_the_server_for_nothing_extra() {
+        fn sending(method: &str, params: &Value) -> Reply {
+            if method == "session/prompt" {
+                return ok(json!({"stopReason": "end_turn"}));
+            }
+            happy(method, params)
+        }
+        let mut app = App::mount();
+        let server = serve(sending);
+        let _events = app.attach(&server);
+        app.run(|ctx| {
+            ctx.settings.clone().set(Settings {
+                working_dir: "/srv/work".to_owned(),
+                ..Settings::default()
+            });
+            ctx.chat_draft.clone().set("summarise the run".to_owned());
+            new_session_sending(ctx, ctx.chat_draft, Some("   ".to_owned()));
+        });
+        app.settle_until(Duration::from_secs(5), |ctx| {
+            matches!(*ctx.screen.peek(), Screen::Chat)
+        });
+        app.settle();
+
+        assert_eq!(
+            server.methods(),
+            ["session/new", "session/prompt"],
+            "a blank model was pushed to the server as though it were a choice"
+        );
+    }
+
+    /// A MODEL THE SERVER REFUSES IS SAID OUT LOUD AND THE MESSAGE STILL GOES.
+    ///
+    /// The session exists and the reader's sentence is in hand by the time the
+    /// refusal lands. Dropping the send would spend their message on the app's
+    /// own bookkeeping — and there would be nowhere to give it back to, since
+    /// the composer it came from is a screen behind.
+    #[test]
+    fn a_model_the_server_refuses_does_not_swallow_the_first_message() {
+        fn refusing(method: &str, params: &Value) -> Reply {
+            match method {
+                "session/set_config_option" => rpc_error(-32602, "unknown model"),
+                "session/prompt" => ok(json!({"stopReason": "end_turn"})),
+                _ => happy(method, params),
+            }
+        }
+        let mut app = App::mount();
+        let server = serve(refusing);
+        let _events = app.attach(&server);
+        app.run(|ctx| {
+            ctx.settings.clone().set(Settings {
+                working_dir: "/srv/work".to_owned(),
+                ..Settings::default()
+            });
+            ctx.chat_draft.clone().set("summarise the run".to_owned());
+            new_session_sending(ctx, ctx.chat_draft, Some("gpt-9".to_owned()));
+        });
+        app.settle_until(Duration::from_secs(5), |ctx| ctx.toast.peek().is_some());
+        app.settle();
+
+        assert_eq!(
+            app.toast().as_deref(),
+            Some("Could not start on gpt-9: unknown model"),
+            "the model was refused and the reader was not told"
+        );
+        assert!(
+            server.methods().contains(&"session/prompt".to_owned()),
+            "the refusal took the reader's first message with it: {:?}",
+            server.methods()
+        );
+    }
+
     /// AND A CREATE THAT WAS REFUSED GIVES IT BACK.
     ///
     /// The second failure this fix is about, and the undocumented one. The
@@ -5322,7 +5509,7 @@ mod tests {
             ctx.chat_draft
                 .clone()
                 .set("rotate the tailscale cert".to_owned());
-            new_session_sending(ctx, ctx.chat_draft);
+            new_session_sending(ctx, ctx.chat_draft, None);
         });
         app.run(|ctx| {
             assert_eq!(
@@ -5339,7 +5526,7 @@ mod tests {
                 working_dir: "/srv/work".to_owned(),
                 ..Settings::default()
             });
-            new_session_sending(ctx, ctx.chat_draft);
+            new_session_sending(ctx, ctx.chat_draft, None);
         });
         app.settle_until(Duration::from_secs(5), |ctx| ctx.toast.peek().is_some());
         assert_eq!(

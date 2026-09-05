@@ -76,6 +76,73 @@ pub(crate) struct BranchList {
     pub loading: bool,
 }
 
+/// WHERE THE NEXT WORKING TREE GETS CUT, settled before it exists.
+///
+/// A carrier beside [`crate::state::AppCtx::new_task`] and for exactly its
+/// reason: the desktop's Code home has a composer, the session it starts does
+/// not exist yet, and what the reader chose there has to survive one screen
+/// change with no conversation to belong to. The sentence travels on
+/// `new_task`; this is the rest of the answer to "where".
+///
+/// READ, NOT TAKEN, which is the one way it differs from `new_task`. A
+/// sentence is a message and is spent when it is sent; a repo is a standing
+/// preference, and a reader who steps into the new-session screen and back
+/// should find the composer still pointed where they left it. That is also why
+/// [`crate::views::code::CodeNewView`] seeds from it rather than emptying it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct NewWhere {
+    /// The allowlisted repo, or empty for "nothing chosen yet" — which is what
+    /// a cold launch holds, and what makes the home composer fall back to the
+    /// first repo the manager offers.
+    pub repo: String,
+    /// The ref the session's own branch is cut from. `None` is the repo's
+    /// default, exactly as `NewSessionSpec::base_branch` reads it.
+    pub base: Option<String>,
+}
+
+/// Point the home composer's next session at `repo`.
+///
+/// [`crate::views::code::choose_repo`]'s two jobs, minus the one this screen
+/// cannot have: the base moves with the repo, because a branch of the old one
+/// does not exist on the new, and the branches are fetched so the chip can say
+/// `main` before it is opened. There is no model to clear — the home composer
+/// has no model picker on this half, which is the decision
+/// `src/shell/desktop/home.rs` records at the send button.
+#[cfg_attr(
+    any(target_os = "ios", target_os = "android"),
+    expect(
+        dead_code,
+        reason = "the home screen with a composer on it is the desktop shell's; \
+                  the phone reaches the new-session screen from a bare button \
+                  and picks its repo there. When it grows one, this expectation \
+                  fails and takes itself out — `new_session_sending` in \
+                  `state.rs` carries the same note for the same reason"
+    )
+)]
+pub(crate) fn choose_new_repo(ctx: &AppCtx, repo: &str) {
+    if ctx.new_where.peek().repo == repo {
+        return;
+    }
+    ctx.new_where.clone().set(NewWhere {
+        repo: repo.to_owned(),
+        base: None,
+    });
+    ensure_code_branches(ctx, repo);
+}
+
+/// Cut the next session from `base`, leaving the repo where it is.
+#[cfg_attr(
+    any(target_os = "ios", target_os = "android"),
+    expect(
+        dead_code,
+        reason = "the desktop home composer's base picker; see `choose_new_repo`"
+    )
+)]
+pub(crate) fn choose_new_base(ctx: &AppCtx, base: Option<String>) {
+    let repo = ctx.new_where.peek().repo.clone();
+    ctx.new_where.clone().set(NewWhere { repo, base });
+}
+
 /// Everything the code chat screen renders.
 #[derive(Clone, PartialEq, Default)]
 #[expect(
