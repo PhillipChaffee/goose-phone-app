@@ -1178,6 +1178,7 @@ mod tests {
             code_draft: use_signal(String::new),
             code_attachments: use_signal(Vec::new),
             new_attachments: use_signal(Vec::new),
+            new_task: use_signal(String::new),
             recipes: use_recipes(),
             skills: crate::skills::use_ctx(),
             scheduler: crate::scheduler::use_ctx(),

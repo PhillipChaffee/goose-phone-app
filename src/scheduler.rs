@@ -1281,6 +1281,7 @@ pub(crate) mod tests {
             code_draft: use_signal(String::new),
             code_attachments: use_signal(Vec::new),
             new_attachments: use_signal(Vec::new),
+            new_task: use_signal(String::new),
             extensions: crate::extensions::use_ctx(),
             skills: crate::skills::use_ctx(),
             recipes: crate::recipes::use_recipes(),
