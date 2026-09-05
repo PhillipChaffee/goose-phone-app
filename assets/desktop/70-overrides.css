@@ -601,15 +601,45 @@
  * `shared.css:892` gives `.btn` `border: 1px solid transparent` — without it
  * the accent stops one pixel short of the button's own edge.
  *
- * `.app > .shell` AND NOT THE WHOLE SHEET, and that scope is load-bearing
- * rather than tidiness. The accent tokens are declared on `.app > .shell`, and
- * `.modal-backdrop` is a SIBLING of `.shell` under `.app` — so an unscoped
- * rule would resolve `var(--accent-fill)` to nothing on the three permission
- * modals in the captured store and paint their primary TRANSPARENT. Those
- * buttons keep `--bg-inverse` here. They are outside the whole surface ramp,
- * not just outside this rule — measured in `desktop-code-chat-confirm` dark,
- * "Always allow" comes out #3f434b on #22252a, which is the phone's palette
- * inside a desktop window — and that is a larger finding than this one rule.
+ * `.app` AND NOT `.app > .shell`, AND THAT IS #254 UNBLOCKING THIS RULE.
+ *
+ * The scope used to be the shell and it was load-bearing rather than tidy:
+ * the accent tokens were declared on `.app > .shell`, `.modal-backdrop` is a
+ * SIBLING of `.shell` under `.app`, so an unscoped rule would have resolved
+ * `var(--accent-fill)` to nothing on the three permission modals in the store
+ * and painted their primary TRANSPARENT. The note left here said those buttons
+ * kept `--bg-inverse`, that they were outside the whole surface ramp rather
+ * than only outside this rule — measured in `desktop-code-chat-confirm` dark,
+ * "Always allow" came out #3f434b on #22252a, the phone's palette inside a
+ * desktop window — and that it was a larger finding than one rule. It was
+ * #254, and `00-tokens.css` now declares the ramp, the ladder and the accent
+ * on `.app`. So the reason for the scope is gone, and with it the last
+ * `--bg-inverse` primary in this shell: the three modal primaries were the
+ * whole of what #120 could not reach.
+ *
+ * (0,2,0) AGAINST shared.css's OWN (0,2,0), resolved by source order, which is
+ * this section's established mechanism rather than a new risk —
+ * `.session-tile`/`.session-quote` above ties with shared.css the same way and
+ * says so. `src/app.rs` emits STYLES then SHELL, and a phone binary contains
+ * no byte of this sheet, so there is nothing to scope away from.
+ *
+ * THE "ALWAYS ALLOW" TWIN IS THE ONE THAT NEEDS A SECOND RULE, and it needs it
+ * for two reasons at once. `shared.css:3277` gives the second allow-option
+ * `background: var(--bg-secondary)` at (0,3,0), which outranks this rule — so
+ * that button keeps its de-emphasised fill, correctly, and would have kept a
+ * teal `border-color` from this rule with a grey fill, which is a control
+ * painted in two decisions. And in DARK the fill it keeps is the one the
+ * surface ramp flattened: `--bg-secondary` was #3f434b on a #22252a dialog,
+ * 1.53:1, and is #24282e on a #1e2126 one, **1.09:1** — the "button that is
+ * gone" case `00-tokens.css` names when it argues that remap.
+ *
+ * `--border-primary` at (0,4,0) answers both, and it is the same edge
+ * `.session-tile` above and `.insp-chip` one column over already take on that
+ * same rung: #2f343b is **1.18:1** on the fill, with `--text-primary` on it at
+ * 12.49:1. LIGHT does not take the ramp, so nothing flattened there and the
+ * button is still #f4f6f7 — but light never had an edge on it either, and
+ * #e3e6ea is 1.16:1 on that fill and **1.25:1** against the white dialog
+ * around it, so the rule is a gain in both themes rather than a repair in one.
  *
  * AND THE DISABLED COMPANION, WHICH IS THE HALF THAT BITES. `shared.css:951`
  * is `.btn:disabled { opacity: 0.55 }` with no colour swap at all, so an
@@ -624,15 +654,19 @@
  * have caught the omission either — all three `.btn.primary` elements the
  * store holds inside the shell are ENABLED, so no audit run has ever measured
  * a disabled one. */
-.app > .shell .btn.primary {
+.app .btn.primary {
   background: var(--accent-fill);
   border-color: var(--accent-fill);
   color: var(--accent-ink);
 }
 
-.app > .shell .btn.primary:disabled {
+.app .btn.primary:disabled {
   background: var(--bg-tertiary);
   border-color: var(--shell-line);
   color: var(--text-secondary);
+}
+
+.app .modal-actions .btn.primary ~ .btn.primary {
+  border-color: var(--border-primary);
 }
 

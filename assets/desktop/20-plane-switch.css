@@ -115,25 +115,54 @@
   cursor: pointer;
 }
 
+/* ── the switch's counts ─────────────────────────────────────────────────
+ *
+ * HOME AT LAST. These two lived at the top of `30-sidebar-list.css` because
+ * #154 folded `60-sidebar-extra.css` into that file while this one belonged to
+ * another lane, and the note that held their place said the move would cost
+ * nothing. It cost nothing, and both halves of that were checked: no rule in
+ * any sheet this shell links names `.plane-seg-count`, so gaining a position
+ * on `30-`'s whole contents breaks no tie, and a dump of every element of all
+ * twenty captured desktop states at 1440x860 — both themes, both `data-nav`
+ * states, 19,796 elements of computed style and border-box rect — is
+ * byte-identical across the move. */
+.plane-seg-count {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  /* NOT the mockup's --faint. The `.plane-seg` rule above records the
+   * measurement: --text-secondary on this track is 4.44:1 in light — 28 audit
+   * findings, one per desktop state — and --text-primary is 8.77:1. So the
+   * unselected count is distinguished by face and size, not by ink. */
+  color: var(--text-primary);
+}
+
+.plane-seg.active .plane-seg-count {
+  color: var(--accent);
+}
+
 /* WHICH HALF YOU ARE IN, in the token shared.css already proved reads as
  * selected — `--bg-tertiary`, the same one `.drawer-item.active` and
  * `.session-item.on` spend. Three levels of "you are here" in one window
  * sounds like too many until you notice they are nested: which half, which
  * destination in it, which row of that destination.
  *
+ * `color` is not restated here: both segments are --text-primary, for the
+ * contrast reason on `.plane-seg` above. Selection is the fill plus the
+ * outline, and the count above takes the accent.
+ *
  * The outline is `.drawer-item.active`'s, for its reason verbatim:
  * `--bg-tertiary` is 1.60:1 on the dark card and 1.13:1 on the light one, and
  * a non-text indicator owes a 3:1 boundary. `box-shadow: inset` rather than a
- * border so the label does not shift 1px on the segment that is highlighted. */
-/* `color` is not restated here: both segments are --text-primary now, for the
- * contrast reason above. Selection is the fill plus the outline.
+ * border so the label does not shift 1px on the segment that is highlighted.
  *
- * --bg-tertiary is the token shared.css already proved reads as selected (see
- * `.drawer-item.active`), and the outline is that rule's, for its reason
- * verbatim: --bg-tertiary is 1.60:1 on the dark card and 1.13:1 on the light
- * one, and a non-text indicator owes a 3:1 boundary. `box-shadow: inset`
- * rather than a border so the label does not shift 1px on the segment that is
- * highlighted. */
+ * That paragraph was written TWICE, in two blocks stacked on this rule saying
+ * the same three things in different words — the tooth-mark of two branches
+ * appending to one 4278-line sheet, and the prose version of the duplicate
+ * declaration `no_block_declares_the_same_property_twice` was written after.
+ * One copy now. */
 .plane-seg.active {
   background: var(--bg-tertiary);
   box-shadow: inset 0 0 0 1px var(--border-secondary);

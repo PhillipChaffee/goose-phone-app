@@ -2723,10 +2723,15 @@ mod tests {
     /// it back and it is green. It does NOT fail for a merely small step: two
     /// rungs one hex apart are two rungs, and telling "too close" from
     /// "deliberately subtle" is what the audit's contrast sweep is for.
+    ///
+    /// The needle is `.app` and was `.app > .shell`: #254 moved the whole
+    /// palette up one element, because `.modal-backdrop` is a SIBLING of the
+    /// shell and so inherited none of it. `block` asserts its needle is
+    /// present, so that rename could not leave this reading an empty string.
     #[test]
     fn the_shell_paints_more_than_one_surface() {
         let sheet = crate::css::SHELL;
-        let dark = block(sheet, ":root[data-theme=\"dark\"] .app > .shell {", "\n}");
+        let dark = block(sheet, ":root[data-theme=\"dark\"] .app {", "\n}");
 
         let rungs = [
             "--surface-panel",

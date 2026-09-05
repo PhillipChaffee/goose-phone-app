@@ -95,9 +95,11 @@
  * scope: #118's spend list is exhaustive and the other six live in
  * `55-panes.css` (`.chrome-sep`, `.conn-host`), `65-responsive.css`
  * (`.chrome-sep` again), `30-sidebar-list.css` (`.nav-library-count`,
- * `.nav-row-age`), `60-sidebar-extra.css` (`.nav-band-count`) and
- * `40-home-chat.css` (`.home-section-meta`), each owned by another lane of this
- * campaign. Nothing else may take the rung, and it may NEVER go on
+ * `.nav-row-age` and — since #154 folded `60-sidebar-extra.css` away —
+ * `.nav-band-count`, which this line named against that file until the file
+ * stopped existing) and `40-home-chat.css` (`.home-section-meta`), each owned
+ * by another lane of this campaign. Nothing else may take the rung, and it may
+ * NEVER go on
  * `.nav-row.on` or `.nav-row:hover` — measured at 3.90:1 on a selected row,
  * which is where every candidate for this rung measured worst. */
 .insp-sec-title {
@@ -216,6 +218,26 @@
  * whole separation. #109 says leave the chip's border alone and it stays
  * `--border-primary`; the note is here because the reason it was safe to
  * leave changed underneath it.
+ *
+ * AND THE BORDER IS SETTLED NOW, which it was not while that paragraph was
+ * written. #52's spend list named this border for `--shell-line-soft` and its
+ * body asked a human to decide; the answer is NO, and it is arithmetic rather
+ * than taste. #242830 on this chip's own `--surface-raise` #24282e is
+ * **1.00:1** — measured, both hexes read off the shipped sheets — so spending
+ * the soft rung here does not soften the outline, it deletes it. Dark goes
+ * 1.18:1 to 1.00:1; light is 1.00:1 either way, since light aliases
+ * `--shell-line-soft` to `--border-primary` #e3e6ea, which is the same byte as
+ * light's `--surface-raise`. The mockups' `.xchip` is that same invisible pair
+ * and is faithful; this shell has an audit and a 3:1 floor for a non-text
+ * boundary, and rule 3 outranks the picture.
+ *
+ * THE REASON GENERALISES AND IS WORTH THE THREE LINES. Any element whose fill
+ * is the raise rung is outside `--shell-line-soft`'s reach, and the tier there
+ * comes from the SURFACE instead: `70-overrides.css` reaches the identical
+ * conclusion from `.session-tile`, where one `--border-primary` reads 1.18:1
+ * inside a raised box and 1.29:1 around it on the canvas. So this chip is not
+ * an exception to the two-tier system — it is the two-tier system working
+ * without a second token.
  *
  * THE `off` INK OVERRIDE IS GONE, and both halves of that are decided:
  * the mockups have no such rule — their `.xchip.off` changes the DOT and
@@ -497,8 +519,20 @@
   padding: 0.3125rem 0;
 }
 
+/* THE SOFT RUNG, and this is the third of the column's dividers to take it.
+ *
+ * The row separator inside the timeline is DETAIL — the mockups draw `.tl .it`
+ * with `--line-soft` — and it was painting `--border-primary`, rgb(47,52,59),
+ * **1.39:1** on the #181a1e panel. That is louder than `.insp-meters` below
+ * (1.18:1 since #106) and louder than `.insp-keys`' structural seam (1.33:1),
+ * so the faintest thing in the column was drawn heaviest. `--shell-line-soft`
+ * #242830 puts it at **1.18:1**, under the structural rule, which is the order
+ * `00-tokens.css` declares the two rungs in and the order the mockups draw.
+ *
+ * Light is the pair light already has: #e3e6ea, the same value
+ * `--border-primary` gives it there, so nothing moves. */
 .insp-step + .insp-step {
-  border-top: 1px solid var(--border-primary);
+  border-top: 1px solid var(--shell-line-soft);
 }
 
 .insp-step-dot {

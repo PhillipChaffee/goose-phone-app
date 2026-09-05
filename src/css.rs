@@ -437,6 +437,15 @@ mod tests {
     /// `var(--surface-card)` and `var( --surface-card )` are one value; nothing
     /// else is.
     ///
+    /// THE TWO NEEDLES ARE `.app` AND NOT `.app > .shell`, and moving them was
+    /// half the cost of #254. The palette had been declared on the shell, which
+    /// is a SIBLING of `.modal-backdrop` under `.app`, so no dialog in a
+    /// desktop window inherited any of it. Both bodies moved up one element;
+    /// the two strings below are the only place in the repo that names them, so
+    /// leaving either behind would have left this test reading nothing while
+    /// still passing — `declarations` asserts its needle is present for exactly
+    /// that reason.
+    ///
     /// REPRODUCED: delete any one line from either body, or change one hex in
     /// one of them, and this fails naming the property and both values.
     #[test]
@@ -453,15 +462,15 @@ mod tests {
              renamed, and this test now checks nothing"
         );
 
-        let media = declarations(&sheet, ":root:not([data-theme=\"light\"]) .app > .shell {");
-        let attribute = declarations(&sheet, ":root[data-theme=\"dark\"] .app > .shell {");
+        let media = declarations(&sheet, ":root:not([data-theme=\"light\"]) .app {");
+        let attribute = declarations(&sheet, ":root[data-theme=\"dark\"] .app {");
 
         assert_eq!(
             media.len(),
             attribute.len(),
             "the dark media body declares {} properties and the \
              `data-theme=\"dark\"` body declares {}. Whichever is short falls \
-             back to the LIGHT declaration on `.app > .shell`, which is how a \
+             back to the LIGHT declaration on `.app`, which is how a \
              near-white slab ends up behind white text on a dark window.\n\
              \n  media only:     {:?}\n  attribute only: {:?}",
             media.len(),
@@ -558,9 +567,9 @@ mod tests {
     /// `color` is in the table and is not a token, deliberately: it is the
     /// single line that makes the ink remap arrive at all. `assets/shared.css`
     /// has `body { color: var(--text-primary) }` and that `var()` substitutes
-    /// at `body`, on `:root`'s value — so without this restatement on the
-    /// shell, remapping `--text-primary` changes the colour of almost nothing
-    /// and every gate in the repo passes over a no-op.
+    /// at `body`, on `:root`'s value — so without this restatement on `.app`,
+    /// remapping `--text-primary` changes the colour of almost nothing and
+    /// every gate in the repo passes over a no-op.
     ///
     /// REPRODUCED: change any one value in `00-tokens.css` and this fails
     /// naming the property, the value it found and the value it expected.
@@ -573,8 +582,8 @@ mod tests {
             .map(|&(_, body)| without_comments(body))
             .unwrap_or_default();
 
-        let base = declarations(&sheet, ".app > .shell {");
-        let dark = declarations(&sheet, ":root[data-theme=\"dark\"] .app > .shell {");
+        let base = declarations(&sheet, ".app {");
+        let dark = declarations(&sheet, ":root[data-theme=\"dark\"] .app {");
 
         // The ink ladder and the line that delivers it; the status trio; the
         // faint rung, the soft hairline, the two inspector rungs and the light
@@ -582,7 +591,7 @@ mod tests {
         for (block, block_name, pins) in [
             (
                 &base,
-                "the light `.app > .shell` block",
+                "the light `.app` block",
                 [
                     ("color", "var(--text-primary)"),
                     ("--ink-faint", "var(--text-secondary)"),

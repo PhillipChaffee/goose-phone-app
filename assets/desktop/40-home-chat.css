@@ -418,8 +418,10 @@
   /* 11.5px, up one rung from --text-2xs. `.mini{font-size:11.5px}` and
    * `.mini .mono{font-size:11px}` — these are the composer's facts, they sit
    * beside a 32px send button, and 10.5 put them below the mockups' own value
-   * for the same element. --text-secondary on --surface-card is 7.85:1 dark and
-   * 4.64:1 light. */
+   * for the same element. --text-secondary on --surface-card is 5.95:1 dark and
+   * 4.64:1 light. (The dark figure read 7.85 until #52's lane re-measured it:
+   * that was #b8b8b8, the PHONE's dark secondary, which the ink ladder in
+   * `00-tokens.css` replaced with #98a1ac. The choice is unchanged.) */
   font-size: var(--text-xs);
   line-height: var(--lh-sm);
   white-space: nowrap;
@@ -434,7 +436,8 @@
    * n.nodeType === 3 …)` — a `::before` is not a child node, so this glyph has
    * never been measured. Measured by hand it is 2.03:1 on the light card and
    * 2.91:1 on the dark one; a separator is a non-text indicator and owes 3:1,
-   * and it fails in both. Secondary is 4.64 and 7.85.
+   * and it fails in both. Secondary is 4.64 and 5.95 — see the note one rule up
+   * for why the dark figure is not the 7.85 this line used to carry.
    *
    * The mockups' own `.sep-dot{color:#454c56}` is fainter still (about 1.4:1)
    * and is one of the places rule 3 outranks them. */
@@ -484,7 +487,26 @@
   width: 100%;
   margin-bottom: 7px;
   padding: 11px 14px;
-  border: 1px solid var(--shell-line);
+  /* THE SOFT RUNG, and this card is one of the two the rung was named for.
+   *
+   * Measured on the captured `desktop-chats` at 1440x860 against the shipped
+   * sheets: the border was `--shell-line`, rgb(44,49,56) dark, **1.19:1** on
+   * this card's own #212429 fill — the same weight as the window band's bottom
+   * edge, spent on the outline of a list item. `--shell-line-soft` #242830 is
+   * **1.05:1** on the same fill, and it is the mockups' `.crow:not(.live)`
+   * rgb(36,40,48) verbatim. Light moves with it, one rung and no further:
+   * #cbd1d6 on #f4f6f7 is **1.42:1** and #e3e6ea on the same fill is
+   * **1.16:1** — the only two-tier pair light already has, in the same order.
+   *
+   * A 1.05:1 edge is not a missing edge, because the edge was never carrying
+   * this card alone: the fill is #212429 on the #1e2126 canvas, 1.04:1, and the
+   * two together are what the mockups draw as a wash with a seam round it.
+   * What the change buys is the ORDER — `.home-starter`'s dashed edge two
+   * sections down stays on `--shell-line`, so the two-tier language this
+   * block's header describes (solid faint card = exists, dashed card = could
+   * start) is now carried by weight as well as by the dash, where before both
+   * tiers were drawn at 1.19:1 and only the dash told them apart. */
+  border: 1px solid var(--shell-line-soft);
   border-radius: var(--radius-lg);
   background: var(--surface-card);
   color: inherit;
@@ -619,7 +641,7 @@
  * `--text-secondary` and not `--text-tertiary`, which is what this shipped as
  * and what `docs/audit.js` caught: tertiary is #606c7a, which is 2.91:1 on the
  * card — under the 4.5 an 11px string owes, and 11px is exactly the size at
- * which a reader is least able to make up the difference. Secondary is 7.85:1
+ * which a reader is least able to make up the difference. Secondary is 5.95:1
  * on the same surface. The mockups set their own faint grey here and do not
  * clear it either; the floor wins over the picture, as it did for the send
  * button's diameter. */
@@ -835,7 +857,20 @@
    * the top of its box than the 10px label does to the bottom of it, so equal
    * padding reads bottom-heavy. It was a flat 12px. */
   padding: 9px 12px 10px;
-  border: 1px solid var(--shell-line);
+  /* THE SOFT RUNG, the second of the two cards #52 named, and the same
+   * arithmetic as `.recent` above because it is the same pair: rgb(44,49,56)
+   * was **1.19:1** on this tile's own #212429 fill and #242830 is **1.05:1**,
+   * against the mockups' `.st-t` rgb(36,40,48). Light 1.42:1 -> 1.16:1.
+   *
+   * TWO OF THE FOUR TILES DO NOT MOVE, and that is the point of spending the
+   * rung on the base rule rather than on the group. `.home-tile.urgent` below
+   * carries `--text-warning` and `.home-tile.live` carries `--accent`
+   * (`97-home-code.css`), so each already declares its own `border-color`.
+   * Measured on the captured `desktop-code-list`: of the four tiles, exactly
+   * the two plain counts soften. Widening the gap between a count and a
+   * demand is what this buys; dimming all four together would have bought
+   * nothing. */
+  border: 1px solid var(--shell-line-soft);
   /* `--radius-lg`, for `.home-starter`'s reason four rules up: the mockups
    * round this at 11 and `.crow` at 12, and this app has one radius for a
    * card. */
@@ -883,7 +918,7 @@
    * ARITHMETIC, because this is the thinnest margin in the pass: 700 weight at
    * 10px does NOT reach the audit's large-text relaxation (that wants 14px AND
    * 700, or 18.66px unconditionally), so this owes the full 4.5:1.
-   * --text-secondary on --surface-card is 4.64:1 light and 7.85:1 dark. It
+   * --text-secondary on --surface-card is 4.64:1 light and 5.95:1 dark. It
    * passes light by 0.14, which is why the tile may not gain a hover fill:
    * --surface-raise would take it to 4.01 and fail. */
   font-size: var(--text-3xs);
