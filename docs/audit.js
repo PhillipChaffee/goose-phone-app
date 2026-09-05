@@ -1165,8 +1165,8 @@ for (const [desktop, found] of Object.entries(REFERENCE)) {
 //                  628 and again in 704..971 while the inspector is open, and
 //                  it has neither a scrim nor a dismissal — so it is not a
 //                  panel you open and close, it is 268px permanently over the
-//                  content column. 25 of these 29 pairs are that one panel, and
-//                  the fix deletes all 25 at once. Measured: it fires at 480,
+//                  content column. 29 of these 33 pairs are that one panel, and
+//                  the fix deletes all 29 at once. Measured: it fires at 480,
 //                  627, 704 and 971 and at no other window size, which is
 //                  exactly the two bands the sheet makes it an overlay in.
 //
@@ -1183,6 +1183,16 @@ for (const [desktop, found] of Object.entries(REFERENCE)) {
 //                  of the twelve dies with #215 alongside the thirteen that
 //                  were already here, and that is the test of the claim: if a
 //                  fix leaves any of them alive it was not this defect.
+//
+//                  AND BY FOUR MORE, for the same reason a second time. The
+//                  capture that took the store to 21 desktop states was driven
+//                  against a Code home that had just grown its own geometry
+//                  (#76), a fifth tile (#77), pressable tiles (#203) and a
+//                  model chip on the Chat home (#194) — so `.home-tile`,
+//                  `.home-tile.live`, `.home-tile.urgent` and
+//                  `.home-chip.picker` are controls that did not exist the
+//                  last time this walk ran. Same panel, same bands, same
+//                  window sizes. All 29 still die together.
 //   button.fab     `--z-chrome` is 20 and the overlay sidebar is `z-index: 3`,
 //                  so a floating button belonging to the content column paints
 //                  over the sidebar's rows — the second half of #209, one
@@ -1210,6 +1220,10 @@ for (const [desktop, found] of Object.entries(REFERENCE)) {
 //                  `assets/shared.css` still centres the phone's on it.
 const OCCLUSION_KNOWN = [
   'aside.navpane >> button.action-chip',
+  'aside.navpane >> button.home-chip.picker',
+  'aside.navpane >> button.home-tile',
+  'aside.navpane >> button.home-tile.live',
+  'aside.navpane >> button.home-tile.urgent',
   'aside.navpane >> button.btn.danger-outline',
   'aside.navpane >> button.btn.primary',
   'aside.navpane >> button.btn.secondary',
