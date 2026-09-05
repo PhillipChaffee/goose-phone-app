@@ -19,7 +19,8 @@
 //! `docs/permission-durability.md` section 0.
 //!
 //! Prompt keywords: "slow" = long stream (time to hit Stop);
-//! "notool" = skip the tool call / permission prompt.
+//! "notool" = skip the tool call / permission prompt; "diff" = add a file
+//! edit whose tool result carries both halves of its diff.
 //!
 //! This file is the transport and nothing else: the HTTP head parse that lets
 //! one listener serve both HTTP and WebSocket, auth, and the frame loop.

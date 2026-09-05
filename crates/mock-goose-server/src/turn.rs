@@ -2,7 +2,8 @@
 //!
 //! Every step is cancellable, because the Stop button is the thing this
 //! script exists to exercise. Prompt keywords: "slow" = a long stream (time
-//! to hit Stop), "notool" = skip the tool call and its permission prompt.
+//! to hit Stop), "notool" = skip the tool call and its permission prompt,
+//! "diff" = add a file edit that carries both halves of its diff.
 //!
 //! A prompt is a `ContentBlock` array, not a string: the text is the first
 //! *text* block, and anything else in the array is an attachment, which the
@@ -164,6 +165,43 @@ impl Turn {
         Ok(())
     }
 
+    /// A file edit, carrying BOTH halves of its diff.
+    ///
+    /// The one shape of `ToolCallContent` no fixture in this repo could
+    /// produce. The mock's other tool call answers with `{"type":"content"}`,
+    /// and `crates/mock-opencode-server` has no diff either, so
+    /// `goose-acp-client`'s `diff` arm was decoded only by unit tests over
+    /// hand-written JSON — which is how the client came to throw `oldText`
+    /// away for the life of the crate without anything noticing (#191). A
+    /// client type nothing on the wire can reach is a client type nobody is
+    /// testing.
+    ///
+    /// BOTH HALVES AND THEY DIFFER, which is the whole point: `oldText` alone
+    /// proves the field is carried, and a renderer that has to compute
+    /// additions against deletions needs two texts that are actually
+    /// different. Three lines each, with one line changed and one added, so a
+    /// diff card built on this has a `+`, a `−` and a context line to show.
+    ///
+    /// No permission round-trip. The shell call above already exercises that
+    /// path, and this one is here to put a shape on the wire, not to script a
+    /// second ask.
+    async fn edit_call(&mut self) -> Result<(), Cancelled> {
+        self.step().await?;
+        self.emit(
+            json!({"sessionUpdate":"tool_call","toolCallId":"tc_2",
+                   "title":"edit: src/scheduler.rs","kind":"edit","status":"in_progress",
+                   "_meta":{"goose":{"toolCall":{"toolName":"developer__text_editor","extensionName":"developer"}}}}),
+        );
+        self.step().await?;
+        self.emit(
+            json!({"sessionUpdate":"tool_call_update","toolCallId":"tc_2","status":"completed",
+                   "content":[{"type":"diff","path":"src/scheduler.rs",
+                               "oldText":"fn tick() {\n    sleep(1);\n}\n",
+                               "newText":"fn tick() {\n    sleep(2);\n    log(\"tick\");\n}\n"}]}),
+        );
+        Ok(())
+    }
+
     /// Assistant message stream (markdown showcase).
     async fn answer(&mut self, slow: bool) -> Result<(), Cancelled> {
         if self.attachments > 0 {
@@ -205,11 +243,15 @@ impl Turn {
         &mut self,
         pending: &Pending,
         with_tool: bool,
+        with_diff: bool,
         slow: bool,
     ) -> Result<(), Cancelled> {
         self.think().await?;
         if with_tool {
             self.tool_call(pending).await?;
+        }
+        if with_diff {
+            self.edit_call().await?;
         }
         self.answer(slow).await
     }
@@ -257,6 +299,11 @@ pub(crate) async fn run_turn(
 
     let slow = user_text.to_lowercase().contains("slow");
     let with_tool = !user_text.to_lowercase().contains("notool");
+    // Opt-in rather than always on, the way every other keyword here is: the
+    // scripted turn is what every app-level test and every captured gallery
+    // state is built out of, and a second tool call in it would change all of
+    // them to make one wire shape reachable.
+    let with_diff = user_text.to_lowercase().contains("diff");
     let mut turn = Turn {
         out,
         sid,
@@ -296,7 +343,11 @@ pub(crate) async fn run_turn(
         &json!({"sessionId": turn.sid, "update": {"sessionUpdate":"usage_update","used":18432,"contextLimit":128_000}}),
     );
 
-    let stop_reason = if turn.script(&pending, with_tool, slow).await.is_ok() {
+    let stop_reason = if turn
+        .script(&pending, with_tool, with_diff, slow)
+        .await
+        .is_ok()
+    {
         // Auto-title + final usage, then resolve the prompt.
         turn.emit(
             json!({"sessionUpdate":"session_info_update","title":auto_title(&user_text),

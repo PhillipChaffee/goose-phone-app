@@ -179,6 +179,86 @@ pub struct ToolCallUpdate {
     pub meta: Option<Value>,
 }
 
+/// A file edit as ACP describes one: where, what it was, and what it became.
+///
+/// BOTH HALVES, WHICH IS THE WHOLE POINT OF THE TYPE. `oldText` used to be
+/// read nowhere in this workspace: [`ToolCallUpdate::content_text`] turned a
+/// `{"type":"diff"}` block into `"[diff: " + path + "]"` followed by `newText`
+/// and threw the rest away, so by the time an edit reached a transcript there
+/// were no `−` lines to colour and no counts to add up. That did not make the
+/// mockups' inline diff card unbuilt; it made it **unbuildable**, one crate
+/// away from where the data arrives. #191 is that finding and this is its
+/// answer.
+///
+/// Every field is optional because the server may omit any of them and a
+/// half-described edit is still worth showing. `old_text: None` is a file that
+/// did not exist before — every line an addition — and is a different claim
+/// from `Some("")`, which is a file that existed and was empty; a renderer
+/// that wants to say "new file" needs to be able to tell those apart, so the
+/// `Option` is kept rather than flattened to a default.
+///
+/// Serde derives for the reason `ChatItem` in the app has them: a decoded diff
+/// that reaches a transcript has to survive the Code tab's on-device cache.
+/// The decode from the WIRE is hand-written in [`ToolCallUpdate::contents`] and
+/// per-field, not `serde_json::from_value` over the whole object — a block
+/// whose `path` is a number must still yield its `newText`, and a whole-struct
+/// parse would drop both.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FileDiff {
+    pub path: Option<String>,
+    pub old_text: Option<String>,
+    pub new_text: Option<String>,
+}
+
+impl FileDiff {
+    /// What to call the file when the server named no path.
+    ///
+    /// `"file"` is the word [`ToolCallUpdate::content_text`] has always used
+    /// for a pathless diff, kept here so the display string has one definition
+    /// rather than two that can drift.
+    #[must_use]
+    pub fn display_path(&self) -> &str {
+        self.path.as_deref().unwrap_or("file")
+    }
+}
+
+/// One entry of a tool call's `content` array — ACP's `ToolCallContent`, as a
+/// type rather than as a line of prose.
+///
+/// The three shapes the protocol defines, and only the ones this client can
+/// read: an entry with an unknown `type`, or a `content` entry whose body is
+/// not a [`ContentBlock`], yields nothing at all. That is the same silence
+/// [`ToolCallUpdate::content_text`] has always kept, and it is deliberate — a
+/// tool result must not be emptied by one entry a newer goose added to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolCallContent {
+    /// `{"type":"content"}` — a message block the tool produced.
+    Content(ContentBlock),
+    /// `{"type":"diff"}` — a file edit, both halves.
+    Diff(FileDiff),
+    /// `{"type":"terminal"}` — output that lives in a terminal on the agent's
+    /// machine.
+    ///
+    /// A UNIT VARIANT, and `terminalId` is a recorded drop rather than an
+    /// oversight. Reading that output means `terminal/output` and a terminal
+    /// this client never creates, releases or waits on; carrying the id would
+    /// be a handle to a resource nothing here can open. When something does
+    /// attach to one, the id goes on this variant and this paragraph comes
+    /// out.
+    Terminal,
+}
+
+/// One string field of a JSON object, when it is a string.
+///
+/// Per FIELD and not per object, which is [`FileDiff`]'s own note: the flatten
+/// this replaces read `path` and `newText` independently, so a block with a
+/// numeric `path` still showed its new text. Keeping that leniency is what
+/// makes this change invisible to the phone.
+fn string_at(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
 impl ToolCallUpdate {
     /// Name of the underlying goose tool, e.g. `developer__shell`, when present.
     #[must_use]
@@ -191,42 +271,61 @@ impl ToolCallUpdate {
             .as_str()
     }
 
-    /// Concatenated human-readable text from the `content` entries
-    /// (`ToolCallContent` variants `content` / `diff` / `terminal`).
+    /// The `content` entries this client understands, decoded.
+    ///
+    /// The structured half of what [`content_text`](Self::content_text)
+    /// renders, and the one that keeps `oldText`. Entries arrive in the order
+    /// the server sent them and the ones this client cannot read are dropped,
+    /// so an empty vector means "nothing here to show" and not "nothing here".
+    #[must_use]
+    pub fn contents(&self) -> Vec<ToolCallContent> {
+        self.content
+            .iter()
+            .flatten()
+            .filter_map(|item| match item.get("type").and_then(Value::as_str) {
+                Some("content") => {
+                    serde_json::from_value::<ContentBlock>(item.get("content")?.clone())
+                        .ok()
+                        .map(ToolCallContent::Content)
+                }
+                Some("diff") => Some(ToolCallContent::Diff(FileDiff {
+                    path: string_at(item, "path"),
+                    old_text: string_at(item, "oldText"),
+                    new_text: string_at(item, "newText"),
+                })),
+                Some("terminal") => Some(ToolCallContent::Terminal),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Concatenated human-readable text from the `content` entries.
+    ///
+    /// Written over [`contents`](Self::contents) rather than over the raw
+    /// JSON, so the display string and the structure can no longer disagree
+    /// about what a tool call contained. Byte for byte what it produced
+    /// before — which is the promise this refactor is under, because
+    /// `src/views/chat.rs` renders this into the phone's tool card and the
+    /// phone's markup must not move.
+    #[must_use]
     pub fn content_text(&self) -> String {
         let mut out = String::new();
-        for item in self.content.iter().flatten() {
-            match item.get("type").and_then(Value::as_str) {
-                Some("content") => {
-                    if let Some(block) = item.get("content") {
-                        if let Ok(block) = serde_json::from_value::<ContentBlock>(block.clone()) {
-                            if !out.is_empty() {
-                                out.push('\n');
-                            }
-                            out.push_str(&block.text_repr());
-                        }
-                    }
-                }
-                Some("diff") => {
-                    let path = item.get("path").and_then(Value::as_str).unwrap_or("file");
-                    if !out.is_empty() {
-                        out.push('\n');
-                    }
+        for item in self.contents() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            match item {
+                ToolCallContent::Content(block) => out.push_str(&block.text_repr()),
+                ToolCallContent::Diff(diff) => {
                     out.push_str("[diff: ");
-                    out.push_str(path);
+                    out.push_str(diff.display_path());
                     out.push(']');
-                    if let Some(new_text) = item.get("newText").and_then(Value::as_str) {
+                    if let Some(new_text) = &diff.new_text {
                         out.push('\n');
                         out.push_str(new_text);
                     }
                 }
-                Some("terminal") => {
-                    if !out.is_empty() {
-                        out.push('\n');
-                    }
-                    out.push_str("[terminal output]");
-                }
-                _ => {}
+                ToolCallContent::Terminal => out.push_str("[terminal output]"),
             }
         }
         out
@@ -569,6 +668,139 @@ mod tests {
             None,
             "no goose _meta means no tool name to show"
         );
+    }
+
+    /// BOTH HALVES OF AN EDIT SURVIVE THE DECODE, which is the whole of #191.
+    ///
+    /// `content_text` flattens a diff to `[diff: path]` plus the new text, and
+    /// the old text was read nowhere in the workspace — so a transcript could
+    /// not colour a deleted line even in principle, because there was no
+    /// deleted line left to colour. This is the assertion that says it is
+    /// there. The same walk also has to keep the ORDER the server sent, since
+    /// two edits to one file are only a story in sequence.
+    #[test]
+    fn a_diff_keeps_the_text_it_replaced_and_not_only_the_text_it_wrote() {
+        let update: ToolCallUpdate = serde_json::from_value(json!({
+            "toolCallId": "call_edit",
+            "content": [
+                {"type": "diff", "path": "src/scheduler.rs",
+                 "oldText": "let n = 1;\n", "newText": "let n = 2;\n"},
+                {"type": "diff", "path": "src/new.rs", "newText": "fn main() {}\n"},
+            ]
+        }))
+        .unwrap();
+
+        let diffs: Vec<FileDiff> = update
+            .contents()
+            .into_iter()
+            .filter_map(|item| match item {
+                ToolCallContent::Diff(diff) => Some(diff),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            diffs,
+            vec![
+                FileDiff {
+                    path: Some("src/scheduler.rs".to_string()),
+                    old_text: Some("let n = 1;\n".to_string()),
+                    new_text: Some("let n = 2;\n".to_string()),
+                },
+                FileDiff {
+                    path: Some("src/new.rs".to_string()),
+                    old_text: None,
+                    new_text: Some("fn main() {}\n".to_string()),
+                },
+            ],
+            "the edit's old side is what a diff card needs to draw a deletion, \
+             and a file with no old side at all is the claim \"this file is \
+             new\" — two different things, so neither may collapse into the \
+             other"
+        );
+        assert_eq!(diffs[0].display_path(), "src/scheduler.rs");
+        assert_eq!(
+            FileDiff::default().display_path(),
+            "file",
+            "a pathless diff is still shown, under the one name content_text \
+             has always given it"
+        );
+    }
+
+    /// The structure and the display string are one walk, so they cannot
+    /// disagree about what a tool call contained.
+    ///
+    /// `content_text` is written over `contents`, and the fixture is the same
+    /// one `tool_call_content_joins_every_kind_it_understands` pins the string
+    /// of — nine entries, of which four are unreadable. What this adds is that
+    /// the five that ARE readable come back as five values a renderer can
+    /// match on, in order, and that the four dropped ones are dropped here too
+    /// rather than arriving as some empty variant.
+    #[test]
+    fn the_decoded_entries_are_the_entries_the_display_string_is_built_from() {
+        let update: ToolCallUpdate = serde_json::from_value(json!({
+            "toolCallId": "call_9",
+            "content": [
+                {"type": "content", "content": {"type": "text", "text": "first"}},
+                {"type": "content", "content": {"type": "not_a_block"}},
+                {"type": "content"},
+                {"type": "diff", "path": "src/lib.rs", "newText": "fn main() {}"},
+                {"type": "diff"},
+                {"type": "terminal", "terminalId": "term_1"},
+                {"type": "something_new"},
+                {"notATypeAtAll": true},
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            update.contents(),
+            vec![
+                ToolCallContent::Content(ContentBlock::text("first")),
+                ToolCallContent::Diff(FileDiff {
+                    path: Some("src/lib.rs".to_string()),
+                    old_text: None,
+                    new_text: Some("fn main() {}".to_string()),
+                }),
+                ToolCallContent::Diff(FileDiff::default()),
+                ToolCallContent::Terminal,
+            ],
+            "a `content` entry with no readable block, and an entry with a \
+             type this crate has never heard of, must contribute nothing at \
+             all — a newer goose adding one must not empty the tool result"
+        );
+        assert_eq!(
+            ToolCallUpdate::default().contents(),
+            vec![],
+            "a tool call with no content yet decodes to nothing, not to one \
+             empty entry"
+        );
+    }
+
+    /// A DIFF WHOSE PATH IS THE WRONG TYPE STILL SHOWS ITS NEW TEXT, which is
+    /// the leniency the flatten had and a whole-struct `from_value` would not.
+    ///
+    /// The old code read `path` and `newText` off the JSON object one at a
+    /// time, so a server that sent a number where a string belonged lost that
+    /// one field and nothing else. Decoding the block as a struct in one call
+    /// would have failed the whole parse and dropped the edit — a strictly
+    /// worse answer, arrived at by accident while making the type nicer.
+    #[test]
+    fn one_bad_field_of_a_diff_does_not_take_the_rest_of_it_down() {
+        let update: ToolCallUpdate = serde_json::from_value(json!({
+            "toolCallId": "call_odd",
+            "content": [{"type": "diff", "path": 42, "oldText": null,
+                         "newText": "fn main() {}"}]
+        }))
+        .unwrap();
+        assert_eq!(
+            update.contents(),
+            vec![ToolCallContent::Diff(FileDiff {
+                path: None,
+                old_text: None,
+                new_text: Some("fn main() {}".to_string()),
+            })],
+        );
+        assert_eq!(update.content_text(), "[diff: file]\nfn main() {}");
     }
 
     /// The three chunk tags are three different things on screen — what the
