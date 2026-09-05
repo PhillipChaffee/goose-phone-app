@@ -233,8 +233,8 @@ const UNDECIDED: &[&str] = &[
     "session-list",
     "session-meta",
     "stat",
-    // src/views/chat.rs — the composer's model and effort chips, the
-    // permission modal, the tool-call glyph (#211).
+    // src/views/chat.rs — the composer's model and effort chips and the
+    // permission modal.
     "chip-effort",
     "chip-label",
     "chip-model",
@@ -250,7 +250,6 @@ const UNDECIDED: &[&str] = &[
     "mode",
     "small",
     "stop",
-    "tool-icon",
     // src/views/attach.rs — the attachment tray above the composer.
     "attach",
     "attach-chip",

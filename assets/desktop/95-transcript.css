@@ -283,6 +283,39 @@
   line-height: var(--lh-xs);
 }
 
+/* AND THE OTHER MARK TAKES THE SAME COLUMN. The rule above built the
+ * mockups' 38px gutter for the card shapes that have a word, and the ones that
+ * do not kept the phone's 18px one — so the column existed on some rows and not
+ * on others, which is the one thing a fixed-width gutter is for.
+ *
+ * Measured before this rule, two cards in one `.tool-run` under the real sheet
+ * list — `shared.css`, then `assets/features/` sorted, then `assets/desktop/`
+ * sorted, then `assets/platform/macos.css` — at
+ * 1440x860: the glyph card's `.tool-icon` box was 18px at x=374 and the word
+ * card's `.tool-kind` 38px at the same x, so `.tool-title` started at 401 on
+ * one and 421 on the other — 20px of rag, identical at 704, 628 and 480,
+ * because both values are fixed `rem` and neither closes with the window.
+ * After it, both marks are 38px and both titles start at 421.
+ *
+ * THE ACCENT AS WELL AS THE WIDTH, which is the judgement call #211 names.
+ * `--tool-gutter` came with `--text-secondary`, so the two card shapes differed
+ * in colour as well as in width; 22-nav-disclosure paints `.tool .nm` in the
+ * accent on EVERY tool row and nothing else in that gutter. Non-text, so 3:1 is
+ * what it owes: `--accent` on `--bg-secondary` is 5.87:1 light and 6.17:1 dark,
+ * the pair `.tool-kind` already records.
+ *
+ * AND IT IS CENTRED IN THE COLUMN WHERE THE WORD IS FLUSH TO ITS LEFT, which
+ * is deliberate and not an oversight. A word is a string and reads from the
+ * edge it starts at; a 16px glyph flush against a 38px box is a mark with 22px
+ * of nothing after it and no left edge of its own to explain the gap. The
+ * chevron below does the same, for a second reason written over its own rule.
+ * `shared.css` already centres this one, so this rule spends two declarations
+ * and not three. */
+.pane-main .scroll.chat .tool-icon {
+  width: 2.375rem;
+  color: var(--accent);
+}
+
 .pane-main .scroll.chat .tool-title {
   color: var(--text-secondary);
   font-weight: 400;
@@ -351,9 +384,33 @@
   }
 }
 
+/* THE THIRD RUNG, INSIDE ONE CARD. `.tool-output > summary::before` took
+ * `--tool-gutter` too, so the disclosure under a card's own head sat on neither
+ * of the columns above it: measured at 1440x860, a word card's `.tool-title`
+ * started at 421 and its "Output" at 399, 22px to the left of the string it is
+ * a section of. Two marks are now one column and this is what makes it three.
+ *
+ * The head's own inset and gap, restated here rather than inherited, because
+ * `shared.css` gives this row 12px and 6px against the head's 11px and 9px and
+ * the two rules are 200 lines apart in a sheet this one cannot edit. With the
+ * mark at 38px the label lands at 421, under the title, and the card has one
+ * left edge from its first row to its last.
+ *
+ * THE CHEVRON STAYS CENTRED IN THAT COLUMN, and unlike the glyph above it this
+ * one has no choice: `shared.css`'s `details[open] > summary::before` turns it
+ * 90deg, and a `transform` with no origin of its own turns about the box's
+ * centre. Flush to the left of a 38px box it would swing a quarter of the box's
+ * width up and to the right every time the section opened — the failure a
+ * `transform-origin` would then have to be invented to undo. Centred, the
+ * rotation is where it has always been. */
 .pane-main .scroll.chat .tool > .tool-output > summary {
   min-height: 2rem;
-  padding: 0 0.75rem;
+  gap: 0.5625rem;
+  padding: 0 0.6875rem;
+}
+
+.pane-main .scroll.chat .tool > .tool-output > summary::before {
+  width: 2.375rem;
 }
 
 .pane-main .scroll.chat .tool > .tool-output pre {
