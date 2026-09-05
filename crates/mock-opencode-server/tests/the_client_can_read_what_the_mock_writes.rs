@@ -452,6 +452,96 @@ async fn the_fleet_carries_a_red_build_a_running_one_and_a_branch_that_landed() 
     );
 }
 
+/// Issues #81, #82 and #83: the four size counts, over the real socket, with
+/// the one thing a fixture set can get wrong about them.
+///
+/// The counts ride the pull request's DETAIL form, which the manager already
+/// fetches for `mergeable` — so a fleet where every pull carries them would
+/// never reach `Option::None`, and a renderer that assumed the numbers always
+/// arrive would pass here, pass locally and pass every capture. One fixture
+/// therefore has no detail form at all. That is not decoration: it is the only
+/// place in the development loop where "GitHub was not asked" exists.
+#[tokio::test]
+async fn the_fleet_measures_some_pull_requests_and_admits_it_measured_others_not_at_all() {
+    let server = Server::start();
+    let client = server.client();
+    let chats = client.chats().await.expect("chats");
+
+    let mut measured = 0_usize;
+    let mut unmeasured = 0_usize;
+    let mut zero_deletions = 0_usize;
+    for chat in &chats {
+        for pull in client.pulls(&chat.id).await.expect("pulls") {
+            let present = [
+                pull.commits.is_some(),
+                pull.additions.is_some(),
+                pull.deletions.is_some(),
+                pull.changed_files.is_some(),
+            ];
+            assert!(
+                present.iter().all(|p| *p) || present.iter().all(|p| !*p),
+                "the four ride ONE response, so a pull carrying some of them \
+                 is a shape the manager cannot make: #{} {present:?}",
+                pull.number
+            );
+            if pull.diffstat().is_some() {
+                measured += 1;
+                zero_deletions += usize::from(pull.deletions == Some(0));
+            } else {
+                unmeasured += 1;
+            }
+        }
+    }
+    assert!(
+        measured >= 2,
+        "one measured pull request cannot show a list what a diffstat column \
+         looks like; found {measured}"
+    );
+    assert_eq!(
+        unmeasured, 1,
+        "exactly one fixture is the manager's detail-call fallback; without \
+         it `Option::None` is unreachable in every local run"
+    );
+    assert_eq!(
+        zero_deletions, 1,
+        "a pull request that removed nothing has to be in the fleet too — \
+         `Some(0)` and `None` are different answers and only a fixture can \
+         prove the mock keeps them apart"
+    );
+
+    // The one tree that has a diff AND a pull request has to tell one story.
+    // A row saying `+23 −2` above a file list adding up to something else
+    // looks like a client bug in every screenshot it appears in.
+    let reviewed = chats
+        .iter()
+        .find(|c| c.title.contains("search box"))
+        .expect("the fixture with a diff and a pull");
+    let session = client
+        .sessions(&reviewed.id)
+        .await
+        .expect("sessions")
+        .first()
+        .expect("a session")
+        .id
+        .clone();
+    let files = client.diff(&reviewed.id, &session).await.expect("diff");
+    let summed = files.iter().fold((0_u32, 0_u32), |(plus, minus), f| {
+        (plus + f.additions, minus + f.deletions)
+    });
+    let pull = client
+        .pulls(&reviewed.id)
+        .await
+        .expect("pulls")
+        .into_iter()
+        .next()
+        .expect("one pull");
+    assert_eq!(pull.diffstat(), Some(summed));
+    assert_eq!(
+        pull.changed_files,
+        Some(u32::try_from(files.len()).expect("two files")),
+    );
+}
+
 /// The transcript, and the field that decides whose turn a message was.
 #[tokio::test]
 async fn a_transcript_comes_back_with_its_roles() {

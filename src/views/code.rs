@@ -204,19 +204,25 @@ fn chat_ask(queue: &[(String, CodePermission)], chat_id: &str) -> Option<(CodePe
 /// so that the row stays a function of its arguments — the list already reads
 /// the signal once for the whole list rather than once per row.
 ///
-/// **What is still absent, and why** (issues #81, #82). The mockups' working
-/// tree row also carries `+34 −11`, a file count, a commit count and an
-/// ahead-count. None of them is on this wire. The diffstat exists only per
-/// SESSION and only through the container (`CodeClient::diff`), so a sweep
-/// for it would wake every sleeping tree; the commit and ahead counts have no
-/// endpoint at all — `ChatMeta` is id/repo/title/branch/base/status/model/
-/// `last_active` and nothing else. Both are one container-free GitHub call
-/// away on the manager's side — `compare/<base>...<branch>` answers
+/// **What this row does not draw yet, and why** (issues #81, #82). The
+/// mockups' working tree row also carries `+34 −11`, a file count, a commit
+/// count and an ahead-count. Three of those are now on this wire and one is
+/// not. `PhillipChaffee/personal-ai-setup#47` stopped `pull_to_wire`
+/// discarding `commits`/`additions`/`deletions`/`changed_files`, so `pull`
+/// carries them whenever the branch has a pull request the manager could read
+/// a detail form for — `PullRequest::diffstat` and `PullRequest::commits`,
+/// with the three limits written down on `code::PullsState::plane_pull`. This
+/// list has not been given them yet; that is a rendering decision and it
+/// belongs with the board's.
+///
+/// Still absent everywhere: a **branch with no pull request** has no numbers
+/// at all, and `behind_by` has no source on any route. Both want one
+/// container-free `compare/<base>...<branch>` on the manager, which answers
 /// `ahead_by`, `behind_by`, `total_commits` and the summed `+/-` in a single
-/// request that wakes nothing, and `pull_to_wire` already receives
-/// `commits`/`additions`/`deletions`/`changed_files` from GitHub and drops
-/// them. Filed as `PhillipChaffee/personal-ai-setup#28` and `#29`. Until one
-/// of those lands the row says the number it has and no others, because a
+/// request that wakes nothing — `PhillipChaffee/personal-ai-setup#29`. The
+/// per-session diffstat is still not the answer: `CodeClient::diff` goes
+/// through the container, so a sweep for it would wake every sleeping tree.
+/// Until #29 lands the row says the numbers it has and no others, because a
 /// plausible one is worse than none.
 fn render_code_row(
     ctx: &AppCtx,

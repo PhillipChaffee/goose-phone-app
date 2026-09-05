@@ -267,18 +267,26 @@ pub enum Checks {
 /// count on a chip meaningful — a repo's other pull requests have nothing to
 /// do with this conversation.
 ///
-/// **Four numbers that are not here and should be** (this repo's #81 and #82,
-/// filed upstream as `PhillipChaffee/personal-ai-setup#28`). GitHub's pull
-/// request DETAIL form carries `commits`, `additions`, `deletions` and
-/// `changed_files`; the LIST form carries none of them, which is why the
-/// manager's `chat_pulls` fetches the detail form per pull already — for
-/// `mergeable`. So the manager receives all four on every call and
-/// `pull_to_wire` builds its dict without them. They are not decoded here
-/// because nothing sends them: a `#[serde(default)]` `u32` would read `0` for
-/// "the manager did not say", and a zero on a screen is a claim like any
-/// other. When the manager sends them they want to be `Option<u32>` for
-/// `mergeable`'s reason — GitHub omits them on any path that did not fetch a
-/// detail form, and "not fetched" is not "no changes".
+/// **How big it is rides the same response** (this repo's #81, #82 and #83).
+/// GitHub's pull request DETAIL form carries `commits`, `additions`,
+/// `deletions` and `changed_files`; the LIST form carries none of them, which
+/// is why the manager's `chat_pulls` fetches the detail form per pull already
+/// — for `mergeable`. `pull_to_wire` used to parse all four and throw them
+/// away; since `PhillipChaffee/personal-ai-setup#47` it forwards them, at zero
+/// extra GitHub cost, and they are decoded below.
+///
+/// They are `Option<u32>` rather than `#[serde(default)]` `u32` for
+/// `mergeable`'s reason. The manager copies each key only when GitHub really
+/// answered with it, so the one path with no detail form — the fallback in
+/// `chat_pulls` when that call raised — leaves all four out. A `0` there would
+/// be a claim that the branch changed nothing, "GitHub was not asked" is a
+/// different thing entirely, and a client has no way to disbelieve a number it
+/// was sent. **"Not fetched" is not "no changes".**
+///
+/// Which is also what makes this safe to decode before the brain has the
+/// manager that sends it: an older manager omits all four on every pull, and
+/// that is the same `None` a failed detail call produces. The app draws
+/// nothing either way, so the wire and the deploy can land in either order.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 #[serde(default)]
 pub struct PullRequest {
@@ -301,6 +309,19 @@ pub struct PullRequest {
     pub base: String,
     pub created_at: String,
     pub updated_at: String,
+    /// Commits in the pull request — which is also how far the branch is
+    /// **ahead** of its base, since that is what a pull request is a request
+    /// to land. A branch with no pull request has neither number here; only
+    /// `compare/<base>...<branch>` answers that one
+    /// (`PhillipChaffee/personal-ai-setup#29`).
+    pub commits: Option<u32>,
+    /// Lines added across the whole pull request, against its base.
+    pub additions: Option<u32>,
+    /// Lines removed. A real `0` is a measurement and arrives as `Some(0)`;
+    /// absent is [`None`] and means nobody measured.
+    pub deletions: Option<u32>,
+    /// Files the pull request touches.
+    pub changed_files: Option<u32>,
 }
 
 fn de_pull_state<'de, D: serde::Deserializer<'de>>(d: D) -> Result<PullState, D::Error> {
@@ -338,6 +359,22 @@ impl PullRequest {
             && !self.draft
             && matches!(self.mergeable, Some(true))
             && !matches!(self.checks, Checks::Failing)
+    }
+
+    /// `(additions, deletions)`, and only when **both** arrived.
+    ///
+    /// A `+N −M` pair is one measurement written two ways round, so half of it
+    /// is not half an answer: `+65` with nothing beside it reads as `−0`,
+    /// which is a claim about the other half that nothing made. The manager
+    /// sends the four counts together or not at all — they come off one
+    /// response — so a half-filled pair is a malformed answer, and this is
+    /// where it stops.
+    #[must_use]
+    pub const fn diffstat(&self) -> Option<(u32, u32)> {
+        match (self.additions, self.deletions) {
+            (Some(plus), Some(minus)) => Some((plus, minus)),
+            _ => None,
+        }
     }
 }
 
@@ -2355,6 +2392,52 @@ mod tests {
         assert_eq!(only.mergeable, None);
         assert_eq!(only.head, "agent/notes-9f2c1a");
         assert_eq!(only.base, "main");
+        // The four size counts are the detail form's, and this fixture is the
+        // shape a manager whose detail call raised sends: absent.
+        assert_eq!(only.commits, None);
+        assert_eq!(only.additions, None);
+        assert_eq!(only.deletions, None);
+        assert_eq!(only.changed_files, None);
+        assert_eq!(only.diffstat(), None);
+    }
+
+    /// The four numbers off GitHub's detail form, and the distinction the
+    /// whole decode exists for: **a measured zero is not an absent field.**
+    ///
+    /// `deletions: 0` says the branch removed nothing and is a fact; a missing
+    /// `deletions` says nobody looked. A `#[serde(default)] u32` would collapse
+    /// those two into the same `0`, and a screen reading it could not tell a
+    /// pure-addition pull request from an unmeasured one.
+    #[test]
+    fn the_size_counts_tell_a_measured_zero_apart_from_an_absent_field() {
+        let sized = pull(&json!({
+            "commits": 4, "additions": 77, "deletions": 0, "changed_files": 3
+        }));
+        assert_eq!(sized.commits, Some(4));
+        assert_eq!(sized.additions, Some(77));
+        assert_eq!(sized.deletions, Some(0));
+        assert_eq!(sized.changed_files, Some(3));
+        assert_eq!(sized.diffstat(), Some((77, 0)));
+
+        let unmeasured = pull(&json!({}));
+        assert_eq!(unmeasured.deletions, None);
+        assert_ne!(
+            unmeasured.deletions, sized.deletions,
+            "\"nobody measured\" and \"measured zero\" must not be one value"
+        );
+    }
+
+    /// Half a diffstat is not half an answer. `+77` printed with nothing
+    /// beside it reads as `−0`, which is a claim about deletions that no
+    /// server made — so the pair arrives whole or not at all.
+    #[test]
+    fn half_a_diffstat_is_no_diffstat() {
+        assert_eq!(pull(&json!({"additions": 77})).diffstat(), None);
+        assert_eq!(pull(&json!({"deletions": 33})).diffstat(), None);
+        assert_eq!(
+            pull(&json!({"additions": 77, "deletions": 33})).diffstat(),
+            Some((77, 33))
+        );
     }
 
     /// A state or a check summary this client has not heard of must not read
