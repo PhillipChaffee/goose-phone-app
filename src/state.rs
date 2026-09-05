@@ -1461,7 +1461,7 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
 
 /// Create a fresh session in the configured working directory and open it.
 pub(crate) fn new_session(ctx: &AppCtx) {
-    new_session_with(ctx, Value::Null);
+    create_session(ctx, Value::Null, None);
 }
 
 /// Create a session that exists for a reason, and say what the reason is.
@@ -1471,18 +1471,95 @@ pub(crate) fn new_session(ctx: &AppCtx) {
 /// the app cannot fake it after the fact by prompting the session into
 /// character. `Value::Null` means "no reason", which is [`new_session`].
 pub(crate) fn new_session_with(ctx: &AppCtx, meta: Value) {
+    create_session(ctx, meta, None);
+}
+
+/// Create a session AND send what is in `composer` as its first turn.
+///
+/// THIS OVERRULES A WRITTEN ARGUMENT, so it states the disagreement. The
+/// desktop home screen's composer said of itself:
+///
+/// > It does NOT send. `send_prompt` returns false without a `session_id`, and
+/// > the session's id only arrives after a round trip, so "type here and it is
+/// > sent" would mean a task waiting on a signal to change.
+///
+/// The first clause is true and the conclusion does not follow. The round trip
+/// is made *here*, and after `chat.set(…)` below this function is holding the
+/// id — a `send_prompt` on the next line finds one. Nothing waits on a signal;
+/// the obstacle the comment named is not in the way, and what the reader got
+/// instead was their own sentence sitting unsent in a composer they had already
+/// pressed send on.
+///
+/// `recipes::run`'s argument is a different one and survives: *"Pre-filled,
+/// never auto-sent … auto-sending would make the second tap of a two-tap flow
+/// the point of no return."* That is about a prompt the RECIPE AUTHOR wrote,
+/// which the reader has not read yet. It does not reach a sentence the reader
+/// typed themselves and then pressed the arrow on — which is why this is a
+/// second entry point rather than a change to [`new_session_with`], the one
+/// `recipes::run` calls.
+#[cfg_attr(
+    any(target_os = "ios", target_os = "android"),
+    expect(
+        dead_code,
+        reason = "the home screen with a composer on it is the desktop shell's; \
+                  the phone opens a new chat from a bare button and has nothing \
+                  to send with it. When it grows one, this expectation fails and \
+                  takes itself out"
+    )
+)]
+pub(crate) fn new_session_sending(ctx: &AppCtx, composer: Signal<String>) {
+    create_session(ctx, Value::Null, Some(composer));
+}
+
+/// Put a lifted first message back where it was typed.
+///
+/// `try_write`, not `write`. `composer` is a signal owned by whichever screen
+/// took the press, and the failure paths below run after a round trip: the
+/// reader can have navigated out of that screen while it was in flight, which
+/// drops the signal, and writing to a dropped one panics. There is nowhere to
+/// give the text back to in that case, and there is no reader to give it to.
+fn give_back(composer: Option<Signal<String>>, text: String) {
+    if let Some(mut composer) = composer {
+        if let Ok(mut slot) = composer.try_write() {
+            *slot = text;
+        }
+    }
+}
+
+fn create_session(ctx: &AppCtx, meta: Value, composer: Option<Signal<String>>) {
+    // THE FIRST MESSAGE IS LIFTED BEFORE THE ROUND TRIP AND PUT BACK BY EVERY
+    // PATH THAT FAILS, which is the second half of #198 and was the undocumented
+    // one. The home screen used to blank its own composer unconditionally the
+    // moment the arrow was pressed — before it could know whether a session had
+    // been made — so a reader who typed a prompt while disconnected, or with no
+    // working directory set, lost it to a toast with nothing to paste and no
+    // undo.
+    //
+    // Lifted rather than merely read, because the clear is load-bearing in the
+    // other direction: while the create is in flight the send button has to be
+    // dead, or a second press makes a second session on the server — a real
+    // object with a real id that nobody asked for, which is the harm
+    // `an_empty_composer_offers_nothing_to_press` already guards.
+    let carried = composer.map_or_else(String::new, |mut composer| {
+        let text = composer.peek().trim().to_owned();
+        composer.set(String::new());
+        text
+    });
+
     let working_dir = ctx.settings.peek().working_dir.trim().to_string();
     if working_dir.is_empty() || !working_dir.starts_with('/') {
         show_toast(
             ctx,
             "Set an absolute working directory (a path on the server) in Settings first",
         );
+        give_back(composer, carried);
         return;
     }
     let ctx = *ctx;
     spawn_forever(async move {
         let Some(client) = ctx.client.peek().clone() else {
             show_toast(&ctx, "Not connected — reconnect in Settings");
+            give_back(composer, carried);
             return;
         };
         let meta = (!meta.is_null()).then_some(&meta);
@@ -1506,8 +1583,24 @@ pub(crate) fn new_session_with(ctx: &AppCtx, meta: Value) {
                 });
                 usage.set(None);
                 screen.set(Screen::Chat);
+                // AND HERE IS THE ID THE OLD COMMENT SAID ONLY ARRIVED LATER.
+                // No files: the screens that send from here have no attach
+                // control, and `send_prompt` takes what the CALLER decides
+                // rather than reading the tray — which is just as well, since
+                // the tray was emptied four lines up.
+                //
+                // A send that could not be handed to the transport leaves the
+                // sentence in the chat's own composer rather than dropping it:
+                // the session exists and its screen is up, so that is where the
+                // reader can see it and press send again.
+                if !carried.is_empty() && !send_prompt(&ctx, carried.clone(), &[]) {
+                    ctx.chat_draft.clone().set(carried);
+                }
             }
-            Err(e) => show_toast(&ctx, format!("Failed to create session: {e}")),
+            Err(e) => {
+                show_toast(&ctx, format!("Failed to create session: {e}"));
+                give_back(composer, carried);
+            }
         }
     });
 }
@@ -4922,6 +5015,153 @@ mod tests {
                 "the last chat's context meter is still on screen"
             );
         });
+    }
+
+    /// THE FIRST MESSAGE GOES OUT WITH THE SESSION IT WAS TYPED FOR.
+    ///
+    /// The desktop home screen's composer carried the reader's sentence into
+    /// the new chat and left it sitting there unsent, on a written argument
+    /// that `send_prompt` cannot work without a `session_id` that "only arrives
+    /// after a round trip". The round trip is made here, and by the line after
+    /// `chat.set(…)` this function is holding the id — which is what this test
+    /// asserts, at the only place it can be asserted: a real `session/prompt`
+    /// on the wire, in order, after a real `session/new`.
+    ///
+    /// The transcript is checked as well as the traffic, because they are two
+    /// different claims: one says the server was told, the other says the
+    /// reader can see that it was.
+    ///
+    /// REPRODUCED: delete the `send_prompt` call in `create_session`'s `Ok` arm
+    /// and the first assertion fails with `["session/new"]`.
+    #[test]
+    fn the_home_composers_first_message_is_sent_with_the_session() {
+        fn sending(method: &str, params: &Value) -> Reply {
+            if method == "session/prompt" {
+                return ok(json!({"stopReason": "end_turn"}));
+            }
+            happy(method, params)
+        }
+        let mut app = App::mount();
+        let server = serve(sending);
+        let _events = app.attach(&server);
+        app.run(|ctx| {
+            ctx.settings.clone().set(Settings {
+                working_dir: "/srv/work".to_owned(),
+                ..Settings::default()
+            });
+            // The composer the press came from. `chat_draft` stands in for the
+            // home screen's own local one, which no test can reach without
+            // mounting a component — and it is the same TYPE playing the same
+            // role, which is all this entry point knows about it.
+            ctx.chat_draft
+                .clone()
+                .set("  rotate the tailscale cert  ".to_owned());
+            new_session_sending(ctx, ctx.chat_draft);
+        });
+        app.settle_until(Duration::from_secs(5), |ctx| {
+            matches!(*ctx.screen.peek(), Screen::Chat)
+        });
+        app.settle();
+
+        assert_eq!(
+            server.methods(),
+            ["session/new", "session/prompt"],
+            "the sentence the reader pressed send on never reached the server, \
+             so it is sitting unsent in the composer of a chat they did not \
+             have to type it into twice"
+        );
+        assert_eq!(
+            prompt_text(&server.params("session/prompt", 0)),
+            "rotate the tailscale cert",
+            "the prompt went out untrimmed or carrying something else"
+        );
+        assert_eq!(
+            app.items(),
+            ["user:rotate the tailscale cert:[]"],
+            "the server was told and the reader was not"
+        );
+        app.run(|ctx| {
+            assert_eq!(
+                *ctx.chat_draft.peek(),
+                "",
+                "the sentence was sent AND left in the composer, so the reader \
+                 is looking at a message they have already sent with the send \
+                 button lit"
+            );
+        });
+    }
+
+    /// AND A CREATE THAT WAS REFUSED GIVES IT BACK.
+    ///
+    /// The second failure this fix is about, and the undocumented one. The
+    /// composer was blanked the moment the arrow was pressed, before anything
+    /// could know whether a session had been made — so a reader who typed a
+    /// prompt with no working directory set, or over a server that refused,
+    /// lost it to a toast with nothing to paste and no undo.
+    ///
+    /// Both refusals, because they are different code paths: the working
+    /// directory is checked synchronously, before anything is spawned, and the
+    /// server's `no` arrives a round trip later.
+    ///
+    /// REPRODUCED: drop either `give_back` call and the matching assertion
+    /// fails with an empty draft.
+    #[test]
+    fn a_refused_create_gives_the_first_message_back() {
+        fn refusing(method: &str, params: &Value) -> Reply {
+            if method == "session/new" {
+                return rpc_error(-32000, "the working directory does not exist");
+            }
+            happy(method, params)
+        }
+        let mut app = App::mount();
+        let server = serve(refusing);
+        let _events = app.attach(&server);
+
+        // No working directory: refused before a task is even spawned.
+        app.run(|ctx| {
+            ctx.chat_draft
+                .clone()
+                .set("rotate the tailscale cert".to_owned());
+            new_session_sending(ctx, ctx.chat_draft);
+        });
+        app.run(|ctx| {
+            assert_eq!(
+                *ctx.chat_draft.peek(),
+                "rotate the tailscale cert",
+                "the composer was blanked for a session that was refused \
+                 without a single frame going out"
+            );
+        });
+
+        // And with one set, the server's own refusal, a round trip later.
+        app.run(|ctx| {
+            ctx.settings.clone().set(Settings {
+                working_dir: "/srv/work".to_owned(),
+                ..Settings::default()
+            });
+            new_session_sending(ctx, ctx.chat_draft);
+        });
+        app.settle_until(Duration::from_secs(5), |ctx| ctx.toast.peek().is_some());
+        assert_eq!(
+            app.toast().as_deref(),
+            Some("Failed to create session: the working directory does not exist")
+        );
+        app.run(|ctx| {
+            assert!(
+                matches!(*ctx.screen.peek(), Screen::Settings),
+                "a chat that was never created was navigated into"
+            );
+            assert_eq!(
+                *ctx.chat_draft.peek(),
+                "rotate the tailscale cert",
+                "the composer was blanked for a session the server refused"
+            );
+        });
+        assert_eq!(
+            server.count("session/prompt"),
+            0,
+            "a first message went out for a session that was never made"
+        );
     }
 
     // ---------------------------------------------------------- sending, and

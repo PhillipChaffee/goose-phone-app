@@ -889,25 +889,35 @@ pub(crate) fn Home(plane: Plane) -> Element {
         }
     });
 
-    // START, and it is the same sequence `recipes::run` uses: put the text
-    // where the conversation will find it, then make the conversation. The
-    // draft lives on `AppCtx` precisely so something can fill it in before its
-    // chat exists — that comment is `open_session`'s, and this is the second
-    // caller of the pattern it was written for.
+    // START, and on the chat half it SENDS.
     //
-    // It does NOT send. `send_prompt` returns false without a `session_id`,
-    // and the session's id only arrives after a round trip, so "type here and
-    // it is sent" would mean a task waiting on a signal to change. The text
-    // lands in the new chat's composer with the cursor in it instead, which is
-    // one keystroke rather than none — stated plainly rather than hidden,
-    // because the mockup implies none.
+    // It did not, and this file argued that it could not: "`send_prompt`
+    // returns false without a `session_id`, and the session's id only arrives
+    // after a round trip, so 'type here and it is sent' would mean a task
+    // waiting on a signal to change." The first clause is true and the
+    // conclusion does not follow. The round trip is made inside
+    // `state::new_session_with`'s own task, which is already holding the id
+    // after `chat.set(…)` — so the send happens there, on the next line, with
+    // nothing waiting on anything. What the reader got in the meantime was
+    // their own sentence sitting unsent in a composer they had already pressed
+    // the arrow on, which is the owner's report. `state::new_session_sending`
+    // carries the full disagreement.
+    //
+    // AND THE DRAFT IS NOT BLANKED HERE ANY MORE. It used to be, at the end of
+    // this closure, unconditionally — before anything could know whether a
+    // session had been made. `new_session_with` refuses synchronously when the
+    // working directory is unset or relative and asynchronously when there is
+    // no client, and in both cases the text was gone: cleared here, parked in a
+    // signal nothing on screen renders, and wiped by the next `open_session`.
+    // The lift-and-give-back now belongs to the one function that knows which
+    // of those happened.
     let mut start = move || {
-        let text = draft.peek().trim().to_owned();
         match plane {
             Plane::Chat => {
-                let mut chat_draft = ctx.chat_draft;
-                chat_draft.set(text);
-                crate::state::new_session(&ctx);
+                // The composer itself, handed over: it is emptied at once so a
+                // second press cannot make a second session while the create is
+                // in flight, and refilled by whichever path fails.
+                crate::state::new_session_sending(&ctx, draft);
             }
             Plane::Code => {
                 // `new_task`, AND IT USED TO BE `code_draft`, WHICH DESTROYED
@@ -926,7 +936,7 @@ pub(crate) fn Home(plane: Plane) -> Element {
                 // `new_attachments` both already draw. `new_task` is the tray's
                 // own shape for the tray's own reason — see the field.
                 let mut new_task = ctx.new_task;
-                new_task.set(text);
+                new_task.set(draft.peek().trim().to_owned());
                 // The code half has no "create and send": a session needs a
                 // repo and a base branch before it can exist, which is what
                 // `CodeNewView` is for. So this carries the text and opens
@@ -934,9 +944,12 @@ pub(crate) fn Home(plane: Plane) -> Element {
                 // further along.
                 let mut screen = ctx.code_screen;
                 screen.set(crate::code::CodeScreen::New);
+                // Blanked here and not by a give-back, because this arm cannot
+                // fail: setting a screen is not a round trip, and the sentence
+                // is already on `new_task` where the next screen will take it.
+                draft.set(String::new());
             }
         }
-        draft.set(String::new());
     };
 
     rsx! {
@@ -2273,16 +2286,27 @@ mod tests {
         );
     }
 
-    /// TYPING AND STARTING CARRIES THE TEXT, which is the whole point of the
-    /// composer being the new-session affordance.
+    /// A CREATE THAT WAS REFUSED LEAVES THE TEXT WHERE THE READER CAN SEE IT.
     ///
-    /// It lands in `ctx.chat_draft` — the signal that lives on the context
-    /// precisely so something can fill it in before its chat exists, which is
-    /// `open_session`'s own comment and the pattern `recipes::run` already
-    /// uses. A composer that dropped the text on the floor would look
-    /// identical until you got to the empty chat.
+    /// This is `what_you_type_on_the_home_screen_reaches_the_new_chat`
+    /// re-pointed rather than a new test, and the old assertion had to go: it
+    /// read `ctx.chat_draft` and passed on a harness with no connection,
+    /// because `start()` wrote the sentence there and blanked the composer
+    /// whether or not a session was ever made. The name promised the
+    /// destination and the body checked the envelope.
+    ///
+    /// The destination is asserted where a destination can be — `state`'s
+    /// `the_home_composers_first_message_is_sent_with_the_session`, against a
+    /// loopback goose, which is the only place a `session/prompt` really goes
+    /// out. What THIS harness has is the unhappy path, and it is the one that
+    /// silently destroyed what you typed: the seeded settings carry no working
+    /// directory, so `new_session_sending` refuses before a frame goes out and
+    /// the sentence has to come back to the field it was lifted from.
+    ///
+    /// REPRODUCED: put `draft.set(String::new())` back at the end of `start()`
+    /// and the first assertion fails with an empty composer over a toast.
     #[test]
-    fn what_you_type_on_the_home_screen_reaches_the_new_chat() {
+    fn a_refused_create_leaves_the_typed_text_on_the_home_screen() {
         let _guard = crate::views::press::alone();
         let mut screen = Pressable::mount(|_| {}, ChatHome);
 
@@ -2291,11 +2315,17 @@ mod tests {
         screen.press("Start a chat");
         screen.settle();
 
+        assert!(
+            screen.markup().contains("rotate the tailscale cert"),
+            "the create was refused and the composer was blanked anyway, so the \
+             sentence is gone with nothing to paste and no undo: {}",
+            screen.markup()
+        );
         assert_eq!(
             screen.with(|ctx| (ctx.chat_draft)()),
-            "rotate the tailscale cert",
-            "the text typed on the home screen did not reach the draft the new \
-             chat reads from, so it is lost the moment the session opens"
+            "",
+            "the sentence was parked in the chat's draft, which nothing on this \
+             screen renders and the next `open_session` wipes"
         );
     }
 
