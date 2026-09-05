@@ -155,9 +155,23 @@
    * Every ink still clears its floor on all four; measured, worst case first:
    *
    *              panel   canvas  card    raise
-   *   primary     17.42   16.14   15.57   14.81
-   *   secondary    8.78    8.14    7.85    7.47
+   *   primary     14.69   13.61   13.13   12.49
+   *   secondary    6.66    6.17    5.95    5.66
+   *   faint        5.05    4.68    4.51    (banned)
    *   accent       7.26    6.73    6.49    6.17
+   *
+   * THAT TABLE IS RE-MEASURED AND TWO OF ITS ROWS HAD GONE STALE, which is
+   * worth recording because they were cited as justification in more than one
+   * region file. It shipped reading 17.42/16.14/15.57/14.81 for primary and
+   * 8.78/8.14/7.85/7.47 for secondary — the arithmetic is right, but those are
+   * #ffffff and #b8b8b8, `assets/shared.css`'s PHONE dark inks. The ink ladder
+   * further down this same file replaced them with the mockups' #e9ecef and
+   * #98a1ac, and the secondary row was left about 25% high: #98a1ac on the
+   * panel is 6.66:1, not 8.78:1. The accent row is unchanged and was always
+   * this value. `--ink-faint` #828b96 is a fourth rung the table predates
+   * entirely; it is banned on the raise because 4.29:1 is under the 4.5 body
+   * text owes, and banned on a selected row — 3.90:1 — by its own comment
+   * below, which is where every candidate for that rung measured worst.
    *
    * LIGHT DOES NOT TAKE THIS RAMP, and that is the same rule as before rather
    * than an exception to it: light already separates its columns, because
@@ -339,12 +353,20 @@
    * sized by `--icon-*`.
    *
    * FOR UPPERCASE TRACKED LABELS ONLY, and only in --text-primary,
-   * --text-secondary or --accent-ink-on-accent-fill. Measured on the ramp:
-   * secondary 8.78/8.14/7.85/7.47 dark on panel/canvas/card/raise and
+   * --text-secondary or --accent-ink-on-accent-fill. RE-MEASURED on the ramp:
+   * secondary 6.66/6.17/5.95/5.66 dark on panel/canvas/card/raise and
    * 5.02/4.64/4.01 light on canvas/card/raise; --accent-ink on --accent-fill is
    * 7.44 dark and 5.19 light. --text-tertiary is banned at every rung — 3.26
    * dark at its best and 2.20 light — which is the 2.91:1 the audit already
-   * caught once on `.recent-fact`. */
+   * caught once on `.recent-fact`.
+   *
+   * The dark row shipped as 8.78/8.14/7.85/7.47 and was the same stale copy
+   * the surface ramp above carried: those four are #b8b8b8, the phone's dark
+   * secondary, which the ink ladder above replaced with #98a1ac. Every rung
+   * still clears 4.5, so the permission this block grants is unchanged — but
+   * it was granting it on numbers a quarter too generous, and it is the second
+   * place in this file that said so. The light row is #6f6f6f and was always
+   * right. */
 
   /* ── THE INSPECTOR'S COLUMN AND ITS TWO DIFF INKS ────────────────────
    *

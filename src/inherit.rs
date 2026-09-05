@@ -278,11 +278,12 @@ const UNDECIDED: &[&str] = &[
     "setting-row",
     "setting-value",
     "sheet-head",
-    // src/views/chrome.rs — the session tile (#63) and its parts.
+    // src/views/chrome.rs — the session row's parts. `session-tile` came off
+    // this list in #223: `70-overrides.css` gives it and `.session-quote` the
+    // hairline the desktop's `--bg-secondary` remap left them without.
     "attention",
     "session-age",
     "session-main",
-    "session-tile",
     "session-title",
     "subtitle",
     // src/views/recipes.rs — the recipe chooser.
