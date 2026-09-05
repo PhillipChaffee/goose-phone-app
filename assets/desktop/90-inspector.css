@@ -55,8 +55,53 @@
  *
  * `.insp-sec`'s `min-height: 2rem` stays: at 1.45 the header computes to
  * 33.2px and the 32 was never binding. */
+/* ── THE FAINT RUNG, SPENT — #118, and these are the first two sites ────
+ *
+ * `--ink-faint` has been DECLARED and never READ since the token pass. That is
+ * the exact failure `00-tokens.css` writes up at its declaration — "the first
+ * cut of this rung WAS `var(--text-secondary)` ... every rule spending the
+ * faint rung was a no-op no gate could see" — one step earlier: a rung with a
+ * value and no consumers renders as nothing at all, and no gate in this repo
+ * could tell that from a rung that works.
+ *
+ * WHAT IT IS FOR, and why a section heading is the first thing to take it. The
+ * mockups paint four ink tiers and spend `--faint` #6a7480 on 44 elements, all
+ * of them the same kind of string: counts, ages, separators, the labels that
+ * should recede INSIDE a control rather than compete with what is in it.
+ * `#118`'s measurement of the app's counterparts is that all fourteen render at
+ * one colour, so "Extensions 1 on" is two equally loud strings and the
+ * inspector's section headings weigh as much as the values under them.
+ *
+ * MEASURED, on the captured desktop states at 1440x860, on the inspector's own
+ * panel:
+ *
+ *   dark   #98a1ac -> #828b96   6.66:1 -> 5.05:1 on #181a1e
+ *   light  #6f6f6f -> #6f6f6f   4.64:1, unchanged
+ *
+ * Light is unchanged BY DESIGN and not by omission: `--ink-faint` resolves to
+ * `var(--text-secondary)` there, because #828b96 measures 3.45:1 on white and a
+ * light window needs a darker faint rung that nothing in the mockups defines.
+ * So this is a dark-only distinction, deliberately, and the token's own comment
+ * is where that is argued.
+ *
+ * 5.05:1 CLEARS THE 4.5 A 10.5px LABEL OWES — `docs/audit.js` relaxes to 3:1
+ * only at 18.66px, so neither of these gets the large-text allowance and
+ * neither needs it. The heading is uppercase and tracked at weight 650, which
+ * is the shape `00-tokens.css` bans `--text-tertiary` from at every rung; the
+ * faint rung is a different value with a different measurement and clears the
+ * same bar the rung above it does.
+ *
+ * SIX OF THE EIGHT SITES ARE NOT HERE, and that is file ownership rather than
+ * scope: #118's spend list is exhaustive and the other six live in
+ * `55-panes.css` (`.chrome-sep`, `.conn-host`), `65-responsive.css`
+ * (`.chrome-sep` again), `30-sidebar-list.css` (`.nav-library-count`,
+ * `.nav-row-age`), `60-sidebar-extra.css` (`.nav-band-count`) and
+ * `40-home-chat.css` (`.home-section-meta`), each owned by another lane of this
+ * campaign. Nothing else may take the rung, and it may NEVER go on
+ * `.nav-row.on` or `.nav-row:hover` — measured at 3.90:1 on a selected row,
+ * which is where every candidate for this rung measured worst. */
 .insp-sec-title {
-  color: var(--text-secondary);
+  color: var(--ink-faint);
   font-size: var(--text-2xs);
   line-height: 1.45;
   font-weight: 650;
@@ -66,7 +111,7 @@
 
 .insp-sec-meta {
   margin-left: auto;
-  color: var(--text-secondary);
+  color: var(--ink-faint);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   line-height: 1.45;

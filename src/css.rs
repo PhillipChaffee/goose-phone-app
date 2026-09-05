@@ -670,6 +670,32 @@ mod tests {
              renamed is worse than no token, because the rules that read it \
              look considered."
         );
+
+        // AND SOMETHING HAS TO READ IT, which is the same failure one step
+        // earlier and is the state this rung shipped in.
+        //
+        // The assertion above catches a faint rung that resolves to the dim
+        // one. It cannot catch a faint rung that resolves to a real third
+        // colour and is referenced by nothing: `--ink-faint` was declared in
+        // both themes, pinned by the table above, argued for in fourteen lines
+        // of comment naming its eight intended consumers — and read by zero
+        // rules in `assets/desktop/` for the whole life of the token. Every
+        // gate in this repo passed, because a rung nothing spends renders
+        // exactly like a rung that does not exist.
+        //
+        // Asked of the WHOLE directory rather than of a named file, because
+        // #118's spend list runs across six region files owned by six lanes and
+        // this check has no business saying which of them arrives first. One
+        // consumer is the claim: the rung is in use.
+        assert!(
+            super::SHELL_PARTS
+                .iter()
+                .any(|&(_, body)| without_comments(body).contains("var(--ink-faint)")),
+            "`--ink-faint` is declared in {FILE} and no rule in assets/desktop/ \
+             reads it, so the third ink tier is a value nothing paints. Spend it \
+             or delete it: a declared rung with no consumers is indistinguishable \
+             from an absent one in every rendered check this repo has."
+        );
     }
 
     /// THE FADE AND THE PADDING ARE ONE NUMBER, and for as long as there was no
