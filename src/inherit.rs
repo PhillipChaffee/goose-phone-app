@@ -104,6 +104,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::selfscan::{without_items_under, TEST_ONLY};
+
 /// Every file under `src/` that writes a `class:` attribute, except the one
 /// named in [`NOT_SCANNED`].
 ///
@@ -317,10 +319,11 @@ const UNDECIDED: &[&str] = &[
 ];
 
 /// The attribute that marks an item as the phone's alone.
+///
+/// Its counterpart — the one that marks an item as test code — is
+/// [`crate::selfscan::TEST_ONLY`], because that is the module the cut itself
+/// now lives in.
 const PHONE_ONLY: &str = "#[cfg(any(target_os = \"ios\", target_os = \"android\"))]";
-
-/// The attribute that marks an item as test code.
-const TEST_ONLY: &str = "#[cfg(test)]";
 
 // ---- what the desktop can render ---------------------------------------
 
@@ -391,39 +394,6 @@ fn desktop_code(name: &str, source: &str) -> String {
         );
     }
     crate::selfscan::code_of(name, &desktop)
-}
-
-/// `code` with every top-level item annotated `marker` removed.
-///
-/// LINE-BASED, and `cargo fmt --all -- --check` is what makes that sound: a
-/// top-level item starts at column 0 and ends either at a line ending in `;`
-/// or at a `}` alone in column 0, and everything in between is indented. So
-/// the cut needs no brace matching — which is the version that was tried and
-/// is not safe, because `src/shell/desktop/mod.rs`'s own test module contains
-/// `'{' => depth += 1` and `'"' => quoted = true`, and a scanner that counts
-/// braces and quotes without lexing Rust reads both wrong.
-///
-/// Ending EARLY leaves test code behind and [`crate::selfscan::code_of`]'s
-/// post-condition fires. Ending LATE would silently delete real code, which is
-/// why `the_scan_agrees_with_the_sheet_about_what_is_the_phones_alone` pins
-/// both sides of the phone cut by name.
-fn without_items_under(code: &str, marker: &str) -> String {
-    let mut out: Vec<&str> = Vec::new();
-    let mut skipping = false;
-    for line in code.lines() {
-        if skipping {
-            let ends_item = line.trim_end().ends_with(';') || line == "}";
-            let top_level = !line.starts_with(char::is_whitespace);
-            skipping = !(top_level && ends_item);
-            continue;
-        }
-        if line == marker {
-            skipping = true;
-            continue;
-        }
-        out.push(line);
-    }
-    out.join("\n")
 }
 
 /// The source of one `rsx!` attribute value: from `rest` to the comma that

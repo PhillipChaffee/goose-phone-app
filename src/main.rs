@@ -72,6 +72,13 @@ mod viewport;
 
 mod views;
 
+// Asks the one question `src/views/` being worn by both shells makes possible
+// to get wrong: which shipping sentences tell the reader they are holding a
+// phone, in a 1440x860 window where they are not. `cfg(test)` like `selfscan`
+// and `inherit` above, so none of it is in any binary.
+#[cfg(test)]
+mod voice;
+
 fn main() {
     // Persisted settings live in the app-private data dir (Android:
     // getFilesDir() via JNI, iOS/desktop: the platform data dir).
