@@ -84,8 +84,39 @@
  *
  * "bordered, shadowed" is what this said until `95-transcript.css` §11 rebuilt
  * the card from the mockups and took the shadow off. The margin is unaffected
- * and the reason for it is unchanged; only the description was stale. */
-.pane-main .composer {
+ * and the reason for it is unchanged; only the description was stale.
+ *
+ * AND `.action-row` WITH IT, WHICH IS THE HALF THIS LIST FORGOT. The two are
+ * siblings — `src/views/code.rs` emits `div.action-row` and `footer.composer`
+ * as consecutive children of the same pane — and the enrolment above is a
+ * NAMED LIST, so the one that was never added to it fell through to
+ * `assets/shared.css:2216`'s `margin: 0 var(--edge) 8px` and sat on the pane's
+ * edge while its sibling sat on the measure's. Measured on the captured
+ * `desktop-code-chat` under the sheet list `docs/audit.js` links, first chip
+ * against composer box:
+ *
+ *   window  shell cell            before            after
+ *   1440    nav open, insp open   286 vs 362  (76)  364 vs 362  (2)
+ *   1440    both columns shut     18 vs 400  (382)  402 vs 400  (2)
+ *   971     nav open, insp open   18 vs 16    (-2)  18 vs 16   (-2)
+ *   704     nav open, insp open   18 vs 16    (-2)  18 vs 16   (-2)
+ *
+ * The residual 2px is `.action-row`'s own `padding: 2px`, which is there so a
+ * focused chip's ring is not sliced off by the scroller — the ROW's box and
+ * the composer's are identical to the pixel at every one of those cells, which
+ * is what "aligned" means for two siblings. Below a 672px pane `--gutter`
+ * collapses to `--edge` and this changes nothing, which is why every narrow
+ * capture of this screen already looked right.
+ *
+ * MARGIN AND NOT `padding: 2px var(--gutter)`, which is what the mockup's own
+ * `.actions` does (22-nav-disclosure, `padding: 9px 26px 0`). Both put the
+ * first chip on the composer's x; they differ in where the overflow goes, and
+ * the row is `overflow-x: auto` with `flex-shrink: 0` chips. The padding form
+ * keeps a pane-wide scroller, so a long chip run scrolls out into the gutter
+ * beside the composer; the margin form makes the two boxes provably the same
+ * width, and the same width is the thing that was wrong. */
+.pane-main .composer,
+.pane-main .action-row {
   margin-left: var(--gutter);
   margin-right: var(--gutter);
 }
@@ -298,26 +329,99 @@ body.away-from-bottom .pane-main .scroll-bottom {
   overflow: hidden;
 }
 
-/* ── 7. the fourth line of a preview ────────────────────────────────────
+/* ── 7. a preview is one line in a column this wide ─────────────────────
  *
- * `.session-quote` clamps to three lines and pads by 10, and WebKit clips
- * `overflow: hidden` at the PADDING box — so a preview needing four lines
- * painted the fourth one into the bottom padding and had it sliced through the
- * middle of its glyphs. It is in assets/shared.css and it is not a desktop bug,
- * but it fires whenever the text needs a fourth line, which a 330pt column
- * makes routine and a 402pt phone does not.
+ * A 1440x860 window has 3.5x the area of a 402x874 phone and its content
+ * column has 1.6x the area of the phone's screen, and it showed the SAME
+ * NUMBER OF ROWS. Measured against the sheet list docs/audit.js links, on
+ * `desktop-recipes-list` at 1440x860 with both side columns open and on the
+ * phone's `recipes-list` at 402x874 — the same fixture in each, so the only
+ * variable is the shell. Rows counted as the scroller's own content box over
+ * the row pitch, which is the row plus `.session-list`'s 8px gap:
  *
- * Fixed by moving the padding OUTSIDE the clip: a transparent bottom border is
- * painted over by the element's own background (`background-clip` is
- * `border-box` by default), so the box is the same height, the same colour and
- * the same radius, and the clip edge is now exactly where the third line ends.
- * No markup, no change to the three lines that are meant to be there.
+ *              row           scroller    rows
+ *   phone      188 @ 370     402x758     3.87
+ *   window   177.3 @ 640     828x826     4.22
  *
- * Desktop-only because the sheet is: the phone's copy of this rule is
- * untouched, which is the promise this branch is under. */
-.session-quote {
-  padding-bottom: 0;
-  border-bottom: 10px solid transparent;
+ * A row 73% wider that gave back 6% of its height, for 9% more rows out of
+ * 1.6x the area. Every pixel of the extra width went into an already-short
+ * title's line box; none of it bought a row.
+ *
+ * None of the three things setting that height was a desktop decision. Two of
+ * them are LINE COUNTS chosen for a narrow column: `.session-title` clamps to
+ * two and `.session-quote` to three, and a line here holds roughly twice what
+ * a line there does — measured on the same fixture, the 250-character recipe
+ * preview is 7 lines at the phone's 268pt of text width and exactly 3 at the
+ * column's 538pt.
+ *
+ * THE MOCKUPS' ANSWER FOR THIS COLUMN IS ONE LINE EACH, and it is not a
+ * paraphrase — `E-options/10-home-chat.html`'s `.crow` is the content
+ * column's list row, and both `.crow .t` and `.crow .q` are
+ * `white-space: nowrap; overflow: hidden; text-overflow: ellipsis`, with the
+ * preview 3px under the title and no surface behind it. Rendered at the same
+ * 1440x860, its `.main` measures x=268 w=828 — this pane exactly — and the row
+ * in it is **64.6px on a 71.6px pitch** against our 177.3 on 185.3.
+ *
+ * So: one line each, and the preview gives up the slab it wore to be a quote
+ * on a phone. A single clamped line inside a filled 12px-padded box reads as a
+ * tag rather than as the last thing said, and the mockups' hierarchy does the
+ * same work with type — the title is serif at --text-primary and the preview
+ * is 12.5px at --text-secondary, one rung down, which is `.crow .q`'s own
+ * arrangement.
+ *
+ * NOT A SMALLER FONT, which is the other way to fit more rows and the wrong
+ * one: every size here is untouched and the type scale in
+ * assets/desktop/00-tokens.css still owns them. What changes is how many lines
+ * of that scale a row spends.
+ *
+ * AND THE TILE IS UNTOUCHED, WHICH IS WHY THIS DOES NOT COLLIDE WITH #63.
+ * `.session-tile` is a 40x40 box in assets/shared.css and #63 is about the
+ * glyph inside it, not the box. Measured after this change, the SHORTEST
+ * captured row is Scheduler's, whose stack is a title and a meta line and no
+ * preview: 22 + 6 + 17.3 = 45.3px against the tile's 40. So on every row this
+ * store holds the text still sets the height and the tile is 5.3px from
+ * becoming the thing that does — which is where a row that also lost its meta
+ * line would land, and that is #63's ground rather than this rule's.
+ *
+ * Measured after, same fixture and same cell, rows visible in the scroller at
+ * the two ends of the window list `docs/audit.js` walks:
+ *
+ *              row height       480          1440         1600
+ *   recipes    177.3 → 92.3   2.60 → 4.81  4.22 → 7.80  4.98 → 9.19
+ *   skills     119.3 → 92.3   3.79 → 4.81  6.14 → 7.80  7.24 → 9.19
+ *   extensions 120.0 → 93.0   3.30 → 4.18  5.64 → 7.15  6.73 → 8.53
+ *   scheduler   71.3 → 71.3   6.08 → 6.08  9.86 → 9.86 11.63 →11.63
+ *
+ * Scheduler is unchanged at the reference window and that is correct: its rows
+ * carry no preview, so there was no third line to spend. Where it DOES move is
+ * the cells with a 328pt pane — 628, 704 and 972 — where its title used to
+ * wrap to two lines and now does not: 93.3px to 71.3, and 6.14 rows to 7.84.
+ * Code's pull list is unchanged at every cell for the same reason plus one
+ * more: no preview, and a 32px `.pull-actions` row under the meta line.
+ *
+ * §7 USED TO BE "the fourth line of a preview", and that rule is retired here
+ * rather than deleted quietly. It read `padding-bottom: 0; border-bottom: 10px
+ * solid transparent` and existed because WebKit clips `overflow: hidden` at
+ * the PADDING box, so a preview needing a fourth line painted it into the
+ * bottom padding and had it sliced through the middle of its glyphs. A
+ * one-line preview with no padding at all cannot have a fourth line and has no
+ * padding to clip into, so the defect is structurally gone and the workaround
+ * with it. The phone's copy of the rule was never touched and is not touched
+ * now.
+ *
+ * Scoped to `.pane-main` because this is a statement about the CONTENT COLUMN.
+ * The sidebar has a row of its own — `.nav-row`, 50px with a title, a say-line
+ * and a mark, and `.nav-row-title` is already `nowrap` + ellipsis — and it is
+ * that row this brings the content column's into line with. */
+.pane-main .session-title {
+  -webkit-line-clamp: 1;
+}
+
+.pane-main .session-quote {
+  -webkit-line-clamp: 1;
+  margin-top: 3px;
+  padding: 0;
+  background: none;
 }
 
 /* ── 8. dialogs that are not sheets ─────────────────────────────────────
