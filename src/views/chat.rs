@@ -722,30 +722,33 @@ pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
                         span { class: "tool-title", "{title}" }
                         span { class: "tool-status", "{tool_status_label(status)}" }
                     }
-                    // WHERE THE INLINE DIFF CARD WOULD GO, and it is not built
-                    // because the data to build it never reaches this file.
+                    // WHERE THE INLINE DIFF CARD WOULD GO. It is buildable
+                    // now, and it stops one layer short of here.
                     //
                     // The mockups render an edit as its own card — a header
                     // carrying the path and a `+12 −3` count over a `<pre>`
                     // whose lines are `.hunk` / `.add` / `.del` / `.ctx`. Two
-                    // of those three need the OLD side of the edit and this
-                    // client does not keep it: `content_text` in
-                    // `crates/goose-acp-client/src/types/mod.rs` turns a
-                    // `{"type":"diff"}` block into the literal string
-                    // `"[diff: " + path + "]"` followed by `newText`, into the
-                    // same flat `String` every other content type goes into,
-                    // and `oldText` is read nowhere in `crates/` or `src/`. So
-                    // by the time an edit is a `ChatItem::Tool` there are no
-                    // +/− lines to colour and no counts to add up; the path is
-                    // recoverable only by parsing that sentinel back out of
-                    // prose the server did not promise.
+                    // of those three need the OLD side of the edit, and this
+                    // client used to throw it away at decode: `content_text`
+                    // in `crates/goose-acp-client/src/types/mod.rs` flattened
+                    // a `{"type":"diff"}` block to `"[diff: " + path + "]"`
+                    // followed by `newText` and `oldText` was read nowhere in
+                    // `crates/` or `src/`. #191 fixed that. The crate now has
+                    // `ToolCallUpdate::contents`, which decodes each entry
+                    // into a `ToolCallContent` and carries a `FileDiff` with
+                    // both halves and the path, and `crates/mock-goose-server`
+                    // puts one on the wire for a prompt containing "diff", so
+                    // the shape is reachable without a real server.
                     //
-                    // Which makes this the second kind of drop, not the first:
-                    // the data EXISTS on the wire and is discarded one crate
-                    // away. Building the card is a change to
-                    // `goose-acp-client` — carry `oldText` onto a structured
-                    // variant — and then to this file. Faking it from what is
-                    // here would mean a diff card that cannot show a deletion,
+                    // WHAT IS STILL MISSING IS ONE FIELD, and it is not in
+                    // this file: `ChatItem::Tool` (`src/state.rs`) carries the
+                    // tool result as a flat `output: String`, so the structure
+                    // is thrown away a second time on the way here. A diff
+                    // card needs `ChatItem::Tool` to hold the decoded
+                    // `Vec<ToolCallContent>` — or at least its diffs —
+                    // alongside the string the `<pre>` below still renders for
+                    // every other kind of result. Faking one from what IS here
+                    // would mean a diff card that cannot show a deletion,
                     // which is the half of a diff people open one for.
                     //
                     // The app already owns a real diff renderer, on the Diff
