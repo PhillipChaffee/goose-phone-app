@@ -1068,19 +1068,29 @@ const OCCLUSION_KNOWN = [
 
 // ── the fill-contrast ledger ────────────────────────────────────────────
 // Indicators that carry their whole meaning in a background colour and do not
-// clear 3:1 against what is behind them. All three are #213's, named by the
-// element rather than by the ratio because the ratio is a fact about which
-// surface the mark landed on and there are several: `.dot.off` alone measures
-// 2.03, 2.20, 2.87 and 1.85 depending on the ground.
+// clear 3:1 against what is behind them. Both are #213's, named by the element
+// rather than by the ratio because the ratio is a fact about which surface the
+// mark landed on and there are several.
 //
-// #213's own table is desktop-only and says dark clears the bar everywhere.
-// This walk covers the phone as well, and the worst number in the app is there:
-// `.dot.off` on the Code plane's `code-pulls` is **1.85:1 in DARK** and 2.03:1
-// in light. The token is `--text-tertiary` spent as a fill, and the sheet
-// already bans it as ink at every rung.
+// `span.dot.off` HAS COME OFF THIS LIST, which is what a ledger that may only
+// shrink is for. It was the worst entry on it — 1.85:1 in dark on the Code
+// plane's pull rows, 2.03:1 on the desktop band in light, and it is the mark
+// that says the app has lost its server. `assets/shared.css` now paints it
+// --text-secondary instead of --text-tertiary and it measures 4.64:1 at its
+// worst over the whole grid, so the walk stopped producing it and the reverse
+// half of the check below would have failed on the entry had it stayed.
+//
+// The two that remain are the same token spent the same way, and each is a
+// separate decision about a separate element rather than a leftover:
+//
+//   span.dot-anim   `src/views/chat.rs`'s thinking indicator, --text-tertiary
+//                   at 6px: 2.20:1 in light on the page, 2.87:1 in dark.
+//   span.mark.idle  `assets/desktop/30-sidebar-list.css`, and its worst
+//                   surface is a SELECTED row: 2.52:1 in dark on #2a2f36,
+//                   4.01:1 in light. Dark-only, which is why the reverse check
+//                   below is asked of a `both` run and not of half a grid.
 const FILL_KNOWN = [
   'span.dot-anim',
-  'span.dot.off',
   'span.mark.idle',
 ];
 
@@ -2246,13 +2256,17 @@ const CONTRAST = ({ mark, ledger }) => {
   // not text.
   //
   // A SHAPE, NOT A CLASS LIST. `.dot, .mark, .dot-anim` would have caught
-  // exactly today's three and nothing added tomorrow, which is the disease this
-  // file keeps being treated for. The shape is: it paints a fill, it carries no
-  // text anywhere under it, it has no element children, and it has no border of
-  // its own — so the fill is the whole of what there is to see. Measured over
-  // the whole grid, that predicate reports **64 findings across three element
-  // families and nothing else**: `.dot.off`, `.mark.idle`, `.dot-anim`, which
-  // is #213's list exactly, arrived at without naming one of them.
+  // exactly the three it landed on and nothing added tomorrow, which is the
+  // disease this file keeps being treated for. The shape is: it paints a fill,
+  // it carries no text anywhere under it, it has no element children, and it
+  // has no border of its own — so the fill is the whole of what there is to
+  // see. Measured over the whole grid on the day it landed, that predicate
+  // reported **64 findings across three element families and nothing else**:
+  // `.dot.off`, `.mark.idle`, `.dot-anim`, which is #213's list exactly,
+  // arrived at without naming one of them. `.dot.off` has since been fixed and
+  // is off the ledger below; the sentence is kept in the past tense rather than
+  // rewritten, because the claim being made is about the PREDICATE and the
+  // evidence for it is what it found before anything was repaired.
   //
   // The two conditions that made it that clean, each stated as a claim:
   //

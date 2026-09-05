@@ -1178,8 +1178,61 @@ html:has(.titlegroup) {
   background: var(--bg-success);
 }
 
+/* --text-secondary, AND IT WAS --text-tertiary. A NON-TEXT INDICATOR OWES 3:1
+ * (WCAG 1.4.11) and this one paid 1.85.
+ *
+ * This is the mark that says the app has lost its server, and it was the least
+ * visible thing on the screen. Measured over every captured state in both
+ * themes, composited against the first opaque paint behind it, worst first:
+ *
+ *   1.85:1  #606c7a on #3f434b  dark, a card — the Code plane's pull rows
+ *   2.03:1  #a7b0b9 on #f4f6f7  light, the desktop band and every card
+ *   2.20:1  #a7b0b9 on #ffffff  light, the page — extensions, schedules
+ *   2.87:1  #606c7a on #22252a  dark, the page
+ *   3.02:1  #606c7a on #1e2126  dark, the desktop canvas — the only pass
+ *
+ * So it failed in BOTH themes and on every surface but one, which is worth
+ * saying because #213 filed it as a light-only fault: its table is the desktop
+ * band alone, and the phone's own darkest pairing is the worse of the two.
+ *
+ * The token is why, and the sheet already knew the number twice over:
+ * `assets/desktop/00-tokens.css` says "--text-tertiary is banned at every rung
+ * — 3.26 dark at its best and 2.20 light", and `assets/desktop/55-panes.css`
+ * says "--text-tertiary would be 2.03:1 in light". Both bans are written for
+ * TEXT. This rule spent the same token as a FILL, where the floor is 3:1
+ * instead of 4.5, and nothing carried the ban across.
+ *
+ * --text-secondary and not a new token, which is the whole reason this edit is
+ * one line in a sheet that is otherwise closed for the campaign: the rung
+ * already exists in both themes and in the desktop's remap of them, and it
+ * clears the bar on every ground above with room —
+ *
+ *   light   #6f6f6f  5.02:1 on #ffffff   4.64:1 on #f4f6f7
+ *   dark    #b8b8b8  7.75:1 on #22252a   5.00:1 on #3f434b   (the phone)
+ *   dark    #98a1ac  6.66:1 on #181a1e   6.17:1 on #1e2126   (the desktop)
+ *
+ * — and "off" reading at the same weight as secondary ink is the design call
+ * #213 asks for and leaves open. It is the right one: an unreachable server is
+ * not a decoration, and every other state of this dot (`.on`, `.busy`, `.err`)
+ * is already a full-strength hue. Off was the only one whispering.
+ *
+ * .dot.busy IS NOT MOVED, and that is a decision rather than an oversight —
+ * #213 asks for it to be looked at in the same pass. --bg-warning #b8860b
+ * measures exactly 3.00:1 on the light band, which clears 1.4.11 and is the
+ * number the audit's own walk tests as `>= 3`. Moving it means moving a status
+ * hue that .dot.wait, the session tile and the sidebar's own marks all share,
+ * in a sheet this campaign is not otherwise opening — for a value that is not
+ * failing. Written down so the next reader knows it was measured, not missed.
+ *
+ * The bare `.dot` above still takes --text-tertiary and is deliberately left:
+ * no state in the gallery renders a dot without one of the five state classes,
+ * so it is a fallback nothing reaches, and changing it would be a claim about
+ * markup that does not exist. `.dot-anim` (below) spends the same token at 6px
+ * and DOES fail, at 2.20:1 light and 2.87:1 dark; it is `src/views/chat.rs`'s
+ * thinking indicator, it is still on `docs/audit.js`'s FILL_KNOWN ledger, and
+ * it is a separate decision about a separate element. */
 .dot.off {
-  background: var(--text-tertiary);
+  background: var(--text-secondary);
 }
 
 .dot.err {
