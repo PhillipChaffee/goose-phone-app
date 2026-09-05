@@ -1959,7 +1959,7 @@ mod tests {
 
     // ---- is the store still a description of this app? -------------------
     //
-    // `docs/gallery-states.json` is 62 states of real markup, and everything
+    // `docs/gallery-states.json` is 69 states of real markup, and everything
     // visual this repo checks reads it: `docs/audit.js` measures those states
     // and `docs/style-gallery.html` renders them. A capture REPLACES it, so
     // between captures it is a photograph — and the one thing a photograph
@@ -2104,74 +2104,39 @@ mod tests {
     /// exists to build gets given away one name at a time; the answer to a new
     /// name is a capture that drives the screen it is on, not a line here.
     ///
-    /// What is on it is one story and it is worth knowing before reading the
-    /// list. Nearly all of it is the CODE PLANE and the INSPECTOR WITH A
-    /// SUBJECT: `desktop-code-list` was captured against a code gateway that
-    /// was not connected, so the repo groups, the worktree rows and every
-    /// panel the inspector draws for a live session have never been in front
-    /// of the audit. The rest is state modifiers on screens that were captured
-    /// in their calm state — `warn`, `urgent`, `live`, `seen` — and the
-    /// Scheduler block of a home screen.
+    /// What is left on it is four names, and all four are unreachable rather
+    /// than merely undriven — which is the distinction that matters, because
+    /// the other forty-nine went away by being driven. The capture that
+    /// removed them ran both fakes, connected both halves, opened a code
+    /// session, a review, a pull request and a goose turn that called two
+    /// tools, and parked a permission on the board so the tiles could be seen
+    /// counting one. What no drive can reach:
+    ///
+    /// `pane-empty` and its two children are `empty_detail`, and the arm that
+    /// calls it is dead. It runs for a destination with `root: None` and no
+    /// detail; `src/nav.rs` has exactly one `root: None` row — Settings — and
+    /// Settings' `detail` is unconditional, so the arm is never taken. The
+    /// three names are the gate's own evidence for that, which is why they
+    /// stay rather than being deleted with the function.
+    ///
+    /// `insp-empty` is the inspector saying it has nothing, and
+    /// `inspector::plane_facts` returns empty only when the plane's server URL
+    /// is *unset* — not when it is set and unreachable, which is what a killed
+    /// fake gives you. A `dev_seed!` build has both URLs compiled in, so the
+    /// only route to it is a first launch with an untouched Settings screen,
+    /// and that is a launch whose every other state is emptier than the one
+    /// already in the store. It went uncaptured because the state that used to
+    /// carry it — `desktop-code-list` against a gateway that was not connected
+    /// — is precisely the defect #140 asked to fix. One class' worth of
+    /// coverage was the price of the whole Code board, and it is written here
+    /// rather than argued again.
     const UNCAPTURED: &[&str] = &[
-        // The inspector's diff counts, and its file list.
-        "add",
-        "del",
-        "insp-file",
-        "insp-file-count",
-        "insp-file-path",
-        "insp-file-tick",
-        "insp-files",
-        "seen",
-        // The inspector's cards, meters and timeline — everything it draws
-        // when it has a subject rather than the empty state.
-        "insp-card",
-        "insp-card-num",
-        "insp-card-sub",
-        "insp-card-title",
-        "insp-card-top",
-        "insp-meter",
-        "insp-meter-label",
-        "insp-meter-value",
-        "insp-meters",
-        "insp-step",
-        "insp-step-arg",
-        "insp-step-dot",
-        "insp-step-name",
-        "insp-step-state",
-        "insp-step-text",
-        "insp-timeline",
-        "insp-track",
-        // The Code half's home screen: repositories and their worktrees.
-        "repo-group",
-        "repo-head",
-        "repo-head-base",
-        "repo-head-facts",
-        "repo-head-name",
-        "tree-age",
-        "tree-branch",
-        "tree-branch-base",
-        "tree-branch-name",
-        "tree-mark",
-        "tree-say",
-        "tree-state",
-        "tree-text",
-        "tree-title",
-        // A home screen's Scheduler block, and the tile subtitle.
-        "home-sched",
-        "home-sched-more",
-        "home-sched-name",
-        "home-sched-what",
-        "home-tile-sub",
-        // States nothing captured was in: a session that needs an answer, one
-        // that is awake, a figure over its bar, a quoted line.
-        "live",
-        "nav-row-needs",
-        "q",
-        "recent-state",
-        "urgent",
-        "warn",
-        // The pane with nothing in it. Reached only by a destination that has
-        // no root, which nothing in the store was driven to.
+        // The inspector with no server URL to describe. See above: a seeded
+        // build cannot reach it, and the state that used to was the bug.
+        "insp-empty",
+        // The pane with nothing in it. `empty_detail`'s arm is unreachable:
+        // Settings is the only `root: None` destination and its detail is
+        // unconditional.
         "pane-empty",
         "pane-empty-hint",
         "pane-empty-line",

@@ -217,11 +217,21 @@
     background: var(--tint-live);
 }
 
+/* `--text-secondary` AND NOT `--text-tertiary`, which is #213's rule arriving
+ * one element late. The faint rung is ink for text nobody has to read; spent
+ * as a FILL it is the whole of what a mark says, and this one says a working
+ * tree is asleep. The board was captured for the first time in the Phase 3
+ * pass and `docs/audit.js`'s fill walk measured the tertiary version at
+ * 2.03:1 in light and 2.91:1 in dark against the row behind it — both under
+ * the 3:1 a non-text indicator owes, and the same failure `.dot.off` was
+ * carrying when #213 was filed. The two live marks are unaffected: awake is
+ * an `--accent` ring and waiting is `--text-warning`, and only the resting
+ * state took the faint rung. */
 .tree-mark {
   width: 8px;
     height: 8px;
     border-radius: var(--radius-full);
-    background: var(--text-tertiary);
+    background: var(--text-secondary);
     justify-self: center;
 }
 

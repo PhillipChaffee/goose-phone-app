@@ -517,23 +517,44 @@ const FONTS = [
 // something else on a runner — which is the whole failure in miniature.
 //
 // So it is named as the next family after each of the three, and the run
-// fails if any character reaches past it. 796 bytes: Google Fonts' css2 API
+// fails if any character reaches past it. 932 bytes: Google Fonts' css2 API
 // will cut a face down to a given string, and this is Noto Sans Math holding
-// that one glyph. Regenerate the same way if this list ever grows —
+// ⋯ plus the two the inspector added below. Regenerate the same way if this
+// list ever grows —
 //   curl -H 'User-Agent: <a Chrome UA>' \
-//     'https://fonts.googleapis.com/css2?family=Noto+Sans+Math&text=%E2%8B%AF'
-// — and follow the src: url() it answers with.
+//     'https://fonts.googleapis.com/css2?family=Noto+Sans+Math&text=%E2%8B%AF%E2%9C%93%E2%86%92'
+// — and follow the src: url() it answers with. Then CHECK the file rather
+// than the CSS: see the measurement note below the list.
 //
 // A LIST, and the second entry is what made it one. The desktop's inspector
 // prints a keyboard legend, so ⌘ (U+2318) and ⌥ (U+2325) are on screen — and
-// no single free family carries all three of the glyphs this app puts outside
+// no single free family carries all of the glyphs this app puts outside
 // the Latin subsets. Measured, by regenerating and running: Noto Sans Math has
 // ⋯ and neither key; Noto Sans Symbols 2 has both keys and not ⋯. So there are
 // two faces, both named after each of the three above, and a glyph that
 // reaches past BOTH still fails the run.
+//
+// The first face grew from one glyph to three, which is this check doing its
+// job rather than a maintenance chore. The capture that put the code plane in
+// the store connected for the first time, and the inspector's live subject
+// draws two more characters: → (U+2192) between a branch and its base in
+// `.insp-card-sub`, and ✓ (U+2713) as the reviewed tick in `.insp-file-tick`,
+// both from `src/shell/desktop/inspector.rs`. Neither is in the Google `latin`
+// subset — that range carries U+2191 and U+2193 but not U+2192, and no tick at
+// all — so this stopped the run the moment the new states landed.
+//
+// WHICH FACE TOOK THEM WAS MEASURED, not assumed, and the obvious guess was
+// wrong: Google's `css2` API answers `text=` with a `unicode-range` listing
+// the codepoints you ASKED FOR whether or not the family has them, so a
+// Symbols 2 subset requested with → comes back declaring U+2192 and renders
+// it out of the host's Lucida Grande. `CSS.getPlatformFontsForNode` is what
+// tells the two apart. Measured that way: Symbols 2 has ✓ and not →; Noto
+// Sans (full) has neither, falling through to Zapf Dingbats; Noto Sans Math
+// has BOTH, and already had ⋯. So the three live in one 932-byte face and the
+// keys stay where they were.
 const LEFTOVERS = [{
   family: 'Audit Leftovers',
-  file: 'noto-sans-math-U22EF.woff2',
+  file: 'noto-sans-math-marks.woff2',
   standsFor: 'whatever the host would have chosen',
   // A glyph borrowed from a fourth face brings that face's ascent and descent
   // into the line box it lands in, so this one is overridden like the others.
@@ -1033,10 +1054,24 @@ for (const [desktop, found] of Object.entries(REFERENCE)) {
 //                  628 and again in 704..971 while the inspector is open, and
 //                  it has neither a scrim nor a dismissal — so it is not a
 //                  panel you open and close, it is 268px permanently over the
-//                  content column. 13 of these 16 pairs are that one panel, and
-//                  the fix deletes all 13 at once. Measured: it fires at 480,
+//                  content column. 25 of these 28 pairs are that one panel, and
+//                  the fix deletes all 25 at once. Measured: it fires at 480,
 //                  627, 704 and 971 and at no other window size, which is
 //                  exactly the two bands the sheet makes it an overlay in.
+//
+//                  IT GREW BY TWELVE AND NOT ONE OF THEM IS NEW, which is the
+//                  distinction this list is worth nothing without. The Phase 3
+//                  capture drove the Code plane connected for the first time
+//                  and opened a review, a pull request and a code
+//                  conversation, so the store now holds worktree rows, a diff
+//                  file head, the code composer and its chips — controls that
+//                  had never been in front of this walk. The panel over them
+//                  is the same panel, in the same two bands, at the same four
+//                  window sizes; what changed is how much of the app was
+//                  standing behind it when the photograph was taken. Every one
+//                  of the twelve dies with #215 alongside the thirteen that
+//                  were already here, and that is the test of the claim: if a
+//                  fix leaves any of them alive it was not this defect.
 //   button.fab     `--z-chrome` is 20 and the overlay sidebar is `z-index: 3`,
 //                  so a floating button belonging to the content column paints
 //                  over the sidebar's rows — the second half of #209, one
@@ -1048,18 +1083,30 @@ for (const [desktop, found] of Object.entries(REFERENCE)) {
 //                  440px tall on a 568px phone, so it reaches the bar: 7px of
 //                  the 44px back chevron on `recipes-detail-toast` at 320x568.
 const OCCLUSION_KNOWN = [
+  'aside.navpane >> button.action-chip',
+  'aside.navpane >> button.btn.danger-outline',
   'aside.navpane >> button.btn.primary',
   'aside.navpane >> button.btn.secondary',
+  'aside.navpane >> button.btn.small.primary',
   'aside.navpane >> button.composer-chip.action.attach',
+  'aside.navpane >> button.composer-chip.action.branch',
   'aside.navpane >> button.composer-chip.action.mode',
   'aside.navpane >> button.composer-chip.action.model',
+  'aside.navpane >> button.composer-chip.action.model.needed',
+  'aside.navpane >> button.composer-chip.action.repo',
   'aside.navpane >> button.home-starter',
   'aside.navpane >> button.icon-btn',
   'aside.navpane >> button.icon-btn.back',
   'aside.navpane >> button.recent',
   'aside.navpane >> button.row-action',
   'aside.navpane >> button.setting-row',
+  'aside.navpane >> button.tree',
+  'aside.navpane >> button.tree.awake',
+  'aside.navpane >> button.tree.waiting',
   'aside.navpane >> input.field',
+  'aside.navpane >> summary',
+  'aside.navpane >> summary.diff-file-head',
+  'aside.navpane >> textarea.compose-field',
   'aside.navpane >> textarea.input',
   'button.fab >> button.btn.secondary.grow',
   'button.fab >> button.drawer-item',
@@ -1705,9 +1752,24 @@ const GEOMETRY = ({ mark, ledger }) => {
     // app's to spend and cannot be given back while the lights are there. The
     // one case where it should be zero and might not be is fullscreen, and
     // FULLSCREEN below owns that question rather than this one.
+    // `+ 1`, AND THE PIXEL IS ROUNDING RATHER THAN SLACK. `scrollWidth` and
+    // `clientWidth` are both integers over a layout that is not: the desktop
+    // capture put "Tighten the composer's chip row" in the band, and measured
+    // at 972, 704 and 627 with the sheets the audit itself links, the heading
+    // is a 200.3px box holding 200.3px of text — `scrollWidth` ceils to 201,
+    // `clientWidth` floors to 200, and a `+ 0.5` tolerance read that as a cut
+    // title and reported the subtitle beside it 24 times over a band that was
+    // fitting its text exactly. The one-pixel difference is the only value the
+    // two integers can take when nothing is cut at all, and no fractional
+    // `scrollWidth` exists to ask instead. What it gives up is a title cut by
+    // exactly one device pixel; what it buys is that the check means the same
+    // thing at every fractional width, which a band whose title is a server
+    // string will land on constantly. The real squeeze it is written for is
+    // not close to the boundary — the subtitle on the same states wants 284px
+    // and is given 198.
     const bandTitle = band[0] && band[0].querySelector('.chrome-heading');
     if (bandTitle && bandTitle.getClientRects().length
-      && bandTitle.scrollWidth > bandTitle.clientWidth + 0.5) {
+      && bandTitle.scrollWidth > bandTitle.clientWidth + 1) {
       const t = bandTitle.getBoundingClientRect().width;
       for (const rival of chrome.querySelectorAll(
         ':scope > *:not(.chrome-title):not(.traffic-slot),'
@@ -2201,6 +2263,21 @@ const CONTRAST = ({ mark, ledger }) => {
 
     const bg = backdrop(el);
     let fg = parse(cs.color);
+    // FULLY TRANSPARENT INK PAINTS NOTHING, and compositing it over the
+    // backdrop below would report the backdrop against itself — 1.00:1 on a
+    // glyph no reader can see, which is a number about the arithmetic rather
+    // than about the screen. The case is real and it is deliberate:
+    // `.insp-file-tick` is a 14px box with a ✓ inside it and `color:
+    // transparent` until the file is marked read, so that one element is both
+    // states of the checkbox instead of two shapes swapping places
+    // (`assets/desktop/90-inspector.css`, and the rsx at
+    // `src/shell/desktop/inspector.rs` says the same thing from the other
+    // side). What this gives up is an ink someone made transparent BY
+    // ACCIDENT, and the mitigation is that such a glyph draws nothing at all:
+    // whatever meaning it was carrying is carried by the box around it, and
+    // the box is a background, which the fill walk further down measures.
+    // `< 1` still composites, because a 40%-opaque ink is ink.
+    if (fg.a === 0) continue;
     if (fg.a < 1) fg = over(fg, bg);
     const size = parseFloat(cs.fontSize);
     const large = size >= 18.66 || (size >= 14 && (parseInt(cs.fontWeight, 10) || 400) >= 700);
