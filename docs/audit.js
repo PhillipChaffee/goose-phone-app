@@ -17,6 +17,13 @@
 //             gutter it floats on, the chrome band still opaque where that
 //             title sits with the scroller's padding still clearing it, and
 //             rows that render nothing and therefore measure nothing.
+//   starving  the one question here that is not about a box too big for its
+//             space: a cell of a grid line given less room than its own text,
+//             beside a cell on the same line sitting on more unused width than
+//             the cut cell has in total. A collapsing track does not overflow,
+//             does not collide and ellipsises politely, so every check above
+//             calls it Clean — which is how #265's board of rows naming
+//             nothing got past all five gates, and #270 is that gap.
 //   occlusion an interactive element painted over by a box that neither
 //             contains it nor sits inside it, with nothing full-screen between
 //             the two — because a modal is meant to cover the page and a
@@ -1524,6 +1531,93 @@ const GEOMETRY = ({ mark, ledger }) => {
     return false;
   };
 
+  // ── the two helpers ROW-OUTBID needs, and both are measurements ────────
+  //
+  // THE LINES OF A GRID, RECOVERED FROM THE BOXES. A grid item's row is not
+  // readable off computed style — `grid-row-start` is `auto` for everything
+  // this app auto-places — so the lines are clustered out of the geometry
+  // instead: grid rows are disjoint bands, so items whose vertical extents
+  // OVERLAP are on one line and items whose extents do not are not.
+  //
+  // Overlap and not the top edge, which is the version that was written first
+  // and is wrong in exactly the case this check exists for. `.tree` is
+  // `align-items: center` over cells of four different heights, so its six
+  // items have four different top edges: measured on `desktop-code-list` at a
+  // 328px board, `Math.round(top)` splits one row into `{branch}`, `{text,
+  // state, age}`, `{mark}` and `{num}` — two of them singletons, which this
+  // walk skips, so `.tree-branch` and `.tree-num` are never asked about and
+  // never answer for their own width either. Over the whole grid that reading
+  // sees 6664 lines against 7656 and 1696 cut cells against 2200, and takes the
+  // worst honest number on this tree from 0.71 down to 0.55 by simply not
+  // putting the question.
+  //
+  // A ZERO-WIDTH CELL IS KEPT, and that is not a detail. The whole subject of
+  // this check is a track squeezed to nothing, so a `width > 0` filter — which
+  // is what the first draft had, copied off the walk below — throws away
+  // exactly the cell the finding is about. Measured on the sabotage in
+  // docs/design.md's table: at a 328px board the six-column row resolves to
+  // `12px 0px 0px 84px 136px 74px`, `.tree-text` and `.tree-branch` are 0px
+  // wide, and with them filtered out the row reported NOTHING while `.tree-num`
+  // sat on 84px of empty reservation. `getClientRects()` is the test instead —
+  // the same one TITLE-OUTBID uses, and for its reason: a box of zero SIZE is a
+  // real finding and a box that was never laid out is not.
+  const gridLines = (grid) => {
+    const kids = [...grid.children].filter((k) => {
+      const ks = getComputedStyle(k);
+      if (ks.display === 'none' || ks.visibility === 'hidden') return false;
+      return k.getClientRects().length > 0;
+    }).sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+    const lines = [];
+    let edge = -Infinity;
+    for (const kid of kids) {
+      const kr = kid.getBoundingClientRect();
+      if (kr.top >= edge - 0.5) lines.push([]);
+      edge = Math.max(edge, kr.bottom);
+      lines[lines.length - 1].push(kid);
+    }
+    return lines;
+  };
+  // HOW MUCH OF ITS OWN WIDTH A CELL IS ACTUALLY USING, read off the text and
+  // not off the box. `scrollWidth` cannot answer this: a stretched cell's
+  // `scrollWidth` IS its `clientWidth`, so `.tree-state` — 136px of fixed track
+  // holding the word `awake`, which wants 33 — reports 136 and looks full. A
+  // Range over the text nodes reports where the glyphs really are, unclipped
+  // (measured: `.tree-title` at a 328px board is a 190px box whose range is
+  // 194.3px, which is the ellipsis's whole point), and fractional, where
+  // `scrollWidth` is an integer over a layout that is not.
+  //
+  // An empty leaf with a box of its own counts as content, because a mark is
+  // content: `.tree-mark` is an 8x8 background and nothing else, and a cell
+  // holding one is not a cell holding nothing.
+  const inlineExtent = (el) => {
+    const range = document.createRange();
+    let lo = Infinity;
+    let hi = -Infinity;
+    const eat = (b) => {
+      if (b.width === 0) return;
+      lo = Math.min(lo, b.left);
+      hi = Math.max(hi, b.right);
+    };
+    const walkInto = (node) => {
+      for (const kid of node.childNodes) {
+        if (kid.nodeType === 3) {
+          if (!kid.data.trim()) continue;
+          range.selectNodeContents(kid);
+          for (const b of range.getClientRects()) eat(b);
+        } else if (kid.nodeType === 1) {
+          const ks = getComputedStyle(kid);
+          if (ks.display === 'none' || ks.visibility === 'hidden') continue;
+          if (kid.children.length === 0 && !kid.textContent.trim()) {
+            eat(kid.getBoundingClientRect());
+          }
+          walkInto(kid);
+        }
+      }
+    };
+    walkInto(el);
+    return hi > lo ? hi - lo : 0;
+  };
+
   for (const el of document.querySelectorAll('*')) {
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') continue;
@@ -1605,6 +1699,131 @@ const GEOMETRY = ({ mark, ledger }) => {
         && cs.overflowX === 'hidden'
         && cs.textOverflow !== 'ellipsis') {
       out.push(`CLIPPED-X    ${name(el)} scroll=${el.scrollWidth} client=${el.clientWidth}`);
+    }
+
+    // A ROW THAT STOPPED NAMING ITS SUBJECT — #270, AND IT IS THE OPPOSITE
+    // FAULT TO EVERY OTHER QUESTION IN THIS FUNCTION.
+    //
+    // SPILL, OVERFLOW-X, CLIPPED-X, GUTTER and OCCLUDED are all about a box
+    // that is TOO BIG for the space it was given. A grid track squeezed to
+    // nothing is the other fault and produces none of them: the row does not
+    // overflow, nothing collides, and the cell that lost its width ellipsises
+    // politely — which is precisely what CLIPPED-X exempts, four lines up.
+    //
+    // THE ONE THAT SHIPPED, and it passed all five gates including this file.
+    // #265's code board, at the two windows either side of one pixel, with the
+    // nav and the inspector both shut:
+    //
+    //   window 557  board 525  title track 387px  `Document the code-agent ports`
+    //   window 558  board 526  title track  74px  `Document…`
+    //
+    // Re-derived rather than quoted, by appending the six-column rule to
+    // `97-home-code.css` and reading the row at those two windows: the failing
+    // side is `12px 74.234px 57.75px 84px 136px 74px` against 194px of title —
+    // the 74.23 that opened #265, to the hundredth. The 387 is the same board
+    // one pixel narrower under the three-column arrangement, which
+    // `97-home-code.css` writes as `b − 138`, and 525 − 138 is 387.
+    //
+    // A board of rows each drawing a dot, a diff stat, a state and an age with
+    // not one character of the title of the thing it was about, and
+    // `node docs/audit.js both` reported **Clean** — at a board width it walks
+    // today, so the four window sizes #265 added would not have caught it
+    // either. Nothing here had the vocabulary.
+    //
+    // THE SHAPE IS TITLE-OUTBID'S, ONE LEVEL DOWN, and that is the whole
+    // argument for it: the band already answers "a squeezed title must outrank
+    // everything negotiable beside it" for `.chrome-heading`, by giving each
+    // sibling on the line a floor taken off something real and reporting the
+    // excess as a bid. A grid row is the same question about a line whose items
+    // this file cannot name in advance. Three things had to be decided:
+    //
+    //   WHICH CELL IS THE SUBJECT — and the answer is that this check does not
+    //   decide. #270 proposed "the only `minmax(0, 1fr)` track", which is not
+    //   available: a grid container's `grid-template-columns` COMPUTES to used
+    //   pixel sizes, so `minmax(0, 1fr)` is gone by the time this walk can read
+    //   it. The obvious proxy is typographic — the biggest, then boldest text
+    //   on the line, no finding where two cells tie — and it was built and
+    //   measured against the role-free version over the whole grid:
+    //
+    //     asked of                lines with a cut cell   at the bar   worst
+    //     every cut cell                           2200            0    0.71
+    //     the typographic subject                  1512            0    0.55
+    //
+    //   Identical where it counts, on a rule about prominence this app has
+    //   never stated anywhere. So the question is asked of every cut cell and
+    //   the bar does the work. It is also what makes the finding readable: the
+    //   string names `.tree-title`, which is the element a reader lost.
+    //
+    //   WHAT THE RIVAL'S FLOOR IS — the width its own content is using,
+    //   measured off a Range (see `inlineExtent`), never typed in.
+    //   TITLE-OUTBID's discipline is that every floor comes off something real;
+    //   for a row nobody can enumerate, the only real thing available is the
+    //   string the cell is actually holding. `.tree-state` is a 136px track
+    //   with `awake` in it: 32px of content and 104px it could give back.
+    //
+    //   WHERE THE BAR IS — `held > t`, which is TITLE-OUTBID's `held > t + 0.5`
+    //   verbatim. Not "any unused width", and the difference is measured rather
+    //   than feared. This tree walks 7656 grid lines of two cells or more, 2200
+    //   of which hold a cell that was given less room than its text; reporting
+    //   on any slack at all fires **4368** times, at half the cut cell's width
+    //   **472**, and at the bar as written **0**. A check that fires on every
+    //   collapsed placeholder gets turned off within a day.
+    //
+    // THE MARGIN, so that a Clean run is not mistaken for a check that cannot
+    // fail. The worst honest line on this tree is `button.tree` at a 732px
+    // board (window 764x760, nav and inspector both shut):
+    // `.tree-branch-name` is cut in 148px of track while `.tree-state` beside
+    // it holds 104px it is not using — 0.71 of the bar. That is the cell
+    // `97-home-code.css` already records as truncated at the widest window this
+    // shell has, so the nearest thing to a finding here is a cell the sheet has
+    // already written down. THERE IS NO LEDGER because this tree produces
+    // nothing; the check is shown failing instead, by the row this file's own
+    // calibration table in docs/design.md carries.
+    //
+    // GRID LINES AND NOT FLEX ROWS, and that one IS a softening — stated as
+    // one, with the number that forced it. Asked of every nowrap flex row as
+    // well, the walk goes from 7656 lines to 131804 and from 0 findings to
+    // **17826**, and the loudest of them is `header.shell-chrome` reporting
+    // that `.window-drag` holds 96px while `.conn-label` has been squeezed to
+    // 0 — which is not a defect, it is `flex: 1 0 96px` doing the one job it
+    // has. TITLE-OUTBID already asks this question of that line and gets it
+    // right, because it can name the four items on it and give each a floor
+    // taken off a real control; this check cannot name anything and has only
+    // the content-width floor. So the flex half of the app is left to the
+    // check that has the floors for it, and a general version of this stays
+    // open — it needs per-element floors that nothing in the repo states yet.
+    if (cs.display.includes('grid')) {
+      for (const line of gridLines(el)) {
+        if (line.length < 2) continue;
+        const cut = [];
+        for (const cell of line) {
+          for (const leaf of [cell, ...cell.querySelectorAll('*')]) {
+            if (leaf.children.length || !leaf.textContent.trim()) continue;
+            if (!leaf.getClientRects().length) continue;
+            // `+ 1` for the reason TITLE-OUTBID states at length: `scrollWidth`
+            // and `clientWidth` are integers over a fractional layout, and one
+            // pixel is the only difference the two can show when nothing is cut
+            // at all. An inline leaf answers 0/0 here and drops out on its own,
+            // which is right: an inline box is not what was given a width, the
+            // block that clips it is.
+            if (leaf.scrollWidth > leaf.clientWidth + 1) cut.push({ cell, leaf });
+          }
+        }
+        // The Range walk is the expensive half, so it runs only on a line that
+        // has already been shown to have lost something.
+        if (!cut.length) continue;
+        const slack = line.map((c) => c.getBoundingClientRect().width - inlineExtent(c));
+        for (const { cell, leaf } of cut) {
+          for (const [j, rival] of line.entries()) {
+            if (rival === cell) continue;
+            if (slack[j] > leaf.clientWidth + 0.5) {
+              out.push(`ROW-OUTBID   ${name(el)} gives ${name(leaf)} ${leaf.clientWidth}px`
+                + ` for ${leaf.scrollWidth}px of text, while ${name(rival)} on the same line`
+                + ` holds ${slack[j].toFixed(0)}px it is not using`);
+            }
+          }
+        }
+      }
     }
 
     // The vertical half, which is the axis growing text moves. There is no
