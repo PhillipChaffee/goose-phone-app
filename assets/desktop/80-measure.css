@@ -205,15 +205,27 @@
  * below. A future change to `--nav-w` or to this inset cannot quietly put the
  * defect back.
  *
- * THREE RULES BECAUSE `transform` IS DOING TWO JOBS. shared.css writes
- * `translate(-50%, 8px)` — the `-50%` is the centring this rule is undoing, and
+ * THREE RULES BECAUSE `transform` WAS DOING TWO JOBS. shared.css wrote
+ * `translate(-50%, 8px)` — the `-50%` was the centring these rules undo, and
  * the `8px` is the rise the button is revealed with. Overriding the whole
  * property means restating the rise in both states, and the reduced-motion
  * block is the third because shared.css's own copy of it is (0,1,0) and would
  * otherwise lose to this rule and give a reader who asked for no motion an 8px
  * rise the phone does not give them. The alternative — `right: calc(var(--edge)
  * - 22px)`, letting the `-50%` stand and cancelling it — is one declaration and
- * hard-codes half of a width declared in another sheet. */
+ * hard-codes half of a width declared in another sheet.
+ *
+ * AND `left`, `right` AND `transform` ARE RESTATEMENTS NOW, NOT OVERRIDES.
+ * #261 found the same defect on the PHONE — the centred disc landing on a tool
+ * card's output disclosure — and shared.css says `right: var(--edge)` and
+ * `translateY(8px)` itself as of that fix. So three of these four declarations
+ * name the value they already inherit. They stay, and deliberately: this file
+ * is where the desktop's own argument for the trailing edge is written, the
+ * numbers in it are swept over 4 shell cells x 11 windows and are the desktop's
+ * to keep, and `z-index: auto` is a real override the phone must not take —
+ * there the disc floats over the composer and keeps `--z-chrome`. What has
+ * changed is only that a future edit to shared.css can no longer move the
+ * desktop's disc, which was never something these rules promised. */
 .pane-main .scroll-bottom {
   left: auto;
   right: var(--edge);
@@ -222,8 +234,9 @@
 }
 
 /* (0,3,0), because shared.css's `body.away-from-bottom .scroll-bottom` is
- * (0,2,1) — `body` is a type selector — and would otherwise put the `-50%`
- * back the moment the button appeared. */
+ * (0,2,1) — `body` is a type selector — and would otherwise have put the `-50%`
+ * back the moment the button appeared. Since #261 that sheet drops the `-50%`
+ * too, so this rule now restates rather than corrects; see above. */
 body.away-from-bottom .pane-main .scroll-bottom {
   transform: translateY(0);
 }

@@ -219,14 +219,86 @@
 
 /* The count is the whole reason the row can stay shut: it says how much is
  * behind it without opening it. */
+/* ── THE FAINT RUNG, SPENT — #118, and this file holds three of its sites ──
+ *
+ * "Library 4" is the string #118 was filed for, quoted in its own body: a
+ * label and a count at one weight, so nothing recedes and the pair reads as
+ * two words. `--ink-faint` is the answer `00-tokens.css` declares and argues,
+ * and `90-inspector.css` and `40-home-chat.css` have already spent it on the
+ * inspector's two section labels and the home's section meta. These three —
+ * this, `.nav-band-count` and `.nav-row-age` — qualify on the same test that
+ * list applies: a number beside the thing it counts, or an age beside the
+ * title it belongs to, is a string a reader SKIMS PAST, and the label next to
+ * it is the one they read.
+ *
+ * MEASURED on the captured `desktop-chat` and `desktop-chats` at 1440x860,
+ * against the sheet list `docs/audit.js` builds, transitions killed, on the
+ * surface each element actually lands on — which is NOT one surface, and that
+ * is why this is measured per site rather than once for the file:
+ *
+ *                        surface            before          after
+ *   .nav-library-count    #1b1d21 (wash)    #98a1ac 6.46:1  #828b96 4.89:1
+ *   .nav-band-count       #181a1e (panel)   #98a1ac 6.66:1  #828b96 5.05:1
+ *   .nav-row-age          #181a1e (panel)   #98a1ac 6.66:1  #828b96 5.05:1
+ *
+ * All dark. Light is unchanged BY DESIGN and not by omission: `00-tokens.css`
+ * resolves `--ink-faint` to `var(--text-secondary)` there, because #828b96 is
+ * 3.45:1 on white and a light window needs a darker faint rung nothing in the
+ * mockups defines. Light's own numbers are 4.53:1 on this wash and 4.64:1 on
+ * the panel, before and after.
+ *
+ * "UNCHANGED IN LIGHT" IS MEASURED AND NOT ASSERTED, which matters because the
+ * whole rung is a name for a value light already has: a dump of every element
+ * of all 21 captured desktop states at 1440x860, in both themes, all three
+ * shell cells and both scroller states, sorted computed style and border-box
+ * rect, moves in **126 of 126 dark cells and 0 of 126 light ones**. A change
+ * that missed would look identical to this one in light and to nothing at all
+ * in dark, which is the failure `00-tokens.css` records the rung already
+ * having had once.
+ *
+ * NEVER `.nav-row.on` OR `.nav-row:hover`, which is the prohibition that
+ * travels with this token: on a raised fill the faint rung measures 3.90:1,
+ * which is where every candidate for this tier measured worst. `.nav-row-age`
+ * below therefore takes the rung on its BASE rule only, and the three rules
+ * that already repaint the selected and hovered row are what enforce it.
+ *
+ * THE DISCLOSURE HAS A RAISED FILL TOO, AND THE ISSUE'S LIST DOES NOT SAY SO.
+ * `.nav-library:hover` mixes 50% of `--bg-tertiary` into the panel and, alone
+ * of the three sites here, that surface is one the count still sits on: hover
+ * promotes the BUTTON to `--text-primary`, and this rule's own `color` beats
+ * inheritance, so the count is the one child hover does not take with it.
+ * Measured on the hovered row with a real pointer — `:hover` cannot be forced
+ * from script — the rung costs 5.92:1 -> 4.48:1 in dark, which crosses the 4.5
+ * a 10.5px string owes for the sake of a surface a reader only sees while they
+ * are pointing at it. So the prohibition reaches here as well, one rule below,
+ * and hover comes out of this change byte-identical to what it ships today.
+ *
+ * THAT SURFACE ALREADY FAILS IN LIGHT AND THIS CHANGE NEITHER CAUSES NOR CURES
+ * IT: #6f6f6f on the light hover fill #ebeef0 is **4.32:1**, before and after,
+ * because light resolves `--ink-faint` to `--text-secondary` and the rule below
+ * names the same token. `.mark.idle` on the same fill is 4.32:1 too. Nothing in
+ * the repo can see either — `docs/audit.js` walks the resting tree and no
+ * capture has ever held a pointer — so the number is written here, where the
+ * next reader of this hover fill will be. */
 .nav-library-count {
   flex: 0 0 auto;
   /* CHANGE: mono, per the mockup and per this sheet's own mono rule. The
-     shipped block's `flex: 0 0 auto` and colour are kept. */
+     shipped block's `flex: 0 0 auto` is kept. */
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   line-height: var(--lh-xs);
   font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+
+/* The prohibition, on the one raised fill in this card that the faint rung
+ * would otherwise land on. (0,2,0) against the base rule's (0,1,0), so it wins
+ * wherever either sits in the sort. `--text-secondary` and not the
+ * `--text-primary` the hovered button gives everything else: the count is
+ * still a count, and a step down from the label it follows is the whole point
+ * of the rung — this restores the exact pair the row has today, on the one
+ * surface where the quieter value cannot be afforded. */
+.nav-library:hover .nav-library-count {
   color: var(--text-secondary);
 }
 
@@ -477,7 +549,16 @@
 
 /* And the count the heading is a flex row FOR, pushed to the end of it. Same
  * face and rung as `.nav-library-count` above, because they are the same
- * statement about two different collections. */
+ * statement about two different collections — and that sentence is now load
+ * bearing rather than descriptive: the rung is `--ink-faint` (#118, measured
+ * at `.nav-library-count`), 5.05:1 on the panel in dark, unchanged in light.
+ *
+ * A HEADING WHOSE COUNT RECEDES, not a heading that recedes: `.nav-band` above
+ * stays on `--text-secondary`. TODAY is what a reader is looking for when they
+ * scan this list; the 3 beside it is what they skim past. Painting both the
+ * faint rung would move the whole band down a tier and re-create the flatness
+ * one tier lower, which is the failure mode #118's spend list is exhaustive
+ * to prevent. */
 .nav-band-count {
   margin-left: auto;
   font-family: var(--font-mono);
@@ -485,7 +566,7 @@
   font-weight: 400;
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
-  color: var(--text-secondary);
+  color: var(--ink-faint);
 }
 
 /* A row. Two lines of text, a mark, and an age — no tile, no action gutter,
@@ -1032,6 +1113,27 @@
   color: var(--insp-del);
 }
 
+/* THE FAINT RUNG ON THE BASE RULE ONLY — #118's third site in this file, and
+ * the one where the prohibition bites.
+ *
+ * `13m` is an age, which is `.nav-row-title`'s footnote and not a string a
+ * reader came here to read, so it takes `--ink-faint`: #98a1ac 6.66:1 →
+ * #828b96 5.05:1 on the panel in dark, unchanged in light. The full
+ * measurement is at `.nav-library-count` above.
+ *
+ * ON A SELECTED OR HOVERED ROW IT MUST NOT, and nothing here has to enforce
+ * that because three rules ~400 lines above already do: light promotes this to
+ * `--text-primary` on `.nav-row.on` / `.nav-row:hover`, and dark's two
+ * theme-scoped carve-outs put it back to `--text-secondary`. So the selected
+ * row keeps 7.93:1 in light and 5.15:1 in dark whatever this declaration says.
+ * That is the ledger's number for why: on a selected fill the faint rung
+ * measures 3.90:1, which is where every candidate for this tier measured
+ * worst, and the reason the spend list names the base rule and stops.
+ *
+ * `.nav-row-sub` above is deliberately NOT on this list even though the two
+ * share a line, a rung and a line-height. A snippet is the sentence that says
+ * which conversation this is; the age beside it is the footnote. They were one
+ * colour, which is #118's symptom, and they are two now. */
 .nav-row-age {
   /* `padding-top: 1px` IS GONE, and the comment below has been asking for that
    * since the age moved. It is the last 1px of the meta line's error: 18px of
@@ -1040,7 +1142,7 @@
    * shape as `.nav-library`'s scoping note, which #128 is about. */
   flex: 0 0 auto;
   margin-left: auto;
-  color: var(--text-secondary);
+  color: var(--ink-faint);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   line-height: var(--lh-xs);
