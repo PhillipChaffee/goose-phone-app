@@ -1112,15 +1112,20 @@ const AT_REST_CSS = '*, *::before, *::after { transition: none !important;'
 // REPRODUCED, three ways, because an axis that is not doing anything is exactly
 // what this one was added to end:
 //
-//   the axis   Cut AWAY_CELLS to `[false]` and the run fails on the ledger's
-//              reverse check — "1 ledger entry names a defect this run did not
-//              find: button.scroll-bottom >> summary". So the entry below is
-//              this axis' own product and nothing else's.
+//   the axis   Cut AWAY_CELLS to `[false]` and the run used to fail on the
+//              ledger's reverse check — "1 ledger entry names a defect this run
+//              did not find: button.scroll-bottom >> summary". That entry is
+//              gone with #261, so this particular demonstration is spent: the
+//              axis' product was a real finding, the finding was fixed, and
+//              what the axis holds now is that the fix stays fixed. Restore
+//              `left: 50%` to assets/shared.css's `.scroll-bottom` and the
+//              pair comes back as an OCCLUDED finding rather than a ledger
+//              line, which is the same reproduction one step later.
 //   the class  Delete `pointer-events: auto` from assets/shared.css's
 //              `body.away-from-bottom .scroll-bottom` and the check below stops
 //              the run on `chat` with "it is still `pointer-events: none` with
 //              the class on".
-//   the rest   Change the same sheet's resting `translate(-50%, 8px)` to 10px
+//   the rest   Change the same sheet's resting `translateY(8px)` to 10px
 //              and it stops on "the disc sits at translateY(10.00px) where the
 //              sheet puts it at 8", which is the transition trap's own alarm
 //              reading a real element rather than a constant.
@@ -1137,9 +1142,10 @@ const stateIsAway = (body) => [...body.matchAll(/class="([^"]*)"/g)]
 // THE TRAP #165 WROTE UP, ONE PROPERTY PAIR OVER, and the reason this returns a
 // number instead of a boolean. Flipping a class starts every transition the
 // sheet declares on it and `getComputedStyle` then answers with an interpolated
-// value; `.scroll-bottom` transitions `opacity` AND `transform`, and #240 gave
-// the desktop's its own `translateY(8px)` at rest, so this is precisely the
-// pair that trap applies to. AT_REST_CSS is linked into both frame lists and
+// value; `.scroll-bottom` transitions `opacity` AND `transform`, and both
+// shells now put the disc at `translateY(8px)` at rest — the desktop since
+// #240, the phone since #261 dropped the centring the phone's `transform` used
+// to be carrying — so this is precisely the pair that trap applies to. AT_REST_CSS is linked into both frame lists and
 // should make the flip instantaneous — SHOULD, which is not a measurement. So
 // the axis asks the disc where it actually is: at rest the sheet puts it 8px
 // down, with the class on it puts it on 0, and anything strictly between the
@@ -1265,21 +1271,19 @@ for (const [desktop, found] of Object.entries(REFERENCE)) {
 //   div.toast      A toast is `position: fixed; z-index: 60` and at AX5 it is
 //                  440px tall on a 568px phone, so it reaches the bar: 7px of
 //                  the 44px back chevron on `recipes-detail-toast` at 320x568.
-//   button
-//     .scroll-bottom
-//                  #261, and it is the entry #250's axis was added to find.
-//                  The jump-to-latest disc is `pointer-events: none` until
-//                  `body.away-from-bottom` is on, so until that axis existed
-//                  this walk skipped it in every cell — see where it does, in
-//                  GEOMETRY. With the class driven it fires on the PHONE, on
-//                  the tool card's output disclosure: `code-chat` at 375x667
-//                  root 16 (disc 165.5,467 44x44 over `summary` 17,453.6
-//                  341x28) and at 390x844 root 23 (disc 173,635.3 over
-//                  `summary` 17,633.4 356x35, which is 33 of its 35 points).
-//                  The DESKTOP produces nothing, which is #209 having been
-//                  fixed: `assets/desktop/80-measure.css` took the disc off
-//                  the reading column and off `--z-chrome`, and
-//                  `assets/shared.css` still centres the phone's on it.
+//
+// `button.scroll-bottom >> summary` HAS COME OFF THIS LIST, and it is the
+// entry #250's axis was added to find — filed as #261 the same day, fixed now.
+// It fired on the PHONE, on a tool card's output disclosure: `code-chat` at
+// 375x667 root 16 (disc 165.5,467 44x44 over `summary` 17,453.6 341x28, 2 of
+// 9 points) and at 390x844 root 23 (disc 173,635.3 over `summary` 17,633.4
+// 356x35, 3 of 9, which is 33 of the control's 35 points of height).
+// `assets/shared.css` centred a 44px opaque disc on the reading column and now
+// parks it at `right: var(--edge)`, where `.fab` already sits; both cells go to
+// 0 of 9 and this walk stopped producing the pair, so the reverse half of the
+// check below would have failed on the entry had it stayed. The DESKTOP never
+// produced it — `assets/desktop/80-measure.css` had answered the same question
+// for that shell since #209, and it is unchanged.
 const OCCLUSION_KNOWN = [
   'aside.navpane >> button.action-chip',
   'aside.navpane >> button.home-chip.picker',
@@ -1307,7 +1311,6 @@ const OCCLUSION_KNOWN = [
   'aside.navpane >> textarea.compose-field',
   'aside.navpane >> textarea.input',
   'button.fab >> button.btn.secondary.grow',
-  'button.scroll-bottom >> summary',
   'div.toast >> button.icon-btn.back',
 ];
 
@@ -2390,7 +2393,9 @@ const GEOMETRY = ({ mark, ledger }) => {
     // #209 had to be found by hand. THE AXIS IS WHAT ANSWERS THAT, not a
     // softening of this line: AWAY_CLASS above drives the class the way the
     // shell attributes are driven, the skip below then stops applying, and the
-    // run reports `button.scroll-bottom >> summary` (#261) on the phone.
+    // run reported `button.scroll-bottom >> summary` on the phone — which is
+    // #261, now fixed and off the ledger. Put `left: 50%` back on
+    // `assets/shared.css`'s `.scroll-bottom` and it comes back here.
     if (cs.pointerEvents === 'none' || el.disabled) continue;
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) continue;

@@ -6,14 +6,24 @@
  * declaration here lands in a 1440pt window as surely as on a 402pt one.
  *
  * The phone-only exceptions are three and this is the whole list: `.ptr`
- * (492-566), created only by the pull-to-refresh gesture in `src/viewport.rs`;
- * the drawer panel head (3237-3319) — `.drawer`, `.drawer-scrim`,
+ * (502-576), created only by the pull-to-refresh gesture in `src/viewport.rs`;
+ * the drawer panel head (3363-3445) — `.drawer`, `.drawer-scrim`,
  * `.drawer-brand` — emitted only by `src/shell/mobile.rs`; and `.drawer-group`
- * (4454-4481), whose `render_group` in `src/shell/mod.rs` carries the same
- * `#[cfg(any(ios, android))]`. That is 186 lines of 4,481, about 4%. All the
+ * (4580-4607), whose `render_group` in `src/shell/mod.rs` carries the same
+ * `#[cfg(any(ios, android))]`. That is 186 lines of 4,607, about 4%. All the
  * rest reaches the desktop — including the drawer ROWS below the panel head,
  * which the sidebar renders. To change how a rule lands there, add an
  * override in `assets/desktop/`; do not edit it here.
+ *
+ * TWO OF THOSE THREE RANGES HAD GONE STALE BEFORE THIS EDIT MOVED THEM, both
+ * by 53 lines: the second pointed at `.modal-body` and the third at the drawer
+ * panel's own transform. The LENGTHS were right — 75, 83 and 28, the same
+ * three numbers as now — so the drift is an insertion above them that nobody
+ * re-derived, and nothing in the repo reads these offsets, which is why
+ * nothing caught it. A reader who follows a stale range concludes the opposite
+ * of what this paragraph says: that the rule in front of them is shared. So
+ * they are re-derived against this file rather than shifted by the size of the
+ * edit below, and re-derive them again after any insertion above line 4580.
  *
  * ATTRIBUTION, and the reason these numbers are not free to taste: the
  * palette, type scale, radii and shadow ramp mirror the goose desktop app's
@@ -2293,10 +2303,70 @@ details[open] > summary::before {
  * listened-to event through a synchronous XHR — a blocking round trip on every
  * frame of every scroll. Rust owns the button and its tap; JS owns whether it
  * is there to be tapped. */
+/* ── AT THE TRAILING EDGE, NOT ON THE COLUMN — #261 ─────────────────────
+ *
+ * `left: 50%` and `translate(-50%, …)` are gone. The slot above defends the
+ * BOTTOM anchoring in its own words and it is right; nothing has ever defended
+ * the CENTRING, and centring is what put a 44px opaque disc on the middle of
+ * the transcript's last line.
+ *
+ * WHAT IT WAS LANDING ON. `docs/audit.js`'s OCCLUDED walk drives
+ * `body.away-from-bottom` (#250) and reported the disc over a tool card's
+ * output disclosure — the control that expands what a tool printed. Measured
+ * by taking `button.scroll-bottom >> summary` off OCCLUSION_KNOWN and running
+ * `node docs/audit.js both` against the sheet as it was: **8 findings**, four
+ * at 2 of 9 sample points and four at 3, spread over `code-chat` in two themes
+ * and in the stressed copy of it. With this change: **0**, and nothing else in
+ * the grid moves — the run is Clean over 98 phone states x 2 themes x 6 sizes
+ * x 4 text sizes.
+ *
+ * ONE CELL, BOTH WAYS, so the number above is not the only evidence. `code-chat`
+ * light, root 23, transitions killed, the disc's box then the disclosure's:
+ *
+ *              before                     after
+ *   390x844    disc 173.0,635.3 44x44     disc 330.0,635.3 44x44
+ *              `summary` 17.0,633.4 356x35, unmoved
+ *              overlap 44.0x33.1          overlap 43.0x33.1
+ *              3 of 9 points              0 of 9 points
+ *
+ * THE OVERLAP BARELY SHRINKS AND THAT IS NOT THE POINT — 44px wide becomes 43,
+ * in the same four of that state's twenty-four phone cells, because on a 375pt
+ * screen the reading column IS the screen (`--measure` is 40rem and never
+ * binds) and there is no gutter to move into. WHICH 43px is the whole of the
+ * improvement: the disclosure's triangle and the word "Output" are at x=17, so
+ * the disc comes off the part of the control that carries its label and its
+ * natural target and sits on the empty end of the row instead. Nine points of a
+ * 3x3 grid inset to 15% is the audit's noise floor, and 0 of 9 is where a
+ * reader is likely to press.
+ *
+ * THE TRAILING EDGE IS THIS SHEET'S OWN ANSWER for a control that floats over
+ * a list — `.fab` is `right: var(--edge)` and says why: "the bottom right,
+ * where a thumb reaches it on any screen length". `--edge` and not `--gutter`
+ * for the reason `assets/desktop/80-measure.css` states at the same three
+ * rules; on a phone the two are the same 16px anyway.
+ *
+ * `z-index: var(--z-chrome)` STAYS, and this is the one place the phone and the
+ * desktop still differ. The desktop drops it to `auto` because there the disc
+ * only has to paint over the scroller it hangs into; here it floats over the
+ * composer, and 20 is what keeps it there.
+ *
+ * AND THE DESKTOP DOES NOT MOVE. `80-measure.css` has answered this question
+ * for that shell since #209 with exactly these declarations on
+ * `.pane-main .scroll-bottom`, which is every `.scroll-bottom` a desktop
+ * binary renders — `section.pane.pane-main` is the only pane
+ * (`src/shell/desktop/mod.rs`). CHECKED RATHER THAN ARGUED, because "the
+ * override has the same value" is a claim about a cascade and not a
+ * measurement: all 21 captured desktop states, in both themes, in all three
+ * shell cells `docs/audit.js` walks and in both scroller states — the whole
+ * tree at 1440x860 (every element, sorted computed style and border-box rect)
+ * and the disc alone at all 13 window sizes, 1,032 cells. **0 of 1,032
+ * differ.** The desktop's own three rules are unchanged and stay; what this
+ * edit did to them is turn `left`, `right` and `transform` from overrides into
+ * restatements, which is written up beside them. */
 .scroll-bottom {
   position: absolute;
   bottom: 8px;
-  left: 50%;
+  right: var(--edge);
   z-index: var(--z-chrome);
   display: inline-flex;
   align-items: center;
@@ -2312,7 +2382,10 @@ details[open] > summary::before {
   font-size: var(--icon-md);
   opacity: 0;
   pointer-events: none;
-  transform: translate(-50%, 8px);
+  /* The rise the button is revealed with, and now the whole of what this
+     property does — it used to carry the centring as well, which is why
+     undoing the centring meant touching all three of these rules. */
+  transform: translateY(8px);
   transition: opacity 140ms ease, transform 140ms ease;
   cursor: pointer;
 }
@@ -2320,7 +2393,7 @@ details[open] > summary::before {
 body.away-from-bottom .scroll-bottom {
   opacity: 1;
   pointer-events: auto;
-  transform: translate(-50%, 0);
+  transform: translateY(0);
 }
 
 .scroll-bottom:active {
@@ -2331,7 +2404,7 @@ body.away-from-bottom .scroll-bottom {
 @media (prefers-reduced-motion: reduce) {
   .scroll-bottom {
     transition: opacity 140ms ease;
-    transform: translate(-50%, 0);
+    transform: translateY(0);
   }
 }
 

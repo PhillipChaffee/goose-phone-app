@@ -9,7 +9,9 @@
 // bottom, which is exactly when the button is not there. A visual property
 // nothing can photograph has to be measured instead.
 //
-// Two halves. The first is placement: the button hangs out of a zero-height
+// Three halves, and the third is new with #261 — see below.
+//
+// The first is placement: the button hangs out of a zero-height
 // slot above the composer, so that it follows the composer as the draft grows
 // it and as the shell tracks the visual viewport with the keyboard up —
 // anything anchored to the bottom of the screen ends up behind one or the
@@ -19,6 +21,19 @@
 // composition cannot show, because it is a class that appears and disappears
 // as a transcript is read. STEPS drives the real scripts through a real
 // scroller: streaming, reading back, the keyboard, a growing draft, a tap.
+//
+// THE THIRD IS WHAT THE DISC IS ON TOP OF, and until #261 this file did not
+// ask it — it asked the opposite. `if (!r.centred)` was an assertion, so the
+// one check written for this element was ENFORCING the defect: a disc centred
+// on the reading column lands on the middle of the transcript's last line, and
+// `docs/audit.js` found it there, on a tool card's output disclosure. Nothing
+// here could have seen that, because every composition above puts
+// `<p>content</p>` in the scroller — the fixtures had no control for the disc
+// to cover, and the walk measured the disc against the composer BELOW it and
+// never against the transcript BEHIND it. `overTheLastLine` is that missing
+// axis, and it is the audit's own instrument: the same 3x3 grid inset to 15%,
+// the same `elementsFromPoint`, asked of the disclosure rather than of the
+// whole store.
 //
 // The markup is built by src/views/mod.rs (`ScrollToBottom`) and restated here
 // the way measure-ptr.js restates the pull indicator's. Keep the two in step;
@@ -142,6 +157,19 @@ const CASES = [
 
 // A transcript long enough to read a good way back through.
 const TRANSCRIPT = '<div class="msg agent"><p>A paragraph of reply.</p></div>'.repeat(80);
+
+// A completed tool call with its output disclosure, restated from the captured
+// `code-chat` the way the button's own markup is restated above. The `summary`
+// is the control #261 is about: it expands what a tool printed, its triangle
+// and its word are at the leading edge of a full-width row, and it is the last
+// thing above the composer often enough for `docs/audit.js` to have caught the
+// disc on it in two of twenty-four phone cells.
+const TOOL = '<div class="tool status-completed"><div class="tool-head">'
+  + `<span class="tool-icon">${ICON}</span>`
+  + '<span class="tool-title">git push origin HEAD</span>'
+  + '<span class="tool-status">Done</span></div>'
+  + '<details class="tool-output"><summary>Output</summary>'
+  + '<pre>To github.com: agent/branch pushed</pre></details></div>';
 
 // What a reader does, and what happens to them. `pinned` is "still at the
 // bottom", `away` is "not, and told so", `held` is "left exactly where they
@@ -267,6 +295,94 @@ const readingBack = async (browser) => {
   return bad;
 };
 
+// ── what the disc is on top of ──────────────────────────────────────────
+//
+// #261, and the axis this file did not have. A tool card's output disclosure
+// is put where the disc is and swept through its band, and at each stop the
+// question is the audit's: of the disclosure's nine sample points, how many
+// does the disc answer for instead of the control?
+//
+// SWEPT RATHER THAN PLACED, because "the last visible line is a control" is a
+// fact about how far a reader happens to have scrolled, and the disc's band is
+// only 52px tall. Five stops carry the summary up through that band, so the
+// walk covers every way the two boxes can meet rather than the one the store
+// happened to catch.
+//
+// SWEPT WITH A SPACER AND NOT WITH `scrollTop`, which is the one thing in here
+// that had to be found by running it. A transcript at its bottom is at its
+// bottom: the disclosure's resting position is the LOWEST it can be, so three
+// of five stops clamped to the same frame and the sweep silently measured one
+// placement three times. A block of adjustable height after the tool card
+// moves the card instead, and the scroller stays pinned to its end — which is
+// also the geometry the defect actually occurs in.
+//
+// THE DISCLOSURE IS SHUT, as it is in the captured `code-chat`: no `open`, so
+// the `<pre>` is not laid out and the `summary` IS the card's last row. That
+// is why this is the control the audit found the disc on rather than the
+// output under it.
+//
+// TWO WIDTHS, and the narrower is the one that matters. At 375pt the reading
+// column IS the screen — `--measure` is 40rem and never binds — so the disc
+// cannot leave the row at all; what the trailing edge buys is WHICH 44px of it
+// the disc is on. The disclosure's triangle and the word `Output` are at the
+// leading edge, and the audit's outermost sample point is at 85% of the row,
+// which clears the disc's left edge by 8px there and by 12 at 402. That 8px is
+// the whole margin this fix has at the narrowest screen this app ships to, and
+// it is printed rather than merely asserted for that reason.
+const overTheLastLine = async (browser) => {
+  let bad = 0;
+  console.log('\n  over the last line');
+  for (const width of [375, 402]) {
+    const p = await browser.newPage({ viewport: { width, height: 874 } });
+    const file = path.join(os.tmpdir(), `sb-last-line-${width}.html`);
+    fs.writeFileSync(file, page({
+      draft: 24,
+      transcript: `${TRANSCRIPT}${TOOL}<div id="after"></div>`,
+    }, true));
+    await p.goto(`file://${file}`, { waitUntil: 'load' });
+    await settle(p);
+    for (const [i, lift] of [0, 12, 24, 36, 48].entries()) {
+      const r = await p.evaluate((px) => {
+        const el = document.getElementById('chat-scroll');
+        document.getElementById('after').style.height = `${px}px`;
+        el.scrollTop = el.scrollHeight;
+        const s = document.querySelector('.tool-output > summary');
+        const box = s.getBoundingClientRect();
+        const disc = document.querySelector('.scroll-bottom');
+        const d = disc.getBoundingClientRect();
+        let points = 0;
+        for (const fy of [0.15, 0.5, 0.85]) {
+          for (const fx of [0.15, 0.5, 0.85]) {
+            const stack = document.elementsFromPoint(box.left + box.width * fx,
+              box.top + box.height * fy);
+            const at = stack.indexOf(s);
+            if ((at < 0 ? stack : stack.slice(0, at)).includes(disc)) points += 1;
+          }
+        }
+        return {
+          points,
+          // How much of the row the disc is on, and how far the outermost
+          // sample point is from it. The first barely moves with the fix; the
+          // second is the fix.
+          overlap: Math.round(Math.max(0, Math.min(box.right, d.right) - Math.max(box.left, d.left))),
+          clearance: Math.round(d.left - (box.left + box.width * 0.85)),
+          summary: `${Math.round(box.left)},${Math.round(box.top)} ${Math.round(box.width)}x${Math.round(box.height)}`,
+          disc: `${Math.round(d.left)},${Math.round(d.top)} ${Math.round(d.width)}x${Math.round(d.height)}`,
+        };
+      }, lift);
+      if (r.points) bad += 1;
+      console.log(
+        `    ${r.points ? 'FAIL' : 'ok  '} ${`${width}pt, lifted ${lift}px`.padEnd(34)}`
+        + ` disc=${r.disc} summary=${r.summary} overlap=${r.overlap}`
+        + ` clearance=${r.clearance}`
+        + (r.points ? `  <- the disc answers ${r.points} of the disclosure's 9 points` : ''),
+      );
+    }
+    await p.close();
+  }
+  return bad;
+};
+
 (async () => {
   const themes = (process.argv[2] || 'both') === 'both' ? ['light', 'dark'] : [process.argv[2]];
   const browser = await chromium.launch();
@@ -298,8 +414,12 @@ const readingBack = async (browser) => {
             top: Math.round(box.top),
             bottom: Math.round(box.bottom),
             gap: Math.round(below.top - box.bottom),
-            centred: Math.abs((box.left + box.right) / 2
-              - document.documentElement.clientWidth / 2) < 1,
+            // #261: the trailing edge, at `--edge`, where `.fab` already
+            // parks for the same reason. Read off the token rather than
+            // written as 16, so this follows the sheet.
+            inset: Math.round(el.offsetParent.getBoundingClientRect().right - box.right),
+            edge: parseFloat(getComputedStyle(document.documentElement)
+              .getPropertyValue('--edge')),
             shellBottom: Math.round(document.querySelector('.app').getBoundingClientRect().bottom),
           };
         });
@@ -313,7 +433,13 @@ const readingBack = async (browser) => {
         }
         // The HIG's 44pt. A round button with no label has nothing else to aim at.
         if (r.width < 44 || r.height < 44) problems.push(`${r.width}x${r.height}, under 44pt`);
-        if (!r.centred) problems.push('not horizontally centred');
+        // WAS `not horizontally centred`, and that assertion was the defect —
+        // see #261 at the top of this file. The centre of the column is the
+        // one place a 44px opaque disc must not be, because the column is
+        // where the transcript's last line is.
+        if (r.inset !== Math.round(r.edge)) {
+          problems.push(`${r.inset}px from the trailing edge, not --edge (${r.edge})`);
+        }
         // Above what follows it, and close enough to read as belonging to it.
         if (r.gap < 0) problems.push(`overlaps what is below it by ${-r.gap}px`);
         if (r.gap > 24) problems.push(`${r.gap}px above the composer — adrift`);
@@ -340,11 +466,12 @@ const readingBack = async (browser) => {
     await p.close();
   }
   bad += await readingBack(browser);
+  bad += await overTheLastLine(browser);
   await browser.close();
   if (bad) {
     console.log(`\n${bad} problem${bad > 1 ? 's' : ''} with the scroll-to-bottom button.`);
     process.exit(1);
   }
   console.log('\nClean: hidden at the bottom, reachable above the composer everywhere'
-    + ' else, and it notices the keyboard.');
+    + ' else, it notices the keyboard, and it is not on the last line\'s control.');
 })();
