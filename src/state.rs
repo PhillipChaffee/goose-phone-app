@@ -46,36 +46,55 @@ pub(crate) enum Tab {
     // kinds, rename and search, not a destination of its own.
 }
 
-/// `serde(default)` is load-bearing: settings persisted by older builds lack
-/// the code-agent fields, and a parse failure would silently wipe the saved
-/// goose server config (the storage layer falls back to `Default`).
+/// `serde(default)` is load-bearing TWICE, and the second use is what let this
+/// reach the disk at all.
 ///
-/// # This is the one persisted key that is still in memory only
+/// The first: settings persisted by an older build lack the code-agent fields,
+/// and a parse failure would silently wipe the saved goose server config (the
+/// storage layer falls back to `Default`).
 ///
-/// It holds `secret_key` and `code_password` in the clear, and `#220` is where
-/// what to do about that is being decided. Two things are already settled and
-/// are recorded at the hook (`use_app_ctx_provider`): a plain file with a
-/// credential in it is a change to the app's threat model rather than a bug
-/// fix, and serializing only the four non-secret fields — which is the obvious
-/// third way and does work — is blocked on the test harness rather than on the
-/// design, because every mounted test shares one storage directory and a saved
-/// working directory would leak from one test into the next.
+/// # The two secrets are never written, by construction
 ///
-/// If a stored value ever does arrive here, note that it REPLACES the default
-/// rather than merging with it: `dev_seed!` below lives in `Default`, so a
-/// merge that fills empty fields from a fresh `Settings::default()` has to come
-/// with it or the first save in a development build silently ends the
-/// documented local workflow.
+/// This struct holds `secret_key` and `code_password` in the clear, and the
+/// standing rule in this repo is that secrets move by reference. A plain file
+/// with a credential in it is a change to the app's threat model rather than a
+/// bug fix — so the two fields are `#[serde(skip_serializing)]` and the file
+/// CANNOT hold one, however the form is filled in. That is not a promise about
+/// how the writer behaves; it is a promise about what the serializer emits, and
+/// `the_saved_settings_file_holds_no_credential` round-trips a filled-in
+/// `Settings` through the real store to say so.
+///
+/// The second use of `serde(default)` is what makes that survivable in a
+/// development build. A missing field is filled from `Settings::default()`,
+/// which is where [`dev_seed!`] lives — so a build carrying
+/// `GOOSE_DEV_SECRET_KEY` refills it on every launch even though the last save
+/// wrote it nowhere. Without the container attribute the same code would
+/// deserialize the two skipped fields as `String::new()` and the documented
+/// local workflow would become "retype two secrets per launch"; a release build
+/// expands every seed to `""` and the whole mechanism is a no-op there.
+///
+/// The other four fields ARE persisted, and a stored value REPLACES the default
+/// rather than merging with it (`new_storage_entry` is
+/// `get().unwrap_or_else(init)`). No merge was added for them, deliberately: a
+/// merge that refilled an empty field from a fresh default would make a field
+/// impossible to CLEAR — clear the working directory, restart, and the seed is
+/// back — and the harm a merge was proposed for is the two secrets, which the
+/// paragraph above already answers.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Settings {
     pub server_url: String,
+    /// NEVER PERSISTED. See the type's own note: the file may not hold a
+    /// credential, and `serde(default)` refills this from `dev_seed!` on load
+    /// so a development build does not pay for that with a retype per launch.
+    #[serde(skip_serializing)]
     pub secret_key: String,
     pub fingerprint: String,
     pub working_dir: String,
     /// Code-agent gateway on the brain, e.g. `https://brain.tailnet.ts.net:4300`.
     pub code_server_url: String,
-    /// `OPENCODE_SERVER_PASSWORD`.
+    /// `OPENCODE_SERVER_PASSWORD`. Never persisted, for `secret_key`'s reason.
+    #[serde(skip_serializing)]
     pub code_password: String,
 }
 
@@ -436,13 +455,14 @@ pub(crate) struct AppCtx {
 
     /// WHETHER THE WINDOW'S RIGHT-HAND INSPECTOR IS SHOWING.
     ///
-    /// FS-BACKED, unlike `settings` and `code_cache`: `use_persistent` builds
+    /// FS-BACKED, and the first key here that was: `use_persistent` builds
     /// over `SessionStorage`, which on every non-wasm target this app builds
     /// for is an in-memory `HashMap` — the trap written up further down this
     /// file — so a flag stored through it is forgotten by the next launch and
     /// nothing says so. `crate::ask_journal::Backing` is `LocalStorage`, and
     /// `the_journals_storage_backing_really_reaches_the_disk` is the existing
-    /// proof that it writes a file.
+    /// proof that it writes a file. `code_cache` and `settings` joined it in
+    /// #220's two halves, so all four persisted keys are on one store now.
     ///
     /// ON `AppCtx` AND NOT LOCAL TO `AppShell`, which is where `nav_open` and
     /// `library_open` correctly live. Those two are deliberately not persisted
@@ -628,69 +648,92 @@ pub(crate) struct AppCtx {
 }
 
 pub(crate) fn use_app_ctx_provider() -> AppCtx {
-    // `settings` IS STILL IN MEMORY AND `code_cache` IS NOT ANY MORE (#220).
+    // EVERY PERSISTED KEY NOW REACHES THE DISK (#220, both halves).
     //
-    // `use_persistent` builds over `SessionStorage`, an in-memory `HashMap`
-    // hung off the Dioxus ROOT CONTEXT on every non-wasm target
-    // (dioxus-sdk-storage `persistence.rs:34`, `client_storage/mod.rs:32-41`,
-    // `memory.rs:13-28`). `LocalStorage` is the fs-backed one, and `set_dir!()`
-    // in `main` points it at `~/Library/Application Support/goose-mobile`.
-    // Measured rather than read: on a machine where this app had run, that
-    // directory held `inspector_open` and `lost_asks` — the two keys already on
-    // `LocalStorage` — and no `settings` and no `code_cache`. Never written,
-    // not stale. So #2's A11 ("a code chat previously opened renders from local
-    // cache instantly, including offline") missed at every launch, which is the
-    // only case the cache exists for at all.
+    // `use_persistent`, which all four of these went through until #220, builds
+    // over `SessionStorage` — an in-memory `HashMap` hung off the Dioxus ROOT
+    // CONTEXT on every non-wasm target (dioxus-sdk-storage
+    // `persistence.rs:34`, `client_storage/mod.rs:32-41`, `memory.rs:13-28`).
+    // `LocalStorage` is the fs-backed one, `crate::ask_journal::Backing` names
+    // it, and `set_dir!()` in `main` points it at
+    // `~/Library/Application Support/goose-mobile`. Measured rather than read:
+    // on a machine where this app had run, that directory held `inspector_open`
+    // and `lost_asks` and NOTHING ELSE. Not stale — never written. So #2's A11
+    // ("a code chat previously opened renders from local cache instantly,
+    // including offline") missed at every launch, which is the only case the
+    // cache exists for at all, and every launch of the desktop shell opened on
+    // an empty Settings form that `dev_seed!` was quietly hiding.
     //
-    // `use_storage` rather than `use_synced_storage`: syncing broadcasts to
-    // other subscribers of the same key and there is one reader of this one in
-    // a process. `LocalStorage::set` notifies only where a subscription exists
-    // (`fs.rs:64-73`), so a key nothing subscribes to costs no channel — and
-    // cannot reach the "send with no receiver panics" hazard that
-    // `testkit::anchor_subscriptions` exists for.
+    // `use_storage` rather than `use_synced_storage` for the two plain ones:
+    // syncing broadcasts to other subscribers of the same key and there is one
+    // reader of each of these in a process. `LocalStorage::set` notifies only
+    // where a subscription exists (`fs.rs:64-73`), so a key nothing subscribes
+    // to costs no channel — and cannot reach the "send with no receiver panics"
+    // hazard that `testkit::anchor_subscriptions` exists for.
     //
-    // WHY `settings` DID NOT MOVE WITH IT, in full, because "we did the easy
-    // one" is not a reason. Two costs, and the second is the one that decided
-    // it:
+    // TWO THINGS HAD TO BE TRUE BEFORE `settings` COULD MOVE, and the second is
+    // why it did not move with `code_cache` in the first half:
     //
-    //  1. `secret_key` and `code_password` are in this struct in the clear.
-    //     Writing them to a plain file is a change to the app's threat model
-    //     and the standing rule here is that secrets move by reference; the
-    //     alternative, the platform Keychain for those two fields on three
-    //     platforms, is a store this app has never opened. Neither belongs
-    //     inside a fix for "the file was never written at all". Serializing
-    //     only the four non-secret fields is the obvious third way and it
-    //     works — it was written, and it is what turned up (2).
+    //  1. THE FILE MUST NOT BE ABLE TO HOLD A CREDENTIAL. `secret_key` and
+    //     `code_password` are in this struct in the clear, and writing them to
+    //     a plain file is a change to the app's threat model rather than a bug
+    //     fix — the standing rule here is that secrets move by reference. They
+    //     are `#[serde(skip_serializing)]` (see `Settings`), so the four
+    //     non-secret fields persist and the two secrets cannot be written
+    //     however the form is filled in. The platform Keychain for those two,
+    //     on three platforms, is a store this app has never opened and is not
+    //     part of "the file was never written at all".
     //  2. ONE PROCESS-WIDE FILE, NINE HUNDRED MOUNTS. Every mounted test calls
-    //     this function, and `testkit::storage_dir` is a single directory for
-    //     the whole test binary, so the moment `settings` is fs-backed one
-    //     test's saved working directory is the next test's starting state.
-    //     Measured: four tests went red immediately — including
+    //     this function and `testkit::storage_dir` is a single directory for
+    //     the whole test binary, so an fs-backed `settings` made one test's
+    //     saved working directory the next test's starting state. Measured, the
+    //     first time this was tried: four tests went red — including
     //     `a_new_chat_with_nowhere_to_run_says_what_is_missing`, whose entire
-    //     subject is an EMPTY working directory — and which four depends on
-    //     the order the suite happens to run in. `code_cache` is keyed by chat
-    //     id and no test asserts on a chat another test cached, which is why
-    //     it can move and this cannot.
+    //     subject is an EMPTY working directory — and which four depended on
+    //     the order the suite happened to run in. That is a harness problem, so
+    //     it is fixed in the harness. `code_cache` could move first because it
+    //     is keyed by chat id and no test asserts on a chat another test
+    //     cached.
     //
-    // So the fix for `settings` is not one attribute, it is per-mount storage
-    // isolation in `testkit`, and that is a change to the harness rather than
-    // to the app. #220 stays open on that half.
-    let settings = dioxus_sdk_storage::use_persistent("settings", Settings::default);
+    // THE NAMESPACE IS BAKED INTO THE KEY, HERE, AND NOWHERE ELSE. `key` is the
+    // identity function in a shipping build — the app writes a file called
+    // `settings` exactly as it always would have — and under `cfg(test)` it
+    // carries a per-mount namespace, so a test binary writes one set of files
+    // per mount and no test can be handed another's state.
+    //
+    // Read ONCE, in a `use_hook`, so it is fixed for the life of this mount.
+    // That is the reason it is here and not in the storage backing: a wrapper
+    // backing would read the namespace at WRITE time, and
+    // `save_to_storage_on_change` writes from a task Dioxus polls long after
+    // this function has returned — so the namespace would have to be kept alive
+    // by whatever is holding the dom, and every one of the ten test harnesses
+    // in this repository would have to know that. This is the one place all ten
+    // of them pass through.
+    #[cfg(test)]
+    let prefix: String = use_hook(crate::testkit::mount_prefix);
+    #[cfg(not(test))]
+    let prefix = String::new();
+    let key = move |name: &str| format!("{prefix}{name}");
+
+    let settings = dioxus_sdk_storage::use_storage::<crate::ask_journal::Backing, Settings>(
+        key("settings"),
+        Settings::default,
+    );
     let code_cache = dioxus_sdk_storage::use_storage::<
         crate::ask_journal::Backing,
         crate::code::CodeCache,
-    >("code_cache".to_owned(), crate::code::CodeCache::default);
+    >(key("code_cache"), crate::code::CodeCache::default);
     // The same fs-backed store, subscribed rather than plain, because the
     // desktop shell can hold two windows on one process and these two are
     // shell state rather than a plane's — see the field's own note.
     let inspector_open = dioxus_sdk_storage::use_synced_storage::<crate::ask_journal::Backing, bool>(
-        "inspector_open".to_owned(),
+        key("inspector_open"),
         || true,
     );
     let lost_asks = dioxus_sdk_storage::use_synced_storage::<
         crate::ask_journal::Backing,
         Vec<crate::ask_journal::AskRecord>,
-    >("lost_asks".to_owned(), Vec::new);
+    >(key("lost_asks"), Vec::new);
     // An entry still `Open` here was written by a process that never got to
     // say what happened to it — the app was killed, so the `Disconnected` arm
     // below never ran. That is the measured case, and this is the only thing
@@ -2350,6 +2393,12 @@ mod tests {
     /// stack trace: it is a provider that publishes nothing, in whichever test
     /// happened to mount first after a gap. Measured before this existed: 4 of
     /// 25 full-suite runs failed, in six different tests, none of them twice.
+    ///
+    /// #220's namespaces make this belt and braces rather than load-bearing: a
+    /// mount now subscribes and writes under a name nothing outside it uses, so
+    /// the sender it creates cannot be found by any later write. Kept because
+    /// the hazard is in a dependency, this is one line, and the bare key it
+    /// holds is still the one `crate::testkit`'s two direct writers use.
     fn keep_the_journals_channel_open() {
         use dioxus_sdk_storage::{LocalStorage, StorageSubscriber as _};
         static ANCHOR: std::sync::OnceLock<
@@ -2378,6 +2427,19 @@ mod tests {
         /// scope of this dom, and dropping it invalidates all of them.
         dom: VirtualDom,
         ctx: AppCtx,
+        /// THE NAMESPACE THIS MOUNT'S PERSISTED KEYS GO UNDER, pinned so that
+        /// the journal seeded below and the mount that reads it back name one
+        /// file.
+        ///
+        /// Every other harness in the repository can leave this alone —
+        /// `use_app_ctx_provider` claims a fresh namespace per mount by itself.
+        /// This one cannot, because it writes a key BEFORE the mount exists and
+        /// has to know what the mount will call it.
+        ///
+        /// Held for the whole test, and declared last so it drops last:
+        /// `mount_over` retries, and every attempt has to land in the same
+        /// namespace as the seed.
+        _scope: crate::testkit::StorageScope,
     }
 
     impl App {
@@ -2396,7 +2458,10 @@ mod tests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             // The provider reaches filesystem-backed storage for the ask
             // journal and panics without a directory; `testkit` owns the one
-            // the whole test binary uses.
+            // the whole test binary uses. The namespace INSIDE that directory
+            // is this mount's own, and it is pinned before the seed below so
+            // that the seed and the mount name one key (#220).
+            let scope = crate::testkit::StorageScope::fresh();
             //
             // Laid down and then CHECKED, because the directory is not this
             // module's to keep: `ask_journal`'s own disk test deletes it when
@@ -2409,7 +2474,7 @@ mod tests {
                 // The journal is the one signal backed by a real file, and the
                 // file outlives the test that wrote it, so every test here says
                 // what it is launching over rather than inheriting it.
-                dioxus_sdk_storage::LocalStorage::set("lost_asks".to_owned(), journal);
+                crate::ask_journal::Backing::set(crate::testkit::storage_key("lost_asks"), journal);
 
                 let mut dom = VirtualDom::new(Probe);
                 dom.rebuild_in_place();
@@ -2422,6 +2487,7 @@ mod tests {
                         _turn: turn,
                         dom,
                         ctx,
+                        _scope: scope,
                     };
                 }
                 drop(dom);

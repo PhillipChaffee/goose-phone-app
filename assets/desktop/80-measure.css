@@ -477,30 +477,21 @@ body.away-from-bottom .pane-main .scroll-bottom {
   max-width: 22rem;
 }
 
-/* ── 9. two empty states are one too many ───────────────────────────────
+/* ── 9. two empty states are one too many — SETTLED BY DELETION (#249) ───
  *
- * Search a list for something that is not in it and the window said two
- * things at once: the list read `No chats match “zzzzqqq”.` and the column
- * beside it read "Nothing open — Pick something from Chats to see it here."
- * There is nothing to pick. A matched pair of shrugs, one of them giving an
- * instruction the app has just finished making impossible.
+ * `.shell:has(.nav-sessions-empty) .pane-main .pane-empty-hint { display:
+ * none }` stood here. Search a list for something not in it and the window
+ * said two things at once: the list read `No chats match “zzzzqqq”.` and the
+ * column beside it read "Nothing open — Pick something from Chats to see it
+ * here." There is nothing to pick. A matched pair of shrugs, one of them
+ * giving an instruction the app had just finished making impossible.
  *
- * The list's sentence is the one that knows WHY, so it is the one that stays,
- * and the detail keeps only its heading. `:has()` because the shell does not
- * know what is in its list column and should not: `p.empty` is what every list
- * in this app renders when it has nothing to show (`views/sessions.rs`,
- * `views/skills.rs`, `views/recipes.rs`, `views/scheduler.rs`,
- * `views/code.rs`), so the question is askable from the markup and needs no
- * new signal, no prop and no plumbing through six views. */
-.shell:has(.nav-sessions-empty) .pane-main .pane-empty-hint {
-  display: none;
-}
-
-/* And the sentence itself moves up under the control that caused it.
+ * The second shrug is gone at the source. `.pane-empty-hint` was
+ * `empty_detail`'s, `empty_detail`'s arm had been unreachable since the
+ * three-column restructure, and #249 deleted the function; the rule that hid
+ * one of its lines cannot fire for markup nothing emits. The list's sentence
+ * — the one that knows WHY — is the only one left, which is the outcome this
+ * rule was reaching for by subtraction.
  *
- * `.empty` is `min-height: 100%` in assets/shared.css so the message centres in
- * the box, which is right on a 874pt phone screen and wrong in a 940pt column:
- * "No chats match" was stranded about 500pt below the search field it was
- * answering. Only in the LIST column — in the detail, "That recipe is no
- * longer open." is the whole screen and centred is where it belongs. */
+ * The number is kept so nothing below renumbers. */
 

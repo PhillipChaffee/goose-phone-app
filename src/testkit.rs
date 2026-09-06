@@ -282,6 +282,144 @@ pub(crate) fn storage_dir() -> std::path::PathBuf {
     .clone()
 }
 
+// ---- one directory, nine hundred mounts, one namespace each ------------
+
+thread_local! {
+    /// The namespace a mount on THIS thread puts in front of every persisted
+    /// key, or `None` when nobody has asked for one.
+    ///
+    /// Thread-local rather than global because mounts run concurrently:
+    /// `cargo test` gives each test its own thread by default, and a global
+    /// would make two mounts fight over one slot. It is claimed per mount
+    /// rather than per thread for the case that has no threads at all —
+    /// `--test-threads=1` runs every test on the main one, and a namespace
+    /// keyed on the thread would put the whole suite back in one file the
+    /// moment anyone reached for that flag to debug an ordering failure.
+    static SCOPE: std::cell::RefCell<Option<String>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+/// A NAMESPACE FOR ONE MOUNT'S PERSISTED KEYS.
+///
+/// #220's second half is the reason this exists. `settings` could not reach the
+/// disk while every mounted test shared one file: one test's saved working
+/// directory became the next test's starting state, four tests went red, and
+/// which four depended on the order the suite ran in. That is the worst
+/// property a merge gate can have, and it is a harness problem rather than a
+/// product one.
+///
+/// WHERE THE NAMESPACE IS APPLIED IS THE WHOLE DESIGN.
+/// `crate::state::use_app_ctx_provider` reads it ONCE, in a `use_hook`, and
+/// builds its four storage keys out of it — so the namespace is baked into the
+/// key the moment the mount exists and travels with it for ever. The obvious
+/// alternative, a wrapper backing that prefixed every key it was handed, reads
+/// the namespace at ACCESS time instead, and `LocalStorage::set` is called from
+/// a task Dioxus polls long after the render that spawned it. That version
+/// needs the guard held for the whole life of the dom, which means every
+/// bespoke test harness in this repository has to know about it — and there are
+/// ten of them, in eight files. Measured on the way through: with the guard on
+/// the two harnesses in this file only, `views::code::pressing` still leaked,
+/// because `a_saved_server_is_dialled_the_first_time_the_tab_is_opened` saves a
+/// `code_server_url` and `src/views/code.rs` mounts through a harness of its
+/// own.
+///
+/// WHAT THIS IS NOT: a way to stop testing persistence. The namespace is a
+/// key-level choice inside a directory that is ALREADY the harness's —
+/// [`storage_dir`] is a temp path where the app uses
+/// `~/Library/Application Support/goose-mobile` — and the code under test is
+/// the same line either way. A test that wants to prove a value SURVIVES pins a
+/// namespace with [`StorageScope::pinned`] and mounts twice inside it, which is
+/// a stronger check than the shared file could ever carry: two mounts on a name
+/// nothing else in the binary writes.
+///
+/// HOW MUCH IT IS HOLDING UP, measured on this tree: force the prefix to `""`,
+/// so every mount shares one set of files the way they all did before, and
+/// **31 of 955** tests in this binary fail. The four the issue named are in
+/// there and so are twenty-seven more; the shared file was never only about
+/// `settings`.
+pub(crate) struct StorageScope(Option<String>);
+
+impl StorageScope {
+    /// Take a namespace by name, so two mounts can deliberately share one.
+    ///
+    /// `""` is a legal name and means the bare key — the namespace a shipping
+    /// build is permanently in.
+    /// `a_write_after_the_last_mount_is_dropped_does_not_panic` pins it,
+    /// because that test is about a subscription a mount created and a write
+    /// made after the mount is gone, and those two have to be talking about the
+    /// same key for the check to be a check.
+    pub(crate) fn pinned(prefix: &str) -> Self {
+        // Before the swap, not after: `storage_dir` anchors a subscription on
+        // its first call, and an anchor taken inside a namespace would hold a
+        // key nothing outside that namespace ever writes.
+        let _ = storage_dir();
+        Self(SCOPE.with(|slot| slot.replace(Some(prefix.to_owned()))))
+    }
+
+    /// A namespace nothing else in the binary uses, pinned.
+    ///
+    /// For a harness that has to write a key BEFORE the mount reads it —
+    /// `crate::state`'s journal harness seeds `lost_asks` on disk and then
+    /// launches over it, and the two have to name the same file. It holds the
+    /// guard and asks [`storage_key`] for the name.
+    pub(crate) fn fresh() -> Self {
+        Self::pinned(&next_prefix())
+    }
+}
+
+impl Drop for StorageScope {
+    fn drop(&mut self) {
+        SCOPE.with(|slot| *slot.borrow_mut() = self.0.take());
+    }
+}
+
+/// Run `f` with every mount inside it under a namespace of your choosing.
+///
+/// The half of [`StorageScope`] that makes persistence testable rather than
+/// only isolatable: two mounts inside one call share a namespace, so the second
+/// reads what the first saved.
+pub(crate) fn in_storage_scope<T>(prefix: &str, f: impl FnOnce() -> T) -> T {
+    let _scope = StorageScope::pinned(prefix);
+    f()
+}
+
+/// The key a write OUTSIDE a mount should use, under whatever namespace is
+/// pinned right now.
+///
+/// Nothing pinned yields the bare key, which is what the two tests that write
+/// through the backing directly want, and what [`anchor_subscriptions`] holds.
+pub(crate) fn storage_key(key: &str) -> String {
+    SCOPE.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .map_or_else(|| key.to_owned(), |prefix| format!("{prefix}{key}"))
+    })
+}
+
+/// THE NAMESPACE A MOUNT IS BORN INTO: the pinned one if there is one, and a
+/// fresh one nothing else uses if there is not.
+///
+/// Called once per mount, from `use_app_ctx_provider`'s `use_hook`, which is
+/// the single place in the app that every harness goes through. The
+/// pinned-wins rule is what lets [`in_storage_scope`] wrap a mount rather than
+/// be overridden by it.
+pub(crate) fn mount_prefix() -> String {
+    let _ = storage_dir();
+    SCOPE
+        .with(|slot| slot.borrow().clone())
+        .unwrap_or_else(next_prefix)
+}
+
+/// A namespace no other mount in this process has had.
+fn next_prefix() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    format!(
+        "mount{}-",
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}
+
 /// Hold one receiver open, for the life of the test binary, on every storage
 /// key the app subscribes to.
 ///
@@ -306,11 +444,18 @@ pub(crate) fn storage_dir() -> std::path::PathBuf {
 /// `lost_asks` is the whole list, and the rule that decides it is
 /// `use_synced_storage` — the only API that subscribes — rather than which
 /// store a key is on. `inspector_open` goes through it too and would belong
-/// here if anything wrote it after its dom was dropped. `code_cache` is
-/// fs-backed since #220 but reaches it through plain `use_storage`, so
-/// `LocalStorage::set` finds no subscription for that key and sends on no
-/// channel (`client_storage/fs.rs:64-73`); `settings` is still
-/// `use_persistent`, an in-memory map with no channel at all.
+/// here if anything wrote it after its dom was dropped. `code_cache` and
+/// `settings` are fs-backed since #220 but reach the store through plain
+/// `use_storage`, so `LocalStorage::set` finds no subscription for either key
+/// and sends on no channel (`client_storage/fs.rs:64-73`).
+///
+/// IT ANCHORS THE BARE KEY, and [`StorageScope`] is why that is still the right
+/// one. This runs inside `storage_dir`'s `OnceLock`, before any namespace is
+/// pinned, so the name it holds is `lost_asks` and not a mount's namespaced
+/// copy. That is the key the two tests which write through the backing DIRECTLY
+/// use — the case this exists for — while a mount's own writes and its own
+/// subscription now share a namespace nothing outside that mount touches, so
+/// the hazard cannot arise there at all.
 fn anchor_subscriptions() {
     use dioxus_sdk_storage::StorageSubscriber;
     // Leaked on purpose: the receiver has to outlive every test in the binary,
@@ -325,7 +470,7 @@ fn anchor_subscriptions() {
 
 #[cfg(test)]
 mod tests {
-    use super::{render, render_seeded};
+    use super::{render, render_seeded, render_settled, with_ctx};
 
     use dioxus::prelude::*;
 
@@ -408,20 +553,171 @@ mod tests {
     /// stack. Load- and order-dependent, so a stress run is a poor way to
     /// prove it fixed; this reproduces the shape directly.
     ///
+    /// PINNED TO THE BARE NAMESPACE, and that is what keeps it a check.
+    /// [`mount_prefix`] hands every mount a namespace of its own, so a mount's
+    /// subscription and a later bare `Backing::set` would otherwise be talking
+    /// about two different keys and this would pass with the anchor deleted.
+    /// `""` is the namespace a shipping build is permanently in, so pinning it
+    /// puts the mount and the write back on one key — which is the shape the CI
+    /// failure had.
+    ///
     /// Shown to fail: comment out the `anchor_subscriptions()` call in
-    /// `storage_dir` and this panics at `fs.rs:71`.
+    /// `storage_dir` and this panics at `fs.rs:71`. Shown to STOP failing —
+    /// which is why the pin is here — by taking `in_storage_scope("")` away as
+    /// well: the mount then subscribes `mountN-lost_asks`, the write below
+    /// names `lost_asks`, and there is no sender for it to fail on.
     #[test]
     fn a_write_after_the_last_mount_is_dropped_does_not_panic() {
         use dioxus_sdk_storage::StorageBacking;
 
-        // Mount and drop, so nothing this test holds is keeping a receiver
-        // alive — which is the state every later test runs in.
-        drop(render(|| rsx! { crate::views::settings::SettingsView {} }));
+        super::in_storage_scope("", || {
+            // Mount and drop, so nothing this test holds is keeping a receiver
+            // alive — which is the state every later test runs in.
+            drop(render(|| rsx! { crate::views::settings::SettingsView {} }));
 
-        // The write the app makes whenever a permission ask is journalled.
-        <crate::ask_journal::Backing as StorageBacking>::set(
-            "lost_asks".to_owned(),
-            &Vec::<crate::ask_journal::AskRecord>::new(),
+            // The write the app makes whenever a permission ask is journalled.
+            <crate::ask_journal::Backing as StorageBacking>::set(
+                "lost_asks".to_owned(),
+                &Vec::<crate::ask_journal::AskRecord>::new(),
+            );
+        });
+    }
+
+    /// EACH MOUNT GETS ITS OWN NAMESPACE, AND A PINNED ONE IS SHARED — the two
+    /// halves of [`StorageScope`], and the reason `settings` could reach the
+    /// disk at all (#220).
+    ///
+    /// The first half is isolation: without it an fs-backed `settings` makes
+    /// one test's saved working directory the next test's starting state, and
+    /// the four tests that went red the first time this was tried are every one
+    /// of them about an EMPTY working directory. The second half is the answer
+    /// to the obvious objection — that isolating every mount would leave
+    /// persistence exercised by nothing. Two mounts inside one pinned namespace
+    /// are a stronger check than the shared file ever was, because the name is
+    /// one nothing else in the binary writes.
+    ///
+    /// Asserted through the app's own signal rather than by reading the file,
+    /// so what is checked is that a LAUNCH sees the save: `settings` is read
+    /// straight into `AppCtx` by `use_app_ctx_provider`, and that is the only
+    /// path that matters.
+    ///
+    /// The saving half is [`render_settled`] and not [`with_ctx`], and that is
+    /// not a preference. `save_to_storage_on_change` is a SPAWNED task, so a
+    /// harness that renders once and reads the value straight back has set a
+    /// signal nothing has written yet; the settle loop is what polls it.
+    /// Measured — with `with_ctx` on both halves this reports `""`, which reads
+    /// exactly like the bug it is testing for.
+    ///
+    /// Shown to fail: put `settings` back on `use_persistent` and the second
+    /// assertion reports `""` against the saved path.
+    #[test]
+    fn a_saved_setting_survives_the_mount_that_saved_it() {
+        use crate::state::Settings;
+
+        const SAVED: &str = "/srv/kept-across-a-launch";
+
+        fn nothing() -> Element {
+            rsx! {}
+        }
+
+        // Isolated by default: a fresh mount is on the launch state whatever
+        // any other test in the binary has saved.
+        assert_eq!(
+            with_ctx(|_| {}, |ctx| ctx.settings.peek().working_dir.clone()),
+            String::new(),
+            "an unpinned mount inherited a working directory from somewhere, so \
+             mounts are not isolated and every test's result depends on the \
+             order the suite happened to run in"
+        );
+
+        super::in_storage_scope("survives-", || {
+            let _ = render_settled(
+                |ctx| {
+                    let mut settings = ctx.settings;
+                    settings.set(Settings {
+                        working_dir: SAVED.to_owned(),
+                        ..Settings::default()
+                    });
+                },
+                nothing,
+            );
+            assert_eq!(
+                with_ctx(|_| {}, |ctx| ctx.settings.peek().working_dir.clone()),
+                SAVED,
+                "a second mount in the same namespace did not see what the first \
+                 one saved, so `settings` is not reaching the disk — which is \
+                 the whole of #220"
+            );
+        });
+    }
+
+    /// THE SAVED FILE CANNOT HOLD A CREDENTIAL, whatever is typed into the
+    /// form.
+    ///
+    /// This is the condition #220's second half had to meet before `settings`
+    /// was allowed near the disk at all. `secret_key` and `code_password` are
+    /// `#[serde(skip_serializing)]`, and the check is a full round trip through
+    /// the store rather than a reading of the attribute: what the file holds is
+    /// exactly what the serializer emitted, so a field the reader cannot get
+    /// back is a field the writer never wrote.
+    ///
+    /// NOT A BYTE SCAN OF THE FILE, deliberately, and this is the trap worth
+    /// naming. `dioxus-sdk-storage` compresses with zlib and hex-encodes
+    /// (`serde_to_string`), so a search for `"s3cr3t-goose"` in those bytes
+    /// passes whether or not the field is in there — a check that cannot fail,
+    /// which is the shape `crate::selfscan` exists because of. The decode is the
+    /// only reading that can tell the two apart.
+    ///
+    /// Under a probe key of its own, and no mount: the question is about the
+    /// TYPE's serialization, and a mount would drag in a namespace and four
+    /// other keys that have nothing to do with it.
+    #[test]
+    fn the_saved_settings_file_holds_no_credential() {
+        use crate::state::Settings;
+        use dioxus_sdk_storage::StorageBacking as _;
+
+        let dir = super::storage_dir();
+        crate::ask_journal::Backing::set(
+            "settings_credential_probe".to_owned(),
+            &Settings {
+                server_url: "http://brain:3285".to_owned(),
+                secret_key: "s3cr3t-goose".to_owned(),
+                fingerprint: "ab:cd".to_owned(),
+                working_dir: "/srv/work".to_owned(),
+                code_server_url: "http://brain:4399".to_owned(),
+                code_password: "s3cr3t-code".to_owned(),
+            },
+        );
+
+        let path = dir.join("settings_credential_probe");
+        assert!(
+            path.is_file(),
+            "no settings file was written at all, so this check is about \
+             nothing: {}",
+            path.display()
+        );
+
+        let read: Settings =
+            crate::ask_journal::Backing::get(&"settings_credential_probe".to_owned())
+                .unwrap_or_else(Settings::default);
+        assert_eq!(
+            (read.server_url.as_str(), read.working_dir.as_str()),
+            ("http://brain:3285", "/srv/work"),
+            "the four non-secret fields did not survive the round trip, so \
+             skipping the other two cost the ones that were meant to persist"
+        );
+        // The default and not `""`: `serde(default)` fills a missing field from
+        // `Settings::default()`, which is where `dev_seed!` lives — so a
+        // development build gets its two seeds back on every load and does not
+        // pay for this with a retype per launch. In a release build every seed
+        // is the empty string and the two readings coincide.
+        assert_eq!(
+            (read.secret_key, read.code_password),
+            (
+                Settings::default().secret_key,
+                Settings::default().code_password
+            ),
+            "a secret came back off the disk, so it went to the disk"
         );
     }
 

@@ -637,6 +637,76 @@ fn render_row(
 mod tests {
     use super::*;
 
+    /// THE TWO CONTEXT-LENGTH NOTES ARE ONE PAIR, and this file is where the
+    /// pair lives because this file is the grammar both sheets are built on.
+    ///
+    /// #205 settled that the row is a fact on both halves; #257 is what that
+    /// left behind. Both halves printed *"Fixed by the model. Nothing a
+    /// message carries changes it."* — a true sentence twice, saying only
+    /// THAT the row is not a control, where design rule 11 asks a fact row to
+    /// say WHY it is not adjustable here. And the two whys are not the same
+    /// fact: goose has no route at all (`session/set_config_option` routes
+    /// four ids and rejects the rest), while `OpenCode` has one and declines
+    /// it, because `PATCH /config` restarts the chat's server and takes the
+    /// event stream with it.
+    ///
+    /// So the notes must lead identically — `docs/design.md`: "both sheets
+    /// are Provider / Model / Thinking effort / Context length in that order,
+    /// with the notes in one voice" — and must then differ, because a shared
+    /// second clause would be one of the two backends' reason printed over
+    /// the other's. Neither half can state that rule on its own, which is why
+    /// #205 deferred it: the two files had different owners and a one-sided
+    /// edit is worse than none.
+    ///
+    /// Shown to fail both ways on this tree: give either note the other's
+    /// second clause and the "differ" assertion names it; change either lead
+    /// and the "one voice" assertion does.
+    #[test]
+    fn both_context_length_notes_lead_alike_and_then_say_their_own_why() {
+        use crate::views::chat::GOOSE_CONTEXT_NOTE;
+        use crate::views::code::CODE_CONTEXT_NOTE;
+
+        /// The shared lead. Not a constant either file imports, on purpose:
+        /// a shared literal would make the two notes agree by construction
+        /// and this test would have nothing left to check.
+        const LEAD: &str = "Fixed by the model. ";
+
+        for (note, half) in [(GOOSE_CONTEXT_NOTE, "goose"), (CODE_CONTEXT_NOTE, "code")] {
+            assert!(
+                note.starts_with(LEAD),
+                "the {half} sheet's Context length note opens {note:?}, so the \
+                 two sheets no longer speak in one voice — docs/design.md \
+                 requires the pair to lead the same way"
+            );
+            let why = note.strip_prefix(LEAD).unwrap_or_default();
+            assert!(
+                why.len() > 20,
+                "the {half} sheet's Context length note is the lead and \
+                 nothing else, which tells the reader THAT the row is not a \
+                 control and never why (design rule 11)"
+            );
+        }
+
+        assert_ne!(
+            GOOSE_CONTEXT_NOTE, CODE_CONTEXT_NOTE,
+            "both halves give the same reason, and the reasons are different \
+             facts: goose has no route for this at all, OpenCode has one and \
+             declines it. One sentence over both is the state #257 was filed \
+             about."
+        );
+        assert!(
+            GOOSE_CONTEXT_NOTE.contains("upstream"),
+            "the goose note no longer points at the only place this can \
+             change — a fifth id on session/set_config_option: \
+             {GOOSE_CONTEXT_NOTE:?}"
+        );
+        assert!(
+            CODE_CONTEXT_NOTE.contains("restarts"),
+            "the code note no longer names the cost that makes PATCH /config \
+             not worth taking: {CODE_CONTEXT_NOTE:?}"
+        );
+    }
+
     #[test]
     fn one_value_is_a_fact_not_a_control() {
         let row = SettingRow::select(

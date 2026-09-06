@@ -338,6 +338,22 @@ const ROW_MODEL: &str = "model";
 
 const ROW_EFFORT: &str = "effort";
 
+/// This half of the pair #257 rewrote, named so the other half can be held
+/// against it: `views::session_settings`'s
+/// `both_context_length_notes_lead_alike_and_then_say_their_own_why` reads
+/// this constant and [`crate::views::chat::GOOSE_CONTEXT_NOTE`] together,
+/// which is the only way a rule about TWO files can fail in one place.
+///
+/// The lead is shared because `docs/design.md` requires the two sheets to
+/// speak in one voice; the clause after it is this backend's own fact, and on
+/// this side a route DOES exist and is declined — `PATCH /config` rewrites the
+/// window and restarts the chat's server, taking the event stream with it. So
+/// the sentence names a cost the app is refusing to spend, where goose's names
+/// a route that is not there.
+pub(crate) const CODE_CONTEXT_NOTE: &str =
+    "Fixed by the model. The one route that changes it restarts this chat's \
+     server, so this app reports it instead.";
+
 /// The chip's face: the model the next message will run on, by its catalogue
 /// name once that has loaded and by its bare id before then.
 fn code_chip_label(reference: Option<&str>, models: &[ModelInfo]) -> String {
@@ -370,6 +386,15 @@ fn code_chip_label(reference: Option<&str>, models: &[ModelInfo]) -> String {
 /// anything: it is catalogue metadata, and the one route that rewrites it
 /// (`PATCH /config`) restarts the chat's server, killing the event stream the
 /// app is reading. It is reported, not offered.
+///
+/// **And the note now says which of those two it is (#257).** Both sheets used
+/// to print "Fixed by the model. Nothing a message carries changes it.", which
+/// is true on each half and tells the reader only *that* the row is not a
+/// control; design rule 11 asks a fact row for the *why*. The whys differ —
+/// this half has a route and declines it for the reason in the paragraph
+/// above, `views/chat.rs` has none — so the pair leads identically and differs
+/// only in the clause that names the reason. `docs/design.md` requires the two
+/// sheets' notes to be in one voice: change one and you owe the other.
 ///
 /// The goose sheet opens on a Provider row and this one does not, which is
 /// the one place the two orders differ. There is no provider to choose here:
@@ -450,7 +475,7 @@ fn code_setting_rows(ctx: &AppCtx, models: &[ModelInfo], loading: bool) -> Vec<S
             "context_length",
             "Context length",
             format!("{} tokens", format_tokens(limit)),
-            "Fixed by the model. Nothing a message carries changes it.",
+            CODE_CONTEXT_NOTE,
         ),
         None => SettingRow::fact("context_length", "Context length", "—", unknown()),
     });
@@ -4030,8 +4055,10 @@ mod tests {
              offered: {html:.400}"
         );
         assert!(
-            html.contains("Fixed by the model. Nothing a message carries changes it."),
-            "and the row says why it is not a control: {html:.400}"
+            html.contains(super::CODE_CONTEXT_NOTE),
+            "and the row says why it is not a control ON THIS HALF — a note \
+             that only said it was not one would be design rule 11 unmet \
+             (#257): {html:.400}"
         );
         assert!(
             !html.contains("not in the chat server's catalogue"),

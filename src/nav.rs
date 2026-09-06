@@ -964,6 +964,55 @@ mod tests {
         }
     }
 
+    /// AND THE ROW THAT LISTS NOTHING MUST STILL DRAW SOMETHING — from every
+    /// state the app can be in, not just the one it launches on.
+    ///
+    /// This is the check that made the desktop's fourth arm safe to delete
+    /// (#249). `src/shell/desktop/mod.rs` used to end its content column with
+    /// `else { empty_detail(dest) }`, a "Nothing open" card for a destination
+    /// with no root, no detail and no home. Nothing could reach it, its three
+    /// class names were three of the four entries on that file's `UNCAPTURED`
+    /// ledger, and no capture could ever photograph it — so the card went and
+    /// the arm went with it. What is left there now renders NOTHING for that
+    /// combination, which is exactly what `Destination::screen` has always done
+    /// on the phone (`.unwrap_or_else(|| rsx! {})`).
+    ///
+    /// A blank column is only harmless while the combination stays impossible,
+    /// and the sibling above checks half of that: Settings is the one
+    /// `root: None` row. This checks the other half — that its `detail` really
+    /// is unconditional. Read off the source that would be `|_| Some(..)`,
+    /// which is a claim about one line; run instead, from all seven navigation
+    /// states in turn, because "unconditional" is a claim about every state and
+    /// a future row could reach for `ctx` on its way to answering.
+    ///
+    /// Shown to fail: give Settings' `detail` a `(ctx.screen)() ==
+    /// Screen::Settings` guard — a plausible-looking tidy — and this reports
+    /// `settings=1/7` while every other test in the file stays green.
+    #[test]
+    fn a_destination_with_no_root_has_a_detail_in_every_state() {
+        assert_eq!(
+            ask(|ctx| per_destination(|dest| {
+                if dest.root.is_some() {
+                    return format!("{}=lists", dest.id);
+                }
+                let held = DESTINATIONS
+                    .iter()
+                    .filter(|from| {
+                        (from.go)(ctx);
+                        push_detail(ctx, from.id);
+                        (dest.detail)(ctx).is_some()
+                    })
+                    .count();
+                format!("{}={held}/{}", dest.id, DESTINATIONS.len())
+            })),
+            "chats=lists | code=lists | recipes=lists | skills=lists | \
+             scheduler=lists | extensions=lists | settings=7/7",
+            "a destination with no root screen answered no detail either, so \
+             the desktop's content column has nothing to put in it — and since \
+             #249 that is a blank pane rather than a sentence"
+        );
+    }
+
     /// Ids, sorted and deduplicated — the shape every set comparison below is
     /// written in, so a failure prints two readable lists rather than two
     /// `Vec<&Destination>` debug dumps.
