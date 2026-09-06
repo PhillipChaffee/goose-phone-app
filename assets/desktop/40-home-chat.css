@@ -752,11 +752,36 @@
 
 /* The count beside a section heading. Not uppercase and not tracked — the
  * heading is the label and this is its value, so it takes the same treatment
- * every other number in this sheet takes. */
+ * every other number in this sheet takes.
+ *
+ * THE FAINT RUNG, and this is the third of #118's eight sites — the first two
+ * are `.insp-sec-title` and `.insp-sec-meta` in `90-inspector.css`, which
+ * carry the prohibition that travels with the token. This one qualifies on
+ * that list's own test: it is a number beside the label that names it, so the
+ * label is what a reader reads and this recedes behind it. `3 threads` and
+ * `recipes & skills` at the same weight as `Recent` and `Ways to start` is
+ * the symptom #118 was filed for.
+ *
+ * MEASURED on `desktop-chats` at 1440x860, against the canvas the home column
+ * sits on:
+ *
+ *   dark   rgb(30,33,38)     #98a1ac 6.17:1  →  #828b96 4.68:1
+ *   light  rgb(255,255,255)  #6f6f6f 5.02:1  →  unchanged
+ *
+ * Light is unchanged BY DESIGN and not by omission — `00-tokens.css` resolves
+ * `--ink-faint` to `var(--text-secondary)` there, because #828b96 is 3.45:1 on
+ * white and a light window needs a darker faint rung nothing in the mockups
+ * defines. 4.68 clears the 4.5 a 10.5px string owes; `docs/audit.js` relaxes to
+ * 3:1 only at 18.66px, so this gets no large-text allowance and needs none.
+ *
+ * `.recent-fact` above stays on `--text-secondary` and that is the same
+ * decision, not an inconsistency: #118's spend list is exhaustive and does not
+ * name it, because a fact about a thread — `4 turns`, `2h` — is a string a
+ * reader is reading, while the count beside a heading is one they are
+ * skimming past. */
 .home-section-meta {
   flex: 0 0 auto;
-  /* `.recent-fact`'s colour and its reason. */
-  color: var(--text-secondary);
+  color: var(--ink-faint);
   font-family: var(--font-mono);
   font-weight: 400;
   letter-spacing: 0;
