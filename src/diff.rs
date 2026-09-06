@@ -205,6 +205,151 @@ fn start_of(range: &str) -> Option<u32> {
     range.split(',').next()?.parse().ok()
 }
 
+/// The most cells the pairing walk below will allocate, as `old x new` lines.
+///
+/// The table is `(m + 1) * (n + 1)` `u32`s, so 250k cells is a megabyte and
+/// bounds both the memory and the time — the walk is O(m x n) and a transcript
+/// renders on the main thread. Past it there is nothing to pair: an edit that
+/// replaces 500 lines with 500 different ones IS a rewrite, and the fallback
+/// says exactly that, in the order a patch would.
+const PAIR_BUDGET: usize = 250_000;
+
+/// The two halves of a file edit, as the numbered rows [`parse`] produces from
+/// a patch.
+///
+/// ACP's `{"type":"diff"}` carries `oldText` and `newText` — whole texts, not
+/// hunks — so the client is where the pairing has to happen. `OpenCode` hands
+/// back a patch and [`parse`] reads it; goose hands back both files and this
+/// reads them. One [`DiffLine`] vocabulary either way, which is what lets
+/// [`gaps`] and [`blocks`] collapse a transcript's edit card with the same code
+/// that collapses the Diff screen.
+///
+/// PREFIX AND SUFFIX FIRST, then a pairing walk over what is left. Both halves
+/// of an ACP diff are usually the WHOLE file — a three-line edit to a
+/// 1200-line file arrives as two 1200-line strings — and trimming the matching
+/// ends takes the O(m x n) walk from 1.4M cells to nine. It is also what keeps
+/// the budget above from biting on anything but a genuine rewrite.
+///
+/// `str::lines` cannot tell `"a\n"` from `"a"`, so `no_newline` is `false` on
+/// every row this produces. That is a recorded drop rather than an oversight:
+/// the flag annotates one side's last line, and the wire gives no way to say
+/// which side lost its newline when both texts are present. `parse` gets it
+/// because a patch states it as a line of its own.
+pub(crate) fn between(old: &str, new: &str) -> Vec<DiffLine> {
+    let old: Vec<&str> = old.lines().collect();
+    let new: Vec<&str> = new.lines().collect();
+
+    let head = old
+        .iter()
+        .zip(new.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    // Bounded by what the head already took, so the two never overlap on a
+    // file that is one repeated line.
+    let tail = old[head..]
+        .iter()
+        .rev()
+        .zip(new[head..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    let mut out = Vec::new();
+    let (mut old_no, mut new_no) = (0_u32, 0_u32);
+    for line in &old[..head] {
+        push(&mut out, LineKind::Context, line, &mut old_no, &mut new_no);
+    }
+
+    let mid_old = &old[head..old.len() - tail];
+    let mid_new = &new[head..new.len() - tail];
+    if mid_old.len().saturating_mul(mid_new.len()) <= PAIR_BUDGET {
+        pair(&mut out, mid_old, mid_new, &mut old_no, &mut new_no);
+    } else {
+        for line in mid_old {
+            push(&mut out, LineKind::Del, line, &mut old_no, &mut new_no);
+        }
+        for line in mid_new {
+            push(&mut out, LineKind::Add, line, &mut old_no, &mut new_no);
+        }
+    }
+
+    for line in &old[old.len() - tail..] {
+        push(&mut out, LineKind::Context, line, &mut old_no, &mut new_no);
+    }
+    out
+}
+
+/// One row, numbering the side or sides it belongs to.
+///
+/// The same arithmetic [`parse`] does inline. It is a function here because
+/// three callers in [`between`] need it and a closure would have to hold two
+/// `&mut` counters and the output vector at once.
+fn push(out: &mut Vec<DiffLine>, kind: LineKind, text: &str, old_no: &mut u32, new_no: &mut u32) {
+    let (old_at, new_at) = match kind {
+        LineKind::Add => {
+            *new_no += 1;
+            (0, *new_no)
+        }
+        LineKind::Del => {
+            *old_no += 1;
+            (*old_no, 0)
+        }
+        LineKind::Context => {
+            *old_no += 1;
+            *new_no += 1;
+            (*old_no, *new_no)
+        }
+    };
+    out.push(DiffLine {
+        kind,
+        old_no: old_at,
+        new_no: new_at,
+        text: text.to_owned(),
+        no_newline: false,
+    });
+}
+
+/// Interleave two runs on their longest common subsequence.
+///
+/// The textbook table, filled from the end so the walk back out is forwards
+/// and the rows come out in file order. `>=` at the tie rather than `>` is
+/// what puts a deletion before the addition that replaces it, which is the
+/// order every patch in the world is read in.
+fn pair(out: &mut Vec<DiffLine>, old: &[&str], new: &[&str], old_no: &mut u32, new_no: &mut u32) {
+    let (m, n) = (old.len(), new.len());
+    let stride = n + 1;
+    let mut table = vec![0_u32; (m + 1) * stride];
+    for i in (0..m).rev() {
+        for j in (0..n).rev() {
+            table[i * stride + j] = if old[i] == new[j] {
+                table[(i + 1) * stride + j + 1] + 1
+            } else {
+                table[(i + 1) * stride + j].max(table[i * stride + j + 1])
+            };
+        }
+    }
+
+    let (mut i, mut j) = (0, 0);
+    while i < m && j < n {
+        if old[i] == new[j] {
+            push(out, LineKind::Context, old[i], old_no, new_no);
+            i += 1;
+            j += 1;
+        } else if table[(i + 1) * stride + j] >= table[i * stride + j + 1] {
+            push(out, LineKind::Del, old[i], old_no, new_no);
+            i += 1;
+        } else {
+            push(out, LineKind::Add, new[j], old_no, new_no);
+            j += 1;
+        }
+    }
+    for line in &old[i..] {
+        push(out, LineKind::Del, line, old_no, new_no);
+    }
+    for line in &new[j..] {
+        push(out, LineKind::Add, line, old_no, new_no);
+    }
+}
+
 /// The runs of unchanged lines worth collapsing.
 ///
 /// A run of `2 * CONTEXT` or fewer is left alone: the band that would hide it
@@ -339,7 +484,8 @@ pub(crate) fn split_path(path: &str) -> (&str, &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        blocks, fingerprint, gaps, parse, split_path, Block, DiffLine, Gap, LineKind, RENDER_CAP,
+        between, blocks, fingerprint, gaps, parse, split_path, Block, DiffLine, Gap, LineKind,
+        PAIR_BUDGET, RENDER_CAP,
     };
     use std::collections::HashMap;
 
@@ -367,6 +513,22 @@ mod tests {
         +new line one\n\
         +new line two\n\
         +new line three\n";
+
+    /// `n` numbered lines, as a file.
+    ///
+    /// Built with `push_str` rather than `map(format!).collect()` because
+    /// clippy's `format_collect` is on: one `format!` allocation per line to
+    /// build one string is the thing that lint exists to catch.
+    fn numbered(word: &str, n: usize) -> String {
+        let mut out = String::new();
+        for i in 0..n {
+            out.push_str(word);
+            out.push(' ');
+            out.push_str(&i.to_string());
+            out.push('\n');
+        }
+        out
+    }
 
     fn kinds(lines: &[DiffLine]) -> Vec<LineKind> {
         lines.iter().map(|l| l.kind).collect()
@@ -597,5 +759,144 @@ mod tests {
     fn the_filename_is_split_off_the_directory() {
         assert_eq!(split_path("src/views/code.rs"), ("src/views/", "code.rs"));
         assert_eq!(split_path("README.md"), ("", "README.md"));
+    }
+
+    /// `crates/mock-goose-server`'s own edit, which is the shape a real goose
+    /// puts on the wire for `developer__text_editor`: one line changed, one
+    /// added, unchanged lines either side. The rows have to come out in file
+    /// order with the deletion ahead of the addition that replaces it, because
+    /// that is the order every patch is read in and the order `parse` produces
+    /// from one.
+    #[test]
+    fn both_halves_of_an_edit_become_rows_in_file_order() {
+        let lines = between(
+            "fn tick() {\n    sleep(1);\n}\n",
+            "fn tick() {\n    sleep(2);\n    log(\"tick\");\n}\n",
+        );
+        assert_eq!(
+            kinds(&lines),
+            vec![
+                LineKind::Context,
+                LineKind::Del,
+                LineKind::Add,
+                LineKind::Add,
+                LineKind::Context,
+            ],
+            "the edit did not come out as one deletion, two additions and the \
+             two lines that did not move"
+        );
+        assert_eq!(lines[1].text, "    sleep(1);");
+        assert_eq!(lines[2].text, "    sleep(2);");
+        // Numbered like a patch: the removed line keeps its old number and has
+        // no new one, and the closing brace moved down a line.
+        assert_eq!((lines[1].old_no, lines[1].new_no), (2, 0));
+        assert_eq!((lines[2].old_no, lines[2].new_no), (0, 2));
+        assert_eq!((lines[4].old_no, lines[4].new_no), (3, 4));
+    }
+
+    /// The two claims a title never makes, and the reason `FileDiff` keeps its
+    /// fields optional: a file that did not exist is every line added, a file
+    /// that does not exist any more is every line removed.
+    #[test]
+    fn an_absent_half_is_a_whole_file_added_or_removed() {
+        assert_eq!(kinds(&between("", "fn main() {}\n")), vec![LineKind::Add]);
+        assert_eq!(
+            kinds(&between("gone\naway\n", "")),
+            vec![LineKind::Del, LineKind::Del]
+        );
+        assert!(
+            between("", "").is_empty(),
+            "two empty halves are not an edit and must not draw a slab"
+        );
+        assert_eq!(
+            kinds(&between("same\n", "same\n")),
+            vec![LineKind::Context],
+            "a diff that changed nothing is still the file, all context"
+        );
+    }
+
+    /// The prefix and suffix trim is what makes this affordable at all — ACP
+    /// sends whole files, so a one-line edit to a long file would otherwise be
+    /// a table the size of the file squared. It is also load-bearing for
+    /// correctness at the edges: a file that is one repeated line must not have
+    /// the same lines counted into both ends.
+    #[test]
+    fn the_matching_ends_are_trimmed_before_anything_is_paired() {
+        let old = "x\nx\nx\nx\n";
+        let new = "x\nx\n";
+        assert_eq!(
+            kinds(&between(old, new)),
+            vec![
+                LineKind::Context,
+                LineKind::Context,
+                LineKind::Del,
+                LineKind::Del
+            ],
+            "the head and the tail overlapped and lines were emitted twice"
+        );
+        // A change in the middle of a long run keeps its context on both sides
+        // and pairs only what is between them.
+        let long = numbered("line", 40);
+        let edited = long.replace("line 20\n", "LINE 20\n");
+        let lines = between(&long, &edited);
+        assert_eq!(
+            lines.len(),
+            41,
+            "a one-line edit produced {} rows",
+            lines.len()
+        );
+        assert_eq!(
+            lines.iter().filter(|l| l.changed()).count(),
+            2,
+            "one line changed, so exactly one deletion and one addition"
+        );
+    }
+
+    /// Past the budget there is nothing to pair, and saying so in patch order
+    /// is the honest fallback: an edit that replaces N lines with N different
+    /// ones IS a rewrite. The guard exists because the table is O(m x n) and a
+    /// transcript renders on the main thread.
+    #[test]
+    fn a_rewrite_too_big_to_pair_comes_out_as_a_rewrite() {
+        // 501 x 501 = 251_001 cells, one over the budget, with no shared line
+        // at either end for the trim to take.
+        let side = 501;
+        assert!(side * side > PAIR_BUDGET);
+        let old = numbered("old", side);
+        let new = numbered("new", side);
+        let lines = between(&old, &new);
+        assert_eq!(lines.len(), side * 2);
+        assert!(
+            lines[..side].iter().all(|l| l.kind == LineKind::Del)
+                && lines[side..].iter().all(|l| l.kind == LineKind::Add),
+            "the fallback interleaved instead of writing every removal then \
+             every addition"
+        );
+    }
+
+    /// The Diff screen's collapse works on these rows too, which is the whole
+    /// point of producing `DiffLine` rather than a second row type: one edit
+    /// card in a transcript gets the same bands the review screen gets.
+    #[test]
+    fn the_screens_own_collapse_reads_these_rows() {
+        let long = numbered("line", 60);
+        let edited = long.replace("line 30\n", "LINE 30\n");
+        let lines = between(&long, &edited);
+        let gaps = gaps(&lines);
+        assert_eq!(
+            gaps.len(),
+            2,
+            "one change in the middle of a long file has a run to collapse on \
+             each side of it"
+        );
+        let rendered = blocks(&lines, &gaps, &HashMap::new());
+        assert!(
+            rendered
+                .blocks
+                .iter()
+                .any(|b| matches!(b, Block::Gap { .. })),
+            "the collapse produced no band: {:?}",
+            rendered.blocks
+        );
     }
 }

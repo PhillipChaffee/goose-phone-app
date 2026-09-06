@@ -335,7 +335,53 @@ button.home-tile[aria-pressed='true'] .home-tile-label {
     box-shadow: inset 0 0 0 2px var(--accent);
 }
 
+/* AND WAITING IS A DIAMOND, WHICH IS THE THIRD SILHOUETTE ON THIS BOARD.
+ *
+ * The disclosure further down used to end "the CSS remedy is available and is
+ * declined here". It is taken now, on a measurement that disclosure never
+ * made: every number it quotes puts a mark against ITS OWN CARD — light 5.87 /
+ * 5.13 / 4.64, dark 6.22 / 7.92 / 5.95 — and the question "is colour the only
+ * channel" is a question about the two marks against EACH OTHER.
+ *
+ * Measured on `desktop-code-list` against this sheet list, transitions killed,
+ * the `waiting` fill against the `asleep` fill:
+ *
+ *   light   rgb(138,97,0) vs rgb(111,111,111)    1.10:1
+ *   dark    rgb(240,180,41) vs rgb(152,161,172)  1.40:1
+ *
+ * 1.10:1 is two marks that are the same grey. Desaturate the board — a
+ * greyscale display, a printout, or the reader — and below a 476px board,
+ * where `.tree-state` is gone, "waiting on you" and "asleep" become one
+ * object. That is WCAG 1.4.1, and it is a floor rather than a preference,
+ * which is what the declined version was missing: the choice of shape is a
+ * design judgement, but leaving hue as the only channel is not a judgement
+ * this repo gets to make. The same paragraph's other reason — that no gate can
+ * check a shape — is true and is why the numbers above are in this comment.
+ *
+ * UNCONDITIONAL, AT EVERY WIDTH, and that is the answer to the objection the
+ * disclosure raised against taking it. Scoped to the narrow container query
+ * the mark would mean one thing under 476px and another over it, and the
+ * reference frame would change as a side effect of a width fix. One shape
+ * everywhere means the word beside it — where the board is wide enough to have
+ * one — agrees with it rather than competing.
+ *
+ * EQUAL INK, DIFFERENT SILHOUETTE, and both halves are arithmetic. A 7px
+ * square is 49px² against the 8px disc's πr² = 50.27px², so the diamond does
+ * not read louder or quieter than the mark it replaces; rotated 45° it shares
+ * no edge with a circle, which a rounded square at this size does not manage.
+ * Its bounding box is 7√2 = 9.90px, and the track it is centred in is the
+ * grid's first column at `0.75rem` = 12px — so it clears by 1.05px each side
+ * and the transform costs no layout at all, since a transform never does.
+ * Measured after: 9.90x9.90 at x=31.05 in the same 480x560 cell the marks were
+ * measured in, against the disc's 8.00x8.00 at x=32.00.
+ *
+ * `--radius-full` is overridden rather than inherited: `border-radius: 1px`
+ * keeps the corners a diamond needs to be one. */
 .tree.waiting .tree-mark {
+  width: 7px;
+  height: 7px;
+  border-radius: 1px;
+  transform: rotate(45deg);
   background: var(--text-warning);
 }
 
@@ -725,12 +771,19 @@ button.home-tile[aria-pressed='true'] .home-tile-label {
  *                   more, which is the shape every other ledger in this repo is
  *                   held to.
  *
- * ── THE STATE IS HUE-ONLY BELOW A 476px BOARD, AND THAT IS DISCLOSED ────
+ * ── THE STATE WAS HUE-ONLY BELOW A 476px BOARD, AND IS NOT NOW ──────────
  *
- * Not argued away. Where `.tree-state` is gone, `waiting` and `asleep` are the
- * SAME OBJECT in two colours: both are 8x8 `--radius-full` marks with a solid
- * fill, inside cards that differ from each other only in border colour and
- * tint. Measured on the board in the three-column tier, light then dark:
+ * ANSWERED, in #264, by the diamond up at `.tree.waiting .tree-mark` — read
+ * that rule for the measurement that settled it, which is the one this
+ * paragraph did not make: the two marks against EACH OTHER, 1.10:1 in light.
+ * What follows is the finding as it stood, kept because the numbers in it are
+ * the ones the fix is measured against and because the reasoning that declined
+ * it was sound on what it knew.
+ *
+ * Where `.tree-state` is gone, `waiting` and `asleep` were the SAME OBJECT in
+ * two colours: both 8x8 `--radius-full` marks with a solid fill, inside cards
+ * that differ from each other only in border colour and tint. Measured on the
+ * board in the three-column tier, light then dark:
  *
  *   waiting  mark rgb(138,97,0) / rgb(240,180,41), and the card's border is
  *            that same hue
@@ -742,27 +795,21 @@ button.home-tile[aria-pressed='true'] .home-tile-label {
  * is not a contrast failure; it is a use-of-colour one, and the border and the
  * tint do not answer it because they are colour too.
  *
- * The word's OTHER channel has the same shape of problem and is not fixable
- * from a stylesheet at all: `home.rs` puts `tree.state.word()` in an
+ * The word's OTHER channel had the same shape of problem and was not fixable
+ * from a stylesheet at all: `home.rs` put `tree.state.word()` in an
  * `aria-label` on a bare `<span class="tree-mark">`, which maps to
  * `role=generic`, and ARIA 1.2 makes `generic` name-prohibited. Chromium's
- * `Accessibility.getFullAXTree` does read the word out of it — `role=generic
+ * `Accessibility.getFullAXTree` did read the word out of it — `role=generic
  * name="waiting on you" from=["relatedElement","attribute"]`, measured on this
  * board — but that is one engine honouring a prohibited attribute, and this app
- * ships on WebKit. #264 holds it, with the one-attribute fix.
+ * ships on WebKit. ANSWERED IN THE SAME PR: `home.rs` now emits `role="img"` on
+ * that span, which permits a name, and the two halves of #264 close together.
  *
- * THE CSS REMEDY FOR THE VISUAL HALF IS AVAILABLE AND IS DECLINED HERE. A
- * second shape on `.tree.waiting .tree-mark` would close it in three lines. It
- * is not taken
- * because it is a design decision no mockup in this repo makes and no gate in
- * this repo can check — `docs/audit.js`'s fill walk measures a mark's
- * CONTRAST, never its shape — so a square dot would ship on one author's
- * judgement, and it would either mean two different things at two window widths
- * or change the mark in the reference frame as a side effect of a width fix.
- * The other way out, narrowing the query so these cells keep the word, is not
- * available: at a 448px board the six-column row gives the title 30.4px and the
- * branch 23.6px, and at 403 it gives them 5.1 and 3.9. Those cells need the
- * narrow arrangement more than the seven that spilled did.
+ * THE THIRD WAY OUT WAS NARROWING THE QUERY so these cells keep the word, and
+ * that one is still not available: at a 448px board the six-column row gives
+ * the title 30.4px and the branch 23.6px, and at 403 it gives them 5.1 and 3.9.
+ * Those cells need the narrow arrangement more than the seven that spilled
+ * did.
  *
  * ── THE THRESHOLDS ARE px AND THE TRACKS THEY GUARD ARE rem ─────────────
  *

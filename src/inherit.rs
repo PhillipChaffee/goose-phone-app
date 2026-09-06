@@ -206,7 +206,11 @@ const UNDECIDED: &[&str] = &[
     "count",
     "diff",
     "diff-badge",
-    "diff-body",
+    // `diff-body` came off this list with #256, which put the Diff screen's own
+    // row vocabulary inside a transcript's edit card and gave the slab a
+    // hairline in `95-transcript.css` — the card's head and the slab measured
+    // 1.06:1 apart in this window, and the rule beside it was already doing
+    // exactly that for `.tool-output`.
     "diff-code",
     "diff-dir",
     "diff-file",

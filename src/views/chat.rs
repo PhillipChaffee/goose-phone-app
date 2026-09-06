@@ -1,9 +1,10 @@
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
 
-use goose_acp_client::ConfigOption;
+use goose_acp_client::{ConfigOption, ToolCallContent};
 
 use crate::attach::AttachTarget;
+use crate::diff::{Block, DiffLine, LineKind};
 use crate::icons::Icon;
 use crate::markdown;
 use crate::state::{
@@ -729,13 +730,29 @@ pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
             kind,
             status,
             output,
+            contents,
             ..
         } => {
             let icon = tool_icon(kind);
             // Desktop-only, the same way the speaker attribution above is — so
             // the phone's tool card is byte-identical to what it was.
             let word = tool_kind_word(crate::shell::Shell::CURRENT, kind);
-            let has_output = !output.is_empty();
+            let edits = tool_edits(contents, title);
+            let counts = edit_counts(&edits);
+            // THE FLAT `<pre>` GOES AWAY EXACTLY WHEN THE CARD HAS ALREADY
+            // DRAWN EVERYTHING, and not one case earlier. `output` for an edit
+            // is `content_text`'s `[diff: src/scheduler.rs]` followed by the
+            // NEW side — the same bytes the slab above it is now showing in
+            // colour, and showing them twice is the transcript arguing with
+            // itself. Three conditions, each of which is a way for the card to
+            // be an incomplete account of the result: no edit was drawn, some
+            // content entry was not a diff (a text block, a terminal), or a
+            // row budget cut one of them short. In all three the disclosure is
+            // the fallback and stays.
+            let drawn_it_all = !edits.is_empty()
+                && edits.len() == contents.len()
+                && edits.iter().all(|edit| edit.cut == 0);
+            let has_output = !output.is_empty() && !drawn_it_all;
             rsx! {
                 div { key: "{index}", class: "tool status-{status}",
                     div { class: "tool-head",
@@ -748,45 +765,26 @@ pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
                             span { class: "tool-icon", Icon { name: "{icon}" } }
                         }
                         span { class: "tool-title", "{title}" }
+                        // `.diff-stat` and its two children are the Diff
+                        // screen's own head counts, unchanged: `flex-shrink:
+                        // 0` so a number never ellipsises (`+12…` is a number
+                        // that lies), `--text-success` / `--text-danger` at
+                        // weight 600, and the same U+2212 minus the review
+                        // screen sets. It sits between the title and the
+                        // status because the title is the only shrinkable item
+                        // in this row and both of the others are counts of
+                        // what the tool did.
+                        if let Some((add, del)) = counts {
+                            span { class: "diff-stat",
+                                span { class: "add", "+{add}" }
+                                span { class: "del", "\u{2212}{del}" }
+                            }
+                        }
                         span { class: "tool-status", "{tool_status_label(status)}" }
                     }
-                    // WHERE THE INLINE DIFF CARD WOULD GO. It is buildable
-                    // now, and it stops one layer short of here.
-                    //
-                    // The mockups render an edit as its own card — a header
-                    // carrying the path and a `+12 −3` count over a `<pre>`
-                    // whose lines are `.hunk` / `.add` / `.del` / `.ctx`. Two
-                    // of those three need the OLD side of the edit, and this
-                    // client used to throw it away at decode: `content_text`
-                    // in `crates/goose-acp-client/src/types/mod.rs` flattened
-                    // a `{"type":"diff"}` block to `"[diff: " + path + "]"`
-                    // followed by `newText` and `oldText` was read nowhere in
-                    // `crates/` or `src/`. #191 fixed that. The crate now has
-                    // `ToolCallUpdate::contents`, which decodes each entry
-                    // into a `ToolCallContent` and carries a `FileDiff` with
-                    // both halves and the path, and `crates/mock-goose-server`
-                    // puts one on the wire for a prompt containing "diff", so
-                    // the shape is reachable without a real server.
-                    //
-                    // THE FIELD ARRIVED (#241). `ChatItem::Tool` now carries
-                    // `contents: Vec<ToolCallContent>` beside the flat
-                    // `output`, so an edit reaches this match arm with its
-                    // path and BOTH halves of its text, cached and all. It is
-                    // deliberately not destructured above: binding it here
-                    // with nothing to render it would be an unused variable,
-                    // and the `..` is what says the data is one line away.
-                    //
-                    // WHAT IS LEFT IS A DESIGN DECISION, not a missing value.
-                    // The app already owns a real diff renderer, on the Diff
-                    // screen (`.scroll.diff` / `.diff-code`, reached through
-                    // `load_code_diff` in `views/code.rs`), and whether this
-                    // card reuses those classes or takes its own is the
-                    // question — either way the desktop needs a rule in
-                    // `assets/desktop/`, since `src/inherit.rs` lists the
-                    // `diff-*` family as undecided at desktop width, and this
-                    // file is shared so the phone's markup must not move.
-                    // Until that is taken, an edit is this disclosure with
-                    // `[diff: src/scheduler.rs]` at the top of it.
+                    if !edits.is_empty() {
+                        div { class: "diff-body", {edit_rows(&edits).into_iter()} }
+                    }
                     if has_output {
                         details { class: "tool-output",
                             summary { "Output" }
@@ -797,6 +795,193 @@ pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
             }
         }
     }
+}
+
+/// The most source rows one edit card draws.
+///
+/// The Diff screen's own ceiling is [`crate::diff::RENDER_CAP`] at 800, and it
+/// is a ceiling for a different object: that screen IS the diff, and 800 rows
+/// there is a long scroll on a page whose only job is to be scrolled. This is a
+/// card in a conversation, between the thing that asked for the edit and the
+/// thing the agent said afterwards, and a 200-row card is a transcript nobody
+/// can get past. 60 clears an ordinary edit whole — the collapse below has
+/// already taken the unchanged runs out — and what it cuts, it says it cut.
+const CARD_ROWS: usize = 60;
+
+/// One file edit out of a tool call's structured contents, laid out.
+struct Edit {
+    /// The caption over the slab, when the card owes the reader one.
+    note: Option<String>,
+    /// Every row of the edit, in file order.
+    lines: Vec<DiffLine>,
+    /// The runs to draw and the bands that stand in for the rest, after
+    /// [`CARD_ROWS`].
+    blocks: Vec<Block>,
+    /// Rows neither drawn nor stood in for by a band.
+    cut: usize,
+}
+
+/// The file edits in a tool call's result, as rows to draw.
+///
+/// THE HEAD IS THE CARD'S HEAD AND THERE IS NOT A SECOND ONE. The mockups draw
+/// an edit with a header carrying the path; this card already has a header
+/// carrying the path, because `ChatItem::Tool.title` for a real goose edit is
+/// `edit: src/scheduler.rs`. Repeating it would print the path twice on every
+/// edit in the transcript. So the caption is conditional and the condition is
+/// stated rather than guessed: it appears when the title does NOT already
+/// contain the path, when one call edited more than one file, and always for
+/// the two claims a title never makes — a file that did not exist before and a
+/// file that does not exist after.
+///
+/// THOSE TWO ARE WHY [`goose_acp_client::FileDiff`] KEEPS ITS `Option`s. Its
+/// own comment says it: `old_text: None` is a file that did not exist, which is
+/// a different claim from `Some("")` — a file that existed and was empty — and
+/// a renderer that wants to say "new file" has to be able to tell them apart.
+/// This is that renderer, and the match below is the first thing in the
+/// workspace that reads the distinction.
+fn tool_edits(contents: &[ToolCallContent], title: &str) -> Vec<Edit> {
+    let files: Vec<_> = contents
+        .iter()
+        .filter_map(|entry| match entry {
+            ToolCallContent::Diff(file) => Some(file),
+            _ => None,
+        })
+        .collect();
+    let expanded = std::collections::HashMap::new();
+    files
+        .iter()
+        .filter_map(|file| {
+            // Neither half means nothing to draw at all — `{"type":"diff"}`
+            // with only a path, which `content_text` renders as `[diff: file]`
+            // and which the disclosure is still the right home for.
+            let lines = crate::diff::between(
+                file.old_text.as_deref().unwrap_or_default(),
+                file.new_text.as_deref().unwrap_or_default(),
+            );
+            if lines.is_empty() {
+                return None;
+            }
+            let path = file.display_path();
+            let note = match (&file.old_text, &file.new_text) {
+                (None, Some(_)) => Some(format!("New file {path}")),
+                (Some(_), None) => Some(format!("Deleted {path}")),
+                _ if files.len() > 1 || !title.contains(path) => Some(format!("Edited {path}")),
+                _ => None,
+            };
+
+            // The Diff screen's collapse, with no expansion state: a
+            // transcript card has no band to tap, so every gap stays shut and
+            // says how much it is holding.
+            let rendered = crate::diff::blocks(&lines, &crate::diff::gaps(&lines), &expanded);
+            let mut blocks = Vec::new();
+            let mut budget = CARD_ROWS;
+            let mut covered = 0_usize;
+            for block in rendered.blocks {
+                if budget == 0 {
+                    break;
+                }
+                match block {
+                    Block::Rows { start, end } => {
+                        let take = (end - start).min(budget);
+                        blocks.push(Block::Rows {
+                            start,
+                            end: start + take,
+                        });
+                        budget -= take;
+                        covered += take;
+                    }
+                    Block::Gap { hidden, .. } => {
+                        blocks.push(block);
+                        covered += hidden;
+                    }
+                }
+            }
+            let cut = lines.len() - covered;
+            Some(Edit {
+                note,
+                lines,
+                blocks,
+                cut,
+            })
+        })
+        .collect()
+}
+
+/// `(additions, deletions)` over every edit in one tool call, or `None` when
+/// the call edited nothing.
+///
+/// Counted off the rows that were BUILT and not the rows that are DRAWN, which
+/// is the only way the head can be true: [`CARD_ROWS`] cuts a long edit short
+/// and a count taken after that cut would under-report the change it is
+/// summarising. The line that says something was cut is the card's, not the
+/// head's.
+fn edit_counts(edits: &[Edit]) -> Option<(usize, usize)> {
+    if edits.is_empty() {
+        return None;
+    }
+    let count = |kind: LineKind| {
+        edits
+            .iter()
+            .flat_map(|edit| edit.lines.iter())
+            .filter(|line| line.kind == kind)
+            .count()
+    };
+    Some((count(LineKind::Add), count(LineKind::Del)))
+}
+
+/// Every row of every edit on one card, in one slab.
+///
+/// ONE `.diff-body` FOR THE WHOLE CALL rather than one per file. Two slabs
+/// abutting inside a card with no rule between them read as one slab with a
+/// seam, and the caption each edit already carries is a better separator than
+/// a border this file cannot add — `assets/shared.css` is the design system
+/// both shells link and is not edited for a desktop want.
+fn edit_rows(edits: &[Edit]) -> Vec<Element> {
+    let mut rows: Vec<Element> = Vec::new();
+    for (e, edit) in edits.iter().enumerate() {
+        if let Some(note) = edit.note.clone() {
+            rows.push(rsx! {
+                p { key: "c{e}", class: "diff-note", "{note}" }
+            });
+        }
+        for block in &edit.blocks {
+            match *block {
+                Block::Rows { start, end } => {
+                    for (offset, line) in edit.lines[start..end].iter().enumerate() {
+                        let index = start + offset;
+                        rows.push(rsx! {
+                            div { key: "l{e}-{index}", class: "{line.row_class()}",
+                                span { class: "diff-sign", "{line.sign()}" }
+                                span { class: "diff-code", "{line.text}" }
+                            }
+                        });
+                    }
+                }
+                // A `<p>` and not the Diff screen's `<button>`: there is
+                // nothing here to press. `.diff-skip` is a control that reveals
+                // what it hides, and a control that does nothing is worse than
+                // the sentence it would have been.
+                // And the band's `at` — the new-side line number it resumes
+                // at, which that screen right-aligns in `.diff-skip-at` — is
+                // dropped rather than run into the sentence. It is an anchor
+                // for a reader working through a file, and nobody works through
+                // a file inside a chat bubble; set as prose it read
+                // `27 unchanged lines · 1`, which is a number with nothing
+                // saying what it counts.
+                Block::Gap { key, hidden, .. } => rows.push(rsx! {
+                    p { key: "g{e}-{key}", class: "diff-note", "⋯ {hidden} unchanged lines" }
+                }),
+            }
+        }
+        if edit.cut > 0 {
+            rows.push(rsx! {
+                p { key: "x{e}", class: "diff-note",
+                    "⋯ {edit.cut} more lines — too long to render in a transcript card."
+                }
+            });
+        }
+    }
+    rows
 }
 
 /// Human wording for a tool's status.
@@ -1089,8 +1274,25 @@ mod tests {
     use crate::testkit::{render, render_seeded};
     use dioxus::prelude::*;
     use goose_acp_client::{
-        ConfigChoice, PermissionOption, PermissionRequest, SessionInfo, ToolCallUpdate,
+        ConfigChoice, FileDiff, PermissionOption, PermissionRequest, SessionInfo, ToolCallContent,
+        ToolCallUpdate,
     };
+
+    /// `n` numbered lines, as a file.
+    ///
+    /// Built with `push_str` rather than `map(format!).collect()` because
+    /// clippy's `format_collect` is on: one `format!` allocation per line to
+    /// build one string is the thing that lint exists to catch.
+    fn numbered(word: &str, n: usize) -> String {
+        let mut out = String::new();
+        for i in 0..n {
+            out.push_str(word);
+            out.push(' ');
+            out.push_str(&i.to_string());
+            out.push('\n');
+        }
+        out
+    }
 
     /// The readout costs a chip in a row that has none to spare, so it only
     /// appears when it is the most useful thing there — and a turn that
@@ -1870,6 +2072,249 @@ mod tests {
         assert!(
             html.contains("<summary>Output</summary><pre>Darwin</pre>"),
             "a tool with output offers no way to read it: {html}"
+        );
+    }
+
+    /// `crates/mock-goose-server`'s own edit, end to end: the shape a real
+    /// goose puts on the wire for a `developer__text_editor` call, through
+    /// `ToolCallUpdate::contents` and `ChatItem::Tool.contents`, to the card.
+    ///
+    /// WHAT THIS USED TO RENDER is the reason it is worth a test rather than a
+    /// screenshot: `content_text` flattens a diff to `[diff: src/scheduler.rs]`
+    /// followed by the NEW side only, so an edit was a closed disclosure whose
+    /// contents were the file as it now stands — no deletions, no counts, and
+    /// nothing to say which of those lines the agent had touched.
+    #[test]
+    fn a_file_edit_is_a_diff_card_and_not_a_pre_full_of_new_text() {
+        let html = render_seeded(
+            |ctx| {
+                let mut chat = ctx.chat;
+                chat.set(ChatState {
+                    session_id: Some("s-1".to_owned()),
+                    items: vec![ChatItem::Tool {
+                        id: "t-2".to_owned(),
+                        title: "edit: src/scheduler.rs".to_owned(),
+                        kind: "edit".to_owned(),
+                        status: "completed".to_owned(),
+                        output: "[diff: src/scheduler.rs]\nfn tick() {\n    sleep(2);\n}"
+                            .to_owned(),
+                        contents: vec![ToolCallContent::Diff(FileDiff {
+                            path: Some("src/scheduler.rs".to_owned()),
+                            old_text: Some("fn tick() {\n    sleep(1);\n}\n".to_owned()),
+                            new_text: Some(
+                                "fn tick() {\n    sleep(2);\n    log(\"tick\");\n}\n".to_owned(),
+                            ),
+                        })],
+                    }],
+                    ..ChatState::default()
+                });
+            },
+            chat(),
+        );
+
+        assert!(
+            html.contains("<div class=\"diff-body\">"),
+            "an edit did not draw a slab: {html}"
+        );
+        assert!(
+            html.contains(
+                "diff-line del\"><span class=\"diff-sign\">-</span>\
+                           <span class=\"diff-code\">    sleep(1);</span>"
+            ),
+            "the line the edit REPLACED is not on screen, which is the half \
+             #191 went and fetched: {html}"
+        );
+        assert!(
+            html.contains(
+                "diff-line add\"><span class=\"diff-sign\">+</span>\
+                           <span class=\"diff-code\">    sleep(2);</span>"
+            ),
+            "the line the edit wrote is not marked as an addition: {html}"
+        );
+        assert!(
+            html.contains("diff-line ctx\""),
+            "the unchanged lines around the change are gone, so the edit has \
+             no context at all: {html}"
+        );
+        assert!(
+            html.contains(
+                "<span class=\"diff-stat\"><span class=\"add\">+2</span>\
+                           <span class=\"del\">\u{2212}1</span></span>"
+            ),
+            "the head does not carry the edit's counts: {html}"
+        );
+        // The title already names the file, so the card does not name it
+        // twice.
+        assert!(
+            !html.contains("Edited src/scheduler.rs"),
+            "the path is printed twice on a card whose title already has it: \
+             {html}"
+        );
+        assert!(
+            !html.contains("<summary>Output</summary>"),
+            "the flat `<pre>` survived beside the slab, so the same edit is on \
+             screen twice: {html}"
+        );
+    }
+
+    /// The two claims a tool title never makes, and the one case where the
+    /// path has to be repeated: a call that edited more than one file.
+    ///
+    /// `FileDiff` keeps `old_text` and `new_text` as `Option`s precisely so a
+    /// renderer can tell "did not exist" from "existed and was empty", and its
+    /// own comment says a renderer that wants to say "new file" needs that.
+    /// This is the only reader of that distinction in the workspace.
+    #[test]
+    fn a_new_file_and_a_deleted_one_say_which_they_are() {
+        let html = render_seeded(
+            |ctx| {
+                let mut chat = ctx.chat;
+                chat.set(ChatState {
+                    session_id: Some("s-1".to_owned()),
+                    items: vec![ChatItem::Tool {
+                        id: "t-3".to_owned(),
+                        title: "edit".to_owned(),
+                        kind: "edit".to_owned(),
+                        status: "completed".to_owned(),
+                        output: "[diff: src/new.rs]".to_owned(),
+                        contents: vec![
+                            ToolCallContent::Diff(FileDiff {
+                                path: Some("src/new.rs".to_owned()),
+                                old_text: None,
+                                new_text: Some("fn main() {}\n".to_owned()),
+                            }),
+                            ToolCallContent::Diff(FileDiff {
+                                path: Some("src/old.rs".to_owned()),
+                                old_text: Some("gone\n".to_owned()),
+                                new_text: None,
+                            }),
+                            // Neither half: nothing to draw, and the card must
+                            // not manufacture a row for it.
+                            ToolCallContent::Diff(FileDiff::default()),
+                        ],
+                    }],
+                    ..ChatState::default()
+                });
+            },
+            chat(),
+        );
+
+        assert!(
+            html.contains("<p class=\"diff-note\">New file src/new.rs</p>"),
+            "a file that did not exist before is captioned as an ordinary \
+             edit: {html}"
+        );
+        assert!(
+            html.contains("<p class=\"diff-note\">Deleted src/old.rs</p>"),
+            "a file that does not exist after is captioned as an ordinary \
+             edit: {html}"
+        );
+        assert!(
+            html.contains("<span class=\"add\">+1</span>")
+                && html.contains("<span class=\"del\">\u{2212}1</span>"),
+            "the head's counts do not add up across the call's two files: \
+             {html}"
+        );
+        assert!(
+            html.contains("<summary>Output</summary>"),
+            "one content entry drew nothing, so the flat output is the only \
+             account of it and has to stay: {html}"
+        );
+    }
+
+    /// The card is a summary and the disclosure is the fallback, so the two
+    /// are coupled: an edit the row budget cut short keeps its `<pre>`, and so
+    /// does a call whose result was not all diffs.
+    #[test]
+    fn an_edit_the_card_had_to_cut_keeps_the_flat_output_beside_it() {
+        let html = render_seeded(
+            |ctx| {
+                let mut chat = ctx.chat;
+                // Every line different, so there is nothing to collapse and
+                // the budget is what stops it.
+                let old = numbered("old", 200);
+                let new = numbered("new", 200);
+                let mut chat_state = ChatState {
+                    session_id: Some("s-1".to_owned()),
+                    ..ChatState::default()
+                };
+                chat_state.items.push(ChatItem::Tool {
+                    id: "t-4".to_owned(),
+                    title: "edit: src/big.rs".to_owned(),
+                    kind: "edit".to_owned(),
+                    status: "completed".to_owned(),
+                    output: "[diff: src/big.rs]".to_owned(),
+                    contents: vec![ToolCallContent::Diff(FileDiff {
+                        path: Some("src/big.rs".to_owned()),
+                        old_text: Some(old),
+                        new_text: Some(new),
+                    })],
+                });
+                chat.set(chat_state);
+            },
+            chat(),
+        );
+
+        assert!(
+            html.contains("more lines — too long to render in a transcript card."),
+            "the card silently stopped drawing rather than saying it had: \
+             {html}"
+        );
+        assert!(
+            html.contains("<summary>Output</summary>"),
+            "the card is an incomplete account of the edit and the disclosure \
+             that would complete it was dropped anyway: {html}"
+        );
+        assert!(
+            html.contains("<span class=\"add\">+200</span>"),
+            "the head's count was taken after the cut, so it under-reports \
+             the edit it is summarising: {html}"
+        );
+    }
+
+    /// A long unchanged run inside an edit collapses into the same band the
+    /// Diff screen draws — as prose rather than as a button, because there is
+    /// nothing in a transcript to press.
+    #[test]
+    fn an_edit_inside_a_long_file_collapses_what_did_not_change() {
+        let html = render_seeded(
+            |ctx| {
+                let mut chat = ctx.chat;
+                let old = numbered("line", 60);
+                let new = old.replace("line 30\n", "LINE 30\n");
+                let mut chat_state = ChatState {
+                    session_id: Some("s-1".to_owned()),
+                    ..ChatState::default()
+                };
+                chat_state.items.push(ChatItem::Tool {
+                    id: "t-5".to_owned(),
+                    title: "edit: src/long.rs".to_owned(),
+                    kind: "edit".to_owned(),
+                    status: "completed".to_owned(),
+                    output: "[diff: src/long.rs]".to_owned(),
+                    contents: vec![ToolCallContent::Diff(FileDiff {
+                        path: Some("src/long.rs".to_owned()),
+                        old_text: Some(old),
+                        new_text: Some(new),
+                    })],
+                });
+                chat.set(chat_state);
+            },
+            chat(),
+        );
+
+        assert!(
+            html.contains("<p class=\"diff-note\">⋯ 27 unchanged lines</p>"),
+            "a 60-line file drew all 60 rows into a transcript card: {html}"
+        );
+        assert!(
+            !html.contains("<button class=\"diff-skip\""),
+            "the band is a control that reveals nothing: {html}"
+        );
+        assert!(
+            !html.contains("<summary>Output</summary>"),
+            "the whole edit is drawn, so the flat `<pre>` is the same bytes \
+             twice: {html}"
         );
     }
 

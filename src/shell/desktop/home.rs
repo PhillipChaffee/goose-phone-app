@@ -1431,8 +1431,35 @@ pub(crate) fn Home(plane: Plane) -> Element {
                                                 }
                                             }
                                         },
+                                        // `role="img"` IS LOAD-BEARING AND IS
+                                        // NOT DECORATION. A bare `<span>` maps
+                                        // to `role=generic`, and ARIA 1.2 lists
+                                        // `aria-label` as PROHIBITED on that
+                                        // role — a conforming user agent is
+                                        // expected to ignore it, so the word
+                                        // below could reach no assistive
+                                        // technology at all. Chromium honours
+                                        // it anyway (`role=generic
+                                        // name="waiting on you"
+                                        // from=["relatedElement","attribute"]`,
+                                        // measured over this board with
+                                        // `Accessibility.getFullAXTree`), which
+                                        // is repair behaviour by one engine and
+                                        // not a guarantee; this app ships on
+                                        // WebKit. `img` permits a name, and it
+                                        // is what this element is: an 8px mark
+                                        // whose whole content is a state.
+                                        //
+                                        // IT IS NOT BELT AND BRACES. Below a
+                                        // 476px board `97-home-code.css` drops
+                                        // `.tree-state` — 13 of the 36 cells
+                                        // `docs/audit.js` walks — on the
+                                        // strength of this label surviving, so
+                                        // in those cells it is the only place
+                                        // the word exists.
                                         span {
                                             class: "tree-mark",
+                                            role: "img",
                                             "aria-label": tree.state.word(),
                                         }
                                         span { class: "tree-text",
