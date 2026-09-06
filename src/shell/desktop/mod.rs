@@ -1322,9 +1322,25 @@ pub(crate) fn AppShell() -> Element {
             // `the_home_screen_does_not_cost_the_controls_it_replaced` is the
             // check that keeps it that way.
             //
-            // `empty_detail` stays for the one destination that has no root:
-            // Settings' detail is unconditional so it never reaches that arm,
-            // and a `root: None` row rendering nothing would be a blank pane.
+            // THREE ARMS, AND THERE WAS A FOURTH (#249). `empty_detail` drew a
+            // "Nothing open" card for a destination with no root, no detail
+            // and no home, and the comment that stood here argued for keeping
+            // it while also proving it dead: `src/nav.rs` has exactly one
+            // `root: None` row — Settings — and Settings' `detail` closure
+            // takes `_` and returns `Some`, so no state of the app reaches
+            // that arm. It was drawn by nothing, its three class names were
+            // three of the four entries on `UNCAPTURED`, and no capture could
+            // ever have photographed it.
+            //
+            // Deleted rather than made reachable, and the phone is why the
+            // trade is cheap: `Destination::screen` collapses the same pair
+            // with `.unwrap_or_else(|| rsx! {})`, so a row with neither a
+            // detail nor a root has ALWAYS rendered a blank screen on iOS and
+            // nobody has ever called that a defect. This shell now answers the
+            // impossible case the way the other shell already did, and
+            // `nav.rs`'s `every_destination_but_settings_lists_something` is
+            // what says the case stays impossible: it holds every `root: None`
+            // row to a detail that is `Some` in every navigation state.
             section { class: "pane pane-main",
                 if let Some(detail) = detail {
                     {detail.view}
@@ -1332,8 +1348,6 @@ pub(crate) fn AppShell() -> Element {
                     home::Home { plane }
                 } else if let Some(root) = dest.root {
                     {root(&ctx)}
-                } else {
-                    {empty_detail(dest)}
                 }
             }
 
@@ -1351,24 +1365,15 @@ pub(crate) fn AppShell() -> Element {
     }
 }
 
-/// What the third column says when nothing is selected.
-///
-/// The state with no precedent to copy: goose's own desktop app never has it,
-/// because there the detail replaces the list rather than sitting beside it.
-/// It is also the state a three-column app is in the moment it launches, so a
-/// blank column is not an option.
-///
-/// Worded off the destination table rather than per screen, so a feature that
-/// adds a row gets this for free and cannot forget it.
-fn empty_detail(dest: &'static Destination) -> Element {
-    rsx! {
-        div { class: "pane-empty",
-            Icon { name: dest.icon }
-            p { class: "pane-empty-line", "Nothing open" }
-            p { class: "pane-empty-hint", "Pick something from {dest.label} to see it here." }
-        }
-    }
-}
+// `empty_detail` WAS HERE, and #249 deleted it. It rendered `.pane-empty`,
+// `.pane-empty-line` and `.pane-empty-hint` — a glyph, "Nothing open" and
+// "Pick something from {label} to see it here." — for a destination with no
+// root and no detail, and it was written when the content area was a list
+// column beside a detail column and launching landed on an empty one. The
+// three-column restructure (#40) took the list into the sidebar and gave the
+// pane a home arm; from that commit on there was no state left that reached
+// it. Its argument, its rules in `assets/desktop/` and its tests went with it;
+// the reasoning is at the pane's own arms above.
 
 #[cfg(test)]
 #[expect(
@@ -1488,10 +1493,16 @@ mod tests {
     #[test]
     fn the_home_screen_does_not_cost_the_controls_it_replaced() {
         let code = shell_code();
+        // It ended at `fn empty_detail` until #249 deleted that function, and
+        // the replacement is TIGHTER rather than equivalent: the third column
+        // is the next thing the shell renders, so the slice is now the content
+        // column and nothing else. A comment would not have done — `shell_code`
+        // drops every comment line before the cut (`selfscan::code_of` explains
+        // why), so a prose terminator is a terminator this scan cannot see.
         let pane = block(
             &code,
             "section { class: \"pane pane-main\",",
-            "fn empty_detail",
+            "inspector::Inspector",
         );
         assert!(
             pane.contains("home::Home"),
@@ -1814,12 +1825,14 @@ mod tests {
     /// through the restructure — and that will let it be changed again —
     /// without anyone having to re-derive by hand what the slice now covers.
     ///
-    /// `pane-detail` in the list below is a class this shell no longer emits
-    /// anywhere: the restructure replaced `.pane-list`/`.pane-detail` with the
-    /// single `.pane-main`. Its assertion is therefore vacuous today and is
-    /// kept as a name that must not come back INSIDE the sidebar rather than
-    /// as a live boundary check — the live ones are `pane-empty`,
-    /// `shell-chrome` and `conn-badge`, all three of which the shell renders.
+    /// `pane-detail` and `pane-empty` in the list below are classes this shell
+    /// no longer emits anywhere: the restructure replaced
+    /// `.pane-list`/`.pane-detail` with the single `.pane-main`, and #249
+    /// deleted `empty_detail` and `.pane-empty` with it. Their assertions are
+    /// therefore vacuous today and are kept as names that must not come back
+    /// INSIDE the sidebar rather than as live boundary checks — the live ones
+    /// are `shell-chrome` and `conn-badge`, both of which the shell renders
+    /// after the sidebar.
     #[test]
     fn the_sidebar_slice_stops_at_the_sidebar() {
         let card = nav_card();
@@ -2215,20 +2228,23 @@ mod tests {
     /// exists to build gets given away one name at a time; the answer to a new
     /// name is a capture that drives the screen it is on, not a line here.
     ///
-    /// What is left on it is four names, and all four are unreachable rather
-    /// than merely undriven — which is the distinction that matters, because
-    /// the other forty-nine went away by being driven. The capture that
-    /// removed them ran both fakes, connected both halves, opened a code
-    /// session, a review, a pull request and a goose turn that called two
-    /// tools, and parked a permission on the board so the tiles could be seen
-    /// counting one. What no drive can reach:
+    /// What is left on it is ONE name, and it is unreachable rather than
+    /// merely undriven — which is the distinction that matters, because the
+    /// other forty-nine went away by being driven. The capture that removed
+    /// them ran both fakes, connected both halves, opened a code session, a
+    /// review, a pull request and a goose turn that called two tools, and
+    /// parked a permission on the board so the tiles could be seen counting
+    /// one.
     ///
-    /// `pane-empty` and its two children are `empty_detail`, and the arm that
-    /// calls it is dead. It runs for a destination with `root: None` and no
-    /// detail; `src/nav.rs` has exactly one `root: None` row — Settings — and
-    /// Settings' `detail` is unconditional, so the arm is never taken. The
-    /// three names are the gate's own evidence for that, which is why they
-    /// stay rather than being deleted with the function.
+    /// It was four until #249. `pane-empty` and its two children were
+    /// `empty_detail`, whose arm ran for a destination with `root: None` and
+    /// no detail — and `src/nav.rs` has exactly one `root: None` row, Settings,
+    /// whose `detail` closure takes `_` and returns `Some`. Three of these four
+    /// lines were therefore this list's own evidence that a function was dead,
+    /// which is a use it was never meant to be put to: a ledger of what a
+    /// CAPTURE has not reached had become the only record that a piece of the
+    /// app could not be reached at all. The function went, the argument moved
+    /// to the pane's own arms, and the ledger went back to holding one thing.
     ///
     /// `insp-empty` is the inspector saying it has nothing, and
     /// `inspector::plane_facts` returns empty only when the plane's server URL
@@ -2245,12 +2261,6 @@ mod tests {
         // The inspector with no server URL to describe. See above: a seeded
         // build cannot reach it, and the state that used to was the bug.
         "insp-empty",
-        // The pane with nothing in it. `empty_detail`'s arm is unreachable:
-        // Settings is the only `root: None` destination and its detail is
-        // unconditional.
-        "pane-empty",
-        "pane-empty-hint",
-        "pane-empty-line",
     ];
 
     /// The store still describes the app — or says exactly where it does not.
@@ -3494,90 +3504,6 @@ mod tests {
              navigations — it is not re-running on arrival, so the desktop's \
              re-fetch-on-mount is dead and ⌘R is the only refresh there is",
             seen.len()
-        );
-    }
-
-    // ---- the third column with nothing in it ----------------------------
-
-    thread_local! {
-        /// Which destination [`EmptyColumn`] is standing in for.
-        ///
-        /// A thread-local rather than a prop because `empty_detail` takes a
-        /// `&'static Destination` and a Dioxus component's props must be
-        /// `PartialEq`; the table's rows have `fn` fields, which cannot be
-        /// compared.
-        static NOTHING_OPEN: RefCell<Option<&'static Destination>> = const {
-            RefCell::new(None)
-        };
-    }
-
-    /// The detail column, on its own, with nothing selected in it.
-    #[component]
-    fn EmptyColumn() -> Element {
-        let dest = NOTHING_OPEN
-            .with(|slot| *slot.borrow())
-            .expect("the test names the destination before it mounts this");
-        super::empty_detail(dest)
-    }
-
-    fn empty_column(dest: &'static Destination) -> String {
-        NOTHING_OPEN.with(|slot| *slot.borrow_mut() = Some(dest));
-        let mut dom = VirtualDom::new(EmptyColumn);
-        dom.rebuild_in_place();
-        dioxus_ssr::render(&dom)
-    }
-
-    /// The column a three-column window opens on says what to do about it, in
-    /// the words of the list beside it.
-    ///
-    /// This is the very first thing the desktop shell shows: launch lands on a
-    /// destination with nothing selected, so an empty third column is the
-    /// state, not an edge of it. Two ways it fails silently, both covered
-    /// here. The sentence is built from `dest.label`, so a destination whose
-    /// wording drifted would point at a list that is not the one on screen —
-    /// "Pick something from Chats" beside the recipes. And the glyph is
-    /// `dest.icon`, which `Icon` renders as *nothing at all* when it does not
-    /// know the name (`src/icons.rs`), so a typo is a blank column rather than
-    /// a compile error.
-    #[test]
-    fn the_empty_column_names_the_list_it_wants_you_to_pick_from() {
-        let mut checked = 0;
-        for dest in DESTINATIONS {
-            // Settings has no list, so its detail is unconditional and this
-            // column is never the one it draws.
-            if dest.root.is_none() {
-                continue;
-            }
-            let html = empty_column(dest);
-            assert!(
-                html.contains("Nothing open"),
-                "the empty detail column for {} says nothing at all: {html}",
-                dest.id
-            );
-            assert!(
-                html.contains(&format!(
-                    "Pick something from {} to see it here.",
-                    dest.label
-                )),
-                "the empty column beside the {} list does not name that list, \
-                 so it tells the reader to pick from somewhere they are not: \
-                 {html}",
-                dest.label
-            );
-            let glyph = crate::icons::path_for(dest.icon).unwrap_or_default();
-            assert!(
-                !glyph.is_empty() && html.contains(glyph),
-                "nothing drew {}'s `{}` glyph, so the empty column is a \
-                 sentence over a blank square: {html}",
-                dest.id,
-                dest.icon
-            );
-            checked += 1;
-        }
-        assert!(
-            checked >= 6,
-            "only {checked} destinations have a list to be empty beside — this \
-             walked the table and found almost nothing in it"
         );
     }
 

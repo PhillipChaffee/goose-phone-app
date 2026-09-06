@@ -477,8 +477,10 @@
   --text-md: 0.9375rem;
 
   /* 16px. The mockups use it once (`.pal-in .q`) and this app spends it on
-   * `.md h3` and `.pane-empty-line`; it exists to keep the markdown ladder
-   * monotone — h1 27, h2 20 (shared.css's one literal), h3 16, h4/body 15. */
+   * `.md h3`; it exists to keep the markdown ladder monotone — h1 27, h2 20
+   * (shared.css's one literal), h3 16, h4/body 15. `.pane-empty-line` was the
+   * second user until #249 deleted the column it headed, which leaves the
+   * token with exactly one and the ladder as its whole reason. */
   --text-lg: 1rem;
 
   /* 21px, `.st-t .n` verbatim — the tile numeral, and the only user. */

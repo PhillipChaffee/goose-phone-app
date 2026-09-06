@@ -2559,11 +2559,14 @@ mod tests {
     /// Mounting is what asserts it: `save_to_storage_on_change` compares the
     /// entry against `None` on its first pass, so any mount at all writes the
     /// key once — and a `SessionStorage`-backed signal writes no file ever.
-    /// A file only, not its contents: `testkit::storage_dir` is one directory
-    /// for the whole binary and every other mounted test in it is writing this
-    /// same key, so an assertion about what is IN the file would be a race.
-    /// [`the_cached_transcript_survives_the_backing_it_is_stored_through`]
-    /// takes the value's half under a key of its own.
+    ///
+    /// A file only, and not its contents. It used to be a race — one directory
+    /// for the whole binary, every other mounted test writing this same key —
+    /// and #220's second half took that away: `testkit::StorageScope` names the
+    /// namespace, so the file below is this test's alone. The assertion stays
+    /// on the file because the value's half is a different question and
+    /// [`the_cached_transcript_survives_the_backing_it_is_stored_through`] asks
+    /// it under a key of its own.
     #[test]
     fn the_transcript_cache_reaches_the_disk() {
         use dioxus::prelude::*;
@@ -2571,9 +2574,11 @@ mod tests {
             rsx! {}
         }
         let dir = crate::testkit::storage_dir();
-        let _ = crate::testkit::render_settled(|_| {}, nothing);
+        crate::testkit::in_storage_scope("cachedisk-", || {
+            let _ = crate::testkit::render_settled(|_| {}, nothing);
+        });
         assert!(
-            dir.join("code_cache").is_file(),
+            dir.join("cachedisk-code_cache").is_file(),
             "mounting the app wrote no code_cache file, so every launch opens \
              a previously-read chat with a cold fetch and A11 is unmet"
         );

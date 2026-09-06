@@ -531,48 +531,23 @@
   outline-offset: 2px;
 }
 
-/* ── 5. the column with nothing in it ───────────────────────────────────
+/* ── 5. the column with nothing in it — GONE (#249) ─────────────────────
  *
- * The state a three-column app is in the moment it launches, and the one state
- * with no precedent to copy: goose's own desktop app never has it, because
- * there a detail replaces its list rather than sitting beside it. */
-
-.pane-empty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 24px;
-  color: var(--text-secondary);
-  text-align: center;
-}
-
-/* Secondary, not tertiary. Measured against `--bg-primary` in a browser,
- * `--text-tertiary` is 2.20:1 in light and 2.87:1 in dark — under the 3:1 that
- * meaningful non-text has to meet, at both. docs/design.md's Deviations
- * section already records that number and reserves tertiary for dots and
- * rules; a 40px glyph that is the only thing in an empty column is not one of
- * those. */
-.pane-empty > .icon {
-  font-size: 40px;
-  color: var(--text-secondary);
-}
-
-.pane-empty-line {
-  margin: 0;
-  font-family: var(--font-serif);
-  font-size: var(--text-lg);
-  line-height: var(--lh-md);
-  color: var(--text-primary);
-}
-
-.pane-empty-hint {
-  margin: 0;
-  font-size: var(--text-sm);
-  line-height: var(--lh-sm);
-}
+ * Four rules stood here — `.pane-empty`, `.pane-empty > .icon`,
+ * `.pane-empty-line`, `.pane-empty-hint` — and they styled `empty_detail` in
+ * `src/shell/desktop/mod.rs`. That function drew the state a three-column app
+ * was in the moment it launched, back when the content area was a list column
+ * beside a detail column. The three-column restructure (#40) moved the list
+ * into the sidebar and gave the pane a home arm, and from that commit the
+ * function was called by nothing: its arm needs a destination with `root:
+ * None` AND no detail, and `src/nav.rs`'s one `root: None` row hands back a
+ * detail unconditionally. Rust and CSS were deleted together, because a rule
+ * whose only subject no longer exists is a rule the next reader has to prove
+ * dead again.
+ *
+ * The number is kept rather than reclaimed so the six banners below it do not
+ * all move — a renumber here is a diff across the rest of the file, and this
+ * file is one region of a directory whose sort IS the cascade. */
 
 /* ── 6. the accent, on the control that does the thing ──────────────────
  *

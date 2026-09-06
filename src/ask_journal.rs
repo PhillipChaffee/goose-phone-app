@@ -30,19 +30,33 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Where the journal is kept, named here rather than written at the one call
-/// site in `crate::state` so that a test in this file can hold it to account.
+/// Where every persisted key in this app is kept, named here rather than
+/// written at the call sites in `crate::state` so that a test in this file can
+/// hold it to account.
 ///
-/// It has to be `LocalStorage`. `use_persistent`, which `settings` still uses,
-/// resolves to `SessionStorage` — an in-memory `HashMap` hung off the root
-/// context on every non-wasm target (dioxus-sdk-storage `persistence.rs:34`,
-/// `client_storage/mod.rs:32-41`, `memory.rs:13-28`) — and a journal kept
-/// there would evaporate on exactly the event it exists to survive.
-/// `the_journals_storage_backing_really_reaches_the_disk` is the gate: swap
-/// this alias and that test fails.
+/// It has to be `LocalStorage`. `use_persistent`, which every key here went
+/// through until #220, resolves to `SessionStorage` — an in-memory `HashMap`
+/// hung off the root context on every non-wasm target (dioxus-sdk-storage
+/// `persistence.rs:34`, `client_storage/mod.rs:32-41`, `memory.rs:13-28`) —
+/// and a journal kept there would evaporate on exactly the event it exists to
+/// survive. `the_journals_storage_backing_really_reaches_the_disk` is the
+/// gate: swap this alias and that test fails.
 ///
-/// It is named here rather than inlined at the call site because three keys
-/// now share it: this journal, `inspector_open`, and `code_cache` since #220.
+/// It is named here rather than inlined at the call sites because FOUR keys
+/// now share it: this journal, `inspector_open`, `code_cache` (#220's first
+/// half) and `settings` (#220's second).
+///
+/// STILL A BARE ALIAS after #220, and that is a decision rather than an
+/// oversight. The obvious way to isolate one test binary's nine hundred mounts
+/// from each other was a wrapper type here that put a namespace in front of
+/// every key it was handed. It works, and it is wrong in one specific way:
+/// `LocalStorage::set` is called from a task Dioxus polls long after the render
+/// that spawned it, so a namespace read at call time has to be kept alive by
+/// whatever is holding the dom — which means every bespoke test harness in this
+/// repository has to know about it, and there are ten. The namespace is instead
+/// baked into the KEY at mount time by `crate::state::use_app_ctx_provider`,
+/// where there is exactly one of it and it cannot be forgotten. This alias
+/// stays what it always was.
 pub(crate) type Backing = dioxus_sdk_storage::LocalStorage;
 
 /// How many entries are kept. The storage backing rewrites a key's whole file

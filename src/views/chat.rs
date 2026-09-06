@@ -410,6 +410,17 @@ fn mode_choices(option: &ConfigOption) -> Vec<SettingChoice> {
 /// that exists a chevron here could only open a list whose every entry the
 /// agent answers `-32602` to. The row stays a fact.
 ///
+/// **What the note says, and why it is a paired edit (#257).** Both halves used
+/// to print "Fixed by the model. Nothing a message carries changes it." — true
+/// on each, and design rule 11 asks a fact row to say *why* it is not
+/// adjustable HERE rather than only *that* it is not. The two whys are
+/// different and that is the whole point: this side has **no route at all**, so
+/// the sentence points upstream; `views/code.rs` has one and declines it,
+/// because using it would restart the chat's server. `docs/design.md` requires
+/// the two sheets' notes to be in one voice, so the pair leads identically and
+/// differs only in the clause that names the reason — change one and you owe
+/// the other.
+///
 /// What that decision leaves behind is [`GOOSE_CONTEXT_ID`], which is the
 /// price of the sheet being open to an option this app has never heard of.
 fn goose_setting_rows(
@@ -459,7 +470,7 @@ fn goose_setting_rows(
                 GOOSE_CONTEXT_ID,
                 "Context length",
                 format!("{} tokens", format_tokens(limit)),
-                "Fixed by the model. Nothing a message carries changes it.",
+                GOOSE_CONTEXT_NOTE,
             ),
             None => SettingRow::fact(
                 GOOSE_CONTEXT_ID,
@@ -476,6 +487,21 @@ fn goose_setting_rows(
 /// agree about it: the row this file appends, and the guard that stands down
 /// when goose sends an option of its own under the same name.
 const GOOSE_CONTEXT_ID: &str = "context_length";
+
+/// This half of the pair #257 rewrote, named so the other half can be held
+/// against it: `views::session_settings`'s
+/// `both_context_length_notes_lead_alike_and_then_say_their_own_why` reads
+/// this constant and [`crate::views::code::CODE_CONTEXT_NOTE`] together, which
+/// is the only way a rule about TWO files can fail in one place.
+///
+/// The lead is shared because `docs/design.md` requires the two sheets to
+/// speak in one voice; the clause after it is this backend's own fact, and on
+/// this side there is no route to decline — `session/set_config_option` routes
+/// four ids and this is not one of them, so the sentence points upstream
+/// rather than at a decision the app took.
+pub(crate) const GOOSE_CONTEXT_NOTE: &str =
+    "Fixed by the model. goose offers no route for changing it — that starts \
+     upstream.";
 
 /// The tail of the transcript: asks this chat lost, and what that cost.
 ///
