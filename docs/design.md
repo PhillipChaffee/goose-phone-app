@@ -1859,6 +1859,7 @@ from here.)
 | `margin-top: -20px` on `.chrome-title` | **588 TITLE-TALLER** and 588 SPILL (1176) | all 42 cells, 14 per cell — the 14 states whose band carries a title |
 | `margin-left: -40px` on `.chrome-title` | **588 TITLE-COLLIDE**, every one of them `div.chrome-title overlaps button.nav-toggle by 32px` | all 42 cells |
 | `flex: 1 1 0` on `.window-drag` (i.e. letting it shrink) | **180 DRAG-GONE** — 164 reading `0px wide` and 16 reading `6px wide` | **five** of the seven widths: 480×560, 571×700, 572×700, 901×760 and 902×760. Clean at 1180×820 and 1600×1000 |
+| the code board's row put back the way it was before the ladder — `.tree { grid-template-columns: 0.75rem minmax(0, 1.35fr) minmax(0, 1.05fr) 5.25rem 8.5rem 4.625rem }`, `.tree-branch { display: flex }`, `.tree-num, .tree-state { display: block }`, which is six columns at every board width and no container query | **5356 ROW-OUTBID** and 120 SPILL (5476) | 264 desktop cells, 0 phone; 11 of the 13 widths (everything but 1440 and 1600), both themes, all four shell states, on the four `desktop-code-list*` states. The **40** cells the SPILL findings are in are a subset: at HEAD this file reported nothing at all in the other **224** |
 
 **Two rows changed shape rather than just size, and both are worth reading.**
 
@@ -1896,6 +1897,25 @@ fires on the ordinarily-captured title rather than only the stressed one, so
 hypothetical — and re-measured on the three-cell grid it reaches further than
 it was first recorded as doing: 480 through 902, down to a strip **0px** wide,
 falling silent only at 1180 and above.
+
+**The last row is the only one whose sabotage is a defect that really shipped**
+— #270, and the row is here rather than in the section below because the check
+is new and the defect is not hypothetical. Every other question this script puts
+is about a box that is *too big* for the space it was given: `SPILL`,
+`OVERFLOW-X`, `CLIPPED-X`, `GUTTER`, `OCCLUDED`. A grid track squeezed to
+nothing is the opposite fault and produces none of them — the row does not
+overflow, nothing collides, and the cell that lost its width ellipsises
+politely, which is exactly what `CLIPPED-X` exempts. #265's code board drew a
+dot, a diff stat, a state and an age with **not one character of the title of
+the thing the row was about**, at a 526px board with a 74.23px title track, and
+all five gates were green. `ROW-OUTBID` is `TITLE-OUTBID` one level down: a cell
+that was given less room than its text, beside a cell on the same grid line
+sitting on more unused width than the cut cell has in total. Its floors are
+measured rather than hand-derived — a cell's own inline extent, read off a
+Range, because a stretched cell's `scrollWidth` is its own `clientWidth` — which
+is what lets it be asked of rows this file cannot name in advance. It reports
+nothing on the tree as it stands, and the margin is written into the check
+beside the bar so a Clean run is not read as a check that cannot fail.
 
 **One check had to be taught what "not rendered" means.** `TITLE-TALLER`
 compared a heading's box against its bar's, and `assets/desktop/` now takes
@@ -2008,3 +2028,13 @@ deliberately excluded, because that room is not the app's to spend and
   `--gutter` rather than `--edge` anyway. It reports nothing on this grid, and
   a check that reports nothing reads like a pass — so it is written down here
   as a gap instead.
+- **`ROW-OUTBID` asks nothing of a flex row.** It walks grid lines only, and
+  that is a softening rather than a scoping: asked of every nowrap flex row as
+  well, the walk goes from 7656 lines to 131804 and from 0 findings to
+  **17826**, the loudest of them `header.shell-chrome` reporting that
+  `.window-drag` holds 96px while `.conn-label` has been squeezed to 0 —
+  `flex: 1 0 96px` doing the one job it has. `TITLE-OUTBID` already asks that
+  question of that line and gets it right, because it can name the four items
+  on it and give each a floor taken off a real control. Every other flex row
+  in the app is unasked, and a general version needs per-element floors that
+  nothing in the repo states yet.

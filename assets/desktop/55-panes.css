@@ -78,13 +78,50 @@
   white-space: nowrap;
 }
 
+/* THE FAINT RUNG, AND THIS ONE IS A SINGLE `/`.
+ *
+ * #118's fourth site of eight — `.insp-sec-title` and `.insp-sec-meta`
+ * (`90-inspector.css`) and `.home-section-meta` (`40-home-chat.css`) came
+ * first, and the prohibition that travels with the token is written beside the
+ * first two: nothing outside the list of eight may take the rung, and never
+ * `.nav-row.on` or `.nav-row:hover`, where it measures 3.90:1. This glyph is
+ * the strongest case on the whole list — it is punctuation between the parent
+ * crumb and the name, it carries no word, and #60 argued exactly that before
+ * being folded into #118.
+ *
+ * MEASURED on `desktop-chat` at 1440x860 — the reference window — against the
+ * sheet list `docs/audit.js` builds, transitions killed, on the band's own
+ * panel. This glyph renders at 972 and wider only, because `65-responsive.css`
+ * takes the whole pair out below that:
+ *
+ *   dark   rgb(24,26,30)     #98a1ac 6.66:1  →  #828b96 5.05:1
+ *   light  rgb(244,246,247)  #6f6f6f 4.64:1  →  unchanged
+ *
+ * Light is unchanged BY DESIGN and not by omission — `00-tokens.css` resolves
+ * `--ink-faint` to `var(--text-secondary)` there, because #828b96 is 3.45:1 on
+ * white and a light window needs a darker faint rung nothing in the mockups
+ * defines. 5.05 clears the 4.5 an 11.5px glyph owes; `docs/audit.js` relaxes to
+ * 3:1 only at 18.66px, so this gets no large-text allowance and needs none.
+ *
+ * `.chrome-parent` beside it stays on `--text-secondary` and that is the spend
+ * list holding rather than an inconsistency: the separator is punctuation and
+ * the crumb is a name, so one of them is read and the other is skimmed past.
+ * The rule above says the same thing in its own words.
+ *
+ * ONE DECLARATION AND NOT TWO. #118's running tally of what is left, and the
+ * note beside the first two spends in `90-inspector.css`, both give
+ * `.chrome-sep` two homes — this file and `65-responsive.css`. Re-derived at
+ * this commit: `65-responsive.css`'s only mention of the class is `display:
+ * none` inside `@media (max-width: 971px)`, which decides whether the glyph is
+ * drawn at all and declares no colour. The spend list is eight SELECTORS and
+ * this is one of them; there is no second `.chrome-sep` rule to change. */
 .chrome-sep {
   flex: 0 0 auto;
   padding: 0 0.25rem;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: var(--lh-sm);
-  color: var(--text-secondary);
+  color: var(--ink-faint);
 }
 
 /* THE HOST IS THE FIRST THING THE BAND GIVES UP.
@@ -122,11 +159,32 @@
   text-overflow: ellipsis;
 }
 
+/* AND THE ADDRESS TAKES THE FAINT RUNG TOO — #118's fifth site of eight, and
+ * the second of the two this file holds.
+ *
+ * It qualifies on the spend list's own test and #60 wrote the reason down
+ * before being folded in: the inspector's `host` row already says this string,
+ * so the badge's copy is a repetition rather than a reading. The pill's own
+ * `.conn-label` beside it is the identification of a control and stays where it
+ * is; this is the address under it.
+ *
+ * MEASURED on `desktop-chat` and `desktop-code-chat` at 1440x860 against the
+ * sheet list `docs/audit.js` builds, transitions killed, on the band's panel —
+ * the same surface and therefore the same pair of numbers as `.chrome-sep`
+ * above. Both are three-column strings: the `@media (max-width: 971px)` block
+ * two rules up drops the host, and `65-responsive.css` drops the separator at
+ * the same width and for the same reason.
+ *
+ *   dark   rgb(24,26,30)     #98a1ac 6.66:1  →  #828b96 5.05:1
+ *   light  rgb(244,246,247)  #6f6f6f 4.64:1  →  unchanged
+ *
+ * 5.05 clears the 4.5 a 10.5px string owes, and light is unchanged for the
+ * reason `.chrome-sep` states above. */
 .shell-chrome > .conn-badge .conn-host {
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   line-height: var(--lh-xs);
-  color: var(--text-secondary);
+  color: var(--ink-faint);
   max-width: 9.25rem;
   overflow: hidden;
   text-overflow: ellipsis;
