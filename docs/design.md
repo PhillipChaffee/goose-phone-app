@@ -1699,7 +1699,7 @@ convention `src/nav.rs` explicitly does not promise (`Screen::Chat` dumps as
 `chat`, singular, and says why). Drop `desktop-code-list` and the run stops
 with *no desktop state was captured with code open*.
 
-**Nine window sizes, and the claim is deliberately weaker.** `SIZES` is a
+**Thirteen window sizes, and the claim is deliberately weaker.** `SIZES` is a
 coverage claim about *devices*: those are the phones this app is gated on and
 there are no others. A window can be any size at all, so no equivalent claim is
 available. What `DESKTOP_SIZES` is instead: **every breakpoint straddled on
@@ -1712,6 +1712,20 @@ room for one), 971 and 972 (the two/three-column edge), **1440×860**
 where the content column is the only thing still growing. Straddling is the
 point: a breakpoint is precisely the number where one width renders one layout
 and the next renders another, and only both sides can say the two agree.
+
+**And four of the thirteen straddle a breakpoint that is not the window's.**
+`assets/desktop/97-home-code.css` makes `.home-board` a named `@container` and
+turns the code row's layout on how wide the *content column* got, so the
+breakpoints that decide it are 475 and 731 board pixels, not window pixels. The
+nine sizes above put the board at nine widths and neither threshold was among
+them — 146 consecutive board widths were unreachable by any gate in the repo,
+and the row that made #265 necessary read `Document…` at 74px of title track
+inside that gap with the boards on either side of it both Clean. 763/764 and
+851/852 are those two thresholds straddled the same way the window's are, and
+they buy eight more board widths besides: 19 against 9, widest remaining gap 74
+against 146. The narrow side of each pair is the informative one — every
+question `docs/audit.js` puts is a cramping question, so a tier's *narrowest*
+board is the one that can produce a finding and its widest never is.
 
 **The 571/572 and 901/902 pairs are gone, and their absence is the point.**
 They straddled the sums of a shell that still had a list column between the nav
