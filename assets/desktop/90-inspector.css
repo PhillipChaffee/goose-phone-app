@@ -773,9 +773,92 @@
   }
 }
 
+/* ═══ 704..971: THE NAV TOGGLE PICKS WHICH SECOND COLUMN YOU GET ══════════
+ *
+ * THE BREAKPOINTS ARE SUMS AND THEY SAY WHAT THE QUESTION IS. 972 is
+ * 268 + 360 + 344 — nav, the measure system's content minimum, inspector. 704
+ * is 360 + 344 exactly, "content and inspector and nothing else". 628 is
+ * 268 + 360. So this band is defined as the width where TWO of the three
+ * columns fit and three do not, and CSS has to name a winner. Letting both
+ * columns stand costs 704 - 268 - 344 = 92px of content and was measured:
+ * `node docs/audit.js light` reported 196 findings, 40 blocks of them at
+ * 704x760 — `label.field-label` spilling by 31px on Settings, `p.about-conn`
+ * by 16, `session-quote` clipped at scroll=35 client=24 across four states.
+ *
+ * #134 ANSWERED "BOTH OF THEM HAVE TO BE ABLE TO WIN", AND THAT IS REVERSED
+ * HERE. `65-responsive.css` used to make `.navpane` an overlay while the
+ * inspector was open, so that pressing either toggle did something. It did
+ * something at the price of 268px permanently over the content column, with no
+ * scrim and no click-away — #215 and #212, and 29 of `docs/audit.js`'s 33
+ * OCCLUSION_KNOWN pairs. The two CSS answers to that were built and measured
+ * on `ceb8a47`, and both are one line:
+ *
+ *   (A) the sidebar closes itself here. Recorded in #215 in Phase 0b.
+ *   (B) the sidebar keeps its column and the inspector yields. This.
+ *
+ * (B), AND THE REASON IS THE DEFAULT STATE RATHER THAN TASTE.
+ * `src/shell/desktop/mod.rs:817` makes `nav_open` a plain `use_signal(|| true)`
+ * — open again at every launch — while `src/state.rs:686` makes
+ * `inspector_open` a `use_synced_storage`, a preference the app restores. So
+ * under (A) a reader whose inspector was last open launches into this band with
+ * NO sidebar and a nav toggle that does nothing, which is the shape of defect
+ * #134 and #214 were both written to fix, arrived at from the other side.
+ * Under (B) they launch into the sidebar they always get, and the inspector is
+ * one press of the nav toggle away. (A) also leaves a stray mark: `width: 0`
+ * does not take `border-right` with it, so the collapsed panel measures 1px —
+ * a hairline down the left edge of the window with nothing on either side.
+ *
+ * SO THE INSPECTOR'S CONTROLS ARE ABSENT WHERE THEY CANNOT ACT, which extends
+ * the rung three lines below rather than inventing one: under 704 this file
+ * already hides the toggle because `.insp` cannot appear at all down there.
+ * Here `.insp` cannot appear while the nav is open, so here they go too. That
+ * is the whole cost of (B) — in this band the reader reaches the inspector by
+ * closing the sidebar, and the nav toggle is the control that picks.
+ *
+ * THE KEYCAP GOES WITH THE CONTROL, IN ONE RULE. `50-band.css` reveals
+ * `.insp-kbd` while the inspector is shut, and takes it away under 704 for the
+ * reason `inspector::CHORDS` refuses invented rows: "a legend that lists a
+ * chord nothing binds is worse than an invented number, because the reader
+ * presses it". ⌘⌥/ is inert in this cell for exactly that reason now, so the
+ * chip goes with the button. It is ONE declaration over both subjects on
+ * purpose: `the_inspector_keycap_goes_at_the_width_its_control_does`
+ * (`src/shell/desktop/mod.rs`) reads one `@media` breakpoint per rule out of
+ * the sheet and so can only ever check the 703 rung, and a second pair of
+ * rules that could drift apart is precisely what it exists to forbid. Two
+ * selectors sharing one `display: none` cannot.
+ *
+ * MEASURED, on `desktop-chat` against the sheet list `docs/audit.js` links,
+ * transitions killed, as nav / .pane-main / .insp in px:
+ *
+ *              nav open, insp open        nav closed, insp open
+ *     704      268 abs / 360 / 344   ->   0 abs / 360 / 344
+ *              268     / 436 /   0        0     / 360 / 344
+ *     800      268 abs / 456 / 344   ->   0 abs / 456 / 344
+ *              268     / 532 /   0        0     / 456 / 344
+ *     971      268 abs / 627 / 344   ->   0 abs / 627 / 344
+ *              268     / 703 /   0        0     / 627 / 344
+ *
+ * The nav-open cell becomes byte-identical to the nav-open, inspector-CLOSED
+ * cell, and the nav-closed cell does not move at all. 628, 703, 972, 1440 and
+ * 1600 are untouched in all four shell cells.
+ *
+ * AND THAT UN-STALES A PARAGRAPH `65-responsive.css` FLAGGED. `docs/audit.js`'s
+ * DESKTOP_SHELL comment leaves mockup 31's cell (nav open, inspector closed)
+ * out of the grid on the ground that at 480, 627, 628, 703, 704 and 971 it
+ * renders a frame identical to the nav-open cell already walked. The overlay
+ * made that false at 704 and 971; the table above is it becoming true again. */
 @media (max-width: 971px) and (min-width: 704px) {
   .shell[data-nav="closed"][data-insp="open"] .insp {
     display: grid;
+  }
+
+  /* `.shell[data-nav="open"] .insp-toggle` and not `.shell-chrome >` — the
+   * control is rendered in exactly one place and the extra `[data-insp]` on
+   * the keycap is there to out-rank `50-band.css`'s (0,3,0) reveal rather than
+   * to narrow the cell, since the chip is on screen in no other one. */
+  .shell[data-nav="open"] .insp-toggle,
+  .shell[data-nav="open"][data-insp="closed"] .insp-kbd {
+    display: none;
   }
 }
 

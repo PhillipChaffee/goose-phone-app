@@ -930,14 +930,27 @@ const DESKTOP_SCALES = [16];
 // MOCKUP 31'S CELL IS THE ONE LEFT OUT, and the reason is measured rather than
 // asserted. At six of the nine window sizes it renders a frame identical to
 // the `nav open` cell already walked: assets/desktop/90-inspector.css's
-// `@media (max-width: 971px) { .shell .insp { display: none } }` (:468-471)
+// `@media (max-width: 971px) { .shell .insp { display: none } }` (:770-774)
 // hides the inspector below 972 outright, and the one rule that brings it back
-// in the 704..971 band (:474-477) needs the nav SHUT to match — so at 480,
+// in the 704..971 band (:850-853) needs the nav SHUT to match — so at 480,
 // 627, 628, 703, 704 and 971, flipping `data-insp` under an open nav changes
-// nothing at all. At the other three it differs from the added cell only in
+// nothing at all.
+//
+// THAT WAS FALSE AT 704 AND 971 FOR THE LIFE OF ONE FILE, and it is true again
+// rather than newly true. `65-responsive.css` restored `.insp` in that band for
+// `[data-insp="open"]` whatever the nav said, and made the sidebar a second
+// overlay to fit it — so mockup 31's cell really did differ there, and this
+// paragraph said otherwise while the sheet that broke it recorded, in its own
+// comment, that it had. #215 took the band the other way (the nav toggle picks
+// which second column you get) and the citations above are the rules that
+// answer it now.
+//
+// At the other three sizes the cell differs from the added one only in
 // how wide the pane is (704/1172/1332 against 972/1440/1600), and nothing in
-// assets/desktop/ couples the pane's CONTENTS to `data-nav`: the four rules
-// that read it touch `.navpane`, `.navcard`, `.nav-toggle` and `.insp`, and
+// assets/desktop/ couples the pane's CONTENTS to `data-nav`: the twelve rules
+// that read it are the sidebar's own box (`.navpane`, `.navcard`), the band's
+// (`.shell-chrome::before`, `.nav-toggle`, `.plane-badge`, `.nav-kbd`) and the
+// inspector's column and controls (`.insp`, `.insp-toggle`, `.insp-kbd`), and
 // nothing else. A pane at 1172 is a pane at a width, and the added cell
 // already sweeps the pane from 480 to 1600 across the size axis. THAT STOPS
 // BEING TRUE the moment a rule makes the pane's contents depend on `data-nav`
@@ -1151,7 +1164,8 @@ for (const [desktop, found] of Object.entries(REFERENCE)) {
 //
 // The reverse half is only asked of a `both` run — see the check at the end of
 // this file. Occlusion is geometry and is identical in the two themes
-// (measured: the same 16 pairs in each), but a fill's contrast is not, and
+// (measured again after #215's band landed: the same 28 pairs in each, and the
+// same 33 in each before it), but a fill's contrast is not, and
 // `span.mark.idle` fails in dark alone. A single-theme run walks half the grid,
 // so it may not judge a ledger written for all of it. CI runs `both`.
 
@@ -1161,45 +1175,53 @@ for (const [desktop, found] of Object.entries(REFERENCE)) {
 // an issue against it; the OCCLUDED walk below is what the check asks and #226
 // is why it asks it that way.
 //
-//   aside.navpane  #215 and #212. The desktop sidebar becomes an overlay below
-//                  628 and again in 704..971 while the inspector is open, and
-//                  it has neither a scrim nor a dismissal — so it is not a
-//                  panel you open and close, it is 268px permanently over the
-//                  content column. 29 of these 33 pairs are that one panel, and
-//                  the fix deletes all 29 at once. Measured: it fires at 480,
-//                  627, 704 and 971 and at no other window size, which is
-//                  exactly the two bands the sheet makes it an overlay in.
+//   aside.navpane  #215 and #212. The desktop sidebar is an overlay below 628
+//                  with neither a scrim nor a dismissal — so it is not a panel
+//                  you open and close, it is 268px over the content column
+//                  until the reader shuts it again. 25 of these 28 pairs are
+//                  that one panel, and they fire at 480 and 627 and at no
+//                  other window size, which is exactly the tier the sheet
+//                  makes it an overlay in.
 //
-//                  IT GREW BY TWELVE AND NOT ONE OF THEM IS NEW, which is the
-//                  distinction this list is worth nothing without. The Phase 3
-//                  capture drove the Code plane connected for the first time
-//                  and opened a review, a pull request and a code
-//                  conversation, so the store now holds worktree rows, a diff
-//                  file head, the code composer and its chips — controls that
-//                  had never been in front of this walk. The panel over them
-//                  is the same panel, in the same two bands, at the same four
-//                  window sizes; what changed is how much of the app was
-//                  standing behind it when the photograph was taken. Every one
-//                  of the twelve dies with #215 alongside the thirteen that
-//                  were already here, and that is the test of the claim: if a
-//                  fix leaves any of them alive it was not this defect.
+//                  FOUR OF THEM HAVE COME OFF, and `button.fab >>
+//                  button.drawer-item` with them, which is what a ledger that
+//                  may only shrink is for. #215's fork was decided in favour
+//                  of (B): in 704..971, where two of the three columns fit,
+//                  the sidebar keeps its column and the INSPECTOR yields —
+//                  `assets/desktop/90-inspector.css` hides the inspector's
+//                  toggle and its keycap while the nav is open there rather
+//                  than making the sidebar a second overlay, which is what
+//                  `65-responsive.css` used to do. Measured over the whole
+//                  grid: `button.btn.danger-outline`, `button.home-tile.live`,
+//                  `button.icon-btn` and `button.row-action` fired at 704
+//                  ALONE and stopped producing, and every remaining entry lost
+//                  its 704 and 971 cells while keeping its 480 and 627 ones.
 //
-//                  AND BY FOUR MORE, for the same reason a second time. The
-//                  capture that took the store to 21 desktop states was driven
-//                  against a Code home that had just grown its own geometry
-//                  (#76), a fifth tile (#77), pressable tiles (#203) and a
-//                  model chip on the Chat home (#194) — so `.home-tile`,
-//                  `.home-tile.live`, `.home-tile.urgent` and
-//                  `.home-chip.picker` are controls that did not exist the
-//                  last time this walk ran. Same panel, same bands, same
-//                  window sizes. All 29 still die together.
-//   button.fab     `--z-chrome` is 20 and the overlay sidebar is `z-index: 3`,
-//                  so a floating button belonging to the content column paints
-//                  over the sidebar's rows — the second half of #209, one
-//                  element over. And on the PHONE, where there is no sidebar,
-//                  the same button covers the bottom of the list it floats on:
-//                  `chats` at 402x874 with a long title, the fab at 264,806
-//                  121x48 over "Load more" at 16,800 370x40.
+//                  AND THAT IS WHY #215 IS STILL OPEN. This paragraph used to
+//                  say all 29 pairs died together and called it the test of
+//                  the fix; the measurement says otherwise and the ledger is
+//                  the thing that caught it. Below 628 there is no arbitration
+//                  to make — 268 + 360 is 628 — so the sidebar cannot be a
+//                  column there whatever is decided about the band above it.
+//                  Measured on the branch that tried: let it be one at 480 and
+//                  `node docs/audit.js light` reports 8 finding-blocks at
+//                  480x560, `div.home-starter-grid` leaving its box by 120px
+//                  and `span.recent-quote` clipped three times, because
+//                  480 - 268 is 212px of content against the measure system's
+//                  own 360 floor. What clears the remaining 25 is a dismissal
+//                  — scrim, click-away, Escape — and that is a class literal
+//                  in src/shell/desktop/mod.rs, so it waits on a capture.
+//   button.fab     On the PHONE, where there is no sidebar, a floating button
+//                  covers the bottom of the list it floats on: `chats` at
+//                  402x874 with a long title, the fab at 264,806 121x48 over
+//                  "Load more" at 16,800 370x40.
+//
+//                  ITS DESKTOP HALF HAS COME OFF with the band above:
+//                  `--z-chrome` is 20 and the overlay sidebar was `z-index: 3`,
+//                  so at 704 the content column's fab painted over the
+//                  sidebar's own rows — the second half of #209, one element
+//                  further out. There is no overlay in that band now and the
+//                  pair stopped producing.
 //   div.toast      A toast is `position: fixed; z-index: 60` and at AX5 it is
 //                  440px tall on a 568px phone, so it reaches the bar: 7px of
 //                  the 44px back chevron on `recipes-detail-toast` at 320x568.
@@ -1222,9 +1244,7 @@ const OCCLUSION_KNOWN = [
   'aside.navpane >> button.action-chip',
   'aside.navpane >> button.home-chip.picker',
   'aside.navpane >> button.home-tile',
-  'aside.navpane >> button.home-tile.live',
   'aside.navpane >> button.home-tile.urgent',
-  'aside.navpane >> button.btn.danger-outline',
   'aside.navpane >> button.btn.primary',
   'aside.navpane >> button.btn.secondary',
   'aside.navpane >> button.btn.small.primary',
@@ -1235,10 +1255,8 @@ const OCCLUSION_KNOWN = [
   'aside.navpane >> button.composer-chip.action.model.needed',
   'aside.navpane >> button.composer-chip.action.repo',
   'aside.navpane >> button.home-starter',
-  'aside.navpane >> button.icon-btn',
   'aside.navpane >> button.icon-btn.back',
   'aside.navpane >> button.recent',
-  'aside.navpane >> button.row-action',
   'aside.navpane >> button.setting-row',
   'aside.navpane >> button.tree',
   'aside.navpane >> button.tree.awake',
@@ -1249,7 +1267,6 @@ const OCCLUSION_KNOWN = [
   'aside.navpane >> textarea.compose-field',
   'aside.navpane >> textarea.input',
   'button.fab >> button.btn.secondary.grow',
-  'button.fab >> button.drawer-item',
   'button.scroll-bottom >> summary',
   'div.toast >> button.icon-btn.back',
 ];
