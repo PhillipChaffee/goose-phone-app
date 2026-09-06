@@ -135,102 +135,19 @@
   }
 }
 
-/* ═══ 704..971: THE INSPECTOR TOGGLE STOPS BEING A DEAD CONTROL ═══════════
+/* ═══ 704..971 IS NOT DECIDED HERE ANY MORE ═══════════════════════════════
  *
- * THE BUG, in one sentence: between 704 and 971 with the sidebar open,
- * pressing the inspector button flipped `aria-expanded` and nothing on screen
- * moved. `90-inspector.css` hides `.insp` outright below 972 and restores it in
- * this band ONLY for `[data-nav="closed"][data-insp="open"]`, while the toggle
- * itself is hidden only below 704 — so for 268 pixels of window width the
- * control was present, pressable, and inert. Worse in the other direction: the
- * inspector's visibility was actually decided by the SIDEBAR's control, so at
- * 800px opening the sidebar silently removed an inspector that was on screen
- * and closing it brought the thing back, with nothing on screen saying why.
+ * This file used to answer the band with five rules that made `.navpane` a
+ * second overlay while the inspector was open, so that both toggles could win.
+ * #215 reversed that: the sidebar keeps its column there and the INSPECTOR
+ * yields, which means the band needs no overlay and no rule in this file. The
+ * whole argument, and the two rules that survive it, are in
+ * `90-inspector.css` — one file decides when the inspector is on screen, and
+ * the ladder that hides its control where it cannot act is already there.
  *
- * THE BREAKPOINTS ARE SUMS AND THEY SAY WHAT THE ANSWER HAS TO BE. 972 is
- * 268 + 360 + 344 — nav, the measure system's content minimum, inspector. 704
- * is 360 + 344 exactly, i.e. "content and inspector, and nothing else". 628 is
- * 268 + 360. So this band is defined as the width at which TWO of the three
- * columns fit and not three, and the shipped sheet answered "which two" with a
- * constant — always nav and content, whatever the reader asked for. The reader
- * asks with two toggles; both of them have to be able to win.
- *
- * So: the inspector answers its own toggle here, and the sidebar becomes an
- * OVERLAY while it is open — the same mechanism, the same three declarations,
- * that the 627 tier above already uses for the same reason one column further
- * down. Content keeps its 360 at the floor of the band (704 - 344), both
- * controls do what they say, and nothing is unreachable in either state.
- *
- * WHY THE SELECTORS ARE LONGER THAN THEY LOOK LIKE THEY NEED TO BE. The rules
- * being overruled are in `90-inspector.css`, which sorts AFTER this file, so
- * order cannot decide this and specificity has to: `.app .shell[data-insp]
- * .insp` is (0,3,0) against `.shell .insp`'s (0,2,0). The block those rules are
- * in belongs to a different lane in this campaign, which is why the correction
- * is written here rather than there — and when that lane is done, all four
- * blocks should be read together and the redundant ones deleted. Recorded so
- * nobody has to rediscover it: `docs/audit.js`'s own DESKTOP_SHELL comment
- * quotes `90-inspector.css:468-477` as the reason mockup 31's cell is left out
- * of the grid, and this change makes that paragraph stale. */
-@media (max-width: 971px) and (min-width: 704px) {
-  .app .shell[data-insp="open"] .insp {
-    display: grid;
-  }
-
-  /* AND THE SIDEBAR GETS OUT OF THE WAY, or 704 - 268 - 344 is a 92px content
-   * column. Only while the inspector is open: with it shut this band is nav +
-   * content exactly as before, and nothing here fires at all. */
-  .shell[data-insp="open"] .navpane {
-    position: absolute;
-    z-index: 3;
-    top: var(--chrome-h);
-    bottom: 0;
-    left: 0;
-    width: var(--nav-w);
-  }
-
-  /* AND A CLOSED SIDEBAR IS STILL CLOSED, which the rule above took away.
-   *
-   * The 627 tier one block up writes the same five declarations on a bare
-   * `.navpane` — (0,1,0) — so `10-sidebar-frame.css`'s
-   * `.shell[data-nav="closed"] .navpane { width: 0 }` at (0,3,0) beats it and
-   * the collapse works. This copy had to out-rank `90-inspector.css`, so it was
-   * written `.shell[data-insp="open"] .navpane` — also (0,3,0), and `10-` sorts
-   * first, so `var(--nav-w)` won the tie and a shut sidebar kept its 268px.
-   * `flex-basis: 0` could not rescue it: the box is out of flow, so `width` was
-   * the only declaration left that could collapse it. `border-right-width: 0`
-   * is a different property and still applied, so the panel lost its hairline
-   * too, and the shadow is scoped to `[data-nav="open"]` — leaving a
-   * borderless, shadowless slab of `--nav-fill` at 1.08:1 against the pane in
-   * BOTH themes, with `elementsFromPoint(134, 400)` returning `aside.navpane`
-   * topmost. A rectangle you cannot see, over a transcript you cannot click.
-   *
-   * Measured on `desktop-chat` under the sheet list `docs/audit.js` links, over
-   * 4 shell cells x 14 widths from 480 to 1600: the six widths in this band go
-   * from `nav 268, main 0..w` to `nav 0, main 0..w` in their nav-closed cells,
-   * and NOTHING else moves — 628, 703, 972, 1440 and 1600 are byte-identical,
-   * and every nav-open cell in the band is untouched.
-   *
-   * Two declarations and not one. `width` is what the rule above set and what
-   * has to be taken back; `box-shadow: none` is because the panel is still
-   * `position: absolute` here, and an absolutely-positioned box of zero width
-   * casts its shadow anyway — a 0-wide slab at x=0 with a 32px blur is a smudge
-   * down the left edge of the window, which is the same class of stray mark. It
-   * is inert today, since the shadow above is scoped to `[data-nav="open"]`,
-   * and it is written down so that widening that scope cannot resurrect it. */
-  .shell[data-insp="open"][data-nav="closed"] .navpane {
-    width: 0;
-    box-shadow: none;
-  }
-
-  .shell[data-insp="open"][data-nav="open"] .navpane {
-    box-shadow: 0 8px 32px rgb(0 0 0 / 24%);
-  }
-
-  /* The band's left cell goes with the column, for the 627 tier's reason
-   * verbatim: the hairline at x=267 is the top of the sidebar's own edge, and
-   * an overlay has no edge for it to be the top of. */
-  .shell[data-insp="open"][data-nav="open"] .shell-chrome::before {
-    display: none;
-  }
-}
+ * The 627 tier above is untouched by that reversal and is still an overlay,
+ * for the reason its own comment gives: 268 + 360 is 628, so below this width
+ * there is no arbitration to make. That is also why #215 is not closed — see
+ * `docs/audit.js`'s occlusion ledger, which still carries 25 pairs off this
+ * tier. */
 
