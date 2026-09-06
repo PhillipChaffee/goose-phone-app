@@ -12,7 +12,7 @@ use crate::state::{
 };
 use crate::views::attach::{attachment_list, AttachButton, AttachTray};
 use crate::views::session_settings::{
-    chip_effort, choice_label, mode_icon, ChoicePickerSheet, SessionSettingsSheet, SettingChoice,
+    chip_effort, mode_icon, option_choices, ChoicePickerSheet, SessionSettingsSheet, SettingChoice,
     SettingRow,
 };
 use crate::views::{
@@ -370,14 +370,15 @@ fn is_mode_chip(option: &ConfigOption) -> bool {
 /// they are what tells "Auto" from "Manual approval" without having to try
 /// both — and an icon derived from the value, because neither ACP nor goose
 /// has a field for one.
+/// The label and the note come from [`option_choices`], which every screen
+/// that renders a goose option shares; the icon is added here, because it is
+/// the one thing about a mode that is not true of every option.
 fn mode_choices(option: &ConfigOption) -> Vec<SettingChoice> {
-    option
-        .options
-        .iter()
-        .map(|c| {
-            SettingChoice::new(&c.value, choice_label(&c.name, &c.value))
-                .with_note(c.description.clone())
-                .with_icon(mode_icon(&c.value))
+    option_choices(option)
+        .into_iter()
+        .map(|choice| {
+            let icon = mode_icon(&choice.value);
+            choice.with_icon(icon)
         })
         .collect()
 }
@@ -431,14 +432,7 @@ fn goose_setting_rows(
             &option.config_id,
             &option.name,
             option.current_value.as_deref(),
-            option
-                .options
-                .iter()
-                .map(|c| {
-                    SettingChoice::new(&c.value, choice_label(&c.name, &c.value))
-                        .with_note(c.description.clone())
-                })
-                .collect(),
+            option_choices(option),
             option.description.clone(),
         )
     }));

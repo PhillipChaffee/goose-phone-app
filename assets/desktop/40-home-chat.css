@@ -402,13 +402,22 @@
   display: none;
 }
 
-/* A FACT, not a control. The mockups draw two visual classes in this row and
- * the difference is the whole grammar of it: a thing you can CHANGE is a
- * bordered box with a chevron (`.picker`), and a thing you can only READ is
- * bare mono text between middots (`.mini .mono`). Every chip this app puts
- * here is the second kind — the model, the host, the extension count, the
- * context size are all read-only on this screen — so they are bare, and the
- * filled pill they used to be was claiming to be pressable.
+/* TWO VISUAL CLASSES, AND BOTH OF THEM ARE NOW ON THIS ROW.
+ *
+ * The mockups draw two and the difference is the whole grammar of it: a thing
+ * you can CHANGE is a bordered box with a chevron (`.picker`), and a thing you
+ * can only READ is bare mono text between middots (`.mini .mono`).
+ *
+ * THIS PARAGRAPH USED TO SAY "every chip this app puts here is the second
+ * kind", and it named its own expiry in the same breath — *that is correct as
+ * long as the model and repo stay unchangeable from this screen; the moment
+ * either becomes a picker, the bordered form has to come back.* That moment is
+ * #79 and #194: the code half's repo and base branch are pickers, and so is the
+ * chat half's model. The host, the extension count and the context window stay
+ * bare, because they really are read-only — and keeping the distinction is the
+ * point rather than a leftover. A chip that is pressable and drawn like the
+ * chips beside it is worse than either, because nothing on the row says what
+ * responds.
  *
  * The middot is a separator drawn by the row rather than a character in the
  * text, so a chip does not have to know whether it is last. */
@@ -427,7 +436,11 @@
   white-space: nowrap;
 }
 
-.home-chip + .home-chip::before {
+/* BETWEEN TWO FACTS, AND ONLY THERE. A middot separates values that share one
+ * run of text; two bordered boxes are already separated by their own edges, and
+ * a glyph between them would read as punctuation inside a control group. Which
+ * is also why the pickers take a real gap below and the facts do not. */
+.home-chip:not(.picker) + .home-chip:not(.picker)::before {
   content: "·";
   margin: 0 6px;
   /* WAS --text-tertiary, AND THAT IS A MISS THE AUDIT CANNOT REPORT.
@@ -448,6 +461,74 @@
  * for that. The one place this shell reaches for `--font-mono`. */
 .home-chip.mono {
   font-family: var(--font-mono);
+}
+
+/* A CONTROL. The mockups' `.picker{border:1px solid their --line;
+ * border-radius:8px;height:26px}`, with the one number this shell may not take.
+ *
+ * 32px AND NOT 26, and it is the same trade the send button two sections up
+ * already records: `docs/audit.js` fails any `button` under 32 in either axis
+ * (`SMALL-TAP`), the floor wins over the picture, and it costs nothing here —
+ * the control zone is `7 + 32 + 8` because the send is 32, so a picker at the
+ * same height fits inside a row that does not move.
+ *
+ * `--radius-md` is 8px, which is the mockups' number and this shell's tier for
+ * a control rather than a card. The edge is `--shell-line`, not the softer rung
+ * `.recent` and `.home-tile` take: a card's outline is decoration and a
+ * control's is the control, and this one has to be findable at a glance among
+ * bare text. Non-text and decorative all the same, so no 3:1 is owed.
+ *
+ * Transparent, because it sits INSIDE `.home-compose`'s own `--surface-card`
+ * fill. A second fill here would be a box drawn on a box, which is what the
+ * filled pill this row used to carry was doing. Hover fills it, the same
+ * one-tier move `.home-starter` makes: an outline is a thing that could become,
+ * and pointing at it is the moment it does. */
+.home-chip.picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  min-height: 2rem;
+  padding: 0 8px;
+  border: 1px solid var(--shell-line);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-xs);
+  line-height: var(--lh-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.home-chip.picker:hover {
+  border-color: var(--accent);
+  background: var(--surface-raise);
+}
+
+/* The glyphs are chrome on a control whose VALUE is the point, so they take the
+ * secondary rung and the primary stays on the name. 12px, `.repo-head > .icon`'s
+ * number and the size every leading glyph in this sheet is set at; the chevron
+ * comes down one more, because it says "there are others" and nothing else. */
+.home-chip.picker > .icon {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.home-chip.picker > .icon:last-child {
+  font-size: 10px;
+}
+
+/* A REAL GAP, and only where a picker is one of the two. `.home-chips` is
+ * `gap: 0` on purpose — the middot above carries its own 12px and a flex gap
+ * beside it was a second helping of the same space — but two bordered boxes
+ * touching is not a separator, it is a seam. 8px is the control-zone gap the
+ * row already uses between its chips and the send button. */
+.home-chip.picker + .home-chip,
+.home-chip + .home-chip.picker {
+  margin-left: 8px;
 }
 
 /* ── pick up where you left off ─────────────────────────────────────────

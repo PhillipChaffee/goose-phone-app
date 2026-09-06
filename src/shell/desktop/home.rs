@@ -28,10 +28,12 @@
 
 use dioxus::dioxus_core::spawn_forever;
 use dioxus::prelude::*;
+use goose_acp_client::ConfigOption;
 
 use crate::icons::Icon;
 use crate::nav::Plane;
 use crate::state::AppCtx;
+use crate::views::session_settings::{option_choices, ChoicePickerSheet};
 
 /// The part of the day, for the greeting.
 ///
@@ -85,12 +87,20 @@ pub(crate) const fn compose_placeholder(plane: Plane) -> &'static str {
 
 /// A count worth putting on the Code half's home screen.
 ///
-/// Only four, and every one of them is read off a signal. The mockup has nine;
-/// five of them (spend, containers warm, queue depth, cold-start seconds,
-/// runners busy) have no source on this side of the wire at all.
+/// Only five, and every one of them is read off a signal. The mockup has nine;
+/// four of them (spend, containers warm, queue depth, cold-start seconds,
+/// runners busy) have no source on this side of the wire at all. The fifth was
+/// **pull requests**, and it was never on that list — #77's whole argument is
+/// that its number IS on the wire and costs no container: `chat_pulls` is the
+/// manager answering GitHub with its own credential, never proxied, so the
+/// plane-wide sweep behind it wakes nothing (`code::refresh_plane_pulls`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Tile {
-    pub value: String,
+    /// A COUNT, not a string, and that is load-bearing rather than tidy: every
+    /// one of these is `something.len()`, and [`Tile::press`] has to ask
+    /// whether the number is zero. Held as a `String` it asked by comparing
+    /// against `"0"`.
+    pub value: usize,
     pub label: &'static str,
     /// The mockup's second line. `None` where there is no SECOND fact — a
     /// blank sub-line is a data slot pretending to be data.
@@ -101,6 +111,54 @@ pub(crate) struct Tile {
     /// can be, and it is the one counting questions the agents are blocked on
     /// — the same fact `sidebar::Mark::Waiting` paints on a row.
     pub urgent: bool,
+    /// The slice of the board directly under it that this tile names, when
+    /// there is one — #203, and the whole of what makes a tile a control.
+    ///
+    /// **Only where the number and the rows AGREE by construction**, which is
+    /// why two of the five are `None` rather than pointed somewhere plausible.
+    /// A tile that reads `5` and filters to four rows is a worse control than
+    /// a tile that does not press: the reader has no way to tell which of the
+    /// two numbers is the lie. `repos` counts groups and no subset of rows;
+    /// `pull requests` counts pull REQUESTS, and a branch that was reopened
+    /// has two of them on one row. See [`code_tiles`].
+    pub filter: Option<BoardFilter>,
+}
+
+impl Tile {
+    /// The filter pressing this tile selects, or `None` when pressing it would
+    /// do nothing.
+    ///
+    /// A count of zero has no rows to select, so the tile renders as the `div`
+    /// it always was rather than as a control that empties the board. That is
+    /// also what keeps `Home` from having to handle a filtered board with
+    /// nothing in it: the only filters reachable are the ones with rows.
+    pub(crate) const fn press(&self) -> Option<BoardFilter> {
+        match self.filter {
+            Some(f) if self.value > 0 => Some(f),
+            _ => None,
+        }
+    }
+}
+
+/// Which slice of the board the tiles are asking for — #203.
+///
+/// Three, and each is the predicate its own tile counts with, not a
+/// paraphrase of it. That is the only reason the set is three rather than
+/// five: a filter whose row count can differ from the number on the tile that
+/// opened it is a filter that makes the screen less trustworthy, not more.
+///
+/// [`Self::Awake`] reads `ChatMeta::is_running` and NOT `TreeState::Awake`,
+/// and the difference is the whole trap. A tree whose container is up and
+/// which is also blocked on the reader is `TreeState::Waiting` — waiting
+/// outranks awake, for `sidebar::Mark`'s reason — while the `awake` tile
+/// counts it, because its container really is up. Filtering on the row's
+/// state would show one row under a tile reading `2`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum BoardFilter {
+    #[default]
+    All,
+    Waiting,
+    Awake,
 }
 
 /// The Code half's counts, from `AppCtx` and nothing else.
@@ -128,20 +186,29 @@ pub(crate) fn code_tiles(ctx: &AppCtx) -> Vec<Tile> {
         names.len()
     };
     let allowed = (ctx.code_repos)().len();
-    vec![
+    let mut tiles = vec![
         Tile {
-            value: chats.len().to_string(),
+            value: chats.len(),
             label: "working trees",
             sub: None,
             urgent: false,
             live: false,
+            // The whole board, which is what pressing it selects: it is how
+            // the reader gets back from one of the two below.
+            filter: Some(BoardFilter::All),
         },
         Tile {
-            value: waiting.to_string(),
+            value: waiting,
             label: "waiting on you",
             sub: None,
             urgent: waiting > 0,
             live: false,
+            // THE ONE #203 IS ABOUT. It is the only tile painted urgent, so
+            // it is the loudest object on the screen, and it was the one that
+            // did nothing. Its count is distinct chats in `code_permissions`
+            // and `code_board` tags a row `Waiting` off the same list, so the
+            // number and the rows cannot disagree.
+            filter: Some(BoardFilter::Waiting),
         },
         // "AWAKE", NOT "RUNNING NOW", and it is a correction rather than a
         // rewording. `ChatMeta.status` is the CONTAINER's lifecycle —
@@ -151,20 +218,90 @@ pub(crate) fn code_tiles(ctx: &AppCtx) -> Vec<Tile> {
         // mid-turn, so a tile headed "running now" was over-claiming, directly
         // above rows that would have had to say "idle".
         Tile {
-            value: awake.to_string(),
+            value: awake,
             label: "awake",
             sub: (asleep > 0).then(|| format!("{asleep} asleep")),
             urgent: false,
             live: awake > 0,
+            // `is_running`, the same field this count is built from — see
+            // `BoardFilter::Awake` for why it is not the row's own state.
+            filter: Some(BoardFilter::Awake),
         },
-        Tile {
-            value: repos.to_string(),
-            label: "repos",
-            sub: (allowed > 0).then(|| format!("{allowed} allowed")),
-            urgent: false,
-            live: false,
-        },
-    ]
+    ];
+    tiles.extend(pull_tile(ctx, &chats));
+    tiles.push(Tile {
+        value: repos,
+        label: "repos",
+        sub: (allowed > 0).then(|| format!("{allowed} allowed")),
+        urgent: false,
+        live: false,
+        // INERT, and #203 asked the question honestly rather than guessing an
+        // answer. This value is groups on the board, its sub-line is the
+        // manager's ALLOWLIST — a different set — and there is no repos
+        // screen anywhere in the app and no endpoint behind one. The nearest
+        // thing that exists is "start a session in a repo", which is a verb
+        // and not this noun.
+        filter: None,
+    });
+    tiles
+}
+
+/// The plane's open pull requests, or `None` when the count would be short.
+///
+/// **The absence is the honest answer and it is the whole of this function.**
+/// `PullsState::by_chat` holds an entry per chat the sweep has ANSWERED for,
+/// and `refresh_plane_pulls` caps a sweep at `SWEEP_MAX_CHATS` (24) — so on a
+/// fleet of thirty, or in the seconds before the first sweep finishes,
+/// flattening the map gives a number that is silently smaller than the truth
+/// and drifts upward while the reader watches it. #77 gave two ways out ("say
+/// so on the subtitle, or leave the tile off past the cap") and this takes the
+/// second: a tile that is missing is a reader who goes and looks, and a tile
+/// reading `3` when it is `9` is a reader who does not.
+///
+/// So the tile appears only when **every tree on the board has been asked
+/// about**. `by_chat` is pruned against the whole index by the sweep, so
+/// "asked about" is exactly `contains_key`, and a chat mapped to an empty list
+/// is an answer — it has no pull requests — rather than a gap.
+///
+/// Draft and red are counted among the OPEN ones only. A merged pull request
+/// with a red build is nobody's problem, which is `code::row_checks_label`'s
+/// rule in its own words, one screen up.
+fn pull_tile(ctx: &AppCtx, chats: &[opencode_client::ChatMeta]) -> Option<Tile> {
+    let pulls = (ctx.code_pulls)();
+    if !chats.iter().all(|c| pulls.by_chat.contains_key(&c.id)) {
+        return None;
+    }
+    let open: Vec<&opencode_client::PullRequest> = chats
+        .iter()
+        .filter_map(|c| pulls.by_chat.get(&c.id))
+        .flatten()
+        .filter(|p| matches!(p.state, opencode_client::PullState::Open))
+        .collect();
+    let draft = open.iter().filter(|p| p.draft).count();
+    let red = open
+        .iter()
+        .filter(|p| matches!(p.checks, opencode_client::Checks::Failing))
+        .count();
+    let mut facts: Vec<String> = Vec::new();
+    if draft > 0 {
+        facts.push(format!("{draft} draft"));
+    }
+    if red > 0 {
+        facts.push(format!("{red} red"));
+    }
+    Some(Tile {
+        value: open.len(),
+        label: "pull requests",
+        sub: (!facts.is_empty()).then(|| facts.join(" \u{b7} ")),
+        urgent: false,
+        live: false,
+        // INERT, for the reason on `Tile::filter`: this counts pull requests
+        // and the board counts trees, and a branch someone reopened carries
+        // two of them on one row (`PullsState::plane_pull` says so where it
+        // takes the first). A filter that could show four rows under a tile
+        // reading five is the defect #203 is complaining about, not its fix.
+        filter: None,
+    })
 }
 
 /// What a working tree is doing, in the one word a board has room for.
@@ -206,11 +343,31 @@ pub(crate) struct Tree {
     /// `ChatMeta.base` is empty for every chat made before the base picker
     /// existed, which is a default rather than a migration — so an empty one
     /// renders no line instead of the word "from".
+    ///
+    /// NOT DRAWN ANY MORE — [`Tree::branch_sub`] is what the row's second
+    /// branch line says, and this is one of the two things it can be. Kept as
+    /// its own field because [`RepoGroup::base`] is a claim about the raw ref
+    /// and would be wrong built from a line that might say `#121 open`.
     pub base: Option<String>,
+    /// The line under the branch name: the pull request and its commit count
+    /// where the branch has one, `from <base>` where it does not — #82.
+    pub branch_sub: Option<String>,
+    /// `(additions, deletions)`, and only where a server sent both — #81. A
+    /// tree with no pull request has no numbers AT ALL, not zeroes, and the
+    /// three limits on that are written on `code::PullsState::plane_pull`.
+    pub num: Option<(u32, u32)>,
+    /// `changed_files` off the same pull request, on its own `Option` because
+    /// the manager can send it without the pair or the pair without it.
+    pub files: Option<u32>,
     /// The ask that is parked in it, or nothing. The mockup's own content here
     /// is the live shell command, which no index on this wire carries.
     pub say: Option<String>,
     pub state: TreeState,
+    /// Whether the CONTAINER is up, which is not [`TreeState::Awake`] — a tree
+    /// that is both up and blocked on the reader is `Waiting`. This is the
+    /// field [`BoardFilter::Awake`] selects on, so that the filter and the
+    /// tile that opened it count the same thing.
+    pub awake: bool,
     pub age: Option<String>,
 }
 
@@ -224,18 +381,152 @@ pub(crate) struct RepoGroup {
     pub base: Option<String>,
     pub awake: usize,
     pub waiting: usize,
+    /// The mockup's `.rhead .rt` total, `+108 −30`, or `None` — which is most
+    /// of the time and by construction.
+    ///
+    /// `code::PullsState::group_diffstat` is what answers it, and the refusal
+    /// is in ITS return type rather than in a comment here: one tree in the
+    /// group that no server measured and there is no total. Summing only the
+    /// trees that happen to carry a pull request would put a plausible figure
+    /// on a heading, and plausible is worse than absent — the reader cannot
+    /// tell a total of four trees from a total of two.
+    pub num: Option<(u32, u32)>,
     pub trees: Vec<Tree>,
+}
+
+/// One tree's commit count, in words. `None` where no pull request carries
+/// one — a branch with no pull request has no commits anybody counted, and
+/// `0 commits` would be a claim (#82).
+fn commits_word(n: u32) -> String {
+    if n == 1 {
+        "1 commit".to_owned()
+    } else {
+        format!("{n} commits")
+    }
+}
+
+/// The file count, in words, for the row's number column.
+fn files_word(n: u32) -> String {
+    if n == 1 {
+        "1 file".to_owned()
+    } else {
+        format!("{n} files")
+    }
+}
+
+/// The mockup's five-cell `+/−` sparkline, as one `true` per added-cell.
+///
+/// It is a RATIO and nothing else — five cells split between the additions and
+/// the deletions — so it renders exactly wherever `+N −M` does and says
+/// nothing the pair beside it does not. #81 asked for it in those words.
+///
+/// **Empty when there is nothing to divide.** A pull request that added and
+/// removed nothing draws no bar at all rather than five blank cells: an empty
+/// cell would be a fill with no meaning, and `docs/audit.js`'s indicator walk
+/// would measure it as one. That is also why the two painted kinds are the
+/// only kinds — the mockup's grey `i.e` filler is a background-painted mark
+/// carrying nothing, which is a finding rather than a design.
+///
+/// Both clamps are the honest half of the rounding: a side with any change at
+/// all keeps a cell, so `+84 −1` shows the deletion instead of rounding it
+/// away, and `+1 −84` still shows the addition.
+fn spark(add: u32, del: u32) -> Vec<bool> {
+    let total = u64::from(add) + u64::from(del);
+    if total == 0 {
+        return Vec::new();
+    }
+    let mut green = (5 * u64::from(add) + total / 2) / total;
+    if add > 0 {
+        green = green.max(1);
+    }
+    if del > 0 {
+        green = green.min(4);
+    }
+    (0..5).map(|i| i < green).collect()
+}
+
+/// One row, from the index entry, the ask parked in it and the newest pull
+/// request off its branch.
+///
+/// Its own function because [`code_board`] is a grouping loop and this is a
+/// dozen field decisions, three of which (`branch_sub`, `num`, `files`) are
+/// the whole of #81 and #82 and want to be read together rather than found
+/// among the bucketing.
+fn tree_of(
+    meta: &opencode_client::ChatMeta,
+    ask: Option<&(String, opencode_client::CodePermission)>,
+    pull: Option<&opencode_client::PullRequest>,
+    state: TreeState,
+    now: i64,
+) -> Tree {
+    let base = (!meta.base.trim().is_empty()).then(|| format!("from {}", meta.base));
+    Tree {
+        id: meta.id.clone(),
+        title: if meta.title.trim().is_empty() {
+            meta.id.clone()
+        } else {
+            meta.title.clone()
+        },
+        branch: (!meta.branch.trim().is_empty()).then(|| meta.branch.clone()),
+        base: base.clone(),
+        // THE MOCKUP'S FINISHED ROW, `4 commits · merged #124`, and each half
+        // arrives on its own. `commits` on a pull request IS the count ahead
+        // of its base, so the mockup's other second line, `3 commits · ↑3
+        // ahead`, is the same number said twice wherever a pull request
+        // exists — and where one does not, neither half has a source and the
+        // line falls back to the base ref.
+        branch_sub: pull
+            .map(|p| match p.commits {
+                Some(n) => format!(
+                    "{} \u{b7} {}",
+                    commits_word(n),
+                    crate::code::row_pull_word(p)
+                ),
+                None => crate::code::row_pull_word(p),
+            })
+            .or(base),
+        num: pull.and_then(opencode_client::PullRequest::diffstat),
+        files: pull.and_then(|p| p.changed_files),
+        say: ask
+            .map(|(_, p)| p.title.trim().to_owned())
+            .filter(|t| !t.is_empty()),
+        state,
+        awake: meta.is_running(),
+        // Guarded against a stamp in the FUTURE, which is a clock skew between
+        // this machine and the manager and would otherwise render as "in 3
+        // hours". `now` is an `i64` of seconds and `last_active` an `f64` of
+        // the same; the cast is scoped to this one comparison and is exact for
+        // any epoch second this century.
+        age: {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "an epoch second is ~2^31, three orders of magnitude \
+                          below where f64 stops representing integers exactly"
+            )]
+            let now = now as f64;
+            (meta.last_active > 0.0 && meta.last_active <= now)
+                .then(|| crate::state::relative_time_secs(meta.last_active))
+        },
+    }
 }
 
 /// THE CODE HALF'S BOARD: per-repo groups of working trees.
 ///
 /// `now` is a parameter for `sidebar::band_of`'s reason — a function that read
 /// the clock could only be checked by a test that also read it.
-pub(crate) fn code_board(ctx: &AppCtx, now: i64) -> Vec<RepoGroup> {
+///
+/// `filter` selects rows BEFORE they are grouped, so a group with nothing left
+/// in it is never made and every count on a heading describes what is under
+/// it. See [`BoardFilter`] for why the set is three.
+pub(crate) fn code_board(ctx: &AppCtx, now: i64, filter: BoardFilter) -> Vec<RepoGroup> {
     // The FRONT of each chat's queue, which is what `views::code` already does
     // with the same list: a board row is not the place to work through a
     // backlog, it is the place to say there is one.
     let asks = (ctx.code_permissions)();
+    // ONE READ FOR THE WHOLE BOARD, which is `views::code`'s habit with the
+    // same map: `plane_pull` is a hash lookup, but the signal behind it is a
+    // clone of every pull request the sweep has seen.
+    let pulls = (ctx.code_pulls)();
 
     let mut chats = (ctx.code_chats)();
     // Newest first, `sidebar::code_rows`' own comparator.
@@ -256,36 +547,18 @@ pub(crate) fn code_board(ctx: &AppCtx, now: i64) -> Vec<RepoGroup> {
         } else {
             TreeState::Asleep
         };
-        let tree = Tree {
-            id: meta.id.clone(),
-            title: if meta.title.trim().is_empty() {
-                meta.id.clone()
-            } else {
-                meta.title.clone()
-            },
-            branch: (!meta.branch.trim().is_empty()).then(|| meta.branch.clone()),
-            base: (!meta.base.trim().is_empty()).then(|| format!("from {}", meta.base)),
-            say: ask
-                .map(|(_, p)| p.title.trim().to_owned())
-                .filter(|t| !t.is_empty()),
-            state,
-            // Guarded against a stamp in the FUTURE, which is a clock skew
-            // between this machine and the manager and would otherwise render
-            // as "in 3 hours". `now` is an `i64` of seconds and `last_active`
-            // an `f64` of the same; the cast is scoped to this one comparison
-            // and is exact for any epoch second this century.
-            age: {
-                #[expect(
-                    clippy::cast_precision_loss,
-                    reason = "an epoch second is ~2^31, three orders of \
-                              magnitude below where f64 stops representing \
-                              integers exactly"
-                )]
-                let now = now as f64;
-                (meta.last_active > 0.0 && meta.last_active <= now)
-                    .then(|| crate::state::relative_time_secs(meta.last_active))
-            },
+        let keep = match filter {
+            BoardFilter::All => true,
+            BoardFilter::Waiting => state == TreeState::Waiting,
+            BoardFilter::Awake => meta.is_running(),
         };
+        if !keep {
+            continue;
+        }
+        // The newest pull request off this branch, or nothing at all. Every
+        // number on the row hangs off this one read, and `plane_pull`'s own
+        // doc is where the three limits it inherits are written down.
+        let tree = tree_of(meta, ask, pulls.plane_pull(&meta.id), state, now);
         if let Some(group) = groups.iter_mut().find(|g| g.repo == repo) {
             group.trees.push(tree);
         } else {
@@ -294,11 +567,17 @@ pub(crate) fn code_board(ctx: &AppCtx, now: i64) -> Vec<RepoGroup> {
                 base: None,
                 awake: 0,
                 waiting: 0,
+                num: None,
                 trees: vec![tree],
             });
         }
     }
     for group in &mut groups {
+        // THE GROUP TOTAL IS NOT SUMMED HERE, and that is the point. It is
+        // asked of `group_diffstat`, which refuses a group holding a tree no
+        // server measured — the refusal is a return type rather than a note,
+        // so this call site has no argument to make.
+        group.num = pulls.group_diffstat(group.trees.iter().map(|t| t.id.as_str()));
         group.awake = group
             .trees
             .iter()
@@ -619,6 +898,41 @@ fn one_line(text: &str) -> Option<String> {
     (!line.is_empty()).then(|| line.to_owned())
 }
 
+/// WHAT A CHIP OPENS, for the ones that are controls rather than facts.
+///
+/// `assets/desktop/40-home-chat.css` states the grammar this belongs to and
+/// used to state it as a permanent rule: the mockups draw two visual classes in
+/// a composer bar — a bordered box with a chevron for a thing you can CHANGE
+/// and bare text for a thing you can only READ — and *"every chip this app puts
+/// here is the second kind"*. That paragraph named its own expiry: *"the moment
+/// either becomes a picker, the bordered form has to come back."* This is that
+/// moment (#79, #194), and the form comes back with it.
+///
+/// Three, and no fourth. The mode belongs to a turn rather than to a session
+/// about to exist, the host and the extension count are genuinely read-only,
+/// and a context window is a fact about a model rather than a choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Pick {
+    /// The chat half's model, chosen before the session exists. #194.
+    Model,
+    /// The code half's repo, out of the manager's allowlist. #79.
+    Repo,
+    /// The ref the working tree's own branch is cut from. #79.
+    Base,
+}
+
+impl Pick {
+    /// The control's accessible name — what `views::press` locates it by, and
+    /// the only name it has once the face is a value and a chevron.
+    pub(crate) const fn title(self) -> &'static str {
+        match self {
+            Self::Model => "Model",
+            Self::Repo => "Repository",
+            Self::Base => "Base branch",
+        }
+    }
+}
+
 /// One fact under the composer, said in as few characters as it takes.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Chip {
@@ -628,6 +942,35 @@ pub(crate) struct Chip {
     /// character by character, and a proportional face makes that harder for
     /// no gain. It is the one place this shell reaches for `--font-mono`.
     pub mono: bool,
+    /// What pressing it opens, or `None` for a fact. A fact is a `span`; a
+    /// control is a `button` wearing `.picker`.
+    pub pick: Option<Pick>,
+    /// A leading glyph, and only the controls have one — it is what the
+    /// mockups' `.picker` puts in front of the value, and what tells two
+    /// bordered boxes apart at a glance before either is read.
+    pub icon: Option<&'static str>,
+}
+
+impl Chip {
+    /// A thing you can only read.
+    const fn fact(text: String, mono: bool) -> Self {
+        Self {
+            text,
+            mono,
+            pick: None,
+            icon: None,
+        }
+    }
+
+    /// A thing you can change.
+    const fn control(text: String, pick: Pick, icon: Option<&'static str>) -> Self {
+        Self {
+            text,
+            mono: false,
+            pick: Some(pick),
+            icon,
+        }
+    }
 }
 
 /// What the composer knows about the session it is about to start.
@@ -644,57 +987,101 @@ pub(crate) struct Chip {
 /// only once a `usage_update` has arrived, which is honest: before the first
 /// turn the app genuinely does not know the window, and a guessed 200k would
 /// be the wrong kind of confident.
-pub(crate) fn compose_chips(ctx: &AppCtx, plane: Plane) -> Vec<Chip> {
+/// `picked` is what the reader chose on this screen and the server has not been
+/// told about yet — the chat half's model, which cannot be written through
+/// [`crate::state::set_config_option`] because that needs a session that does
+/// not exist. It outranks `current_value` for exactly as long as that is true.
+pub(crate) fn compose_chips(ctx: &AppCtx, plane: Plane, picked: Option<&str>) -> Vec<Chip> {
     let mut out = Vec::new();
     match plane {
         Plane::Chat => {
-            if let Some(model) = (ctx.config_options)()
+            let option = (ctx.config_options)()
                 .iter()
                 .find(|o| o.config_id == "model")
-                .and_then(goose_acp_client::ConfigOption::current_label)
-            {
-                out.push(Chip {
-                    text: model.to_owned(),
-                    mono: false,
+                .cloned();
+            // THE MODEL IS A CONTROL NOW, and only where choosing would decide
+            // something: `is_adjustable` is false for a one-value select, and
+            // offering that as a menu is design rule 11's control that does
+            // nothing. With no option at all — a cold launch, before any
+            // session has said what the agent offers — there is no chip, which
+            // is what shipped and stays true.
+            let adjustable = option.as_ref().is_some_and(ConfigOption::is_adjustable);
+            let label = picked
+                .map(|value| model_label(value, option.as_ref()))
+                .or_else(|| {
+                    option
+                        .as_ref()
+                        .and_then(ConfigOption::current_label)
+                        .map(str::to_owned)
+                });
+            if let Some(label) = label {
+                out.push(if adjustable {
+                    Chip::control(label, Pick::Model, None)
+                } else {
+                    Chip::fact(label, false)
                 });
             }
             if let Some(host) = host_of(&ctx.settings.peek().server_url) {
-                out.push(Chip {
-                    text: host,
-                    mono: true,
-                });
+                out.push(Chip::fact(host, true));
             }
             let loaded = (ctx.extensions.list)().items.len();
             if loaded > 0 {
-                out.push(Chip {
-                    text: format!("{loaded} extensions"),
-                    mono: false,
-                });
+                out.push(Chip::fact(format!("{loaded} extensions"), false));
             }
             if let Some((_, limit)) = (ctx.usage)().filter(|(_, limit)| *limit > 0) {
-                out.push(Chip {
-                    text: format!("{} context", crate::views::chat::format_tokens(limit)),
-                    mono: true,
-                });
+                out.push(Chip::fact(
+                    format!("{} context", crate::views::chat::format_tokens(limit)),
+                    true,
+                ));
             }
         }
         Plane::Code => {
-            if let Some(host) = host_of(&ctx.settings.peek().code_server_url) {
-                out.push(Chip {
-                    text: host,
-                    mono: true,
-                });
+            // WHERE THE TREE GETS CUT, as two controls — #79. They lead the row
+            // because they are the only two facts on it the reader decides, and
+            // because the send button below cannot act on the sentence without
+            // them: `views::code::can_start` wants a repo before it wants
+            // anything else.
+            //
+            // AND ONLY WITH AN ALLOWLIST TO PICK FROM. A picker over an empty
+            // manager list is a control that opens a sheet saying there is
+            // nothing in it, on a screen whose standing line is already saying
+            // the gateway is not connected. `N repos` was the fact these two
+            // replace, and it was gated on the same count.
+            let where_ = (ctx.new_where)();
+            if !(ctx.code_repos)().is_empty() {
+                out.push(Chip::control(
+                    if where_.repo.is_empty() {
+                        Pick::Repo.title().to_owned()
+                    } else {
+                        crate::views::code::repo_chip_label(&where_.repo).to_owned()
+                    },
+                    Pick::Repo,
+                    Some("repo"),
+                ));
+                out.push(Chip::control(
+                    crate::views::code::branch_chip_label(where_.base.as_deref()).to_owned(),
+                    Pick::Base,
+                    Some("git-branch"),
+                ));
             }
-            let repos = (ctx.code_repos)().len();
-            if repos > 0 {
-                out.push(Chip {
-                    text: format!("{repos} repos"),
-                    mono: false,
-                });
+            if let Some(host) = host_of(&ctx.settings.peek().code_server_url) {
+                out.push(Chip::fact(host, true));
             }
         }
     }
     out
+}
+
+/// A model reference as the catalogue names it, or the reference itself.
+///
+/// [`ConfigOption::current_label`] does exactly this for the value the SERVER
+/// holds, and cannot be asked about one it has not been told yet — which is
+/// every model picked on the home screen, right up until the session exists.
+fn model_label(value: &str, option: Option<&ConfigOption>) -> String {
+    option
+        .and_then(|o| o.options.iter().find(|c| c.value == value))
+        .map_or(value, |c| c.name.as_str())
+        .to_owned()
 }
 
 /// The host and port out of a configured URL, or `None` if there is not one.
@@ -755,6 +1142,24 @@ fn CodeDial() -> Element {
     rsx! {}
 }
 
+/// What is inside a count tile, whichever element is carrying it.
+///
+/// A component rather than a copy, because #203 turns three of the five tiles
+/// into `button`s and leaves two as `div`s: written twice, the three class
+/// names inside would be two places to rename, and
+/// `every_class_the_desktop_shell_renders_is_in_the_captured_store` counts a
+/// literal it finds in either.
+#[component]
+fn TileFace(tile: Tile) -> Element {
+    rsx! {
+        div { class: "home-tile-value", "{tile.value}" }
+        div { class: "home-tile-label", "{tile.label}" }
+        if let Some(sub) = tile.sub {
+            div { class: "home-tile-sub", "{sub}" }
+        }
+    }
+}
+
 /// The plane's home screen.
 ///
 /// Its own component rather than rsx inside `AppShell`, for `SidebarList`'s
@@ -763,7 +1168,6 @@ fn CodeDial() -> Element {
 #[component]
 pub(crate) fn Home(plane: Plane) -> Element {
     let ctx = crate::state::use_app_ctx();
-    let mut draft = use_signal(String::new);
 
     let connected = match plane {
         Plane::Chat => (ctx.conn)().is_connected(),
@@ -772,6 +1176,35 @@ pub(crate) fn Home(plane: Plane) -> Element {
     let count = match plane {
         Plane::Chat => (ctx.sessions)().len(),
         Plane::Code => (ctx.code_chats)().len(),
+    };
+
+    // WHICH SLICE OF THE BOARD THE TILES ARE ASKING FOR — #203.
+    //
+    // The screen's own signal and not `AppCtx`'s, deliberately: it is a view
+    // of a list rather than a fact about the plane, and leaving the shell
+    // resets it, which is the right answer to "I filtered to `waiting`, went
+    // and answered it, and came back".
+    let mut want = use_signal(BoardFilter::default);
+    let tiles = if plane == Plane::Code {
+        code_tiles(&ctx)
+    } else {
+        Vec::new()
+    };
+    // A FILTER WHOSE COUNT HAS FALLEN TO ZERO IS NOT A FILTER, and this is
+    // read rather than written back, because writing a signal during a render
+    // is how a render loop starts. Reachable without any race: filter to
+    // `waiting on you`, answer the last ask in another window, and the poll
+    // empties the queue under a board that would otherwise show nothing at
+    // all with no way back.
+    let filter = match want() {
+        BoardFilter::All => BoardFilter::All,
+        other => {
+            if tiles.iter().any(|t| t.press() == Some(other)) {
+                other
+            } else {
+                BoardFilter::All
+            }
+        }
     };
 
     let starters = if plane == Plane::Chat {
@@ -832,6 +1265,491 @@ pub(crate) fn Home(plane: Plane) -> Element {
         }
     });
 
+    rsx! {
+        // `home-code` ON THE `main` THAT ALREADY CARRIES `home` — #76, and the
+        // whole of it. Seven rules in `assets/desktop/97-home-code.css` have
+        // been correct and emitted by nothing since `c5db8a0`: the code half
+        // wore the chat half's geometry because it had no class of its own to
+        // hang a rule on, and no CSS could fix that.
+        //
+        // TWO TOP-LEVEL BRANCHES, and it is the shape rather than a preference.
+        // The mockup's code home is three rows — a board that scrolls, and a
+        // composer welded to the bottom edge that never does — and the chat
+        // home is one column with the composer THIRD. rsx has no conditional
+        // wrapper, so the composer is a component (`HomeCompose`) and each half
+        // says where it goes. What the two branches share is the shape this
+        // file's header names: a thing you type into, and what you might pick
+        // up. They never shared an order.
+        main {
+            class: if plane == Plane::Code { "scroll home home-code" } else { "scroll home" },
+            div { class: "home-inner",
+                if plane == Plane::Code {
+                    // THE BOARD IS ITS OWN SCROLL REGION, which is what the
+                    // dock is for: with nine trees the column measured 1133px
+                    // in an 826px pane and the last working-tree row sat 307px
+                    // below the fold, while the box you type into was the first
+                    // thing on screen. Now the rows scroll under a composer
+                    // that does not move.
+                    div { class: "home-board",
+                        // THE CODE HALF HAS TO DIAL ITSELF, and nothing on the
+                        // desktop ever did: `views::code::CodeSessionsView` is
+                        // the only thing in the app that calls `code_connect`,
+                        // and this shell renders `Home` where that view would
+                        // be. So the board, the sidebar's tree list and every
+                        // tile read an empty `code_chats` forever, with the
+                        // standing line correctly reporting a socket nobody had
+                        // tried to open.
+                        CodeDial {}
+                        // Disconnected, the reason — and on this half the sheet
+                        // draws it as the amber banner `.home-code
+                        // .home-standing` has been holding for it, rather than
+                        // as 22px of grey body text.
+                        if !connected {
+                            p { class: "home-standing", "{standing(plane, connected, count)}" }
+                        }
+                        // THREE OF THE FIVE PRESS, AND TWO DO NOT — #203, and
+                        // the split is the answer rather than a shortfall.
+                        // The issue asked honestly what each tile could go to
+                        // and found two with no destination; `Tile::filter`
+                        // carries which is which and says why. A `button`
+                        // where a `div` was costs no class name, so what the
+                        // capture gate sees added here is nothing — the
+                        // pressed state travels on `aria-pressed`, which is
+                        // also the attribute a screen reader needs.
+                        //
+                        // NO FILL ON HOVER OR ON PRESS, and that is measured
+                        // rather than taste: `40-home-chat.css` records that
+                        // `--text-secondary` on `--surface-card` is 4.64:1 in
+                        // light and that `--surface-raise` would take
+                        // `.home-tile-label` to 4.01 and fail the text walk.
+                        // The whole treatment is therefore an edge.
+                        div { class: "home-tiles",
+                            for tile in tiles {
+                                if let Some(pick) = tile.press() {
+                                    button {
+                                        key: "{tile.label}",
+                                        class: if tile.urgent {
+                                            "home-tile urgent"
+                                        } else if tile.live {
+                                            "home-tile live"
+                                        } else {
+                                            "home-tile"
+                                        },
+                                        "aria-pressed": if filter == pick { "true" } else { "false" },
+                                        // Pressing the engaged one clears it,
+                                        // which is what a toggle is: there is
+                                        // no other affordance on this screen
+                                        // for "show me all of them again"
+                                        // except the `working trees` tile,
+                                        // and that one IS this gesture.
+                                        onclick: move |_| {
+                                            want.set(
+                                                if filter == pick { BoardFilter::All } else { pick },
+                                            );
+                                        },
+                                        TileFace { tile: tile.clone() }
+                                    }
+                                }
+                                if tile.press().is_none() {
+                                    div {
+                                        key: "{tile.label}",
+                                        class: if tile.urgent {
+                                            "home-tile urgent"
+                                        } else if tile.live {
+                                            "home-tile live"
+                                        } else {
+                                            "home-tile"
+                                        },
+                                        TileFace { tile: tile.clone() }
+                                    }
+                                }
+                            }
+                        }
+
+                        // THE BOARD: what is actually in each repo. Every child
+                        // of a row is a span — the mockup puts an "Answer"
+                        // button on three of its six rows, and a button inside a
+                        // button makes the parser hoist the inner one, which
+                        // re-parents everything after it. That shape produced
+                        // 1600 audit findings the one time it shipped here. The
+                        // whole row is the target and it opens the chat, where
+                        // the permission modal offers the same two answers with
+                        // the ask beside them.
+                        for group in code_board(&ctx, crate::state::now_secs(), filter) {
+                            div { key: "{group.repo}", class: "repo-group",
+                                div { class: "repo-head",
+                                    Icon { name: "repo" }
+                                    span { class: "repo-head-name", "{group.repo}" }
+                                    span { class: "repo-head-base",
+                                        if let Some(base) = group.base.clone() {
+                                            "{base} \u{b7} {group.trees.len()} trees"
+                                        } else {
+                                            "{group.trees.len()} trees"
+                                        }
+                                    }
+                                    span { class: "repo-head-facts",
+                                        if group.waiting > 0 {
+                                            span { class: "warn", "{group.waiting} waiting" }
+                                        }
+                                        if group.awake > 0 {
+                                            span { class: "live", "{group.awake} awake" }
+                                        }
+                                        // THE MOCKUP'S `+108 −30`, and it is
+                                        // absent on most headings by design.
+                                        // See `RepoGroup::num`: one tree in
+                                        // the group that no server measured
+                                        // and `group_diffstat` answers
+                                        // nothing, so this slot cannot carry
+                                        // a figure nobody sent.
+                                        if let Some((add, del)) = group.num {
+                                            span { class: "repo-head-num",
+                                                span { class: "tree-add", "+{add}" }
+                                                " "
+                                                span { class: "tree-del", "\u{2212}{del}" }
+                                            }
+                                        }
+                                    }
+                                }
+                                for tree in group.trees {
+                                    button {
+                                        key: "{tree.id}",
+                                        class: tree.state.class(),
+                                        title: "{tree.title}",
+                                        // Enter the plane first —
+                                        // `open_code_chat` sets `code_screen`
+                                        // and not `tab`, and `nav::current`
+                                        // reads the tab first. The bug
+                                        // `sidebar.rs` writes up at length.
+                                        onclick: {
+                                            let id = tree.id.clone();
+                                            move |_| {
+                                                (crate::nav::primary(Plane::Code).go)(&ctx);
+                                                if let Some(meta) =
+                                                    (ctx.code_chats)().iter().find(|c| c.id == id)
+                                                {
+                                                    crate::code::open_code_chat(&ctx, meta.clone());
+                                                }
+                                            }
+                                        },
+                                        span {
+                                            class: "tree-mark",
+                                            "aria-label": tree.state.word(),
+                                        }
+                                        span { class: "tree-text",
+                                            span { class: "tree-title", "{tree.title}" }
+                                            if let Some(say) = tree.say.clone() {
+                                                span { class: "tree-say q", "{say}" }
+                                            }
+                                        }
+                                        span { class: "tree-branch",
+                                            if let Some(branch) = tree.branch.clone() {
+                                                span { class: "tree-branch-name", "{branch}" }
+                                            }
+                                            // `4 commits · #121 open` where
+                                            // the branch has a pull request,
+                                            // `from main` where it does not —
+                                            // #82. Same class, same geometry;
+                                            // what changed is that the line
+                                            // stopped repeating the heading
+                                            // directly above it on every row.
+                                            if let Some(sub) = tree.branch_sub.clone() {
+                                                span { class: "tree-branch-base", "{sub}" }
+                                            }
+                                        }
+                                        // THE 84px COLUMN THE ROW HAS NEVER
+                                        // HAD — #81. Emitted whether or not
+                                        // it has anything in it, because it
+                                        // is a grid cell: an unmeasured tree
+                                        // that skipped its `span` would slide
+                                        // its state and its age one column
+                                        // left and the board would stop
+                                        // lining up.
+                                        span { class: "tree-num",
+                                            if let Some((add, del)) = tree.num {
+                                                span { class: "tree-add", "+{add}" }
+                                                " "
+                                                span { class: "tree-del", "\u{2212}{del}" }
+                                            }
+                                            // TWO LINES AND NOT THREE, and it
+                                            // is measured: the file count on
+                                            // a line of its own took this
+                                            // cell to 51px inside a row whose
+                                            // other columns are 38, so every
+                                            // measured row stood 13px taller
+                                            // than every unmeasured one and
+                                            // the board went ragged. The
+                                            // count and the sparkline share
+                                            // the second line and every row
+                                            // is 60px again.
+                                            if tree.num.is_some() || tree.files.is_some() {
+                                                span { class: "tree-sub",
+                                                    if let Some(files) = tree.files {
+                                                        span { class: "tree-files", {files_word(files)} }
+                                                    }
+                                                    if let Some((add, del)) = tree.num {
+                                                        span { class: "tree-bars",
+                                                            for (i, on) in spark(add, del).into_iter().enumerate() {
+                                                                i {
+                                                                    key: "{i}",
+                                                                    class: if on {
+                                                                        "tree-bar tree-add"
+                                                                    } else {
+                                                                        "tree-bar tree-del"
+                                                                    },
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        span { class: "tree-state", {tree.state.word()} }
+                                        if let Some(age) = tree.age.clone() {
+                                            span { class: "tree-age", "{age}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // WELDED TO THE BOTTOM EDGE, and LAST. `flex: 0 0 auto`
+                    // over a board that takes the slack, which is the mockup's
+                    // three-row `.main`. On the chat half the composer is third
+                    // in one scrolling column; here it is a region.
+                    div { class: "home-dock",
+                        HomeCompose { plane }
+                    }
+                } else {
+                    // NO GREETING ON THE CODE HALF, which is why this is inside
+                    // the chat branch rather than guarded. The mockup has none
+                    // — that side opens on a board, because what a working tree
+                    // is doing is the question, and `hour_now` is UTC and says
+                    // so.
+                    h1 { class: "home-greeting", "{part_of_day(hour_now())}." }
+                    // ONE SENTENCE UNDER THE GREETING, AND ONLY WHEN IT IS OWED.
+                    //
+                    // This was the `else` of the lede's `if let`; with the lede
+                    // gone it stands on its own, and the branch it lost is the
+                    // decision #200 left open. CONNECTED, BOTH HALVES SAY
+                    // NOTHING HERE, which was already the code half's rule and
+                    // its reason carries over: the tiles and the board are that
+                    // half's standing line, and on this one the count is on the
+                    // section heading three inches down — `.home-section-meta`
+                    // reads "12 threads" beside "Pick up where you left off". A
+                    // sentence here would be the same number said twice, which
+                    // is what the owner called unnecessary. Disconnected, both
+                    // halves still owe the reader the reason, and nothing else
+                    // on the screen gives it.
+                    if !connected {
+                        p { class: "home-standing", "{standing(plane, connected, count)}" }
+                    }
+
+                    // THE COMPOSER IS THE NEW-SESSION AFFORDANCE, which is why
+                    // the sidebar's New button hides while this is on screen.
+                    // The owner's words: "I don't think we need a new chat
+                    // button when the big chat box is visible in the middle."
+                    HomeCompose { plane }
+
+                    // PICK UP WHERE YOU LEFT OFF.
+                    //
+                    // See `Recent` for why this is here after being cut once.
+                    // The short version: the sidebar's row and this one are not
+                    // the same row, and the mockups render both.
+                    if !recent.is_empty() {
+                        div { class: "home-recent",
+                            h2 { class: "home-section",
+                                "Pick up where you left off"
+                                span { class: "home-section-meta",
+                                    {
+                                        let n = (ctx.sessions)().len();
+                                        if n == 1 { "1 thread".to_owned() } else { format!("{n} threads") }
+                                    }
+                                }
+                            }
+                            for row in recent {
+                                button {
+                                    key: "{row.id}",
+                                    class: row.state.class(),
+                                    title: "{row.title}",
+                                    // The sidebar row's sequence, and it has to
+                                    // be this order: `open_session` sets
+                                    // `screen`, not `tab`, and `nav::current`
+                                    // reads the tab first — so a row pressed
+                                    // from any other destination would open a
+                                    // session the window was not looking at.
+                                    // Entering the plane first is what makes the
+                                    // press land.
+                                    onclick: {
+                                        let id = row.id;
+                                        move |_| {
+                                            (crate::nav::primary(Plane::Chat).go)(&ctx);
+                                            // Looked up rather than carried:
+                                            // `Recent` is what the row DRAWS,
+                                            // and `open_session` needs the whole
+                                            // `SessionInfo` — its cwd, its kind,
+                                            // the fields a summary has no
+                                            // business holding a stale copy of.
+                                            if let Some(info) =
+                                                (ctx.sessions)().iter().find(|s| s.session_id == id)
+                                            {
+                                                crate::state::open_session(&ctx, info.clone());
+                                            }
+                                        }
+                                    },
+                                    span { class: "recent-dot" }
+                                    span { class: "recent-text",
+                                        span { class: "recent-title", "{row.title}" }
+                                        if let Some(quote) = row.quote.clone() {
+                                            span { class: "recent-quote", "{quote}" }
+                                        }
+                                    }
+                                    span { class: "recent-facts",
+                                        if let Some(turns) = row.turns.clone() {
+                                            span { class: "recent-fact", "{turns}" }
+                                        }
+                                        if let Some(word) = row.state.word() {
+                                            span { class: "recent-state", "{word}" }
+                                        } else if let Some(age) = row.age.clone() {
+                                            span { class: "recent-fact", "{age}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // WAYS TO START, and only on the chat half.
+                    //
+                    // Recipes and skills are the two things this half can begin
+                    // with that are not a blank prompt, and the sidebar keeps
+                    // them behind the Library disclosure — so this is the one
+                    // place they are visible without a click. Named from the
+                    // server's own list rather than invented.
+                    if !starters.is_empty() {
+                        div { class: "home-starters",
+                            h2 { class: "home-section",
+                                "Ways to start"
+                                if let Some(kinds) = starter_kinds(&starters) {
+                                    span { class: "home-section-meta", "{kinds}" }
+                                }
+                            }
+                            div { class: "home-starter-grid",
+                                for starter in starters {
+                                    button {
+                                        key: "{starter.kind}-{starter.name}",
+                                        class: "home-starter",
+                                        title: "{starter.name}",
+                                        onclick: move |_| {
+                                            let mut tab = ctx.tab;
+                                            tab.set(starter.tab);
+                                        },
+                                        Icon { name: starter.icon }
+                                        span { class: "home-starter-text",
+                                            span { class: "home-starter-name", "{starter.name}" }
+                                            // The taxonomy word AND the
+                                            // sentence, in that order and
+                                            // separated by a middot — the
+                                            // mockups' own "recipe · summarises
+                                            // overnight runs". The word alone
+                                            // was the whole second line, which
+                                            // told the reader what the card IS
+                                            // and nothing about what it would
+                                            // do.
+                                            span { class: "home-starter-kind",
+                                                "{starter.kind}"
+                                                if let Some(what) = starter.description.clone() {
+                                                    span { class: "home-starter-what", " · {what}" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // THE BLOCK THAT CLOSES THE CHAT COLUMN, and it is one now
+                    // rather than two. The mockups end with a dashed schedule
+                    // row pushed to the bottom and a hairline footnote under it;
+                    // the footnote is the owner's cut (#200), so the pill on the
+                    // column's bottom edge is the whole ending. `margin-top:
+                    // auto` in `40-home-chat.css` is what puts it there, and
+                    // that only works because `.home-inner` is
+                    // `min-height: 100%`.
+                    if let Some(sched) = sched_line(&ctx, crate::state::now_secs()) {
+                        button {
+                            class: "home-sched",
+                            title: "Open the scheduler",
+                            onclick: move |_| {
+                                let mut tab = ctx.tab;
+                                tab.set(crate::state::Tab::Scheduler);
+                            },
+                            Icon { name: "clock" }
+                            span { class: "home-sched-name", "{sched.name}" }
+                            span { class: "home-sched-what", "{sched.what}" }
+                            if sched.more > 0 {
+                                span { class: "home-sched-more", "+{sched.more} more" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// THE THING YOU TYPE INTO, on either half.
+///
+/// Its own component because #76 moved it: the chat home renders it third, in
+/// one scrolling column, and the code home renders it LAST, inside a
+/// `.home-dock` that does not scroll. rsx has no conditional wrapper, so the
+/// two orders are two branches, and a block that appears in both has to be a
+/// component rather than a copy.
+///
+/// It owns the draft as well, which `Home` used to. Nothing outside the
+/// composer ever read that signal, and a lifted first message has to be given
+/// back to the field it was lifted from — a scope that unmounts under the
+/// round trip is the one thing `state::give_back`'s `try_write` exists for.
+#[component]
+fn HomeCompose(plane: Plane) -> Element {
+    let ctx = crate::state::use_app_ctx();
+    let mut draft = use_signal(String::new);
+    // THE MODEL, HELD HERE UNTIL THERE IS A SESSION TO PUT IT ON — #194.
+    //
+    // `state::set_config_option` needs a `session_id` and the home screen's
+    // whole premise is that there is not one, so a picker that wrote through it
+    // would have been a control that silently did nothing. The choice waits in
+    // this signal, the chip shows it, and `state::new_session_sending` applies
+    // it to the session it creates before the first word goes out.
+    let model = use_signal(|| None::<String>);
+    let mut sheet = use_signal(|| None::<Pick>);
+
+    // WHERE THE TREE GETS CUT, seeded the way `CodeNewView` seeds its own
+    // pills, and for its reason rather than by copying it: the chip has to be
+    // able to say `goose-phone-app` and `main` before either is opened, or the
+    // reader is told to choose something that already has an answer.
+    //
+    // A write during render, which `CodeNewView` also does and which cannot
+    // loop here: `choose_new_repo` returns early when the repo is unchanged,
+    // and the base is only written once, when a fetched default arrives for the
+    // repo now chosen.
+    if plane == Plane::Code {
+        let where_ = (ctx.new_where)();
+        if where_.repo.is_empty() {
+            if let Some(first) = (ctx.code_repos)().first() {
+                crate::code::choose_new_repo(&ctx, &first.name);
+            }
+        } else if where_.base.is_none() {
+            let branches = (ctx.code_branches)();
+            if branches.repo == where_.repo {
+                if let Some(default) = branches.default {
+                    crate::code::choose_new_base(&ctx, Some(default));
+                }
+            }
+        }
+    }
+
     // START, and on the chat half it SENDS.
     //
     // It did not, and this file argued that it could not: "`send_prompt`
@@ -859,8 +1777,11 @@ pub(crate) fn Home(plane: Plane) -> Element {
             Plane::Chat => {
                 // The composer itself, handed over: it is emptied at once so a
                 // second press cannot make a second session while the create is
-                // in flight, and refilled by whichever path fails.
-                crate::state::new_session_sending(&ctx, draft);
+                // in flight, and refilled by whichever path fails. The model
+                // goes with it, because it is the one thing about the session
+                // that has to be decided before its first turn runs and the
+                // only channel for it is this call (#194).
+                crate::state::new_session_sending(&ctx, draft, model.peek().clone());
             }
             Plane::Code => {
                 // `new_task`, AND IT USED TO BE `code_draft`, WHICH DESTROYED
@@ -880,11 +1801,34 @@ pub(crate) fn Home(plane: Plane) -> Element {
                 // own shape for the tray's own reason — see the field.
                 let mut new_task = ctx.new_task;
                 new_task.set(draft.peek().trim().to_owned());
-                // The code half has no "create and send": a session needs a
-                // repo and a base branch before it can exist, which is what
-                // `CodeNewView` is for. So this carries the text and opens
-                // that screen — the same shape as the chat side, one screen
-                // further along.
+                // AND IT STILL OPENS THE NEW-SESSION SCREEN, which is #79's one
+                // open decision taken and written down rather than left.
+                //
+                // The chips above now say WHERE — repo and base travel on
+                // `ctx.new_where` and `CodeNewView` seeds from them, so the
+                // thing this issue actually reported ("the destination the
+                // session will land in is not visible while you type", and a
+                // second screen asking again for what you already chose) is
+                // gone. What the arrow does NOT do is create the tree outright,
+                // and that was measured before it was decided:
+                //
+                //   - `views::code::can_start` wants a MODEL, and its own note
+                //     says why it may not be defaulted into — "the one parameter
+                //     that decides what the work costs, how good it is, and,
+                //     through privacy hard rule 1, who gets to see the code". A
+                //     one-step send would need a fourth picker here or a send
+                //     that refuses with three pills' worth of reasons and no
+                //     room to say which.
+                //   - `CodeNewView` is reachable from NOWHERE else on this
+                //     shell. `grep -rn 'CodeScreen::New' src` finds three
+                //     writers: the sessions list's FAB and the code chat's
+                //     topbar, neither of which the desktop mounts, and this
+                //     line. It owns the only attach tray a new code session has
+                //     and the only mode picker, so creating from here would take
+                //     both off the desktop with nothing to replace them.
+                //
+                // So this half is two steps on purpose, and the second one now
+                // opens on the answers the first gave.
                 let mut screen = ctx.code_screen;
                 screen.set(crate::code::CodeScreen::New);
                 // Blanked here and not by a give-back, because this arm cannot
@@ -896,377 +1840,228 @@ pub(crate) fn Home(plane: Plane) -> Element {
     };
 
     rsx! {
-        main { class: "scroll home",
-            div { class: "home-inner",
-                // NO GREETING ON THE CODE HALF. The mockup has none — that
-                // side opens on a board, because what a working tree is doing
-                // is the question, and `hour_now` is UTC and says so.
-                if plane == Plane::Chat {
-                    h1 { class: "home-greeting", "{part_of_day(hour_now())}." }
-                }
-                // ONE SENTENCE UNDER THE GREETING, AND ONLY WHEN IT IS OWED.
+        div { class: "home-compose",
+            textarea {
+                class: "input",
+                placeholder: compose_placeholder(plane),
+                value: "{draft}",
+                // TWO, AND NOT THREE, AND NOT ONE.
                 //
-                // This was the `else` of the lede's `if let`; with the lede
-                // gone it stands on its own, and the branch it lost is the
-                // decision #200 left open. CONNECTED, BOTH HALVES NOW SAY
-                // NOTHING HERE, which was already the code half's rule and its
-                // reason carries over: the tiles and the board are that half's
-                // standing line, and on this one the count is on the section
-                // heading three inches down — `.home-section-meta` reads "12
-                // threads" beside "Pick up where you left off". A sentence here
-                // would be the same number said twice, which is what the owner
-                // called unnecessary. Disconnected, both halves still owe the
-                // reader the reason, and nothing else on the screen gives it.
-                if !connected {
-                    p { class: "home-standing", "{standing(plane, connected, count)}" }
-                }
-
-                // THE COMPOSER IS THE NEW-SESSION AFFORDANCE, which is why the
-                // sidebar's New button hides while this is on screen. The
-                // owner's words: "I don't think we need a new chat button when
-                // the big chat box is visible in the middle."
-                div { class: "home-compose",
-                    textarea {
-                        class: "input",
-                        placeholder: compose_placeholder(plane),
-                        value: "{draft}",
-                        // TWO, AND NOT THREE, AND NOT ONE.
-                        //
-                        // Three made the resting composer a 148px slab with
-                        // two empty lines under the placeholder, against the
-                        // mockups' 100px — measured, `.home-compose` was
-                        // 640x148 where `.launch.calm` is 712x100, with the
-                        // 17/18/15 field padding identical on both sides and
-                        // only the line count different. It is 48px of the
-                        // 110px by which this column ran off the bottom of the
-                        // window.
-                        //
-                        // One would be the mockups' own number and cannot
-                        // ship: nothing in this app grows a textarea. There is
-                        // no `field-sizing`, no `scrollHeight` read and no
-                        // resize hook anywhere in `src/`, and
-                        // `assets/shared.css`'s `max-height` only CAPS a field
-                        // that grows by this attribute. At one row a second
-                        // line of a prompt would scroll inside a box the
-                        // height of a single line, which is worse than the
-                        // slab. Two is the smallest count that still shows the
-                        // reader the line they just wrapped.
-                        rows: 2,
-                        oninput: move |e| draft.set(e.value()),
-                        onkeydown: move |e: Event<KeyboardData>| {
-                            if e.key() == Key::Enter && !e.modifiers().contains(Modifiers::SHIFT) {
-                                e.prevent_default();
-                                if !draft.peek().trim().is_empty() {
-                                    start();
-                                }
-                            }
-                        },
-                    }
-                    div { class: "home-compose-row",
-                        // WHAT THE SESSION WILL BE, before it exists.
-                        //
-                        // The mockup puts six facts here; three of them have
-                        // no source on the wire and are absent rather than
-                        // guessed. See `compose_chips`.
-                        div { class: "home-chips",
-                            for chip in compose_chips(&ctx, plane) {
-                                span {
-                                    key: "{chip.text}",
-                                    class: if chip.mono { "home-chip mono" } else { "home-chip" },
-                                    "{chip.text}"
-                                }
-                            }
-                        }
-                        // `.send`, the circle, and NOT `.btn primary`.
-                        //
-                        // It is the same control the transcript's composer
-                        // already uses (`assets/shared.css`), which is the point:
-                        // the thing you press to send is one shape everywhere
-                        // in the app, and the reader meets it here first. A
-                        // 131x40 rectangle reading "Start a chat" was saying
-                        // out loud what an arrow in a circle says by being
-                        // where it is — and, being `--bg-inverse` when live and
-                        // `--bg-tertiary` when not, it was also the reason a
-                        // resting home screen had no accent on it anywhere.
-                        button {
-                            class: "send",
-                            // A name of its own, so the control is findable by
-                            // something other than the words inside it — which
-                            // is what a screen reader needs and what
-                            // `views::press` locates by. It carries the whole
-                            // label now that the face is a glyph.
-                            title: match plane {
-                                Plane::Chat => "Start a chat",
-                                Plane::Code => "Start a session",
-                            },
-                            "aria-label": match plane {
-                                Plane::Chat => "Start a chat",
-                                Plane::Code => "Start a session",
-                            },
-                            // AN EMPTY COMPOSER STARTS NOTHING. Without this a
-                            // stray press makes a session on the server — a
-                            // real object with a real id that nobody asked for
-                            // and someone now has to delete.
-                            disabled: draft().trim().is_empty(),
-                            onclick: move |_| start(),
-                            Icon { name: "arrow-up" }
+                // Three made the resting composer a 148px slab with two empty
+                // lines under the placeholder, against the mockups' 100px —
+                // measured, `.home-compose` was 640x148 where `.launch.calm` is
+                // 712x100, with the 17/18/15 field padding identical on both
+                // sides and only the line count different. It is 48px of the
+                // 110px by which this column ran off the bottom of the window.
+                //
+                // One would be the mockups' own number and cannot ship: nothing
+                // in this app grows a textarea. There is no `field-sizing`, no
+                // `scrollHeight` read and no resize hook anywhere in `src/`, and
+                // `assets/shared.css`'s `max-height` only CAPS a field that
+                // grows by this attribute. At one row a second line of a prompt
+                // would scroll inside a box the height of a single line, which
+                // is worse than the slab. Two is the smallest count that still
+                // shows the reader the line they just wrapped.
+                rows: 2,
+                oninput: move |e| draft.set(e.value()),
+                onkeydown: move |e: Event<KeyboardData>| {
+                    if e.key() == Key::Enter && !e.modifiers().contains(Modifiers::SHIFT) {
+                        e.prevent_default();
+                        if !draft.peek().trim().is_empty() {
+                            start();
                         }
                     }
-                }
-
-                // PICK UP WHERE YOU LEFT OFF.
+                },
+            }
+            div { class: "home-compose-row",
+                // WHAT THE SESSION WILL BE, before it exists — and two of these
+                // are now controls rather than facts.
                 //
-                // See `Recent` for why this is here after being cut once. The
-                // short version: the sidebar's row and this one are not the
-                // same row, and the mockups render both.
-                if plane == Plane::Chat && !recent.is_empty() {
-                    div { class: "home-recent",
-                        h2 { class: "home-section",
-                            "Pick up where you left off"
-                            span { class: "home-section-meta",
-                                {
-                                    let n = (ctx.sessions)().len();
-                                    if n == 1 { "1 thread".to_owned() } else { format!("{n} threads") }
-                                }
-                            }
-                        }
-                        for row in recent {
+                // The mockup puts six facts here; three of them have no source
+                // on the wire and are absent rather than guessed. Of the ones
+                // that are left, the model (#194) and the code half's repo and
+                // base (#79) are things you CHANGE, and `assets/desktop/40-home-
+                // chat.css` has always said what that means: a bordered box with
+                // a chevron, because a chip that is pressable and drawn like the
+                // read-only chips beside it is worse than either.
+                div { class: "home-chips",
+                    for chip in compose_chips(&ctx, plane, model().as_deref()) {
+                        if let Some(pick) = chip.pick {
                             button {
-                                key: "{row.id}",
-                                class: row.state.class(),
-                                title: "{row.title}",
-                                // The sidebar row's sequence, and it has to be
-                                // this order: `open_session` sets `screen`, not
-                                // `tab`, and `nav::current` reads the tab
-                                // first — so a row pressed from any other
-                                // destination would open a session the window
-                                // was not looking at. Entering the plane first
-                                // is what makes the press land.
-                                onclick: {
-                                    let id = row.id;
-                                    move |_| {
-                                        (crate::nav::primary(Plane::Chat).go)(&ctx);
-                                        // Looked up rather than carried: `Recent`
-                                        // is what the row DRAWS, and `open_session`
-                                        // needs the whole `SessionInfo` — its cwd,
-                                        // its kind, the fields a summary has no
-                                        // business holding a stale copy of.
-                                        if let Some(info) =
-                                            (ctx.sessions)().iter().find(|s| s.session_id == id)
-                                        {
-                                            crate::state::open_session(&ctx, info.clone());
-                                        }
+                                key: "{chip.text}",
+                                class: "home-chip picker",
+                                // The control's only name once its face is a
+                                // value: `views::press` locates by this, and a
+                                // screen reader reads it.
+                                title: pick.title(),
+                                "aria-label": pick.title(),
+                                onclick: move |_| {
+                                    // Asked on the press rather than on the
+                                    // render, exactly as `CodeNewView`'s branch
+                                    // pill asks: the manager answers this from
+                                    // GitHub with its own credential, so it
+                                    // wakes no container, but it is still a
+                                    // round trip nobody has asked for until the
+                                    // sheet is opened. `ensure_code_branches`
+                                    // returns at once when the list is in hand.
+                                    if pick == Pick::Base {
+                                        let repo = ctx.new_where.peek().repo.clone();
+                                        crate::code::ensure_code_branches(&ctx, &repo);
                                     }
+                                    sheet.set(Some(pick));
                                 },
-                                span { class: "recent-dot" }
-                                span { class: "recent-text",
-                                    span { class: "recent-title", "{row.title}" }
-                                    if let Some(quote) = row.quote.clone() {
-                                        span { class: "recent-quote", "{quote}" }
-                                    }
+                                if let Some(icon) = chip.icon {
+                                    Icon { name: icon }
                                 }
-                                span { class: "recent-facts",
-                                    if let Some(turns) = row.turns.clone() {
-                                        span { class: "recent-fact", "{turns}" }
-                                    }
-                                    if let Some(word) = row.state.word() {
-                                        span { class: "recent-state", "{word}" }
-                                    } else if let Some(age) = row.age.clone() {
-                                        span { class: "recent-fact", "{age}" }
-                                    }
-                                }
+                                "{chip.text}"
+                                Icon { name: "chevron-down" }
+                            }
+                        } else {
+                            span {
+                                key: "{chip.text}",
+                                class: if chip.mono { "home-chip mono" } else { "home-chip" },
+                                "{chip.text}"
                             }
                         }
                     }
                 }
-
-                // WAYS TO START, and only on the chat half.
+                // `.send`, the circle, and NOT `.btn primary`.
                 //
-                // Recipes and skills are the two things this half can begin
-                // with that are not a blank prompt, and the sidebar keeps them
-                // behind the Library disclosure — so this is the one place
-                // they are visible without a click. Named from the server's
-                // own list rather than invented.
-                if plane == Plane::Chat && !starters.is_empty() {
-                    div { class: "home-starters",
-                        h2 { class: "home-section",
-                            "Ways to start"
-                            if let Some(kinds) = starter_kinds(&starters) {
-                                span { class: "home-section-meta", "{kinds}" }
-                            }
-                        }
-                        div { class: "home-starter-grid",
-                            for starter in starters {
-                                button {
-                                    key: "{starter.kind}-{starter.name}",
-                                    class: "home-starter",
-                                    title: "{starter.name}",
-                                    onclick: move |_| {
-                                        let mut tab = ctx.tab;
-                                        tab.set(starter.tab);
-                                    },
-                                    Icon { name: starter.icon }
-                                    span { class: "home-starter-text",
-                                        span { class: "home-starter-name", "{starter.name}" }
-                                        // The taxonomy word AND the sentence,
-                                        // in that order and separated by a
-                                        // middot — the mockups' own
-                                        // "recipe · summarises overnight
-                                        // runs". The word alone was the whole
-                                        // second line, which told the reader
-                                        // what the card IS and nothing about
-                                        // what it would do.
-                                        span { class: "home-starter-kind",
-                                            "{starter.kind}"
-                                            if let Some(what) = starter.description.clone() {
-                                                span { class: "home-starter-what", " · {what}" }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                // It is the same control the transcript's composer already uses
+                // (`assets/shared.css`), which is the point: the thing you press
+                // to send is one shape everywhere in the app, and the reader
+                // meets it here first. A 131x40 rectangle reading "Start a chat"
+                // was saying out loud what an arrow in a circle says by being
+                // where it is — and, being `--bg-inverse` when live and
+                // `--bg-tertiary` when not, it was also the reason a resting
+                // home screen had no accent on it anywhere.
+                button {
+                    class: "send",
+                    // A name of its own, so the control is findable by something
+                    // other than the words inside it — which is what a screen
+                    // reader needs and what `views::press` locates by. It
+                    // carries the whole label now that the face is a glyph.
+                    title: match plane {
+                        Plane::Chat => "Start a chat",
+                        Plane::Code => "Start a session",
+                    },
+                    "aria-label": match plane {
+                        Plane::Chat => "Start a chat",
+                        Plane::Code => "Start a session",
+                    },
+                    // AN EMPTY COMPOSER STARTS NOTHING. Without this a stray
+                    // press makes a session on the server — a real object with a
+                    // real id that nobody asked for and someone now has to
+                    // delete.
+                    disabled: draft().trim().is_empty(),
+                    onclick: move |_| start(),
+                    Icon { name: "arrow-up" }
                 }
+            }
+        }
+        {home_sheet(&ctx, sheet, model)}
+    }
+}
 
-                // THE CODE HALF'S COUNTS. Chat has no equivalent worth a tile:
-                // a conversation count is already the lede's first clause, and
-                // everything else the mockup tiles there is spend and latency,
-                // which have no source.
-                // THE CODE HALF HAS TO DIAL ITSELF, and nothing on the
-                // desktop ever did: `views::code::CodeSessionsView` is the
-                // only thing in the app that calls `code_connect`, and this
-                // shell renders `Home` where that view would be. So the board,
-                // the sidebar's tree list and every tile read an empty
-                // `code_chats` forever, with the standing line correctly
-                // reporting a socket nobody had tried to open.
-                if plane == Plane::Code {
-                    CodeDial {}
+/// Whichever chip's sheet is open.
+///
+/// [`ChoicePickerSheet`] and nothing of this screen's own, which is #194's
+/// instruction in its own words: *"reuse it rather than inventing a second one,
+/// so the two screens cannot drift."* The repo and branch rows are
+/// `views::code`'s too — the same `repo_choices` and `branch_choices` the
+/// new-session screen builds, so a repo is described the same way in both
+/// places and the filter that arrived for one arrives for both.
+fn home_sheet(
+    ctx: &AppCtx,
+    mut sheet: Signal<Option<Pick>>,
+    mut model: Signal<Option<String>>,
+) -> Element {
+    let ctx = *ctx;
+    match sheet() {
+        None => rsx! {},
+        Some(Pick::Model) => {
+            let option = (ctx.config_options)()
+                .iter()
+                .find(|o| o.config_id == "model")
+                .cloned();
+            // What this screen has settled outranks what the server holds, for
+            // as long as the two can differ — which is until the session exists.
+            let current = model().or_else(|| option.as_ref().and_then(|o| o.current_value.clone()));
+            let choices = option.as_ref().map(option_choices).unwrap_or_default();
+            rsx! {
+                ChoicePickerSheet {
+                    title: "Select model",
+                    backend: "goose",
+                    // NOT "applies from your next message", which is the default
+                    // and is false here: there is no next message on this screen,
+                    // there is a first one, and this is the same distinction
+                    // `ChoicePickerSheet::subtitle` was added for.
+                    subtitle: "the chat you start runs on this from its first message",
+                    choices,
+                    current,
+                    // Unreachable while the chip renders only for an adjustable
+                    // option, and stated anyway, by the rule `views::chat`'s mode
+                    // sheet states it under: an empty picker with nothing in it
+                    // and nothing to say is the one outcome a reader cannot act
+                    // on.
+                    empty: "This agent offers no other model.",
+                    onchoose: move |value: String| {
+                        model.set(Some(value));
+                        sheet.set(None);
+                    },
+                    onclose: move |()| sheet.set(None),
                 }
-
-                if plane == Plane::Code {
-                    div { class: "home-tiles",
-                        for tile in code_tiles(&ctx) {
-                            div {
-                                key: "{tile.label}",
-                                class: if tile.urgent {
-                                    "home-tile urgent"
-                                } else if tile.live {
-                                    "home-tile live"
-                                } else {
-                                    "home-tile"
-                                },
-                                div { class: "home-tile-value", "{tile.value}" }
-                                div { class: "home-tile-label", "{tile.label}" }
-                                if let Some(sub) = tile.sub.clone() {
-                                    div { class: "home-tile-sub", "{sub}" }
-                                }
-                            }
-                        }
-                    }
-
-                    // THE BOARD: what is actually in each repo. Every child of
-                    // a row is a span — the mockup puts an "Answer" button on
-                    // three of its six rows, and a button inside a button makes
-                    // the parser hoist the inner one, which re-parents
-                    // everything after it. That shape produced 1600 audit
-                    // findings the one time it shipped here. The whole row is
-                    // the target and it opens the chat, where the permission
-                    // modal offers the same two answers with the ask beside
-                    // them.
-                    for group in code_board(&ctx, crate::state::now_secs()) {
-                        div { key: "{group.repo}", class: "repo-group",
-                            div { class: "repo-head",
-                                Icon { name: "repo" }
-                                span { class: "repo-head-name", "{group.repo}" }
-                                span { class: "repo-head-base",
-                                    if let Some(base) = group.base.clone() {
-                                        "{base} \u{b7} {group.trees.len()} trees"
-                                    } else {
-                                        "{group.trees.len()} trees"
-                                    }
-                                }
-                                span { class: "repo-head-facts",
-                                    if group.waiting > 0 {
-                                        span { class: "warn", "{group.waiting} waiting" }
-                                    }
-                                    if group.awake > 0 {
-                                        span { class: "live", "{group.awake} awake" }
-                                    }
-                                }
-                            }
-                            for tree in group.trees {
-                                button {
-                                    key: "{tree.id}",
-                                    class: tree.state.class(),
-                                    title: "{tree.title}",
-                                    // Enter the plane first — `open_code_chat`
-                                    // sets `code_screen` and not `tab`, and
-                                    // `nav::current` reads the tab first. The
-                                    // bug `sidebar.rs` writes up at length.
-                                    onclick: {
-                                        let id = tree.id.clone();
-                                        move |_| {
-                                            (crate::nav::primary(Plane::Code).go)(&ctx);
-                                            if let Some(meta) =
-                                                (ctx.code_chats)().iter().find(|c| c.id == id)
-                                            {
-                                                crate::code::open_code_chat(&ctx, meta.clone());
-                                            }
-                                        }
-                                    },
-                                    span {
-                                        class: "tree-mark",
-                                        "aria-label": tree.state.word(),
-                                    }
-                                    span { class: "tree-text",
-                                        span { class: "tree-title", "{tree.title}" }
-                                        if let Some(say) = tree.say.clone() {
-                                            span { class: "tree-say q", "{say}" }
-                                        }
-                                    }
-                                    span { class: "tree-branch",
-                                        if let Some(branch) = tree.branch.clone() {
-                                            span { class: "tree-branch-name", "{branch}" }
-                                        }
-                                        if let Some(base) = tree.base.clone() {
-                                            span { class: "tree-branch-base", "{base}" }
-                                        }
-                                    }
-                                    span { class: "tree-state", {tree.state.word()} }
-                                    if let Some(age) = tree.age.clone() {
-                                        span { class: "tree-age", "{age}" }
-                                    }
-                                }
-                            }
-                        }
-                    }
+            }
+        }
+        Some(Pick::Repo) => {
+            let repos = (ctx.code_repos)();
+            let count = repos.len();
+            rsx! {
+                ChoicePickerSheet {
+                    title: "Repositories ({count})",
+                    backend: "code agent",
+                    subtitle: "from the brain's allowlist",
+                    choices: crate::views::code::repo_choices(&repos),
+                    current: Some((ctx.new_where)().repo),
+                    empty: "The manager's allowlist is empty — nothing to start a session on.",
+                    onchoose: move |value: String| {
+                        crate::code::choose_new_repo(&ctx, &value);
+                        sheet.set(None);
+                    },
+                    onclose: move |()| sheet.set(None),
                 }
-
-                // THE BLOCK THAT CLOSES THE CHAT COLUMN, and it is one now
-                // rather than two. The mockups end with a dashed schedule row
-                // pushed to the bottom and a hairline footnote under it; the
-                // footnote is the owner's cut (#200), so the pill on the
-                // column's bottom edge is the whole ending. `margin-top: auto`
-                // in `40-home-chat.css` is what puts it there, and that only
-                // works because `.home-inner` is `min-height: 100%`.
-                if plane == Plane::Chat {
-                    if let Some(sched) = sched_line(&ctx, crate::state::now_secs()) {
-                        button {
-                            class: "home-sched",
-                            title: "Open the scheduler",
-                            onclick: move |_| {
-                                let mut tab = ctx.tab;
-                                tab.set(crate::state::Tab::Scheduler);
-                            },
-                            Icon { name: "clock" }
-                            span { class: "home-sched-name", "{sched.name}" }
-                            span { class: "home-sched-what", "{sched.what}" }
-                            if sched.more > 0 {
-                                span { class: "home-sched-more", "+{sched.more} more" }
-                            }
-                        }
-                    }
+            }
+        }
+        Some(Pick::Base) => {
+            let branches = (ctx.code_branches)();
+            rsx! {
+                ChoicePickerSheet {
+                    title: "Choose base branch",
+                    backend: "code agent",
+                    subtitle: "the session's own branch is cut from this one",
+                    // The manager stops at 500. Said above the rows, because
+                    // with a filter over a list that has been cut short,
+                    // "Nothing matches" about a branch that exists is a lie the
+                    // reader has no way to catch.
+                    note: branches.truncated.then(|| {
+                        format!(
+                            "{} branches — this repo has more than the manager will \
+                             read, so one that is missing here may still exist.",
+                            branches.names.len(),
+                        )
+                    }),
+                    choices: crate::views::code::branch_choices(&branches),
+                    current: (ctx.new_where)().base,
+                    empty: if branches.loading {
+                        "Asking GitHub for this repo's branches…"
+                    } else {
+                        "This manager cannot list branches — the session starts on the repo's default."
+                    },
+                    onchoose: move |value: String| {
+                        crate::code::choose_new_base(&ctx, Some(value));
+                        sheet.set(None);
+                    },
+                    onclose: move |()| sheet.set(None),
                 }
             }
         }
@@ -1282,7 +2077,8 @@ pub(crate) fn Home(plane: Plane) -> Element {
 mod tests {
     use super::{
         code_board, code_tiles, compose_chips, compose_placeholder, part_of_day, recent_for,
-        sched_line, standing, starter_kinds, Home, RecentState, Starter, TreeState,
+        sched_line, spark, standing, starter_kinds, BoardFilter, Home, RecentState, Starter, Tile,
+        TreeState,
     };
     use crate::nav::Plane;
     use crate::views::press::Pressable;
@@ -1401,14 +2197,13 @@ mod tests {
             tiles
                 .iter()
                 .find(|t| t.label == label)
-                .map(|t| t.value.clone())
-                .unwrap_or_default()
+                .map_or(usize::MAX, |t| t.value)
         };
-        assert_eq!(by("working trees"), "3");
+        assert_eq!(by("working trees"), 3);
         // "awake" and not "running now": `ChatMeta.status` is the container's
         // lifecycle and not a turn's, and `code::status_label` calls the same
         // state "idle". The tile was over-claiming — see `code_tiles`.
-        assert_eq!(by("awake"), "1");
+        assert_eq!(by("awake"), 1);
         assert_eq!(
             tiles
                 .iter()
@@ -1417,12 +2212,136 @@ mod tests {
             Some("2 asleep".to_owned()),
             "the tile's second line should account for the trees that are not awake"
         );
-        assert_eq!(by("repos"), "2", "two trees in one repo counted twice");
-        assert_eq!(by("waiting on you"), "0");
+        assert_eq!(by("repos"), 2, "two trees in one repo counted twice");
+        assert_eq!(by("waiting on you"), 0);
         assert_eq!(
             tiles.iter().filter(|t| t.urgent).count(),
             0,
             "nothing is blocked, so nothing should be shouting"
+        );
+        // NO PULL-REQUEST TILE, because the sweep has answered for none of
+        // these three trees. Flattening `by_chat` here would have printed `0`
+        // over a plane whose pull requests nobody has asked about yet — see
+        // `pull_tile`.
+        assert_eq!(
+            tiles.iter().filter(|t| t.label == "pull requests").count(),
+            0,
+            "the plane claimed a pull-request count before the sweep had \
+             answered for a single tree"
+        );
+    }
+
+    /// THE PULL-REQUEST TILE IS ABSENT UNTIL EVERY TREE HAS BEEN ASKED
+    /// ABOUT, and present the moment they all have — #77.
+    ///
+    /// The two directions are one test because the interesting half is the
+    /// first: `by_chat` fills one chat at a time and is capped at 24, so a
+    /// tile built by flattening it would print a number that is silently
+    /// short and then creep upward while the reader watches. `pull_tile`
+    /// refuses instead, which is #77's own second option — "leave the tile off
+    /// past the cap".
+    ///
+    /// REPRODUCED: drop the `all(contains_key)` guard in `pull_tile` and the
+    /// first half fails with a tile reading `1` over a plane with two trees.
+    #[test]
+    fn the_pull_request_tile_waits_until_every_tree_has_answered() {
+        let short = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    meta("a", "repo", "stopped", 2.0),
+                    meta("b", "repo", "stopped", 1.0),
+                ]);
+                let mut pulls = ctx.code_pulls;
+                pulls.write().by_chat.insert(
+                    "a".to_owned(),
+                    vec![pull(7, opencode_client::PullState::Open)],
+                );
+            },
+            code_tiles,
+        );
+        assert!(
+            !short.iter().any(|t| t.label == "pull requests"),
+            "the tile counted one tree's pull requests and called it the \
+             plane's, while the second tree had never been asked about"
+        );
+
+        let whole = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    meta("a", "repo", "stopped", 2.0),
+                    meta("b", "repo", "stopped", 1.0),
+                ]);
+                let mut pulls = ctx.code_pulls;
+                let mut w = pulls.write();
+                w.by_chat.insert(
+                    "a".to_owned(),
+                    vec![opencode_client::PullRequest {
+                        draft: true,
+                        checks: opencode_client::Checks::Failing,
+                        ..pull(7, opencode_client::PullState::Open)
+                    }],
+                );
+                // Asked, and has none. An answer, not a gap.
+                w.by_chat.insert("b".to_owned(), Vec::new());
+            },
+            code_tiles,
+        );
+        let tile = whole
+            .iter()
+            .find(|t| t.label == "pull requests")
+            .expect("every tree answered, so the plane can say how many");
+        assert_eq!(tile.value, 1);
+        assert_eq!(
+            tile.sub.as_deref(),
+            Some("1 draft \u{b7} 1 red"),
+            "the mockup's own sub-line is `1 draft \u{b7} 1 red` and both \
+             facts are on the wire"
+        );
+        assert_eq!(
+            tile.press(),
+            None,
+            "the pull-request tile filtered the board, which counts trees \
+             rather than pull requests — see `Tile::filter`"
+        );
+    }
+
+    /// A MERGED PULL REQUEST IS NOT AN OPEN ONE, and its red build is nobody's
+    /// problem.
+    ///
+    /// `code::row_checks_label` already drops the build for a pull request
+    /// that is not open, one screen down; a tile that counted it would be the
+    /// app disagreeing with itself about the same pull request in one window.
+    #[test]
+    fn the_pull_request_tile_counts_only_what_is_open() {
+        let tiles = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![meta("a", "repo", "stopped", 1.0)]);
+                let mut pulls = ctx.code_pulls;
+                pulls.write().by_chat.insert(
+                    "a".to_owned(),
+                    vec![
+                        opencode_client::PullRequest {
+                            checks: opencode_client::Checks::Failing,
+                            ..pull(9, opencode_client::PullState::Merged)
+                        },
+                        pull(8, opencode_client::PullState::Closed),
+                    ],
+                );
+            },
+            code_tiles,
+        );
+        let tile = tiles
+            .iter()
+            .find(|t| t.label == "pull requests")
+            .expect("the tree answered, so the tile is owed");
+        assert_eq!(tile.value, 0, "a merged and a closed pull counted as open");
+        assert_eq!(
+            tile.sub, None,
+            "a merged pull request's red build was counted as a plane that \
+             has something red waiting for it"
         );
     }
 
@@ -1674,7 +2593,7 @@ mod tests {
                     },
                 )]);
             },
-            |ctx| code_board(ctx, 2_000_000_000),
+            |ctx| code_board(ctx, 2_000_000_000, BoardFilter::All),
         );
         assert_eq!(groups.len(), 2, "two repos, two groups");
         assert_eq!(groups[0].repo, "goose-phone-app");
@@ -1712,7 +2631,7 @@ mod tests {
                     based("c2", "repo", "main"),
                 ]);
             },
-            |ctx| code_board(ctx, 2_000_000_000),
+            |ctx| code_board(ctx, 2_000_000_000, BoardFilter::All),
         );
         assert_eq!(same[0].base.as_deref(), Some("from main"));
 
@@ -1724,12 +2643,312 @@ mod tests {
                     based("c2", "repo", "release"),
                 ]);
             },
-            |ctx| code_board(ctx, 2_000_000_000),
+            |ctx| code_board(ctx, 2_000_000_000, BoardFilter::All),
         );
         assert_eq!(
             mixed[0].base, None,
             "the heading picked one of two bases and presented it as the repo's"
         );
+    }
+
+    /// A ROW DRAWS THE NUMBERS IT WAS SENT AND NOT ONE MORE — #81, #82.
+    ///
+    /// Three trees in one repo, and the middle one is the whole point: it has
+    /// a pull request whose detail form the manager could not read, which is
+    /// the shape `mock-opencode-server`'s `#126` ships and the shape a real
+    /// manager produces on any minute GitHub is slow. `Option<u32>` on the
+    /// wire only helps if the renderer keeps the distinction, and a
+    /// `unwrap_or(0)` anywhere on this path would put `+0 −0` on that row —
+    /// a claim that the branch changed nothing.
+    ///
+    /// REPRODUCED: replace `pull.and_then(PullRequest::diffstat)` with a sum
+    /// defaulted to zero and the second row's assertion fails.
+    #[test]
+    fn a_row_carries_only_the_numbers_a_server_sent() {
+        let groups = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    based("measured", "repo", "main"),
+                    opencode_client::ChatMeta {
+                        last_active: 2.0,
+                        ..based("unmeasured", "repo", "main")
+                    },
+                    opencode_client::ChatMeta {
+                        last_active: 3.0,
+                        ..based("no-pull", "repo", "main")
+                    },
+                ]);
+                let mut pulls = ctx.code_pulls;
+                let mut w = pulls.write();
+                w.by_chat.insert(
+                    "measured".to_owned(),
+                    vec![opencode_client::PullRequest {
+                        commits: Some(4),
+                        additions: Some(77),
+                        deletions: Some(33),
+                        changed_files: Some(3),
+                        ..pull(121, opencode_client::PullState::Open)
+                    }],
+                );
+                w.by_chat.insert(
+                    "unmeasured".to_owned(),
+                    vec![pull(126, opencode_client::PullState::Open)],
+                );
+                w.by_chat.insert("no-pull".to_owned(), Vec::new());
+            },
+            |ctx| code_board(ctx, 2_000_000_000, BoardFilter::All),
+        );
+        let tree = |id: &str| {
+            groups[0]
+                .trees
+                .iter()
+                .find(|t| t.id == id)
+                .expect("every seeded tree is on the board")
+                .clone()
+        };
+
+        let measured = tree("measured");
+        assert_eq!(measured.num, Some((77, 33)));
+        assert_eq!(measured.files, Some(3));
+        assert_eq!(
+            measured.branch_sub.as_deref(),
+            Some("4 commits \u{b7} #121 open"),
+            "the mockup's finished row is `4 commits \u{b7} merged #124` and \
+             both halves are off one read of `plane_pull`"
+        );
+
+        let unmeasured = tree("unmeasured");
+        assert_eq!(
+            unmeasured.num, None,
+            "a pull request the manager could not read a detail form for was \
+             drawn as a branch that changed nothing"
+        );
+        assert_eq!(unmeasured.files, None);
+        assert_eq!(
+            unmeasured.branch_sub.as_deref(),
+            Some("#126 open"),
+            "the pull request is still real without its size, so the row says \
+             what it knows and drops only the count"
+        );
+
+        let none = tree("no-pull");
+        assert_eq!(none.num, None);
+        assert_eq!(
+            none.branch_sub.as_deref(),
+            Some("from main"),
+            "a branch with no pull request keeps the base ref, which is the \
+             only thing anybody has measured about it"
+        );
+    }
+
+    /// THE GROUP TOTAL REFUSES A GROUP HOLDING AN UNMEASURED TREE, and it is
+    /// `group_diffstat` that refuses rather than this file.
+    ///
+    /// The mockup's `.rhead .rt` reads `+108 −30` — a sum over every tree in
+    /// the repo. Summing only the ones that happen to carry a pull request
+    /// would put a plausible figure on a heading, and the reader has no way to
+    /// tell a total of three trees from a total of one. So the heading says
+    /// nothing until every tree under it has been measured, which today means
+    /// a group with no pull-request-less tree in it.
+    #[test]
+    fn a_repo_heading_totals_only_a_group_it_can_measure_whole() {
+        let groups = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    based("solo", "measured-repo", "main"),
+                    opencode_client::ChatMeta {
+                        last_active: 2.0,
+                        ..based("with-pull", "mixed-repo", "main")
+                    },
+                    opencode_client::ChatMeta {
+                        last_active: 3.0,
+                        ..based("without", "mixed-repo", "main")
+                    },
+                ]);
+                let sized = opencode_client::PullRequest {
+                    additions: Some(84),
+                    deletions: Some(0),
+                    ..pull(109, opencode_client::PullState::Merged)
+                };
+                let mut pulls = ctx.code_pulls;
+                let mut w = pulls.write();
+                w.by_chat.insert("solo".to_owned(), vec![sized.clone()]);
+                w.by_chat.insert("with-pull".to_owned(), vec![sized]);
+                w.by_chat.insert("without".to_owned(), Vec::new());
+            },
+            |ctx| code_board(ctx, 2_000_000_000, BoardFilter::All),
+        );
+        let group = |repo: &str| {
+            groups
+                .iter()
+                .find(|g| g.repo == repo)
+                .expect("both repos are on the board")
+                .num
+        };
+        assert_eq!(
+            group("measured-repo"),
+            Some((84, 0)),
+            "a group whose every tree was measured is a real total, and `0` \
+             deletions is a measurement rather than an absence"
+        );
+        assert_eq!(
+            group("mixed-repo"),
+            None,
+            "the heading totalled the one tree that had a pull request and \
+             presented it as the repo's"
+        );
+    }
+
+    /// A TILE SELECTS EXACTLY ITS OWN NUMBER OF ROWS — #203, and this is the
+    /// assertion the whole filter design exists to satisfy.
+    ///
+    /// The trap is `awake`. `c1`'s container is up AND it is blocked on the
+    /// reader, so its ROW is `Waiting` — waiting outranks awake — while the
+    /// awake TILE counts it, because the container really is up. A filter
+    /// written against `TreeState::Awake` would show one row under a tile
+    /// reading two, and a reader would have no way to tell which number lied.
+    ///
+    /// REPRODUCED: change `BoardFilter::Awake`'s arm in `code_board` to
+    /// `state == TreeState::Awake` and this fails on the awake tile with 1 row
+    /// against a value of 2.
+    #[test]
+    fn every_pressable_tile_selects_exactly_the_rows_it_counts() {
+        let (tiles, boards) = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    meta("c1", "one", "running", 300.0),
+                    meta("c2", "one", "running", 200.0),
+                    meta("c3", "two", "stopped", 100.0),
+                ]);
+                let mut perms = ctx.code_permissions;
+                perms.set(vec![(
+                    "c1".to_owned(),
+                    opencode_client::CodePermission::default(),
+                )]);
+            },
+            |ctx| {
+                let boards: Vec<(BoardFilter, usize)> =
+                    [BoardFilter::All, BoardFilter::Waiting, BoardFilter::Awake]
+                        .into_iter()
+                        .map(|f| {
+                            (
+                                f,
+                                code_board(ctx, 2_000_000_000, f)
+                                    .iter()
+                                    .map(|g| g.trees.len())
+                                    .sum(),
+                            )
+                        })
+                        .collect();
+                (code_tiles(ctx), boards)
+            },
+        );
+        let mut checked = 0;
+        for tile in &tiles {
+            let Some(pick) = tile.press() else { continue };
+            let rows = boards
+                .iter()
+                .find(|(f, _)| *f == pick)
+                .map(|(_, n)| *n)
+                .expect("every filter a tile can press is walked above");
+            assert_eq!(
+                rows, tile.value,
+                "the `{}` tile reads {} and selects {rows} row(s) — a control \
+                 whose number disagrees with what it shows is worse than one \
+                 that does not press",
+                tile.label, tile.value
+            );
+            checked += 1;
+        }
+        assert_eq!(
+            checked, 3,
+            "three of the five tiles are meant to press; a change to that set \
+             wants this assertion looked at rather than bumped"
+        );
+        // And the two that do not press say so, rather than pressing to
+        // nowhere. `pull requests` is absent here: nothing has been swept.
+        assert_eq!(
+            tiles
+                .iter()
+                .filter(|t| t.press().is_none())
+                .map(|t| t.label)
+                .collect::<Vec<_>>(),
+            ["repos"]
+        );
+    }
+
+    /// A FILTER WITH NOTHING LEFT IN IT IS NOT A FILTER, so a tile whose count
+    /// has fallen to zero cannot be pressed and cannot stay pressed.
+    ///
+    /// `Home` reads `Tile::press` for both, which is why the rule lives on the
+    /// tile: the board can never be handed a filter that empties it.
+    #[test]
+    fn a_count_of_zero_is_not_a_control() {
+        let tiles = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![meta("c1", "one", "stopped", 1.0)]);
+            },
+            code_tiles,
+        );
+        let by = |label: &str| {
+            tiles
+                .iter()
+                .find(|t| t.label == label)
+                .and_then(Tile::press)
+        };
+        assert_eq!(by("working trees"), Some(BoardFilter::All));
+        assert_eq!(
+            by("waiting on you"),
+            None,
+            "nothing is blocked, so the amber tile would filter the board to \
+             nothing at all"
+        );
+        assert_eq!(by("awake"), None, "no container is up");
+    }
+
+    /// THE SPARKLINE IS A RATIO, AND IT NEVER DRAWS AN EMPTY CELL.
+    ///
+    /// The mockup's fifth cell is a grey filler, and a grey filler is a
+    /// background-painted mark carrying no meaning — which is the exact shape
+    /// `docs/audit.js`'s indicator walk exists to catch, at about 1.2:1. So
+    /// the five cells are split between the two real kinds and both are
+    /// painted.
+    ///
+    /// The clamps are the honest half of the rounding: 84 added against 1
+    /// removed still shows the deletion, because rounding it away would say
+    /// the branch removed nothing.
+    #[test]
+    fn the_sparkline_divides_five_cells_and_leaves_none_blank() {
+        assert_eq!(spark(0, 0), Vec::<bool>::new(), "nothing to divide");
+        for (add, del) in [(77_u32, 33_u32), (84, 0), (0, 12), (23, 2), (1, 1)] {
+            let cells = spark(add, del);
+            assert_eq!(cells.len(), 5, "+{add} \u{2212}{del} drew {cells:?}");
+            assert_eq!(
+                cells.iter().filter(|c| **c).count() > 0,
+                add > 0,
+                "+{add} \u{2212}{del}: an addition with no cell, or a cell \
+                 with no addition"
+            );
+            assert_eq!(
+                cells.iter().filter(|c| !**c).count() > 0,
+                del > 0,
+                "+{add} \u{2212}{del}: a deletion with no cell, or a cell \
+                 with no deletion"
+            );
+        }
+        assert_eq!(spark(84, 0), [true; 5]);
+        assert_eq!(spark(0, 84), [false; 5]);
+        assert_eq!(
+            spark(84, 1),
+            [true, true, true, true, false],
+            "one line removed out of 85 rounded away to nothing, which says \
+             the branch removed nothing"
+        );
+        assert_eq!(spark(1, 84), [true, false, false, false, false]);
     }
 
     /// A tree the manager sent with no repo is filed rather than dropped.
@@ -1743,7 +2962,7 @@ mod tests {
                 let mut chats = ctx.code_chats;
                 chats.set(vec![meta("c1", "  ", "stopped", 1.0)]);
             },
-            |ctx| code_board(ctx, 2_000_000_000),
+            |ctx| code_board(ctx, 2_000_000_000, BoardFilter::All),
         );
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].repo, "no repo");
@@ -1796,6 +3015,18 @@ mod tests {
             status: status.to_owned(),
             model: None,
             last_active: last,
+        }
+    }
+
+    /// A pull request with nothing measured about it — the shape a manager
+    /// that could not read GitHub's detail form sends, which is
+    /// `mock-opencode-server`'s `#126`. Sizes are added by the caller that
+    /// wants them, so a test that forgets to is testing the absent case.
+    fn pull(number: u64, state: opencode_client::PullState) -> opencode_client::PullRequest {
+        opencode_client::PullRequest {
+            number,
+            state,
+            ..opencode_client::PullRequest::default()
         }
     }
 
@@ -1919,7 +3150,7 @@ mod tests {
                 let mut ext = ctx.extensions.list;
                 ext.write().items = vec![extension("developer"), extension("memory")];
             },
-            |ctx| compose_chips(ctx, Plane::Chat),
+            |ctx| compose_chips(ctx, Plane::Chat, None),
         );
         let text: Vec<&str> = chips.iter().map(|c| c.text.as_str()).collect();
         assert!(
@@ -1960,7 +3191,7 @@ mod tests {
                 let mut usage = ctx.usage;
                 usage.set(Some((83_000, 1_000_000)));
             },
-            |ctx| compose_chips(ctx, Plane::Chat),
+            |ctx| compose_chips(ctx, Plane::Chat, None),
         );
         let text: Vec<&str> = chips.iter().map(|c| c.text.as_str()).collect();
         assert!(
@@ -1982,7 +3213,7 @@ mod tests {
                 let mut usage = ctx.usage;
                 usage.set(Some((0, 0)));
             },
-            |ctx| compose_chips(ctx, Plane::Chat),
+            |ctx| compose_chips(ctx, Plane::Chat, None),
         );
         assert!(
             !chips.iter().any(|c| c.text.contains("context")),
@@ -2000,7 +3231,7 @@ mod tests {
                 let mut ext = ctx.extensions.list;
                 ext.write().items = vec![extension("developer")];
             },
-            |ctx| compose_chips(ctx, Plane::Chat),
+            |ctx| compose_chips(ctx, Plane::Chat, None),
         );
         for chip in &chips {
             assert_eq!(
@@ -2476,6 +3707,627 @@ mod tests {
             "the \"Ways to start\" heading has no meta, so the two section \
              headings on this screen are asymmetric — one carries a value and \
              one carries nothing: {html}"
+        );
+    }
+
+    /// One allowlisted repo, as the manager sends it.
+    fn allowed(name: &str) -> opencode_client::RepoEntry {
+        opencode_client::RepoEntry {
+            name: name.to_owned(),
+            url: String::new(),
+            edit_only: false,
+            allow_push: false,
+            public_throwaway: false,
+        }
+    }
+
+    /// One goose config option with `values` to choose between.
+    fn option(id: &str, current: &str, values: &[(&str, &str)]) -> goose_acp_client::ConfigOption {
+        serde_json::from_value(serde_json::json!({
+            "configId": id,
+            "name": id,
+            "type": "select",
+            "currentValue": current,
+            "options": values
+                .iter()
+                .map(|(value, name)| serde_json::json!({"value": value, "name": name}))
+                .collect::<Vec<_>>(),
+        }))
+        .expect("a config option this test wrote")
+    }
+
+    /// THE CODE HOME HAS A SHELL OF ITS OWN, AND THE COMPOSER IS UNDER THE
+    /// BOARD — #76, which is the whole reason this wave exists.
+    ///
+    /// Seven rules in `assets/desktop/97-home-code.css` were correct and
+    /// emitted by nothing from `c5db8a0` until now, because `home.rs` rendered
+    /// one `main { class: "scroll home" }` for both halves: the code half wore
+    /// the chat half's geometry and no CSS could fix that, since there was no
+    /// class on the element to hang a rule on.
+    ///
+    /// ORDER IS HALF THE ASSERTION and it is the half a `contains` check would
+    /// miss. `.home-dock` is `flex: 0 0 auto` under a `.home-board` that takes
+    /// the slack, so the dock is only welded to the bottom edge if it comes
+    /// LAST. Emitted first — which is where the composer was — it is a region
+    /// pinned to the top with the board under it, which is the shipped layout
+    /// wearing new class names.
+    ///
+    /// REPRODUCED: swap the two `div`s in the `Plane::Code` branch and the
+    /// third assertion fails; drop the `home-code` from the `main`'s class and
+    /// the first does.
+    #[test]
+    fn the_code_home_docks_its_composer_under_its_own_board() {
+        let html = crate::testkit::render(|| rsx! { Home { plane: Plane::Code } });
+        for needle in ["home-board", "home-dock", "home-tiles", "home-compose"] {
+            assert!(
+                html.contains(needle),
+                "the code home renders no `{needle}`, so the ordering \
+                 assertions below would be about nothing: {html}"
+            );
+        }
+        // Safe against the loop above, which is why it runs first: a needle
+        // that is not there fails there rather than comparing two sentinels.
+        let at = |needle: &str| html.find(needle).unwrap_or(usize::MAX);
+        assert!(
+            html.contains("scroll home home-code"),
+            "the code half's `main` does not carry `home-code`, so every rule \
+             in `97-home-code.css` that scopes to it paints nothing: {html}"
+        );
+        assert!(
+            at("home-board") < at("home-tiles"),
+            "the counts are outside the board, so they do not scroll with the \
+             rows they count"
+        );
+        assert!(
+            at("home-board") < at("home-dock"),
+            "the dock is emitted before the board, so `flex: 0 0 auto` pins the \
+             composer to the TOP of the pane and the board scrolls under it — \
+             which is the layout this issue is about, wearing new names"
+        );
+        assert!(
+            at("home-dock") < at("home-compose"),
+            "the composer is not inside the dock"
+        );
+    }
+
+    /// A board with a measured tree, an unmeasured one and one with no pull
+    /// request at all — which is the fixture set `mock-opencode-server` ships
+    /// and the state the operator captures.
+    fn seed_board(ctx: &crate::state::AppCtx) {
+        let mut chats = ctx.code_chats;
+        chats.set(vec![
+            opencode_client::ChatMeta {
+                branch: "agent/blocked".to_owned(),
+                ..based("blocked-tree", "repo", "main")
+            },
+            opencode_client::ChatMeta {
+                last_active: 2.0,
+                branch: "agent/quiet".to_owned(),
+                ..based("quiet-tree", "repo", "main")
+            },
+        ]);
+        let mut perms = ctx.code_permissions;
+        perms.set(vec![(
+            "blocked-tree".to_owned(),
+            opencode_client::CodePermission {
+                title: "Run cargo clippy?".to_owned(),
+                ..opencode_client::CodePermission::default()
+            },
+        )]);
+        let mut pulls = ctx.code_pulls;
+        let mut w = pulls.write();
+        w.by_chat.insert(
+            "quiet-tree".to_owned(),
+            vec![opencode_client::PullRequest {
+                commits: Some(4),
+                additions: Some(77),
+                deletions: Some(33),
+                changed_files: Some(3),
+                ..pull(121, opencode_client::PullState::Open)
+            }],
+        );
+        w.by_chat.insert("blocked-tree".to_owned(), Vec::new());
+    }
+
+    /// THE 84px NUMBERS COLUMN IS ON THE ROW — #81, #82, in the markup the
+    /// window really produces.
+    ///
+    /// Two rows, and only one of them has been measured: the assertions below
+    /// are as much about what the OTHER row does not say. A `+0 −0` on the
+    /// blocked tree would be the app claiming its branch changed nothing, and
+    /// a `.tree-bars` there would be five cells dividing zero.
+    ///
+    /// REPRODUCED: drop the `if let Some((add, del))` guard round the number
+    /// column and the last two assertions fail together.
+    #[test]
+    fn a_board_row_draws_its_numbers_and_the_unmeasured_row_draws_none() {
+        let html =
+            crate::testkit::render_seeded(seed_board, || rsx! { Home { plane: Plane::Code } });
+        assert!(
+            html.contains("class=\"tree-add\">+77<")
+                && html.contains("class=\"tree-del\">\u{2212}33<"),
+            "the measured tree drew no `+77 \u{2212}33`: {html}"
+        );
+        assert!(
+            html.contains("class=\"tree-files\">3 files<"),
+            "no file count on a pull request that carries `changed_files`"
+        );
+        assert!(
+            html.contains("4 commits \u{b7} #121 open"),
+            "the second branch line still reads `from main` on a tree with a \
+             pull request, which is the fact the heading above it repeats"
+        );
+        assert!(
+            html.contains("from main"),
+            "the tree with no pull request lost its base ref as well"
+        );
+        // The unmeasured row's cell is EMITTED and EMPTY: it is a grid column,
+        // and a row that skipped it would slide its state and its age left.
+        assert!(
+            html.contains("<span class=\"tree-num\"></span>"),
+            "the row with no numbers dropped its grid cell rather than \
+             leaving it empty, so the board stops lining up: {html}"
+        );
+        assert_eq!(
+            html.matches("class=\"tree-num\"").count(),
+            2,
+            "one numbers cell per row, measured or not"
+        );
+        assert_eq!(
+            html.matches("tree-bar tree-").count(),
+            5,
+            "the sparkline is five cells on the one measured row and none \
+             anywhere else"
+        );
+    }
+
+    /// PRESSING THE AMBER TILE FILTERS THE BOARD, AND PRESSING IT AGAIN
+    /// CLEARS IT — #203, and the owner's words: "these things aren't clickable
+    /// at all. I feel like they should be."
+    ///
+    /// The tile counting the questions the agents are blocked on is the only
+    /// one painted urgent, so it is the loudest object on the screen, and it
+    /// was the one that did nothing.
+    ///
+    /// REPRODUCED: render the tiles as `div`s again and `press` panics with
+    /// "nothing matching \"home-tile urgent\" carries an click listener".
+    #[test]
+    fn the_amber_tile_filters_the_board_to_what_is_waiting() {
+        let _guard = crate::views::press::alone();
+        let mut screen = Pressable::mount(seed_board, CodeHome);
+        screen.settle();
+
+        let all = screen.markup();
+        assert!(
+            all.contains("blocked-tree") && all.contains("quiet-tree"),
+            "both trees should be on an unfiltered board: {all}"
+        );
+
+        screen.press("home-tile urgent");
+        let waiting = screen.markup();
+        assert!(
+            waiting.contains("blocked-tree"),
+            "the tree the reader is blocked on left the board it filtered TO"
+        );
+        assert!(
+            !waiting.contains("quiet-tree"),
+            "pressing `waiting on you` left the quiet tree on the board, so \
+             the tile is decoration: {waiting}"
+        );
+        assert!(
+            waiting.contains("aria-pressed=\"true\""),
+            "nothing on screen says which filter is engaged"
+        );
+
+        screen.press("home-tile urgent");
+        assert!(
+            screen.markup().contains("quiet-tree"),
+            "pressing the engaged tile again did not clear it, so the reader \
+             is stranded on a filtered board"
+        );
+    }
+
+    /// AND THE CHAT HOME WEARS NONE OF IT.
+    ///
+    /// The two screens share a shape and not an order — the chat column is one
+    /// scroller with the composer third, and the code half is a board over a
+    /// dock. A `home-board` on the chat half would put `overflow-y: auto` round
+    /// a greeting.
+    #[test]
+    fn the_chat_home_is_one_column_and_says_so() {
+        let html = crate::testkit::render(|| rsx! { Home { plane: Plane::Chat } });
+        for class in ["home-code", "home-board", "home-dock"] {
+            assert!(
+                !html.contains(class),
+                "the chat home rendered the code half's `{class}`, so it takes \
+                 that half's geometry: {html}"
+            );
+        }
+        assert!(
+            html.contains("home-compose"),
+            "no composer on the chat home"
+        );
+    }
+
+    /// THE CODE COMPOSER NAMES WHERE THE TREE GETS CUT — #79.
+    ///
+    /// Two bare facts became two controls: the repo the session runs on and
+    /// the ref its own branch is cut from. The `N repos` chip they replace was
+    /// a count of a list the reader could not open — it said how many choices
+    /// there were and offered none of them.
+    ///
+    /// `render_settled` rather than `render`, because the first pass is where
+    /// the composer writes the default repo into the carrier: rendered once,
+    /// the chip still reads `Repository`.
+    #[test]
+    fn the_code_composer_offers_the_repo_and_the_base_rather_than_counting_them() {
+        let html = crate::testkit::render_settled(
+            |ctx| {
+                let mut repos = ctx.code_repos;
+                repos.set(vec![allowed("acme/infra"), allowed("acme/web")]);
+            },
+            || rsx! { Home { plane: Plane::Code } },
+        );
+        assert!(
+            html.contains("home-chip picker"),
+            "the composer's chips are all still facts, so nothing on this \
+             screen says where the session will be cut: {html}"
+        );
+        assert!(
+            html.contains(r#"aria-label="Repository""#)
+                && html.contains(r#"aria-label="Base branch""#),
+            "one of the two controls #79 asks for is missing: {html}"
+        );
+        assert!(
+            html.contains("infra"),
+            "the repo control does not name the repo it is pointed at, so the \
+             destination is still invisible while you type: {html}"
+        );
+        assert!(
+            !html.contains("2 repos"),
+            "the count chip the two controls replace is still on the row, so \
+             the same fact is said twice and one of the two is not pressable"
+        );
+    }
+
+    /// WITH NO ALLOWLIST THERE ARE NO CONTROLS, only the reason.
+    ///
+    /// A picker over an empty manager list opens a sheet saying there is
+    /// nothing in it, on a screen whose standing line is already saying the
+    /// gateway is not connected. `N repos` was gated on the same count.
+    #[test]
+    fn an_empty_allowlist_offers_nothing_to_pick() {
+        let html = crate::testkit::render_settled(|_| {}, || rsx! { Home { plane: Plane::Code } });
+        assert!(
+            !html.contains("picker"),
+            "the code home offered a repo picker with no repos to pick: {html}"
+        );
+        assert!(
+            html.contains("home-standing"),
+            "and it did not say why either: {html}"
+        );
+    }
+
+    /// WHAT YOU PICK ON THE HOME SCREEN IS WHERE THE NEW SESSION OPENS — the
+    /// half of #79 that makes the two-step honest.
+    ///
+    /// The issue's own objection to a picker that still routes onward is that
+    /// it "leaves two places to choose a repo and ignores the one you used".
+    /// `ctx.new_where` is what stops that being true, and this is the
+    /// assertion on it: `views::code::CodeNewView` seeds from the carrier and
+    /// only falls back to the first allowlisted repo when it is empty.
+    ///
+    /// The needle is `class="choice"` WITH its closing quote, which is the
+    /// only way to name the second row: the first is `class="choice selected"`
+    /// because it is the repo the composer defaulted to, and a press on that
+    /// would assert nothing.
+    ///
+    /// REPRODUCED: point the sheet's `onchoose` at a local signal instead of
+    /// `choose_new_repo` and the first assertion fails with `acme/infra`.
+    #[test]
+    fn the_repo_picked_on_the_home_screen_is_the_one_carried_forward() {
+        let _guard = crate::views::press::alone();
+        let mut screen = Pressable::mount(
+            |ctx| {
+                let mut repos = ctx.code_repos;
+                repos.set(vec![allowed("acme/infra"), allowed("acme/web")]);
+            },
+            CodeHome,
+        );
+        screen.settle();
+
+        screen.press("Repository");
+        screen.settle();
+        assert!(
+            screen.markup().contains("Repositories (2)"),
+            "the repo control did not open a picker: {}",
+            screen.markup()
+        );
+
+        screen.press(r#"class="choice""#);
+        screen.settle();
+
+        assert_eq!(
+            screen.with(|ctx| (ctx.new_where)().repo),
+            "acme/web",
+            "the repo chosen on the home screen was not written to the carrier \
+             the new-session screen seeds from, so that screen will open on the \
+             first repo of the allowlist and ask again"
+        );
+        assert!(
+            !screen.markup().contains("Repositories (2)"),
+            "the sheet stayed open over the choice it had just taken"
+        );
+        assert!(
+            screen.markup().contains("web"),
+            "the chip still names the old repo: {}",
+            screen.markup()
+        );
+    }
+
+    /// CHANGING THE REPO DROPS THE BASE WITH IT.
+    ///
+    /// `views::code::choose_repo` draws the same line for the same reason: a
+    /// branch of the repo you just left does not exist on the one you just
+    /// chose, and carrying the name over would put a base on the wire that the
+    /// manager has to refuse.
+    #[test]
+    fn choosing_another_repo_does_not_keep_the_old_ones_branch() {
+        let (repo, base) = crate::testkit::with_ctx(
+            |ctx| {
+                crate::code::choose_new_repo(ctx, "acme/infra");
+                crate::code::choose_new_base(ctx, Some("release-4".to_owned()));
+                crate::code::choose_new_repo(ctx, "acme/web");
+            },
+            |ctx| {
+                let held = (ctx.new_where)();
+                (held.repo, held.base)
+            },
+        );
+        assert_eq!(repo, "acme/web");
+        assert_eq!(
+            base, None,
+            "the base branch of the repo the reader just left is still selected"
+        );
+    }
+
+    /// THE MODEL IS A CONTROL ON THE HOME COMPOSER — #194, reported by the
+    /// owner against a real server: "i can't actually change the model or
+    /// anything else from this thing."
+    ///
+    /// And it is drawn as one. `assets/desktop/40-home-chat.css` states the
+    /// rule this satisfies: a chip that is clickable but drawn like the
+    /// read-only chips beside it is worse than either, because nothing on the
+    /// row says what responds.
+    #[test]
+    fn the_model_can_be_changed_before_the_conversation_exists() {
+        let html = crate::testkit::render_settled(
+            |ctx| {
+                let mut config = ctx.config_options;
+                config.set(vec![option(
+                    "model",
+                    "gpt-5.2",
+                    &[("gpt-5.2", "GPT-5.2"), ("claude-opus-5", "Claude Opus 5")],
+                )]);
+            },
+            || rsx! { Home { plane: Plane::Chat } },
+        );
+        assert!(
+            html.contains(r#"aria-label="Model""#) && html.contains("home-chip picker"),
+            "the model is still a read-only chip on the one screen where \
+             choosing one is the natural thing to do: {html}"
+        );
+        assert!(html.contains("GPT-5.2"), "the chip does not name the model");
+    }
+
+    /// A SETTING WITH ONE VALUE IS A FACT, not a menu.
+    ///
+    /// `ConfigOption::is_adjustable` is the same guard `views::chat`'s mode
+    /// chip applies, for design rule 11's reason: offering a list of one is a
+    /// control that decides nothing.
+    #[test]
+    fn a_model_with_nothing_to_choose_between_stays_bare() {
+        let chips = crate::testkit::with_ctx(
+            |ctx| {
+                let mut config = ctx.config_options;
+                config.set(vec![option("model", "gpt-5.2", &[("gpt-5.2", "GPT-5.2")])]);
+            },
+            |ctx| compose_chips(ctx, Plane::Chat, None),
+        );
+        assert_eq!(chips.len(), 1);
+        assert_eq!(chips[0].text, "GPT-5.2");
+        assert!(
+            chips[0].pick.is_none(),
+            "a one-value select was offered as a picker"
+        );
+    }
+
+    /// AND THE CHIP SAYS WHAT WAS JUST PICKED, not what the server still holds.
+    ///
+    /// The two can differ for exactly as long as there is no session to write
+    /// the choice to — which is the whole of the home screen. A chip that went
+    /// on naming `currentValue` after a pick would be a control the reader
+    /// pressed with nothing visibly happening, which is the defect #194 is
+    /// about arriving one layer down.
+    #[test]
+    fn the_chip_names_the_model_the_reader_just_chose() {
+        let chips = crate::testkit::with_ctx(
+            |ctx| {
+                let mut config = ctx.config_options;
+                config.set(vec![option(
+                    "model",
+                    "gpt-5.2",
+                    &[("gpt-5.2", "GPT-5.2"), ("claude-opus-5", "Claude Opus 5")],
+                )]);
+            },
+            |ctx| compose_chips(ctx, Plane::Chat, Some("claude-opus-5")),
+        );
+        assert_eq!(
+            chips[0].text, "Claude Opus 5",
+            "the chip is still reporting the server's model over the one the \
+             reader chose, and the catalogue's own name is what it should say"
+        );
+    }
+
+    /// A REFERENCE THE CATALOGUE DOES NOT CARRY IS PRINTED AS IT IS.
+    ///
+    /// `current_label` falls back the same way for the server's own value.
+    /// Empty is not a special case: nothing offers it, and inventing a word
+    /// for it here would be a name for a model that has none.
+    #[test]
+    fn a_model_the_server_has_not_described_is_named_by_its_reference() {
+        let chips = crate::testkit::with_ctx(
+            |ctx| {
+                let mut config = ctx.config_options;
+                config.set(vec![option(
+                    "model",
+                    "gpt-5.2",
+                    &[("gpt-5.2", "GPT-5.2"), ("claude-opus-5", "Claude Opus 5")],
+                )]);
+            },
+            |ctx| compose_chips(ctx, Plane::Chat, Some("qwen3-coder-480b")),
+        );
+        assert_eq!(chips[0].text, "qwen3-coder-480b");
+    }
+
+    /// BEFORE ANYTHING IS CHOSEN THE CONTROL ASKS FOR THE THING IT SETS.
+    ///
+    /// The one render where the carrier is still empty — the composer seeds it
+    /// on its first pass — and the one place a chip in this app may name its
+    /// own control rather than a value. `views::code`'s model pill draws the
+    /// same distinction in the same words.
+    ///
+    /// The host is on this row too, and it is the one fact the code half keeps:
+    /// which gateway the tree will be built on is not something this screen can
+    /// change, and it is the only thing left saying which brain is answering.
+    #[test]
+    fn the_code_controls_name_themselves_until_they_have_a_value() {
+        let chips = crate::testkit::with_ctx(
+            |ctx| {
+                let mut repos = ctx.code_repos;
+                repos.set(vec![allowed("acme/infra")]);
+                let mut settings = ctx.settings;
+                settings.write().code_server_url = "http://brain.ts.net:4399".to_owned();
+            },
+            |ctx| compose_chips(ctx, Plane::Code, None),
+        );
+        let text: Vec<&str> = chips.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(text, ["Repository", "Default", "brain.ts.net:4399"]);
+        assert!(
+            chips[2].mono && chips[2].pick.is_none(),
+            "the gateway is not something this screen can change, and an \
+             address is compared character by character"
+        );
+    }
+
+    /// THE MODEL PICKER OPENS AND WHAT IT PICKS STICKS — #194 end to end.
+    ///
+    /// The sheet is `ChoicePickerSheet`, which is `views::chat`'s and
+    /// `views::code`'s, so this asserts the wiring rather than the widget: that
+    /// the chip opens it, that it is built from the agent's own catalogue, and
+    /// that choosing writes somewhere the send button will read.
+    ///
+    /// The needle is `class="choice"` WITH its closing quote, which is the only
+    /// way to name a row that is not the current one: the model the server
+    /// holds renders as `class="choice selected"`.
+    #[test]
+    fn the_model_picked_on_the_home_screen_is_the_one_the_chip_then_names() {
+        let _guard = crate::views::press::alone();
+        let mut screen = Pressable::mount(
+            |ctx| {
+                let mut config = ctx.config_options;
+                config.set(vec![option(
+                    "model",
+                    "gpt-5.2",
+                    &[("gpt-5.2", "GPT-5.2"), ("claude-opus-5", "Claude Opus 5")],
+                )]);
+            },
+            ChatHome,
+        );
+        screen.settle();
+
+        screen.press("Model");
+        screen.settle();
+        assert!(
+            screen.markup().contains("Select model") && screen.markup().contains("Claude Opus 5"),
+            "the model chip did not open a picker over the agent's own \
+             catalogue: {}",
+            screen.markup()
+        );
+
+        screen.press(r#"class="choice""#);
+        screen.settle();
+        assert!(
+            !screen.markup().contains("Select model"),
+            "the sheet stayed open over the choice it had just taken"
+        );
+        assert!(
+            screen
+                .markup()
+                .contains(r#"aria-label="Model">Claude Opus 5"#),
+            "the chip is still naming the model the server holds after a \
+             choice was made, so the control looks like it did nothing: {}",
+            screen.markup()
+        );
+    }
+
+    /// AND SO DOES THE BASE BRANCH — the second half of #79.
+    ///
+    /// The sheet is `views::code`'s own: the same `branch_choices`, the same
+    /// `Default` marking, and the same note about a list the manager cut short
+    /// at 500. With a filter over a truncated list, "Nothing matches" about a
+    /// branch that exists is a lie the reader has no way to catch, so it is
+    /// said above the rows on both screens or on neither.
+    #[test]
+    fn the_base_branch_can_be_changed_from_the_home_composer() {
+        let _guard = crate::views::press::alone();
+        let mut screen = Pressable::mount(
+            |ctx| {
+                let mut repos = ctx.code_repos;
+                repos.set(vec![allowed("acme/infra")]);
+                let mut branches = ctx.code_branches;
+                branches.set(crate::code::BranchList {
+                    repo: "acme/infra".to_owned(),
+                    default: Some("main".to_owned()),
+                    names: vec!["main".to_owned(), "release-4".to_owned()],
+                    truncated: true,
+                    loading: false,
+                });
+            },
+            CodeHome,
+        );
+        screen.settle();
+        assert!(
+            screen.markup().contains(r#"aria-label="Base branch">"#),
+            "no base control: {}",
+            screen.markup()
+        );
+
+        screen.press("Base branch");
+        screen.settle();
+        assert!(
+            screen.markup().contains("Choose base branch") && screen.markup().contains("release-4"),
+            "the base chip did not open the repo's branch list: {}",
+            screen.markup()
+        );
+        assert!(
+            screen.markup().contains("more than the manager will"),
+            "a list the manager cut short is being presented as complete, so a \
+             filter over it would report a branch that exists as missing: {}",
+            screen.markup()
+        );
+
+        screen.press(r#"class="choice""#);
+        screen.settle();
+        assert_eq!(
+            screen.with(|ctx| (ctx.new_where)().base),
+            Some("release-4".to_owned()),
+            "the base chosen on the home screen was not written to the carrier \
+             the new-session screen seeds from"
+        );
+        assert!(
+            !screen.markup().contains("Choose base branch"),
+            "the sheet stayed open over the choice it had just taken"
         );
     }
 

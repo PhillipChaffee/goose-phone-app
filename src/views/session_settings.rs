@@ -231,6 +231,26 @@ pub(crate) fn choice_label(name: &str, value: &str) -> String {
     name.to_owned()
 }
 
+/// The rows one goose config option offers, labelled the way this app labels.
+///
+/// ONE COPY, and it was three. `views::chat` wrote this expression twice — in
+/// `goose_setting_rows` and in `mode_choices` — and the home composer's model
+/// picker would have been a third; three places deciding what a value is CALLED
+/// is three chances for the settings sheet, the mode chip and the home screen
+/// to name the same model differently in one window. The mode's own icon stays
+/// at its call site, because it is the one thing about a mode that is not true
+/// of every option.
+pub(crate) fn option_choices(option: &goose_acp_client::ConfigOption) -> Vec<SettingChoice> {
+    option
+        .options
+        .iter()
+        .map(|c| {
+            SettingChoice::new(&c.value, choice_label(&c.name, &c.value))
+                .with_note(c.description.clone())
+        })
+        .collect()
+}
+
 /// What the composer chip says about thinking effort, after the model name —
 /// or `None` when there is nothing worth saying.
 ///

@@ -959,6 +959,79 @@
   letter-spacing: 0;
 }
 
+/* ── `+23 −2`: HOW BIG THE TREE IS ────────────────────────────────────── */
+/* The mockups' `.stat`, in the slot the meta line has held open for it since
+ * #181 — between the branch and the age, which is where 22-nav-disclosure puts
+ * it — `.stat{margin-left:auto}` in their own mono token, beside a branch
+ * capped at `max-width:132px`. (Their token is quoted in words rather than
+ * written out: `the_desktop_sheet_spends_no_token_that_does_not_exist` reads
+ * a `var()` inside a comment as a spend, and theirs is not a name this app
+ * declares.)
+ *
+ * NO 132px CAP, AND THAT IS THE CAP. Their branch needs a literal because
+ * their `.stat` is pushed to the end by `margin-left:auto` and would otherwise
+ * be pushed off it; here `.nav-row-sub` is already `flex: 1 1 auto` with
+ * `min-width: 0` and an ellipsis, and this box is `flex: 0 0 auto`, so the
+ * branch yields to the size and the size never yields to the branch. Same
+ * property, no number, and it holds at a sidebar width the mockups never drew.
+ * Measured on the 268px column at 1440x860, `desktop-code-list`'s own rows: the
+ * subtitle goes 194.34 -> 152.72 beside a `+84 −0`, -> 146.41 beside `+77 −33`
+ * and -> 127.44 beside a four-digit `+1204 −998`, the size taking 35.63, 41.94
+ * and 60.91 of the 213px meta line; the age stays at x=238.34 and the row stays
+ * 50px tall in every one of them. A row with no size is byte-identical to what
+ * it was.
+ *
+ * `margin-left: auto` is NOT restated here even though the mockups' rule has
+ * it: `.nav-row-age` two rules down already carries it and is the last item on
+ * the line, so a second auto margin would split the slack between them and put
+ * a gap in the middle of the meta line rather than at the end of it.
+ *
+ * THE INKS ARE THE ONES THIS APP ALREADY HAS. `--insp-add` / `--insp-del`, the
+ * pair `00-tokens.css` declares for a diff counter on the PANEL rung — which
+ * is exactly what `--nav-fill` is (`--surface-panel`). Their name is now one
+ * element wider than the inspector and should lose the `insp-` when a lane
+ * owns that file; what must not happen is the alternative, `--diff-add` /
+ * `--diff-del` from shared.css, which are deliberately theme-invariant because
+ * they are painted on `--code-bg` and measure 2.19:1 here.
+ *
+ * Measured in Chromium on this column, both row states and both themes:
+ * #7ee0a4 is 10.86:1 on dark's panel and 8.40:1 on a selected row's #2a2f36,
+ * #ff9b98 is 8.62 and 6.67; #2f6b3d is 5.89:1 on light's panel and 5.10:1 on
+ * its selected #e3e6ea, #b3261e is 6.03 and 5.22. A 10.5px string owes 4.5 and
+ * all eight clear it, so the carve-out that repaints `.nav-row-sub` and
+ * `.nav-row-age` on a selected row has nothing to do here — these two keep
+ * their hue in every row state, because the hue IS the meaning.
+ *
+ * The `+` and the `−` carry it a second time, which is what makes the pair
+ * legible to a reader who cannot tell the two hues apart. `.insp-file-count`
+ * spends the same two inks on the same two signs for the same reason. */
+.nav-row-stat {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: baseline;
+  /* The separator, as a gap rather than as a text node: the two spans are
+   * emitted with no whitespace between them, and `.insp-file-count`'s own
+   * comment is the record of what that reads as without one — "+12−3", and at
+   * four digits "+1204−998". 4px here against its 6px, because this line is
+   * 10.5px where that cell is 11.5 and the row has 213px to spend. */
+  gap: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-xs);
+  /* The whole point of a size on a list: two rows are compared by eye, and
+   * proportional digits make `+9 −11` and `+11 −9` different widths. */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.nav-row-stat .add {
+  color: var(--insp-add);
+}
+
+.nav-row-stat .del {
+  color: var(--insp-del);
+}
+
 .nav-row-age {
   /* `padding-top: 1px` IS GONE, and the comment below has been asking for that
    * since the age moved. It is the last 1px of the meta line's error: 18px of
