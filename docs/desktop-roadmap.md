@@ -46,7 +46,10 @@ rather than about the desktop.** The paragraph above ends "every in-repo
 false of most of them: the shell has been rebuilt twice since `d716047` — #40
 turned `src/shell/desktop.rs` into the directory `src/shell/desktop/`, and #157
 cut `assets/desktop.css` into fifteen files under `assets/desktop/` — so a
-citation into either one names a path that does not exist. **A stale citation
+citation into either one names a path that does not exist. (There are
+**thirteen** today: #154 and #155 folded `60-sidebar-extra.css` and
+`98-home-sched.css` away, which is this paragraph's own point happening to this
+paragraph.) **A stale citation
 inside a paragraph that promises fresh citations is worse than no citation**,
 because the reader stops checking. So this pass fixes the guarantee as well as
 the numbers, and the guarantee is now narrower on purpose:
@@ -424,7 +427,11 @@ damage — **thirty-eight** `include_str!`s reaching up out of a shared crate in
 `assets/desktop.css` into the fifteen region files under `assets/desktop/` and
 `src/css.rs` names each of them twice: once in the shipping `concat!` and once
 in the `cfg(test)` `SHELL_PARTS` table that lets a test address a region by
-name. Add a
+name. (Thirteen region files since #154 and #155, so **thirty-five**
+`include_str!`s today, not thirty-eight — 6 in `STYLES`, `SHARED`, two
+`cfg`-exclusive `PLATFORM` arms, and the thirteen twice. Counted with
+`grep -o`, which also finds the three times the macro is named in prose and
+reports 38; the argument is unchanged either way.) Add a
 `pub(crate)`→`pub` sweep across ~54,400 lines of `src/`, on a repo whose
 `src/main.rs:9-11` is explicitly laid out to keep concurrent branches out of
 each other's hunks, and it is three commits and a wrecked `git blame` in

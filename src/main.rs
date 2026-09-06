@@ -16,6 +16,9 @@ mod ask_journal;
 
 mod attach;
 
+#[cfg(test)]
+mod citations;
+
 mod code;
 
 mod cron;

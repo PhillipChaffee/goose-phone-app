@@ -648,7 +648,14 @@
  * 360 is not a taste either: docs/design.md records that "320pt is a defensive
  * width rather than a device; the narrowest this app really meets is 360", and
  * `node docs/measure-composer.js 360` is a gate. The numbers are stated once,
- * in src/shell/desktop.rs, and a test there checks this file against them. */
+ * in src/shell/desktop/mod.rs — `NAV`, `CONTENT_MIN` and `OVERLAY` — and
+ * `the_stylesheet_breaks_where_the_arithmetic_says` there checks the sheet
+ * against them. The SHEET and not this file: that test reads
+ * `crate::css::SHELL`, the whole concatenation, and the rule it looks for
+ * (`@media (max-width: 627px)`, which is `OVERLAY - 1`) is in
+ * `65-responsive.css`. Until #143's sweep this named the single file #40 had
+ * already turned into that directory; the claim was true the whole time and
+ * only the path was gone. */
 .app > .shell {
   /* The SIDEBAR column, gap included, and it is wider than it was because it
    * now holds the plane's own list rather than seven destination labels.

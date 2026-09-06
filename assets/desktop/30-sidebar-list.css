@@ -282,8 +282,7 @@
  * next reader of this hover fill will be. */
 .nav-library-count {
   flex: 0 0 auto;
-  /* CHANGE: mono, per the mockup and per this sheet's own mono rule. The
-     shipped block's `flex: 0 0 auto` is kept. */
+  /* Mono, per the mockup and per this sheet's own mono rule. */
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   line-height: var(--lh-xs);
@@ -611,9 +610,9 @@
   padding: 7px 8px;
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  /* ADD one declaration to the shipped block: the actions below measure
-     against this. Without it they measure against `.pane`, which is the
-     positioned ancestor, and land in the content column. */
+  /* The actions below measure against this. Without it they measure against
+     `.pane`, which is the positioned ancestor, and land in the content
+     column. */
   position: relative;
 }
 
@@ -1015,8 +1014,7 @@
  * hierarchy survives — the title is --text-primary at 8.77:1 and this is
  * 4.64:1, which is a clear step down without being unreadable. */
 .nav-row-sub {
-  /* CHANGE: `flex: 1 1 auto` added so the age can sit at the end of the meta
-     line; every other declaration in the shipped block is kept. */
+  /* `flex: 1 1 auto` so the age can sit at the end of the meta line. */
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;

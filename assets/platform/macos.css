@@ -120,7 +120,7 @@
  *
  * Read off the window, not inferred from it. `src/shell/desktop/mod.rs`
  * `use_fullscreen` asks tao on a `Resized` and writes the attribute in the
- * render, beside `data-detail` and `data-nav`. It replaced a JS test of
+ * render, beside `data-nav` and `data-insp`. It replaced a JS test of
  * `innerHeight >= screen.height - 2` that NEVER FIRED in a real fullscreen
  * window, which made this whole block dead for the life of the feature.
  *

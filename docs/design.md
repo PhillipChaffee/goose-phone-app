@@ -796,6 +796,25 @@ All commented at the point of use in the stylesheet:
   light — a marker that vanishes in one theme. Their values are set by the
   `+`/`−` glyph rather than by the leading rule: the glyph is text on the row
   tint and wants 4.5:1, which is much the stricter of the two bars.
+- **And the light half of that, said out loud: in light the code surfaces are
+  the loudest object on the page, and that is accepted.** Six tokens hang off
+  `--code-bg` staying `#282c34` in both themes — `--code-fg`, `--code-muted`,
+  `--diff-add`, `--diff-del`, `--diff-add-fill`, `--diff-del-fill` — and the
+  desktop's `--insp-add` / `--insp-del` exist under different names for the
+  same reason (`assets/desktop/00-tokens.css`): declaring `--diff-add` there
+  would put a light value on the real diff screen, where `#2f6b3d` measures
+  **2.19:1** on the slab. What the invariance buys is that code text is
+  **11.22:1** on the slab in *both* themes, one of the best-contrasting
+  surfaces in the app. What it costs is an asymmetry nothing else in the sheet
+  has, measured against the surface each slab actually sits on: `--code-bg`
+  against the page is **14.00:1** in light and **1.15:1** in a desktop pane
+  (1.10:1 on the phone), and `--slab-sunken` inside a tool card is **12.91:1**
+  in light and **1.09:1** in dark. So "sunken" is literal in dark and
+  **inverted** in light — the same element takes roughly twelve times the
+  attention — and a reader who notices that in light mode is seeing the
+  decision working, not a bug. Reversing it was considered and rejected on the
+  2.19:1 above: a light slab breaks the diff colours that both syntax
+  highlighting and the review screen assume.
 
 ## How to check your work
 
@@ -1441,20 +1460,25 @@ is open.
 wider than the 402 frame every gallery state is audited in — and it is also
 exactly what goose's own desktop app ships as its minimum. 560 is the nav's
 intrinsic height (seven destinations at 48px, plus the wordmark and the
-padding) with slack. A test in `src/shell/desktop.rs` checks the floor against
-the breakpoints, because only one of the two is compiled.
+padding) with slack. `the_window_floor_lands_inside_the_narrowest_tier`, in
+`src/shell/desktop/mod.rs`, checks the floor against the breakpoints, because
+only one of the two is compiled.
 
 **Nothing observes a DOM resize.** The breakpoints are `@media` rules in a
 stylesheet a phone binary does not contain, so pane count needs no Rust at
 all. That is not tidiness — it is the synchronous-XHR rule above: a Rust
-`onresize` handler would be a blocking round trip per frame of a drag. The one
-thing CSS cannot work out for itself is whether a detail is open, and that is
-a fact about the app rather than the window, so the shell states it in a
-`data-detail` attribute.
+`onresize` handler would be a blocking round trip per frame of a drag. What
+CSS cannot work out for itself is stated as three plain attributes on
+`.shell` — `data-nav`, `data-fullscreen`, `data-insp` — each a fact about the
+app or the window rather than about its width. There was a fourth: this
+paragraph said "whether a detail is open … so the shell states it in a
+`data-detail` attribute" until #143's sweep, and that attribute went out with
+the list column, because one content column does not need telling which of two
+holds anything.
 
 This paragraph read "**Nothing observes a resize**" until `use_fullscreen`
 landed, and the qualifier is the whole of the difference rather than a hedge.
-`src/shell/desktop.rs` does now take a `tao` `Resized` — as a *trigger*, to
+`src/shell/desktop/mod.rs` does now take a `tao` `Resized` — as a *trigger*, to
 read `window().fullscreen()` back off the window, because tao publishes no
 fullscreen event of its own. A `tao` event is not a DOM event: it is already in
 this process's event loop and reaches the closure by a function call, so none
@@ -1466,8 +1490,12 @@ column count travels that way, and nothing may start to.
 the band the traffic lights are painted in, and it carries three things: the
 nav toggle, the name of whatever the detail column is showing, and the
 connection. `assets/desktop/` then takes that same heading back out of the
-pane below it (`[data-detail="open"] .pane-detail .topbar > .title`), so there
-is **one title per window** where there used to be one per column.
+pane below it (`.shell:has(.chrome-title) .pane-main .topbar > .title`, in
+`80-measure.css`), so there is **one title per window** where there used to be
+one per column. That selector read `[data-detail="open"] .pane-detail .topbar >
+.title` in this document until #143's sweep, and both halves of it had moved:
+the attribute is gone with the list column, and the pane it names is
+`.pane-main`.
 
 Only the detail's, and only when there is one. A LIST keeps its heading on the
 canvas at every width, in every state, so the list column never moves — which
@@ -1717,8 +1745,8 @@ and the next renders another, and only both sides can say the two agree.
 `assets/desktop/97-home-code.css` makes `.home-board` a named `@container` and
 turns the code row's layout on how wide the *content column* got, so the
 breakpoints that decide it are 475 and 731 board pixels, not window pixels. The
-nine sizes above put the board at nine widths and neither threshold was among
-them — 146 consecutive board widths were unreachable by any gate in the repo,
+nine the list held before #265 put the board at nine widths and neither
+threshold was among them — 146 consecutive board widths were unreachable by any gate in the repo,
 and the row that made #265 necessary read `Document…` at 74px of title track
 inside that gap with the boards on either side of it both Clean. 763/764 and
 851/852 are those two thresholds straddled the same way the window's are, and
@@ -1746,21 +1774,36 @@ taken in the 1180×820 the window opened at before the re-scale, which changes
 nothing it was taken for: the root is the web view's own default and does not
 move with the window.
 
-**The shell's own state walks in place of the text axis.** `data-nav` and
-`data-fullscreen` are plain attributes on `.shell` that only
+**The shell's own state walks in place of the text axis.** `data-nav`,
+`data-fullscreen` and `data-insp` are plain attributes on `.shell` that only
 `assets/desktop/` and `assets/platform/macos.css` read, so flipping them is
-a real reflow of a real rule rather than a fiction — which is exactly what
-separates them from `data-detail`, a fact about what the app has open that has
-to be *captured* and must never be flipped. Three cells, chosen rather than
-multiplied: **nav open**, **nav closed**, and **fullscreen**. The collapse
-earns its pass because the rail and collapsed tiers are where the window chrome
-gets crowded, and that is where this shell's one shipped regression lived.
-Fullscreen earns its own because the band is the whole of what it changes — it
-gives back the 76pt traffic-light indent and takes 10pt of padding — so
-`closed x fullscreen` would measure the collapsed cell twice and nothing else.
+a real reflow of a real rule rather than a fiction. **Four cells, chosen rather
+than multiplied**, and `docs/audit.js`'s `DESKTOP_SHELL` names each: **nav
+open + inspector open** (the captured arrangement), **nav closed + inspector
+open**, **nav open + inspector open + fullscreen**, and **nav closed +
+inspector closed**, which is the only cell that takes the pane to the whole
+window. The collapse earns its pass because the rail and collapsed tiers are
+where the window chrome gets crowded, and that is where this shell's one
+shipped regression lived. Fullscreen earns its own because the band is the
+whole of what it changes — it gives back the 76pt traffic-light indent and
+takes 10pt of padding — so `closed x fullscreen` would measure the collapsed
+cell twice and nothing else.
 
-That both attributes are *written by the render* is what makes this legitimate,
-and it was not always true. `data-fullscreen` used to be set from JS, inferred
+This paragraph read **three cells** and separated the axis from "`data-detail`,
+a fact about what the app has open that has to be *captured* and must never be
+flipped", and #143's sweep found both halves of that false. `data-insp` is
+flippable for exactly `data-nav`'s reason — the inspector is rendered
+unconditionally and the *sheet* hides it, so every captured state carries the
+whole third column in its bytes whatever the attribute said — and it is the one
+value the grid used to take from the store, which makes it the one an
+operator's own machine would otherwise have decided. `data-detail` is not the
+counter-example any more either: it went out with the list column.
+`docs/audit.js`'s comment beside `DESKTOP_SHELL` carries the full argument,
+including which cell is deliberately left out and the measurement that says it
+would render an identical frame at ten of the thirteen sizes.
+
+That all three attributes are *written by the render* is what makes this
+legitimate, and it was not always true. `data-fullscreen` used to be set from JS, inferred
 from `innerHeight >= screen.height - 2`, and that comparison never once matched
 a real fullscreen window: the rule below was dead in every window that ever
 ran, and no frame here rendered it either. Two independent gaps, each of which

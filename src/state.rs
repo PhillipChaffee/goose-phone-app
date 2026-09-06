@@ -2076,6 +2076,13 @@ pub(crate) fn relative_time(epoch: i64) -> String {
 /// option set, which is also pushed as a `config_option_update`; both paths
 /// land in `ctx.config_options`, so whichever arrives first wins and they
 /// agree.
+///
+/// SERVER-FIRST, and that is a safety property rather than a style: the chip
+/// is redrawn only from what the agent answers with, never from what was
+/// tapped, so a refused switch cannot paint an approval mode the server is not
+/// using. `docs/approval-modes.md` is the whole trace, end to end — it exists
+/// because a user asked whether the mode chip was really wired and the answer
+/// was in six files and no document.
 pub(crate) fn set_config_option(ctx: &AppCtx, config_id: &str, value: &str) {
     let Some(client) = ctx.client.peek().clone() else {
         return;

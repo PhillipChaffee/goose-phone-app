@@ -120,28 +120,13 @@
   font-variant-numeric: tabular-nums;
 }
 
-.insp-sec-act {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 2rem;
-  min-height: 2rem;
-  padding: 0 0.5rem;
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  font-family: inherit;
-  font-size: var(--text-2xs);
-  line-height: var(--lh-sm);
-  cursor: pointer;
-}
-
-.insp-sec-act:hover {
-  border-color: var(--text-tertiary);
-  color: var(--text-primary);
-}
+/* `.insp-sec-act` USED TO SIT HERE and styled nothing: a section-header action
+ * button — `margin-left: auto`, a 2rem square, a `--border-primary` outline and
+ * a hover state — that `inspector.rs` has never emitted. #146 deleted it after
+ * sweeping all of `src/` for a `class:` literal or a helper that could compose
+ * the name and finding the two selectors and nothing else. A rule no markup
+ * reaches is not a rule; it is a proposal, and a reader of this file could not
+ * tell it apart from one the shell relies on. */
 
 .insp-kv {
   padding: 0 0.875rem 0.25rem;
@@ -702,9 +687,14 @@
   text-align: center;
 }
 
-.insp-key.wide {
-  min-width: 2.75rem;
-}
+/* `.insp-key.wide` USED TO SIT HERE, a 2.75rem floor for a keycap that needed
+ * more than the 1.75rem above. `inspector.rs` writes `class: "insp-key"`
+ * unconditionally and always has, and all four `CHORDS` — `⌘/`, `⌘⌥/`, `⌘R`,
+ * `esc` — fit the 28px floor already, so the modifier had no case to be wired
+ * up to either. #146 deleted it rather than emitting it: `wide` would be a NEW
+ * class literal in one of the four files
+ * `every_class_the_desktop_shell_renders_is_in_the_captured_store` scans, and a
+ * capture is not what an unused modifier is worth. */
 
 .insp-empty {
   padding: 1.5rem 0.875rem;

@@ -270,8 +270,9 @@ body.away-from-bottom .pane-main .scroll-bottom {
  * to be a `@media (min-width: 902px)` that hid the DETAIL's copy, which left
  * the badge jumping between columns as the window was dragged across that
  * width: the state of the connection appeared to move because the layout
- * reflowed. `.shell-chrome` now carries it (`src/shell/desktop.rs`), so both
- * panes give theirs up at every width and there is nothing left to reflow.
+ * reflowed. `.shell-chrome` now carries it (`src/shell/desktop/mod.rs`), so
+ * both panes give theirs up at every width and there is nothing left to
+ * reflow.
  *
  * `.pane .topbar >` and not `.pane-main .topbar >`: `views/code.rs` hand-
  * rolls a badge of its own in the Code LIST's header, so a rule naming only

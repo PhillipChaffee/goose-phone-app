@@ -360,6 +360,12 @@ pub fn ChatView() -> Element {
 /// An option with a single value stays in the sheet as a fact. A chip that
 /// opens a one-row picker is a control that does nothing (design rule 11),
 /// and the setting still exists, so it is reported rather than hidden.
+///
+/// The names and descriptions on that picker are the AGENT'S, all the way
+/// down: "Smart approve" is a string this repo never writes. `git grep` is one
+/// way to see that and `docs/approval-modes.md` is the other — the trace from
+/// this predicate to `session/set_config_option` and back, written down
+/// because a user asked whether a safety control was really wired.
 fn is_mode_chip(option: &ConfigOption) -> bool {
     (option.category.as_deref() == Some("mode") || option.config_id == "mode")
         && option.is_adjustable()

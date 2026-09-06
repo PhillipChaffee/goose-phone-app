@@ -25,8 +25,9 @@ loop the app is developed in.
 
 <sub>The running app, not mock-ups: captures off an iPhone 17 Pro simulator
 (`scripts/shoot-simulator.sh <name>`). For markup that cannot drift there is
-[`docs/style-gallery.html`](docs/style-gallery.html): twenty-seven screen states
-dumped out of the app's own DOM, which is also what `docs/audit.js` reads.</sub>
+[`docs/style-gallery.html`](docs/style-gallery.html): seventy screen states —
+49 phone, 21 desktop — dumped out of the app's own DOM, which is also what
+`docs/audit.js` reads.</sub>
 
 ## Features
 
