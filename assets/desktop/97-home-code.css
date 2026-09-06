@@ -542,162 +542,323 @@ button.home-tile[aria-pressed='true'] .home-tile-label {
   color: var(--accent);
 }
 
-/* ── SIX COLUMNS ARE A WIDE-WINDOW LUXURY, AND THREE OF THEM GO ──────────
+/* ── THE ROW IS A LADDER, AND EVERY RUNG IS CHOSEN BY THE TITLE ──────────
  *
- * THE FINDING: `node docs/audit.js both` reported 168 SPILLs on
- * `desktop-code-list`, every one of them `button.tree content leaves the box by
- * 52px`, and the 52 is the least interesting half of it. Measured under the
- * sheet list `docs/audit.js` links, at 628 with the nav open, as the row's
- * resolved tracks:
+ * THE FINDING THAT OPENED THIS: `node docs/audit.js both` reported 168 SPILLs
+ * on `desktop-code-list` and `desktop-code-list-picker`, every one of them
+ * `button.tree content leaves the box by 52px`. The 52 is the least
+ * interesting half of it. Re-measured under the sheet list `docs/audit.js`
+ * itself links, at window 628 with the nav open, the row's resolved tracks are
  *
  *     12px  0px  0px  84px  136px  74px
  *
- * Both flexible tracks are ZERO. `.tree-text` is a 0px box at x=322 and
- * `.tree-branch` is a 0px box at x=334, so the row draws a dot, then `+77 −33`,
- * then `asleep`, then an age hanging at x=644.5 in a card that ends at 612 —
- * and NOT ONE CHARACTER of the title of the thing the row is about. The
- * overflow is the symptom the check can see; the defect is a board of rows that
- * name nothing.
+ * with `clientWidth`/`scrollWidth` 326/379 on the row and 328/380 on the board.
+ * BOTH FLEXIBLE TRACKS ARE ZERO, so the row draws a dot, `+77 −33`, `asleep`
+ * and an age hanging outside its own card — and not one character of the title
+ * of the thing the row is about. The overflow is the symptom a check can see;
+ * the defect is a board of rows that name nothing.
  *
- * WHY 326 IN EVERY ONE OF THEM, and it is one cause rather than a coincidence.
- * `src/shell/desktop/mod.rs` names three numbers — `NAV` 268, `CONTENT_MIN`
- * 360, `INSP` 344 — and every breakpoint in `assets/desktop/` is a SUM of them:
- * 628 is NAV + CONTENT_MIN, 704 is CONTENT_MIN + INSP, 972 is all three. A
- * breakpoint built that way puts the content column at CONTENT_MIN EXACTLY at
- * the first pixel of its own tier, whichever columns are beside it there:
+ * WHY 326 IN SEVEN CELLS OF THE 36 THE GRID WALKS, and it is one cause rather
+ * than a coincidence. Three numbers run this shell — `NAV` 268 and
+ * `CONTENT_MIN` 360 in `src/shell/desktop/mod.rs`, and `--insp-w: 344px` in
+ * `00-tokens.css` — and every breakpoint in `assets/desktop/` is a SUM of them:
+ * 628 is NAV + CONTENT_MIN, 704 is CONTENT_MIN + the inspector, 972 is all
+ * three (`65-responsive.css:151` does that arithmetic out loud). A breakpoint
+ * built that way puts the
+ * content column at CONTENT_MIN EXACTLY at the first pixel of its own tier,
+ * whichever columns are beside it there:
  *
  *      628  nav in flow, no inspector          628 − 268       = 360
  *      704  inspector open, nav overlaid       704 − 344       = 360
  *      972  all three columns in flow          972 − 268 − 344 = 360
  *
- * SEVEN CELLS OF THE 36 THE GRID WALKS, three windows, one number — and the
- * seven are exactly the arrangements in which the third column is on screen
- * with the nav still costing its 268, which the audit's own list agrees with:
- * 628 and 972 in the two nav-open cells, 704 in three. Both windows' nav-CLOSED
- * cells measure 594 and do not fail, so `326` is not a property of a width.
+ * 360 − 32 (`--edge` a side; `80-measure.css`'s `--gutter` collapses to it
+ * below the measure) is a 328px board, and the row is `width: 100%` of it:
+ * 328 − 2 border − 26 padding = 300px of grid against 306 of fixed track plus
+ * five 12px gaps = 366. The seven are the arrangements in which the third
+ * column is on screen with the nav still costing its 268; both windows'
+ * nav-CLOSED cells measure a 594px board and never failed. Re-run against the
+ * parent commit's sheet, the 168 factor exactly: 56 distinct cells — 7 x 2
+ * captured states (`desktop-code-list`, `desktop-code-list-picker`) x 2 passes
+ * (plain and long-text) x 2 themes — times the 3 selector strings the five rows
+ * produce (`button.tree.awake`, `button.tree.waiting`, `button.tree`).
  *
- * 360 − 32 (`--edge` a side: `80-measure.css`'s `--gutter` collapses to it
- * below the measure) is a 328px board, and the row is `width: 100%` of that:
- * 328 − 2 border − 26 padding = 300px of grid. The six tracks want
- * 12 + 84 + 136 + 74 = 306 of fixed track plus five 12px gaps = 366 before
- * either `fr` gets a pixel, so the flexible pair is crushed to 0 and the fixed
- * cells still hang 66px past the content box — 52 past the border box, 53 on
- * `scrollWidth − clientWidth`. The other 29 cells the grid walks give the row
- * 401px or more and none of them spills.
+ * ── THE BOARD'S OWN RANGE, WHICH IS WHAT MAKES THIS SOLVABLE ────────────
  *
- * A CONTAINER QUERY AND NOT A `@media` TIER, which is a departure from
- * `65-responsive.css`'s idiom and is argued rather than preferred. The
- * condition is "the content column is near its floor", and in window terms that
- * is FOUR blocks — `(max-width: 557px)`, `(628..825) [data-nav="open"]`,
- * `(704..901) [data-insp="open"]` and
- * `(972..1169) [data-nav="open"][data-insp="open"]` — whose eight breakpoints
- * are every one of them hand-computed from `--nav-w`, `--insp-w` and `--edge`.
- * `--nav-w` has already moved once in this shell's life (212 to 268, when the
- * plane's list arrived into the sidebar), and it would have moved all eight of
- * those numbers with nothing in the repo able to say so. The board's own inline
- * size is the fact the row actually depends on; asking it directly is one block
- * that cannot go stale.
+ * Swept one window pixel at a time through both shell arrangements, the board
+ * takes 449 distinct widths and they run 328 to 776 — no wider at ANY window,
+ * because `--measure: 48.5rem` at the top of this file caps `.home-inner`
+ * (measured: 776 at windows 1440, 1600, 2000, 2560 and 3200 alike). So the row
+ * has a floor and a ceiling, 448px apart, and the whole question is which
+ * arrangement to draw at each of the 449.
+ *
+ * At the 16px root this shell has, the three arrangements below cost:
+ *
+ *   six    12 + 84 + 136 + 74 fixed, five gaps      title 0.5625 x (b − 394)
+ *   four   12 + 136 + 74 fixed, three gaps          title b − 286
+ *   three  12 + 74 fixed, two gaps                  title b − 138
+ *
+ * (`b` is the board; the row eats 28 of it in border and padding. The
+ * six-column title is 1.35/2.4 of what is left after the fixed tracks, which is
+ * where the 0.5625 comes from.) THE THREE-COLUMN TITLE IS WIDER THAN THE
+ * SIX-COLUMN ONE AT EVERY BOARD WIDTH — (b − 138) − 0.5625(b − 394) is
+ * 0.4375b + 83.6, positive for every b — so a step DOWN at each threshold is
+ * not a bug to be designed out. It is what choosing a wider arrangement costs,
+ * and the only question a threshold can answer is how far down.
+ *
+ * ── ONE FLOOR, DERIVED ONCE, AND BOTH THRESHOLDS COME OUT OF IT ─────────
+ *
+ * 190px: the title track the three-column row gives at a 328px board.
+ *
+ * That is the narrowest title this shell can ever be asked to draw, in the
+ * arrangement that exists BECAUSE the room ran out. It is pure geometry —
+ * 328 − 28 − 12 − 74 − 24 — with no string in it, so no fixture can move it.
+ * And it is the only bar that answers the actual defect: a row that gives the
+ * title LESS than the emergency arrangement gives it at the tightest content
+ * column this shell can produce is a wider window drawing a worse title than a
+ * narrower one, which is what a reader experiences as broken.
+ *
+ * THE FLOOR THIS REPLACES WAS `.tree-age`'s 4.625rem, and it was the weakest
+ * bar available: the NARROWEST fixed cell on the row. Six columns cleared it at
+ * a 526px board with a 74.23px title, and 74.23px of `--text-sm` renders
+ * `Document…`, `Tighten th…`, `Give the s…` — measured, all five rows, by
+ * laying prefixes out in the title's own resolved font. A board ONE PIXEL
+ * NARROWER drew all five titles whole in 387px. That is the defect, and the old
+ * threshold is where it came from.
+ *
+ * Applying 190 to each arrangement:
+ *
+ *   four columns   b − 286 ≥ 190           →  b ≥ 476    →  475 is the last fail
+ *   six columns    0.5625(b − 394) ≥ 190   →  b ≥ 731.8  →  731 is the last fail
+ *
+ * and the four-column number has a second reading worth keeping, because it is
+ * the one a later `--edge` or `.tree-state` change has to hold: 476 is
+ * 328 + 12 + 8.5rem. The four-column row may start exactly where the board has
+ * grown by the gap and the track that `.tree-state` costs — no earlier, or the
+ * state word is bought with title.
+ *
+ * MEASURED ACROSS ALL 449 BOARD WIDTHS, in both shell arrangements:
+ *
+ *   328..475   three columns   title 190 → 337
+ *   476..731   four columns    title 190 → 445
+ *   732..776   six columns     title 190.13 → 214.86
+ *
+ * The title track is never below 190 anywhere, and the least of any of the five
+ * fixture titles that is on screen at any board width is 96% — one word of
+ * `Tighten the composer's chip row`, at the two step boundaries and nowhere
+ * else. Against the rule this replaces: 74.23px and 37%.
+ *
+ * ── WHAT EACH RUNG DROPS, AND THE TRUE REASON FOR EACH ──────────────────
+ *
+ * The rule this replaces gave each of its three drops a warrant and TWO OF THE
+ * THREE WERE FALSE. They are corrected here rather than softened, because in
+ * this directory the comment is the deliverable.
+ *
+ *   `.tree-branch`  The claim was "already 0px wide in every cell this fires
+ *                   in". It was true in seven of the thirteen. Measured on the
+ *                   parent of the commit that shipped it: the branch track is
+ *                   23.61px in the four board-448 cells and 3.92px in the two
+ *                   board-403 cells, and 23.61px of `--text-2xs` mono renders
+ *                   `ag…` over `#1…`. THE TRUE REASON is that two characters
+ *                   and an ellipsis name nothing, and that this is the cell
+ *                   which never fits: at the 776 ceiling — the widest board
+ *                   this shell has — 167px of track still draws
+ *                   `agent/personal-ai-setup-…` against the 194.6px the name
+ *                   needs. A cell truncated at the ceiling is the first to
+ *                   spend.
+ *
+ *   `.tree-num`     The claim was "the board says this twice above the rows
+ *                   already — `.repo-head-num` carries the GROUP's `+84 −0` on
+ *                   the heading immediately over them, and `.home-tiles`
+ *                   carries the board's". BOTH HALVES ARE FALSE, measured on
+ *                   `desktop-code-list` at 1440. `.home-tiles` carries no diff
+ *                   stat at all: the five tiles read `5 working trees`,
+ *                   `1 waiting on you`, `2 awake` over `3 asleep`,
+ *                   `3 pull requests` over `1 draft · 1 red`, and `3 repos`
+ *                   over `3 allowed`. And `.repo-head-num` occurs ONCE across
+ *                   the three `.repo-group`s — on `notes-public`, the group
+ *                   with a single tree. `goose-phone-app` has no total at all
+ *                   and carries two measured rows (`+23 −2` over `2 files`,
+ *                   `+77 −33` over `3 files`).
+ *                   That is structural rather than a fixture accident:
+ *                   `RepoGroup::num` in `src/shell/desktop/home.rs` is `None`
+ *                   "which is most of the time and by construction", because
+ *                   one unmeasured tree in a group means no heading total.
+ *
+ *                   SO THIS DROP LOSES A FACT, and `.tree-sub` goes with it —
+ *                   the file count and the `.tree-bars` sparkline, restated
+ *                   nowhere on this board at any width. THE TRUE REASON is the
+ *                   trade, stated as a trade and measured at a 672px board:
+ *                   the six-column row buys `+23 −2` over `2 files` and a
+ *                   sparkline for a title reading `Give the sidebar a sear…`
+ *                   and a branch reading `agent/goose-phone…`, where the
+ *                   four-column row spends the same width on
+ *                   `Give the sidebar a search box` and the branch's own repo
+ *                   is on the heading over it either way. A row that cannot
+ *                   name its subject is worse than a row missing its diff
+ *                   stat. The numbers come back at 732, the
+ *                   first board at which they cost the title nothing below the
+ *                   floor — and at 776, where they are always on, the board is
+ *                   the width the mockup drew it at (`.board` in
+ *                   11-home-code.html, an 828px pane less 26px of gutter a
+ *                   side).
+ *
+ *   `.tree-state`   136px, the largest fixed track, and it now goes ONE RUNG
+ *                   LOWER than the other two rather than with them: it survives
+ *                   to a 476px board where they stop at 732. That is the whole
+ *                   reason the middle rung exists. Moving a single threshold up
+ *                   to the floor would have taken the state word out of ten
+ *                   more of the 36 cells than the rule it replaces did; the
+ *                   ladder takes it out of exactly the same thirteen and no
+ *                   more, which is the shape every other ledger in this repo is
+ *                   held to.
+ *
+ * ── THE STATE IS HUE-ONLY BELOW A 476px BOARD, AND THAT IS DISCLOSED ────
+ *
+ * Not argued away. Where `.tree-state` is gone, `waiting` and `asleep` are the
+ * SAME OBJECT in two colours: both are 8x8 `--radius-full` marks with a solid
+ * fill, inside cards that differ from each other only in border colour and
+ * tint. Measured on the board in the three-column tier, light then dark:
+ *
+ *   waiting  mark rgb(138,97,0) / rgb(240,180,41), and the card's border is
+ *            that same hue
+ *   asleep   mark rgb(111,111,111) / rgb(152,161,172)
+ *
+ * Only `awake` keeps a shape of its own — a transparent disc with a 2px inset
+ * `--accent` ring. All three clear the 3:1 a non-text indicator owes against
+ * their own card (light 5.87 / 5.13 / 4.64, dark 6.22 / 7.92 / 5.95), so this
+ * is not a contrast failure; it is a use-of-colour one, and the border and the
+ * tint do not answer it because they are colour too.
+ *
+ * The word's OTHER channel has the same shape of problem and is not fixable
+ * from a stylesheet at all: `home.rs` puts `tree.state.word()` in an
+ * `aria-label` on a bare `<span class="tree-mark">`, which maps to
+ * `role=generic`, and ARIA 1.2 makes `generic` name-prohibited. Chromium's
+ * `Accessibility.getFullAXTree` does read the word out of it — `role=generic
+ * name="waiting on you" from=["relatedElement","attribute"]`, measured on this
+ * board — but that is one engine honouring a prohibited attribute, and this app
+ * ships on WebKit. #264 holds it, with the one-attribute fix.
+ *
+ * THE CSS REMEDY FOR THE VISUAL HALF IS AVAILABLE AND IS DECLINED HERE. A
+ * second shape on `.tree.waiting .tree-mark` would close it in three lines. It
+ * is not taken
+ * because it is a design decision no mockup in this repo makes and no gate in
+ * this repo can check — `docs/audit.js`'s fill walk measures a mark's
+ * CONTRAST, never its shape — so a square dot would ship on one author's
+ * judgement, and it would either mean two different things at two window widths
+ * or change the mark in the reference frame as a side effect of a width fix.
+ * The other way out, narrowing the query so these cells keep the word, is not
+ * available: at a 448px board the six-column row gives the title 30.4px and the
+ * branch 23.6px, and at 403 it gives them 5.1 and 3.9. Those cells need the
+ * narrow arrangement more than the seven that spilled did.
+ *
+ * ── THE THRESHOLDS ARE px AND THE TRACKS THEY GUARD ARE rem ─────────────
+ *
+ * Every track on this row is a `rem` and both numbers in the two queries below
+ * are pixels, so the guard does not travel with the root the way the thing it
+ * guards does. Both break-evens are derived and both are measured. Content
+ * leaves a row's BORDER box — which is what a SPILL finding reports — when the
+ * board is under `tracks + gaps + 14` (13px of padding and 1px of border on the
+ * trailing side), so at a root of R the tightest board in each tier fails at:
+ *
+ *   three columns   328 = 5.375R + 38    →  R = 53.95
+ *   four columns    476 = 13.875R + 50   →  R = 30.70
+ *   six columns     732 = 19.125R + 74   →  R = 34.40
+ *
+ * The binding one is the middle rung, 30.70. Swept over every window from 490
+ * to 800 at a series of roots, the first spill appears between a 30.5 root
+ * (0px) and a 30.8 root (2px, window 508, board 476, four columns) — the
+ * derivation to two decimal places. The rule this replaces broke at 23.63 by
+ * the same arithmetic (526 = 19.125R + 74) and the same sweep: 0px at a 23.5
+ * root, 2px at 23.7, 8px at 24 on a 526px board.
+ *
+ * IT IS RECORDED RATHER THAN EXPRESSED IN `rem`, and the reason is that a
+ * `rem` threshold here cannot be written honestly. The row is a px chrome
+ * (1px border, 13px padding, 12px gaps, `--edge`'s 16) around rem tracks, so
+ * the exact scaling threshold is `calc(577.67px + 9.5694rem)` — false precision
+ * inside a query whose parse failure has no fallback. If a WebKit declined that
+ * `calc()` the block would drop whole and the row would spill on the product
+ * while `docs/audit.js`, which runs Chromium, went on reporting Clean.
+ *
+ * AND THE DESKTOP ROOT CANNOT REACH 30.70 TODAY. `src/css.rs` gives a macOS
+ * binary `assets/platform/macos.css`, which sets no font at all — the iOS
+ * sheet's `font: -apple-system-body` is the Dynamic Type opt-in and no other
+ * build has it — so nothing moves the root off the web view's 16.
+ * `docs/audit.js`'s `DESKTOP_SCALES` is `[16]` for exactly that reason and
+ * records the read that established it. If a desktop build ever opts into a
+ * system text size, that list grows and this paragraph is the first thing that
+ * has to be re-derived.
+ *
+ * ── A CONTAINER QUERY AND NOT A `@media` TIER ───────────────────────────
+ *
+ * A departure from `65-responsive.css`'s idiom, and argued rather than
+ * preferred. The condition is "how wide did the content column get", and in
+ * window terms each of these two thresholds is FOUR blocks — a bare
+ * `max-width`, one under `[data-nav="open"]`, one under `[data-insp="open"]`
+ * and one under both — and every breakpoint in all eight would be hand-computed
+ * from `--nav-w`, `--insp-w` and `--edge`. `--nav-w` has already moved once in
+ * this shell's life (212 to 268, when the plane's list arrived in the sidebar;
+ * `src/shell/desktop/mod.rs:1403` is the record) and it would have moved every
+ * one of them with nothing in the repo able to say so. The board's own inline
+ * size is the fact the row depends on; asking it directly is two blocks that
+ * cannot go stale.
  *
  * AND IT RAISES NO FLOOR, which is the one thing a first use of a feature owes.
  * `@container` is Chromium 105 and Safari 16.0. This directory already spends
- * `color-mix()` 21 times with no `@supports` around any of them — the first is
+ * `color-mix()` 22 times with no `@supports` around any of them — the first is
  * `20-plane-switch.css:37`, and `assets/shared.css` has 14 more — and that is
- * Safari 16.2. So the sheets a macOS binary links ALREADY require a strictly
- * NEWER WebKit than this query does, out of the same macOS release (Ventura
+ * Safari 16.2, so the sheets a macOS binary links ALREADY require a strictly
+ * newer WebKit than these queries do, out of the same macOS release (Ventura
  * 13). No phone can reach the question: `src/css.rs` makes `SHELL` the empty
  * string under `cfg(any(target_os = "ios", target_os = "android"))` and a
- * `const` assertion holds it there, so the only other web views this rule ever
- * lands in are the Chromium-family ones a Linux or Windows dev build opens,
- * which have had `@container` since 105. `docs/audit.js` runs a Playwright
- * Chromium far past that, so the instrument and the shipped web view agree
- * about it.
+ * `const` assertion holds it there.
  *
- * 525px, AND THE THRESHOLD IS THE TITLE'S RATHER THAN THE OVERFLOW'S. The row
- * stops overflowing at a 394px board (28 of border and padding, 366 of fixed
- * track and gap), but a board at 394 gives the flexible pair 0px — the same
- * unreadable row, one pixel short of a finding. So the number comes from the
- * title instead: the pair splits the free space 1.35/1.05, so the title is
- * 0.5625 × (board − 394), and it may not be narrower than `.tree-age`'s 4.625rem
- * — the narrowest FIXED cell on the row, because a row that spends less width
- * naming the tree than stamping its age has inverted its own hierarchy. 74 /
- * 0.5625 = 131.56 of free space, and 394 + 131.56 = 525.56, so 525 is the last
- * whole pixel that fails.
+ * ── WHAT NO CHECK IN THIS REPO CAN SEE ──────────────────────────────────
  *
- * The grid cannot tell 525 from its neighbours and that is stated rather than
- * hidden: the board's measured widths across the 36 desktop cells are 328, 403,
- * 448 | 595, 596, 671, 672, 776, so ANY threshold in 449..594 selects the same
- * cells. 525 is the one this row's own arithmetic produces.
+ * `docs/audit.js`'s nine window widths and four shell cells produce eight board
+ * widths — 328, 403, 448, 595, 596, 671, 672, 776 — so the grid steps 448 to
+ * 595 IN ONE MOVE and no gate can see any layout between them. Both of this
+ * rule's thresholds and the 526px board that was the worst row on this branch
+ * live inside that gap — 69 window widths land there with the nav and the
+ * inspector shut, 138 with the inspector open, 207 with both. The 449-width
+ * sweeps quoted above are this comment's evidence, not a check: nothing re-runs
+ * them.
  *
- * SO THIRTEEN CELLS TURN AND NOT SEVEN, deliberately. 403 (703 with the nav
- * open) and 448 (the 480 floor) are the same defect one notch less severe — a
- * 5.1px title track and a 30.4px one, measured — and a threshold drawn between
- * them and the seven would be a threshold chosen to match the CHECK rather than
- * the layout.
+ * The audit's other axis reaches this board even less. Its `LONGEST` stress map
+ * holds eleven selectors and NONE of them matches any of the 35 classes the
+ * board renders — `.chrome-heading` and `.chrome-sub` are the only two that
+ * match anywhere in `desktop-code-list`, and both are in the window chrome. So
+ * the stressed copy of this state lays out the same five fixture titles as the
+ * plain one, and half of the 168 findings that opened this were the same
+ * strings counted twice. Both gaps are #265.
  *
- * WHICH THREE GO, and each of the three is the one whose sentence is still on
- * screen without it:
+ * ── THE BLOCKS, AND THEIR ORDER IS LOAD-BEARING ─────────────────────────
  *
- *   `.tree-branch`  It is already 0px wide in every cell this fires in, and
- *                   both spans inside it are `overflow: hidden` — so it is
- *                   painting nothing at all today and costs a 12px gap to do
- *                   it. Nothing visible is lost; the gap comes back.
- *   `.tree-num`     84px. The board says this twice above the rows already —
- *                   `.repo-head-num` carries the GROUP's `+84 −0` on the
- *                   heading immediately over them, and `.home-tiles` carries
- *                   the board's. Dropping the cell whole is also the only
- *                   honest way to lose it: `+77 −33` truncated to `+7…` is a
- *                   number that is wrong rather than absent, which is why no
- *                   `white-space` answer was available here.
- *   `.tree-state`   136px, the largest fixed track, and the one the row says
- *                   three other ways. `home.rs` fills `.tree-mark`'s
- *                   `aria-label` from `tree.state.word()` — the SAME
- *                   expression that fills this span — so the word stays in the
- *                   button's accessible name; `.tree.awake` and `.tree.waiting`
- *                   already paint the whole card with an accent or warning
- *                   border and tint; and the mark carries the third state as a
- *                   fill. Only `asleep` reduces to the neutral mark, and asleep
- *                   is the absence.
- *
- * THE NAME WAS MEASURED RATHER THAN ARGUED, because `aria-label` on a bare
- * `span` is the kind of thing that reads as obviously fine and is not.
- * Chromium's `Accessibility.getFullAXTree` over this board with the query
- * firing gives the five row buttons `"awake Document the code-agent ports
- * 11m"`, `"waiting on you Tighten the composer's chip row Run git push 14m"`,
- * `"asleep Give the sidebar a search box 2h"` and two more of the same shape.
- * The word is first in every one of them. At 1440 the same read gives
- * `"asleep Give the sidebar a search box … asleep 2h"` — so the wide row says
- * it TWICE to a screen reader, and dropping the span removes a duplication
- * rather than a fact.
- *
- * WHAT SURVIVES IS THE ROW'S SENTENCE: which tree (the title), how it is (the
- * mark), and how long ago (the age) — and the age is the one fact on this board
- * that no other element restates. 12 + 74 + two 12px gaps = 110 against 300, so
- * the title track is 190px at the floor and 310px at the 480 window, against
- * the 0px and 30.4px they were.
- *
- * AND THE ROWS STOP BEING ONE HEIGHT, which this file has already argued about
- * once and comes out the other way here. `.tree-num`'s comment above rejected a
- * third line because it made the fixture board `60/73/73/60/73` and "reads as a
- * rendering fault rather than as a difference in what is known": the tall rows
- * differed by whether a tree had been MEASURED, which is not a thing the row
- * shows. Under this query the board is `40/60/40/40/40`, and the 60 is the one
- * row carrying a `.tree-say` — the question the agent is waiting on, in words,
- * on a second line. That height difference is exactly a difference in what the
- * row says, so it is the good kind, and a `min-height` here would be 20px of
- * invented geometry spent hiding it.
- *
- * WHAT THIS DOES NOT FIX, so it is not mistaken for fixed: between a 449px and
- * a 594px board the six-column row survives with a title between 31 and 113px,
- * and nothing in the audit's window list lands there — the grid steps 448 to
- * 595 in one move. If a window size is ever added inside that gap it will
- * render a row this paragraph predicted and no check has seen. */
-@container board (max-width: 525px) {
+ * The narrow block nests inside the middle one by cascade rather than by an
+ * exclusive `min-width`, so a board under 476 matches both: the first sets four
+ * columns and takes `.tree-branch` and `.tree-num` out, the second overrides
+ * `grid-template-columns` and takes `.tree-state` too. Equal specificity, so
+ * SOURCE ORDER decides — swap them and every board under 476 draws a
+ * four-column grid with three cells in it. They are adjacent for that reason.
+ * A `min-width: 476px` on the middle block would make the pair order-free at
+ * the cost of a second copy of a number that has to stay exactly one more than
+ * the other. */
+@container board (max-width: 731px) {
+  .tree {
+    grid-template-columns: 0.75rem minmax(0, 1fr) 8.5rem 4.625rem;
+  }
+
+  .tree-branch,
+  .tree-num {
+    display: none;
+  }
+}
+
+@container board (max-width: 475px) {
   .tree {
     grid-template-columns: 0.75rem minmax(0, 1fr) 4.625rem;
   }
 
-  .tree-branch,
-  .tree-num,
   .tree-state {
     display: none;
   }
