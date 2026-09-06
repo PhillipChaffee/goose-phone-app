@@ -575,9 +575,18 @@ button.home-tile[aria-pressed='true'] .home-tile-label {
  * 360 − 32 (`--edge` a side; `80-measure.css`'s `--gutter` collapses to it
  * below the measure) is a 328px board, and the row is `width: 100%` of it:
  * 328 − 2 border − 26 padding = 300px of grid against 306 of fixed track plus
- * five 12px gaps = 366. The seven are the arrangements in which the third
- * column is on screen with the nav still costing its 268; both windows'
- * nav-CLOSED cells measure a 594px board and never failed. Re-run against the
+ * five 12px gaps = 366. The seven are the arrangements in which the nav is
+ * STILL BEING PAID FOR while the third column is on screen — which is not the
+ * same as the nav being open, and getting that wrong is how the first version
+ * of this paragraph shipped a false claim. Read out of the pre-fix audit's own
+ * cell list: 628 nav-open (x2, one of them fullscreen), 704 nav-open (x2) AND
+ * **704 nav-CLOSED**, 972 nav-open (x2). The 704 nav-closed cell fails because
+ * `65-responsive.css` OVERLAYS the nav in 704..971 while the inspector is
+ * open — it is out of flow already, so closing it hands the column back
+ * nothing, and the board stays 328. Where closing it does return the width,
+ * the cell never failed: 628 and 972 nav-closed both measure a **596px** board
+ * (594 is the row's client width inside it, which is what the first draft of
+ * this sentence quoted as the board). Re-run against the
  * parent commit's sheet, the 168 factor exactly: 56 distinct cells — 7 x 2
  * captured states (`desktop-code-list`, `desktop-code-list-picker`) x 2 passes
  * (plain and long-text) x 2 themes — times the 3 selector strings the five rows
@@ -645,8 +654,9 @@ button.home-tile[aria-pressed='true'] .home-tile-label {
  *
  * The title track is never below 190 anywhere, and the least of any of the five
  * fixture titles that is on screen at any board width is 96% — one word of
- * `Tighten the composer's chip row`, at the two step boundaries and nowhere
- * else. Against the rule this replaces: 74.23px and 37%.
+ * `Tighten the composer's chip row`, at the two step boundaries and at the
+ * 328px floor, and nowhere else. Against the rule this replaces: 74.23px and
+ * 37%.
  *
  * ── WHAT EACH RUNG DROPS, AND THE TRUE REASON FOR EACH ──────────────────
  *
@@ -661,11 +671,13 @@ button.home-tile[aria-pressed='true'] .home-tile-label {
  *                   board-403 cells, and 23.61px of `--text-2xs` mono renders
  *                   `ag…` over `#1…`. THE TRUE REASON is that two characters
  *                   and an ellipsis name nothing, and that this is the cell
- *                   which never fits: at the 776 ceiling — the widest board
- *                   this shell has — 167px of track still draws
- *                   `agent/personal-ai-setup-…` against the 194.6px the name
- *                   needs. A cell truncated at the ceiling is the first to
- *                   spend.
+ *                   still truncated at the CEILING: at 776 — the widest board
+ *                   this shell has — 167px of track draws
+ *                   `agent/personal-ai-setup-…` against the 194.6px that name
+ *                   needs. Four of the five fixture branches are cut there;
+ *                   the fifth, `agent/notes-public-2d6ba0`, fits, so "never
+ *                   fits" would be one row too strong. A cell the widest
+ *                   window cannot finish is the first to spend.
  *
  *   `.tree-num`     The claim was "the board says this twice above the rows
  *                   already — `.repo-head-num` carries the GROUP's `+84 −0` on
@@ -707,9 +719,9 @@ button.home-tile[aria-pressed='true'] .home-tile-label {
  *                   LOWER than the other two rather than with them: it survives
  *                   to a 476px board where they stop at 732. That is the whole
  *                   reason the middle rung exists. Moving a single threshold up
- *                   to the floor would have taken the state word out of ten
- *                   more of the 36 cells than the rule it replaces did; the
- *                   ladder takes it out of exactly the same thirteen and no
+ *                   to the floor would have taken the state word out of 26 of
+ *                   the 36 cells — THIRTEEN more than the rule it replaces did;
+ *                   the ladder takes it out of exactly the same thirteen and no
  *                   more, which is the shape every other ledger in this repo is
  *                   held to.
  *
@@ -767,18 +779,32 @@ button.home-tile[aria-pressed='true'] .home-tile-label {
  *
  * The binding one is the middle rung, 30.70. Swept over every window from 490
  * to 800 at a series of roots, the first spill appears between a 30.5 root
- * (0px) and a 30.8 root (2px, window 508, board 476, four columns) — the
+ * (0px) and a 30.8 root (1px, window 508, board 476, four columns) — the
  * derivation to two decimal places. The rule this replaces broke at 23.63 by
  * the same arithmetic (526 = 19.125R + 74) and the same sweep: 0px at a 23.5
- * root, 2px at 23.7, 8px at 24 on a 526px board.
+ * root, 1px at 23.7, 7px at 24 on a 526px board.
  *
- * IT IS RECORDED RATHER THAN EXPRESSED IN `rem`, and the reason is that a
- * `rem` threshold here cannot be written honestly. The row is a px chrome
- * (1px border, 13px padding, 12px gaps, `--edge`'s 16) around rem tracks, so
- * the exact scaling threshold is `calc(577.67px + 9.5694rem)` — false precision
- * inside a query whose parse failure has no fallback. If a WebKit declined that
- * `calc()` the block would drop whole and the row would spill on the product
- * while `docs/audit.js`, which runs Chromium, went on reporting Clean.
+ * AND THE SPILL IS THE LATER FAILURE, NOT THE FIRST. What this ladder is FOR
+ * is the 190px floor, and that stops holding twelve points below any overflow.
+ * Smallest title track over the audit's own 36 cells, swept: **190** at root
+ * 16, 179.25 at 18, 168.5 at 20, 140.05 at 24, 54 at 32. A root of 18 already
+ * draws a row narrower than this rule promises, long before one spills, so
+ * "the desktop root cannot reach 30.70" below is the weaker of the two things
+ * that keep this honest — the binding fact is that it cannot reach 18.
+ *
+ * IT IS RECORDED RATHER THAN EXPRESSED IN `rem`, AND ONLY ONE OF THE TWO
+ * THRESHOLDS HAS AN ARITHMETIC EXCUSE. The middle rung is exactly expressible:
+ * `calc(340px + 8.5rem)` is 476 at every root, and it is the same sum this
+ * comment writes out above. Only the six-column rung carries a repeat —
+ * `calc(578.667px + 9.5694rem)`, because the 1.35/1.05 split divides by 2.4.
+ * So the honest reason both stay in px is the SECOND one and not the first:
+ * a container query's parse failure has no fallback, and if a WebKit declined
+ * a `calc()` inside one the block would drop whole and the row would spill on
+ * the product while `docs/audit.js`, which runs Chromium, went on reporting
+ * Clean. Every other breakpoint in this directory is a px number for the same
+ * reason. Written down because the first draft of this paragraph said a `rem`
+ * threshold "cannot be written honestly", and for the binding rung that is
+ * simply untrue.
  *
  * AND THE DESKTOP ROOT CANNOT REACH 30.70 TODAY. `src/css.rs` gives a macOS
  * binary `assets/platform/macos.css`, which sets no font at all — the iOS
@@ -816,11 +842,14 @@ button.home-tile[aria-pressed='true'] .home-tile-label {
  * ── WHAT NO CHECK IN THIS REPO CAN SEE ──────────────────────────────────
  *
  * `docs/audit.js`'s nine window widths and four shell cells produce eight board
- * widths — 328, 403, 448, 595, 596, 671, 672, 776 — so the grid steps 448 to
- * 595 IN ONE MOVE and no gate can see any layout between them. Both of this
- * rule's thresholds and the 526px board that was the worst row on this branch
- * live inside that gap — 69 window widths land there with the nav and the
- * inspector shut, 138 with the inspector open, 207 with both. The 449-width
+ * widths — 328, 403, 448, 595, 596, 671, 672, 776 — so it steps 448 to 595 in
+ * one move and 672 to 776 in another, and no gate can see any layout inside
+ * either. THERE ARE TWO GAPS AND THIS RULE PUTS ONE THRESHOLD IN EACH: 475 and
+ * the 526px board that was the worst row on this branch are in the first, 731
+ * is in the second. Counted over 480..1600, the first gap takes 146 window
+ * widths with the nav and the inspector shut, 292 with the inspector open and
+ * 438 with both; the 526..594 band inside it — the one that made this commit
+ * necessary — takes 69, 138 and 207. The 449-width
  * sweeps quoted above are this comment's evidence, not a check: nothing re-runs
  * them.
  *
