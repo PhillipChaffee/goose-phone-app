@@ -833,6 +833,42 @@ const SIZES = [
 // column, and both went out with it. A pair that straddles nothing measures
 // one layout twice and reports it as agreement.
 //
+// AND FOUR OF THE ELEVEN STRADDLE A BREAKPOINT THAT IS NOT THE WINDOW'S, which
+// is #265 and is the only reason a width here is ever not a sum of the shell's
+// own numbers. `assets/desktop/97-home-code.css` gives `.home-board` a named
+// `@container board / inline-size` and asks it two questions — `max-width: 731`
+// takes the branch and the number off the row, `max-width: 475` takes the state
+// off as well — so the row's layout turns on how wide the CONTENT COLUMN got
+// rather than on how wide the window is. The nine sizes above put the board at
+// nine widths, 328 through 776, and NEITHER threshold was among them: 448 is
+// the closest sample below 475 and 595 the closest above, 672 the closest below
+// 731 and 776 the closest above. 146 consecutive board widths, 449 to 594, were
+// unreachable by any gate in this repo, and the row that made #265 necessary
+// read `Document…` at 74px of title track on a 526px board — inside that gap,
+// with the two boards on either side of it both Clean.
+//
+//   763x760   board 731 with both panels shut: the last pixel of the middle
+//             tier. Its nav-open cells put the board at 463 and its
+//             nav-closed-inspector-open cell at 387, two more widths nothing
+//             reached.
+//   764x760   board 732 — the FIRST pixel of the widest tier, where the row
+//             carries the branch and the number and has least room for them.
+//             That is the informative half of this pair: every question this
+//             file puts is a cramping question (SPILL, CLIPPED-X, OVERFLOW-X,
+//             TITLE-OUTBID), so the sample that can produce a finding is a
+//             tier's narrowest board and never its widest. The 763 side is here
+//             for the straddle's own reason, above.
+//   851x800   board 475 with the sidebar shut and the inspector open: the last
+//             pixel of the narrow tier. Nav-open puts the board at 551, which
+//             is 25 from the 526 that opened the issue.
+//   852x800   board 476, the first pixel of the middle tier.
+//
+// Measured after: 19 board widths against 9, and the widest remaining gap is 74
+// rather than 146. This does not make the board continuous and is not meant to
+// — the sweeps in `97-home-code.css`'s own comment are evidence, not a check —
+// but it puts a rendered frame on both sides of both thresholds, which is
+// exactly what the nine sizes above already do for the window's.
+//
 // Height travels with width for SIZES' reason. It is not a device height here
 // — there is no such thing — so each is chosen to be plausible and to leave
 // the nav its 560.
@@ -842,6 +878,10 @@ const DESKTOP_SIZES = [
   { width: 628, height: 700 },
   { width: 703, height: 760 },
   { width: 704, height: 760 },
+  { width: 763, height: 760 },
+  { width: 764, height: 760 },
+  { width: 851, height: 800 },
+  { width: 852, height: 800 },
   { width: 971, height: 800 },
   { width: 972, height: 800 },
   { width: 1440, height: 860, reference: true },
@@ -928,13 +968,13 @@ const DESKTOP_SCALES = [16];
 // at the reference — and that geometry had never been laid out by anything.
 //
 // MOCKUP 31'S CELL IS THE ONE LEFT OUT, and the reason is measured rather than
-// asserted. At six of the nine window sizes it renders a frame identical to
+// asserted. At ten of the thirteen window sizes it renders a frame identical to
 // the `nav open` cell already walked: assets/desktop/90-inspector.css's
 // `@media (max-width: 971px) { .shell .insp { display: none } }` (:770-774)
 // hides the inspector below 972 outright, and the one rule that brings it back
 // in the 704..971 band (:850-853) needs the nav SHUT to match — so at 480,
-// 627, 628, 703, 704 and 971, flipping `data-insp` under an open nav changes
-// nothing at all.
+// 627, 628, 703, 704, 763, 764, 851, 852 and 971, flipping `data-insp` under an
+// open nav changes nothing at all.
 //
 // THAT WAS FALSE AT 704 AND 971 FOR THE LIFE OF ONE FILE, and it is true again
 // rather than newly true. `65-responsive.css` restored `.insp` in that band for
@@ -1363,6 +1403,29 @@ const LONGEST = {
   // below refuses to write into anything with an element child — so keying
   // this on the wrapper would look like a stress case and test nothing.
   '.session-meta > span': 'Every weekday at 09:00 America/Los_Angeles · 20250823_140512_9f3ab2',
+  // THE CODE BOARD, WHICH THIS MAP DID NOT REACH AT ALL — #265. The board
+  // renders 35 distinct classes and, before these two, this list matched NONE
+  // of them: the only selectors that hit anything in `desktop-code-list` were
+  // `.chrome-heading` and `.chrome-sub`, and both are in the window chrome. So
+  // `desktop-code-list (long text)` laid out the same five fixture titles as
+  // `desktop-code-list` and reported identical geometry, which is a finding
+  // count that doubles for a pass that changed nothing.
+  //
+  // It is the one screen in this shell whose text is ENTIRELY the server's. A
+  // working tree's title is whatever task it was started for, and its branch is
+  // the manager's `agent/<repo>-<hash>` — so the ceiling on the branch is the
+  // longest repository this app can be pointed at, which is why the string
+  // below is a plausible repo name and not a long sentence.
+  //
+  // The branch measures how much worse rather than whether: `.tree-branch-name`
+  // is truncated at EVERY board width this shell can produce — 167px of track
+  // against the 194.6px the captured `agent/personal-ai-setup-3c7e01` already
+  // wants, at the 776 ceiling. What the stress asks there is whether it goes on
+  // ellipsising inside its own 8.5rem track or starts pushing the state and the
+  // age out of the row, and only a string longer than the one the capture
+  // caught can put that question.
+  '.tree-title': 'Document the code-agent ports and the manager routes that reach them',
+  '.tree-branch-name': 'agent/personal-ai-setup-experiments-3c7e01',
 };
 
 // The class a selector is worth looking for in the captured markup: the last
@@ -3055,9 +3118,9 @@ const compareFonts = async (states) => {
   //
   // AND THE TWO SHELLS ARE STATED SEPARATELY, for exactly that reason one
   // level up. They are different grids — six phone sizes at four text sizes
-  // against nine window sizes at one, with the shell's own collapses in place
-  // of the text axis — so a single sentence over both would claim four times the
-  // scale coverage the desktop half has.
+  // against thirteen window sizes at one, with the shell's own collapses in
+  // place of the text axis — so a single sentence over both would claim four
+  // times the scale coverage the desktop half has.
   const themeCount = `${themes.length} theme${themes.length > 1 ? 's' : ''}`;
   const count = (desktop) => states.filter((z) => !!z.desktop === desktop).length;
   // The away axis is not a multiplier over the whole half — it is asked of the
