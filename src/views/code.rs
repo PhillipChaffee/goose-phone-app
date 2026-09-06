@@ -26,6 +26,7 @@ use crate::diff::Block;
 use crate::external::open_external;
 use crate::icons::Icon;
 use crate::nav::Crumb;
+use crate::shell::Shell;
 use crate::state::{relative_time_secs, use_app_ctx, AppCtx, ConnState};
 use crate::views::attach::{AttachButton, AttachTray};
 use crate::views::chat::{format_tokens, render_transcript};
@@ -1810,6 +1811,46 @@ pub fn CodeDiffView() -> Element {
     }
 }
 
+/// The tooltip on a file that has already been marked reviewed.
+///
+/// THE LAST OF #161'S TEN, and the worst of them for a reason that is about the
+/// attribute rather than about the sentence: a `title` is a HOVER tooltip, so
+/// this string is only ever *read* on the desktop — the phone has no pointer to
+/// rest — and until now it said "tap". The one shared string in this app whose
+/// reader is known to be at a computer was the one telling them they were
+/// holding a phone.
+///
+/// Both arms are kept rather than the phone's dropped, which is where this
+/// differs from [`crate::shell::nav_tooltip`]. That one returns `None` on the
+/// phone because the drawer's markup has to stay byte-identical to what the
+/// gallery captured; here every `.diff-seen` in the store already carries a
+/// `title` whichever shell dumped it, so dropping the attribute would be a
+/// markup change made for a copy fix. The shape is
+/// `views::chrome::row_action_words`'s instead: one gesture word per shell,
+/// chosen at compile time, and the phone's byte-identical.
+///
+/// THE DEFECT IS IN THE STORE, which is how sure this is: `desktop-code-diff`
+/// carries `title="Reviewed — tap to unmark"` on a `.diff-seen` with
+/// `aria-pressed="true"`, and `code-diff` — the phone's — has no reviewed file
+/// in it and so never rendered the sentence at all. The captured desktop frame
+/// keeps the old wording until the next capture; nothing reads a `title` out of
+/// that file, so no gate is stale, only the bytes.
+///
+/// Takes the `Shell` instead of reading [`Shell::CURRENT`] itself, for
+/// [`crate::shell::this_device`]'s reason — `cargo test` runs on a host, where
+/// `CURRENT` is always [`Shell::Desktop`], so the phone arm would be verified
+/// by nothing.
+///
+/// The unreviewed tooltip stays a plain literal at the call site: "Mark
+/// reviewed" names no gesture, so it is the same sentence on both shells and a
+/// branch would only give the reader two ways to say one thing.
+const fn diff_seen_title(shell: Shell) -> &'static str {
+    match shell {
+        Shell::Mobile => "Reviewed — tap to unmark",
+        Shell::Desktop => "Reviewed — click to unmark",
+    }
+}
+
 /// One file's band: a head you can scan, and a body that folds away
 /// independently of every other file's.
 fn render_diff_file(ctx: &AppCtx, state: &DiffState, file: &DiffFile, wrap: bool) -> Element {
@@ -1916,7 +1957,7 @@ fn render_diff_file(ctx: &AppCtx, state: &DiffState, file: &DiffFile, wrap: bool
                 button {
                     class: "diff-seen",
                     "aria-pressed": "{seen}",
-                    title: if seen { "Reviewed — tap to unmark" } else { "Mark reviewed" },
+                    title: if seen { diff_seen_title(Shell::CURRENT) } else { "Mark reviewed" },
                     onclick: move |e: Event<MouseData>| {
                         e.stop_propagation();
                         e.prevent_default();
@@ -2247,15 +2288,16 @@ mod tests {
     use super::{
         agent_choices, branch_chip_label, branch_choices, can_start, chat_ask, chat_crumb,
         chat_where, choose_repo, code_chip_label, code_mode_label, code_setting_rows,
-        compose_placeholder, diff_crumb, initial_mode, merge_confirm_body, mode_icon,
-        model_choices, model_sheet_choices, new_crumb, new_model_label, new_session_sheet,
-        offered_models, pulls_crumb, pulls_subtitle, repo_chip_label, repo_choices, resolve_agent,
-        unknown_model_note, withheld_note, Agent, BranchList, CodeChatView, CodeDiffView,
-        CodeNewView, CodePermission, CodePermissionModal, CodePullsView, CodeSessionsView,
-        FileStatus, ModelInfo, NewLists, NewPill, NewSheet, PullRequest, RepoEntry,
-        SessionSettingsSheet, DEFAULT_AGENT,
+        compose_placeholder, diff_crumb, diff_seen_title, initial_mode, merge_confirm_body,
+        mode_icon, model_choices, model_sheet_choices, new_crumb, new_model_label,
+        new_session_sheet, offered_models, pulls_crumb, pulls_subtitle, repo_chip_label,
+        repo_choices, resolve_agent, unknown_model_note, withheld_note, Agent, BranchList,
+        CodeChatView, CodeDiffView, CodeNewView, CodePermission, CodePermissionModal,
+        CodePullsView, CodeSessionsView, FileStatus, ModelInfo, NewLists, NewPill, NewSheet,
+        PullRequest, RepoEntry, SessionSettingsSheet, DEFAULT_AGENT,
     };
     use crate::code::{CodeChatState, DiffFile, DiffState, FileView, PullsState};
+    use crate::shell::Shell;
     use crate::state::{use_app_ctx, AppCtx, ChatItem, ConnState};
     use crate::testkit::{render as mount, render_seeded as mount_seeded};
     use dioxus::prelude::*;
@@ -2351,6 +2393,29 @@ mod tests {
                  itself"
             );
         }
+    }
+
+    /// Both arms of the reviewed tooltip, which is the whole point of taking
+    /// the `Shell` rather than reading `Shell::CURRENT` inside the function:
+    /// this host is always [`Shell::Desktop`], so an ambient read would leave
+    /// the phone's arm asserted by nothing. #161's last site.
+    ///
+    /// The gesture word is what is asserted, not the whole sentence — a
+    /// rewrite of the copy is allowed, a tooltip that tells a pointer to tap
+    /// is not.
+    #[test]
+    fn the_reviewed_tooltip_names_the_gesture_the_reader_can_actually_make() {
+        let mobile = diff_seen_title(Shell::Mobile);
+        let desktop = diff_seen_title(Shell::Desktop);
+        assert!(
+            mobile.contains("tap") && !mobile.contains("click"),
+            "the phone's reviewed tooltip is {mobile:?}"
+        );
+        assert!(
+            desktop.contains("click") && !desktop.contains("tap"),
+            "a `title` is a hover tooltip, so the desktop is the only shell \
+             that ever reads this one — and it is {desktop:?}"
+        );
     }
 
     /// The sentence the window's bar puts beside a code chat's title, which

@@ -201,7 +201,12 @@
   --text-code: min(var(--text-xs), 20px);
   --lh-code: calc(var(--text-code) * 5 / 3);
 
-  /* Code slabs stay this dark in both themes. */
+  /* Code slabs stay this dark in both themes. What that looks like in LIGHT —
+   * the slab is then the highest-contrast object on the page, 14.00:1 against
+   * white where in dark it is 1.15:1 against the pane — is a taste call the app
+   * has made, and docs/design.md's Deviations section is where it is argued.
+   * Read that before reversing this: the reason is #2f6b3d measuring 2.19:1 on
+   * a light slab, not habit. */
   --code-bg: #282c34;
   --code-fg: #e6e6e6;
   /* Everything below is set ON --code-bg, which does not swap with the

@@ -840,14 +840,15 @@ const SIZES = [
 // column, and both went out with it. A pair that straddles nothing measures
 // one layout twice and reports it as agreement.
 //
-// AND FOUR OF THE ELEVEN STRADDLE A BREAKPOINT THAT IS NOT THE WINDOW'S, which
-// is #265 and is the only reason a width here is ever not a sum of the shell's
-// own numbers. `assets/desktop/97-home-code.css` gives `.home-board` a named
-// `@container board / inline-size` and asks it two questions — `max-width: 731`
-// takes the branch and the number off the row, `max-width: 475` takes the state
-// off as well — so the row's layout turns on how wide the CONTENT COLUMN got
-// rather than on how wide the window is. The nine sizes above put the board at
-// nine widths, 328 through 776, and NEITHER threshold was among them: 448 is
+// AND FOUR OF THE THIRTEEN STRADDLE A BREAKPOINT THAT IS NOT THE WINDOW'S,
+// which is #265 and is the only reason a width here is ever not a sum of the
+// shell's own numbers. `assets/desktop/97-home-code.css` gives `.home-board` a
+// named `@container board / inline-size` and asks it two questions —
+// `max-width: 731` takes the branch and the number off the row,
+// `max-width: 475` takes the state off as well — so the row's layout turns on
+// how wide the CONTENT COLUMN got rather than on how wide the window is. The
+// NINE this list held before #265 put the board at nine widths, 328 through
+// 776, and NEITHER threshold was among them: 448 is
 // the closest sample below 475 and 595 the closest above, 672 the closest below
 // 731 and 776 the closest above. 146 consecutive board widths, 449 to 594, were
 // unreachable by any gate in this repo, and the row that made #265 necessary
@@ -874,7 +875,7 @@ const SIZES = [
 // rather than 146. This does not make the board continuous and is not meant to
 // — the sweeps in `97-home-code.css`'s own comment are evidence, not a check —
 // but it puts a rendered frame on both sides of both thresholds, which is
-// exactly what the nine sizes above already do for the window's.
+// exactly what the other nine already do for the window's.
 //
 // Height travels with width for SIZES' reason. It is not a device height here
 // — there is no such thing — so each is chosen to be plausible and to leave
@@ -914,8 +915,9 @@ const DESKTOP_SCALES = [16];
 // inspector's, and whether the window is fullscreen.
 //
 // `data-nav` is a plain attribute on `.shell` that only assets/desktop/
-// reads (src/shell/desktop.rs sets it; a test there checks the sheet acts on
-// it), so flipping it here is a real reflow of a real rule and not a fiction.
+// reads (src/shell/desktop/mod.rs sets it; a test there checks the sheet acts
+// on it), so flipping it here is a real reflow of a real rule and not a
+// fiction.
 // It is worth the second pass because the rail tier and the collapsed tier are
 // where the window chrome gets crowded: the toggle, the traffic-light
 // reservation and the nav card are all in the same corner, and the one
@@ -949,14 +951,15 @@ const DESKTOP_SCALES = [16];
 // AND THE WINDOW'S OWN TWO STATES, in the same list rather than as a second
 // product.
 //
-// `data-fullscreen` is the other attribute `src/shell/desktop.rs` writes onto
-// `.shell`, and until this list existed nothing rendered a frame with it set:
-// `assets/platform/macos.css`'s `[data-fullscreen="true"]` block — which takes
-// the whole 76pt traffic-light indent and the 52pt band's padding back — was
-// checked by nothing at all. It was also, for the whole life of the feature,
-// REACHED by nothing: the flag came from a JS guess at `innerHeight` that never
-// once matched a real fullscreen window. A rule no frame ever renders and no
-// window ever triggers is indistinguishable from a rule that works.
+// `data-fullscreen` is the other attribute `src/shell/desktop/mod.rs` writes
+// onto `.shell`, and until this list existed nothing rendered a frame with it
+// set: `assets/platform/macos.css`'s `[data-fullscreen="true"]` block — which
+// takes the whole 76pt traffic-light indent and the 52pt band's padding back —
+// was checked by nothing at all. It was also, for the whole life of the
+// feature, REACHED by nothing: the flag came from a JS guess at `innerHeight`
+// that never once matched a real fullscreen window. A rule no frame ever
+// renders and no window ever triggers is indistinguishable from a rule that
+// works.
 //
 // FOUR CELLS AND NOT EIGHT, chosen rather than multiplied — the same
 // discipline the first three were chosen with, applied to the attribute that
@@ -2035,8 +2038,8 @@ const GEOMETRY = ({ mark, ledger }) => {
   // NOT "one title per window", which is the tempting reading and is wrong.
   // The LIST column keeps its own heading on purpose — "Skills" over the list
   // of skills — so that the list never moves at any width or in any state
-  // (`src/shell/desktop.rs`). Stated that way the rule fires 144 times on a
-  // correct build, once per size where both columns are up. What must not
+  // (`src/shell/desktop/mod.rs`). Stated that way the rule fires 144 times on
+  // a correct build, once per size where both columns are up. What must not
   // double is the DETAIL's heading, because that is the one the band took.
   //
   // COUNTED AS RENDERED, which is the only reading that means anything here.
@@ -2079,8 +2082,8 @@ const GEOMETRY = ({ mark, ledger }) => {
     // less: on a correct build both are hidden and neither has a box.
     const pane = shown('.pane-detail .topbar .title, .pane-detail .topbar .titlegroup');
     // Guarded on the band actually carrying one. With nothing open the band
-    // paints no title at all — `src/shell/desktop.rs` renders it only for a
-    // `Some(crumb)`, so an empty flex item never takes its gap — and then the
+    // paints no title at all — `src/shell/desktop/mod.rs` renders it only for
+    // a `Some(crumb)`, so an empty flex item never takes its gap — and then the
     // detail pane keeping its own heading is not a duplicate, it is the only
     // one there is.
     if (band.length && pane.length) {
@@ -2116,9 +2119,11 @@ const GEOMETRY = ({ mark, ledger }) => {
     // state loses its dot at every size in both themes while
     // `node docs/audit.js both` reports **Clean**. With this arm:
     // **1176 CONN-GONE** (14 states x 2 for the long-text pass x 2 themes x
-    // 7 window sizes x 3 shell states — every desktop cell there is).
+    // 7 window sizes x 3 shell states — every desktop cell there was, on the
+    // grid of the day; the same experiment on today's 21 x 13 x 4 would report
+    // a bigger number and the same finding).
     //
-    // `src/shell/desktop.rs` renders `views::ConnBadge` unconditionally, so
+    // `src/shell/desktop/mod.rs` renders `views::ConnBadge` unconditionally, so
     // there is no state of the app in which none is correct. That is asserted
     // on the Rust side too, but a source-shaped test can only say the call
     // site is still written down; this says the dot is still painted.
@@ -2268,7 +2273,7 @@ const GEOMETRY = ({ mark, ledger }) => {
   //
   // Keyed on the attribute rather than on the state's key, for the reason the
   // band block above is: the attribute is what the sheet reads, and the walk
-  // sets it exactly as `src/shell/desktop.rs` does. A phone frame has no
+  // sets it exactly as `src/shell/desktop/mod.rs` does. A phone frame has no
   // element carrying it, so this cannot reach one.
   const fullscreen = document.querySelector('.shell[data-fullscreen="true"]');
   if (fullscreen) {
@@ -3199,11 +3204,12 @@ const compareFonts = async (states) => {
               // attributes: with no `.shell` to put them on, the cells are
               // that many walks of one identical frame and the summary line
               // goes on advertising a shell axis. Measured: rename the
-              // class consistently — in `src/shell/desktop.rs`'s markup and in
-              // both desktop sheets, which is what an ordinary refactor does —
-              // and the layout is untouched, the axis quietly stops existing
-              // and `node docs/audit.js both` reports **Clean**. It is the
-              // exact failure DESKTOP_SHELL was added to end, one level down.
+              // class consistently — in `src/shell/desktop/mod.rs`'s markup and
+              // in both desktop sheets, which is what an ordinary refactor
+              // does — and the layout is untouched, the axis quietly stops
+              // existing and `node docs/audit.js both` reports **Clean**. It is
+              // the exact failure DESKTOP_SHELL was added to end, one level
+              // down.
               //
               // WIDENED FROM `.shell` ALONE to every attribute in SHELL_ATTRS,
               // because "the element is there" was only the first of the ways

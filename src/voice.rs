@@ -115,6 +115,7 @@ const AMBIGUOUS_PHRASES: &[&str] = &["your desktop"];
 /// fixtures and failure messages, several of which quote the very sentences
 /// this gate is about.
 const NOT_SCANNED: &[&str] = &[
+    "src/citations.rs",
     "src/inherit.rs",
     "src/selfscan.rs",
     "src/serverkit.rs",
@@ -138,17 +139,17 @@ const NOT_SCANNED: &[&str] = &[
 /// does not have to be reproduced here, and rewording around the fragment still
 /// fails.
 ///
-/// NINE OF THE TEN WENT IN #161. This is the tenth, and it is still here for
-/// ownership rather than for difficulty: `src/views/code.rs` belongs to another
-/// lane of this campaign, whose own fix is in `CodeNewView`, and an edit here
-/// would conflict with it.
-///
-/// It is the worst of the ten. A `title` attribute is a HOVER tooltip, so this
-/// sentence is ONLY ever read on the desktop — it exists to be read with a
-/// pointer and it says tap. The wording it wants is
-/// `views::chrome::row_action_words`'s: a `Shell` branch with "tap" on one side
-/// and "click" on the other.
-const ADDRESSING_A_PHONE: &[(&str, &str)] = &[("src/views/code.rs", "tap to unmark")];
+/// IT IS EMPTY, AND THAT IS THE END STATE THIS LIST WAS BUILT FOR. Nine of the
+/// ten went in #161; the tenth — `views::code`'s `"Reviewed — tap to unmark"`,
+/// a `title` attribute and therefore a HOVER tooltip, so the one shared
+/// sentence in this app whose reader is known to be at a computer was the one
+/// telling them they were holding a phone — went in #143's sweep, as
+/// `views::code::diff_seen_title`, once `src/views/code.rs` stopped being
+/// another lane's file. An empty ledger is still a ledger: the first
+/// assertion below is vacuous now and the second is what the gate rests on, so
+/// the eleventh sentence to address a phone is a red build rather than an
+/// eleventh entry.
+const ADDRESSING_A_PHONE: &[(&str, &str)] = &[];
 
 /// One shipping sentence that names a device.
 #[derive(Debug)]
@@ -676,9 +677,12 @@ fn no_shared_string_tells_a_desktop_reader_they_are_holding_a_phone() {
 /// its exemption with it: `src/shell/mobile.rs` compiled into a desktop binary
 /// is a file full of phone copy this gate has stopped reading.
 ///
-/// This module exempts ITSELF, and has to: [`ADDRESSING_A_PHONE`] quotes ten
-/// sentences about phones, so a scan that read its own source would report the
-/// scanner. Through `file!()` rather than a literal, following
+/// This module exempts ITSELF, and has to: [`DEVICE_WORDS`] is a list of
+/// phone words and [`AMBIGUOUS_PHRASES`] is a sentence fragment about desktops,
+/// so a scan that read its own source would report the scanner. That was true
+/// when [`ADDRESSING_A_PHONE`] still quoted ten sentences and it stays true now
+/// that the ledger is empty — the needles are the exemption's reason, not the
+/// ledger. Through `file!()` rather than a literal, following
 /// `src/inherit.rs` — it keeps saying which file that is when the module is
 /// renamed, where a literal would quietly stop matching.
 #[test]

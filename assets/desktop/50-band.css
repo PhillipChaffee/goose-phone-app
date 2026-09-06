@@ -626,14 +626,14 @@
 
 /* WHAT THE WINDOW HAS OPEN, said once, in the window's own bar.
  *
- * `src/shell/desktop.rs` renders this from `nav::Detail`'s crumb whenever the
- * detail column has something in it, and the rule further down takes the pane's
- * own copy of the same heading back out. So there is one title per WINDOW where
- * there used to be one per COLUMN — at three columns that is 64px of pane
- * header given back at the top of every window, and a heading that no longer
- * slides sideways when the nav collapses (measured: the detail title's x was
- * 486 with the nav open and 380 with it shut, because it is padded by a gutter
- * computed from the pane's own width).
+ * `src/shell/desktop/mod.rs` renders this from `nav::Detail`'s crumb whenever
+ * the detail column has something in it, and the rule further down takes the
+ * pane's own copy of the same heading back out. So there is one title per
+ * WINDOW where there used to be one per COLUMN — at three columns that is 64px
+ * of pane header given back at the top of every window, and a heading that no
+ * longer slides sideways when the nav collapses (measured: the detail title's
+ * x was 486 with the nav open and 380 with it shut, because it is padded by a
+ * gutter computed from the pane's own width).
  *
  * ONE LINE, and that is a constraint rather than a taste. `--chrome-h` is 34px
  * — the height of this row plus the band's hairline, `assets/platform/macos.css`

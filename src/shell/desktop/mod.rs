@@ -896,14 +896,18 @@ pub(crate) fn AppShell() -> Element {
     let mut library_open = use_signal(|| false);
 
     rsx! {
-        // `data-detail` is the one thing the CSS cannot work out for itself,
-        // and it is a fact about the app rather than about the window: below
-        // the three-column breakpoint the list and the detail share a column,
-        // so the sheet has to know which of them has something in it. Two
-        // columns is what goose's own desktop app is at every width
-        // (`ui/desktop/src/components/schedules/SchedulesView.tsx` returns the
-        // detail INSTEAD of the list), so this is the reference layout, not a
-        // degraded one.
+        // THREE ATTRIBUTES, and they are the whole of what the sheet cannot
+        // work out for itself. Each is a fact about the app or the window that
+        // no `@media` query can reach: which way the nav toggle was last
+        // pressed, whether the window is fullscreen, whether the reader wants
+        // the inspector. Width decides everything else, in `assets/desktop/`.
+        //
+        // THERE WERE FOUR. `data-detail` said which of two columns held
+        // content, and it went out with the list column — one column does not
+        // need telling, and `:has(.chrome-title)` asks the markup directly
+        // (`the_pane_gives_up_what_the_window_bar_took` is the check that
+        // replaced the assertion on it). This comment described that attribute
+        // until #143's sweep, above a `div` that had stopped writing it.
         div {
             class: "shell",
             // The whole of the collapse, as far as Rust is concerned. Width
@@ -915,8 +919,8 @@ pub(crate) fn AppShell() -> Element {
             // ON `.shell`, beside the other two facts the sheet reads, and not
             // on `.app` where the JS used to put it. `.app` is the phone's
             // element too, and an attribute set from a desktop-only hook had
-            // no business there; here it sits with `data-detail` and
-            // `data-nav`, set the same way, by the same render.
+            // no business there; here it sits with `data-nav` and
+            // `data-insp`, set the same way, by the same render.
             "data-fullscreen": if fullscreen() { "true" } else { "false" },
             "data-insp": if insp_open() { "open" } else { "closed" },
 
@@ -3068,7 +3072,7 @@ mod tests {
         assert!(
             macos.contains(r#".shell[data-fullscreen="true"]"#),
             "fullscreen hides the traffic lights, so it must drop the reservation \
-             — and the attribute is on `.shell`, beside data-detail and data-nav"
+             — and the attribute is on `.shell`, beside data-nav and data-insp"
         );
         // BOTH HALVES, because for the whole life of this feature only one of
         // them existed. The sheet had its rule and the attribute was set by a
