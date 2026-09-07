@@ -53,10 +53,76 @@
   }
 }
 
+/* ═══ THE DIM BEHIND THE OVERLAID PANEL ═══════════════════════════════════
+ *
+ * Declared here, at rest, and revealed by ONE rule inside the tier below,
+ * because the element exists at every width and is the overlay tier's alone.
+ * `src/shell/desktop/mod.rs` renders it unconditionally — the shell's standing
+ * rule, the same one the inspector column is rendered under — so `data-nav`
+ * decides it the way it decides the column itself and `docs/audit.js`'s four
+ * shell cells exercise the rule rather than photographing one arm of it.
+ *
+ * FULL VIEWPORT, INCLUDING THE BAND, and that is read off the check rather
+ * than chosen and then justified. `docs/audit.js`'s OCCLUDED walk exempts a
+ * covered control when something between it and its blocker `b.width >= vw &&
+ * b.height >= vh` — "the page as a WHOLE has gone behind something, which is a
+ * statement to the reader rather than an accident". A scrim that started at
+ * `--chrome-h`, which is what the panel itself does, would be 45px short of
+ * that and would leave all 25 pairs on the ledger while looking, in a
+ * screenshot, exactly like one that worked.
+ *
+ * It costs the band: with the sidebar open at this width the nav toggle, the
+ * connection pill and `.window-drag` are all behind the wash, so the window
+ * cannot be dragged until the panel is closed. The toggle is not a loss — a
+ * press there lands on the scrim, and the scrim means close, which is what the
+ * toggle meant. `.insp-toggle` is not a loss either: `90-inspector.css` has it
+ * `display: none` under 704 already, because the third column cannot appear
+ * down here at all.
+ *
+ * VISIBILITY AND OPACITY, NOT `display`, and the pair is `10-sidebar-frame.css`'s
+ * on `.navcard`: instant on the way in, deferred on the way out, so the wash
+ * fades with the panel's own 200ms slide instead of popping while it moves.
+ * `visibility: hidden` is what keeps the closed scrim out of the hit test —
+ * out of `elementsFromPoint`, so it silences no finding, and out of the way of
+ * every click at every width above this tier.
+ *
+ * AND IT IS WHAT ESCAPE READS. `DISMISS_KEY` in `src/shell/desktop/mod.rs`
+ * asks this element's COMPUTED visibility before it presses it, because
+ * whether the panel is an overlay or a column is a fact only this sheet has:
+ * `nav_open` is `true` at 1440 too, where the sidebar is a column and Escape
+ * must leave it alone.
+ *
+ * 40% black is `.drawer-scrim`'s own value (`assets/shared.css`). One panel,
+ * two shells, one wash. */
+.nav-scrim {
+  position: absolute;
+  inset: 0;
+  /* Under the panel and over everything else, which is the pair the phone
+   * already declares for the same two elements. See `.navpane` below for why
+   * the rung is `--z-modal` rather than one of the three under it. */
+  z-index: calc(var(--z-modal) - 1);
+  background: rgb(0 0 0 / 40%);
+  visibility: hidden;
+  opacity: 0;
+  transition:
+    opacity 200ms cubic-bezier(0.32, 0.72, 0, 1),
+    visibility 0s 200ms;
+}
+
 @media (max-width: 627px) {
   .shell-chrome > .conn-badge {
     padding: 0 0.5rem;
     border-color: transparent;
+  }
+
+  /* THE ONE RULE THAT PUTS IT ON SCREEN. Both halves of the condition are
+   * load-bearing and neither can be dropped into the rule above: the width is
+   * what makes the panel an overlay, and `data-nav` is what says the reader
+   * asked for it. */
+  .shell[data-nav="open"] .nav-scrim {
+    visibility: visible;
+    opacity: 1;
+    transition: opacity 200ms cubic-bezier(0.32, 0.72, 0, 1);
   }
 
   /* THE BAND'S LEFT CELL GOES WITH THE COLUMN. `50-band.css` draws a hairline
@@ -72,7 +138,31 @@
 
   .navpane {
     position: absolute;
-    z-index: 3;
+    /* THE PANEL IS ON THE DECLARED SCALE NOW, where it was a bare `3`.
+     *
+     * `assets/shared.css` declares four rungs for things that float over the
+     * page — `--z-scrim` 15, `--z-chrome` 20, `--z-toast` 60, `--z-modal` 100
+     * — and this panel was below all of them, which is what let `.topbar`'s 20
+     * paint across the plane switch and make the app's only way between halves
+     * unclickable (#214). A number outside the scale cannot be reasoned about
+     * against the things it has to beat.
+     *
+     * `--z-modal` AND NOT `--z-chrome`, because the phone already answers this
+     * exact question about this exact element: `.drawer` is `--z-modal` and
+     * `.drawer-scrim` is `calc(var(--z-modal) - 1)`, and in this tier the
+     * sidebar IS the drawer — a panel over the page that takes the pointer,
+     * dims what is behind it and closes on Escape. Two rungs for one shape in
+     * two shells would be two grammars.
+     *
+     * WHAT THAT PUTS BEHIND IT is the toast, at 60. That is not new and not a
+     * regression: the phone's drawer has been over its toasts for the life of
+     * the drawer, for the same reason — a message about something that just
+     * happened waits behind the thing the reader is looking at. What stays IN
+     * FRONT is `.modal-backdrop`, which is `--z-modal` too and is rendered
+     * inside the pane, so DOM order settles the tie the right way round: a
+     * confirm raised from the content column is still answerable with the
+     * sidebar open. */
+    z-index: var(--z-modal);
     top: var(--chrome-h);
     bottom: 0;
     left: 0;
@@ -147,7 +237,12 @@
  *
  * The 627 tier above is untouched by that reversal and is still an overlay,
  * for the reason its own comment gives: 268 + 360 is 628, so below this width
- * there is no arbitration to make. That is also why #215 is not closed — see
- * `docs/audit.js`'s occlusion ledger, which still carries 25 pairs off this
- * tier. */
+ * there is no arbitration to make and the panel has to sit on the content.
+ *
+ * WHAT MADE THAT LEGITIMATE rather than a defect is the scrim at the top of
+ * this file, and it is measured: `docs/audit.js`'s occlusion ledger carried 25
+ * `aside.navpane >> …` pairs off this tier and carries none. A panel over the
+ * page with a dim behind it, a click-away and an Escape is a panel; the same
+ * panel without them was 268px parked over the reader's content with the band
+ * toggle as the only way both in and out. */
 
