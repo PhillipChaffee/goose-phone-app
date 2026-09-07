@@ -22,7 +22,10 @@
 //! goose ships `thinking_effort` as a lone `off` on a non-reasoning model,
 //! and `OpenCode` returns no variants at all for the minimax/qwen/glm/kimi
 //! families — so instead of the setting disappearing, the user is told why
-//! it is not adjustable here.
+//! it is not adjustable here. **Told by [`stuck_note`], which is the half
+//! that was missing (#289):** the downgrade was mechanical and the sentence
+//! was not, so "Thinking effort — Off" stood alone and read as a switch
+//! somebody had thrown.
 //!
 //! The two tabs share the grammar, not the list. Each backend contributes
 //! exactly what it can actually do, so a shorter list reads as "this backend
@@ -148,16 +151,17 @@ impl SettingRow {
                 },
                 |ch| ch.label.clone(),
             );
+        let adjustable = choices.len() > 1;
         Self {
             id: id.into(),
             name: name.into(),
             value,
-            note,
-            choices: if choices.len() > 1 {
-                choices
+            note: if adjustable {
+                note
             } else {
-                Vec::new()
+                Some(stuck_note(note))
             },
+            choices: if adjustable { choices } else { Vec::new() },
             current: current.map(str::to_owned),
             action: false,
         }
@@ -282,6 +286,45 @@ pub(crate) fn chip_effort(current: Option<&str>) -> Option<String> {
         "medium" => "Med".to_owned(),
         _ => choice_label(raw, raw),
     })
+}
+
+/// What a downgraded [`SettingRow::select`] says once it is a fact, after
+/// whatever the backend had already said about the setting.
+///
+/// **#289, and the row it is about is "Thinking effort — Off".** goose ships
+/// `thinking_effort` as a lone `off` whenever the session's model cannot
+/// reason, `select` correctly renders that flat, and flat is where the copy
+/// ran out: with no chevron and no reason beside it, `Off` reads as a switch
+/// somebody threw rather than as a tier this model never had.
+/// `views/chat.rs`'s composer chip has answered that question since it was
+/// written — it hides the effort when `ConfigOption::is_adjustable` is false,
+/// so "Claude Sonnet 5 Off" cannot mislead — and the sheet, which is the
+/// screen you open precisely to ask *why*, said nothing.
+///
+/// Here rather than at the call sites because the downgrade is here: design
+/// rule 11's "a fact says why it is not adjustable" belongs to the moment a
+/// control becomes a fact, and every backend that ever grows a one-value
+/// option is covered by writing it once. It is also the sentence no caller
+/// can supply, since the caller does not know how many choices survived.
+///
+/// APPENDED, NEVER SUBSTITUTED. What the backend sends is what the setting
+/// DOES — goose's `thinking_effort` description is "Controls reasoning effort
+/// for models that support extended thinking" — and what is missing is why
+/// this session is stuck on one value. Those are two sentences, and dropping
+/// the first to make room for the second would be answering a question by
+/// deleting its context.
+///
+/// "Nothing else", not "only one value": the downgrade catches an EMPTY choice
+/// list as well as a single one — a chat server that offered no model
+/// catalogue at all reaches this — so a sentence that counted would be false
+/// on half its call sites.
+fn stuck_note(existing: Option<String>) -> String {
+    const STUCK: &str = "Nothing else is on offer, so this is where the setting stands rather \
+         than a choice that was made.";
+    match existing.filter(|note| !note.trim().is_empty()) {
+        Some(note) => format!("{} {STUCK}", note.trim_end()),
+        None => STUCK.to_owned(),
+    }
 }
 
 fn humanize(raw: &str) -> String {
@@ -705,6 +748,13 @@ mod tests {
             "the code note no longer names the cost that makes PATCH /config \
              not worth taking: {CODE_CONTEXT_NOTE:?}"
         );
+        assert!(
+            CODE_CONTEXT_NOTE.contains("ceiling"),
+            "\"Context length\" is two questions — the model's own window, and \
+             a ceiling the reader sets under it to bound cost — and the row \
+             answers only the first. Saying which one it is answering is the \
+             whole of what #289 could honestly ship: {CODE_CONTEXT_NOTE:?}"
+        );
     }
 
     #[test]
@@ -718,6 +768,77 @@ mod tests {
         );
         assert!(!row.is_control());
         assert_eq!(row.value, "Off");
+    }
+
+    /// #289: `Thinking effort — Off` with nothing beside it reads as a switch
+    /// somebody threw. goose ships that row on every model that cannot reason,
+    /// and the sheet is the screen a reader opens to ask *why* — so the
+    /// downgrade to a fact now brings the reason with it, whether or not the
+    /// backend had already said what the setting does.
+    #[test]
+    fn a_control_that_became_a_fact_says_why_it_is_stuck() {
+        let bare = SettingRow::select(
+            "thinking_effort",
+            "Thinking effort",
+            Some("off"),
+            vec![SettingChoice::new("off", "Off")],
+            None,
+        );
+        assert!(!bare.is_control());
+        let note = bare.note.unwrap_or_default();
+        assert!(
+            note.contains("Nothing else is on offer"),
+            "an empty note slot under a flat row is design rule 11 unmet: {note:?}"
+        );
+
+        // goose's own words about `thinking_effort`, which say what the option
+        // DOES and never why this session is stuck on one value.
+        let described = SettingRow::select(
+            "thinking_effort",
+            "Thinking effort",
+            Some("off"),
+            vec![SettingChoice::new("off", "Off")],
+            Some("Controls reasoning effort for models that support extended thinking.".to_owned()),
+        );
+        let note = described.note.unwrap_or_default();
+        assert!(
+            note.starts_with("Controls reasoning effort")
+                && note.contains("Nothing else is on offer"),
+            "the backend's sentence is context for the reason, not a rival to \
+             it — dropping either leaves half an answer: {note:?}"
+        );
+    }
+
+    /// The other direction, and it is the one that keeps the sentence honest:
+    /// a row that can still be chosen between says nothing about being stuck,
+    /// because it is not.
+    #[test]
+    fn a_row_that_can_still_be_chosen_between_is_left_alone() {
+        let row = SettingRow::select(
+            "mode",
+            "Mode",
+            Some("auto"),
+            vec![
+                SettingChoice::new("auto", "Auto"),
+                SettingChoice::new("approve", "Manual approval"),
+            ],
+            Some("How much it asks first.".to_owned()),
+        );
+        assert_eq!(row.note.as_deref(), Some("How much it asks first."));
+    }
+
+    /// An empty choice list is a downgrade too — a chat server that offered no
+    /// catalogue at all reaches it — so the sentence may not count the values
+    /// it did not get. "Nothing else", never "only one".
+    #[test]
+    fn an_empty_choice_list_is_not_described_as_one_value() {
+        let row = SettingRow::select("model", "Model", Some("retired_model"), Vec::new(), None);
+        let note = row.note.unwrap_or_default();
+        assert!(
+            !note.contains("one value"),
+            "there were no values at all here: {note:?}"
+        );
+        assert!(note.contains("Nothing else is on offer"), "{note:?}");
     }
 
     /// The third shape is pressable and has nothing to push, so drilling into

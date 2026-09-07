@@ -351,9 +351,20 @@ const ROW_EFFORT: &str = "effort";
 /// window and restarts the chat's server, taking the event stream with it. So
 /// the sentence names a cost the app is refusing to spend, where goose's names
 /// a route that is not there.
+///
+/// **And it now says WHICH question the number answers (#289).** "Context
+/// length" is two questions and this row only ever modelled the first: the
+/// model's window, which is catalogue metadata and genuinely fixed, and a
+/// ceiling the reader sets under it to bound cost or to compact earlier. The
+/// owner asked for the second and was shown the first with no sign that they
+/// were different, which reads as the request having been refused rather than
+/// as it never having been asked. Naming the distinction is all this app can
+/// honestly do here — no id the manager routes carries a ceiling, and building
+/// the control is #289's own open half.
 pub(crate) const CODE_CONTEXT_NOTE: &str =
-    "Fixed by the model. The one route that changes it restarts this chat's \
-     server, so this app reports it instead.";
+    "Fixed by the model. This is the window it comes with rather than a \
+     ceiling set under it, and the one route that would move it restarts this \
+     chat's server.";
 
 /// The chip's face: the model the next message will run on, by its catalogue
 /// name once that has loaded and by its bare id before then.
