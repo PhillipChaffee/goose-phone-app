@@ -176,31 +176,56 @@
    * number, which is also design.md's tier for a container that holds other
    * things. */
   border-radius: var(--radius-xl);
-  /* THE CARD RUNG, AND NOT THE MOCKUPS'. `.launch{background:their --surface}`
-   * is #24282e, which is --surface-raise here. Taking it would be right in dark
-   * and wrong in light, where --surface-raise resolves to shared.css's
-   * --bg-tertiary (#e3e6ea) and the placeholder — `.input::placeholder` is
-   * --text-secondary, #6f6f6f — measures 4.01:1 on it, under the 4.5 it owes.
-   * On --surface-card the same placeholder is 4.64:1 light and 5.95:1 dark.
-   * The floor wins over the picture; the 1px edge is what separates the
-   * control, as it does in the mockups.
+  /* THE MOCKUPS' RUNG IN DARK AND THE CARD RUNG IN LIGHT, and it is ONE
+   * declaration rather than a theme block.
    *
-   * STILL THE CARD RUNG, and now with the second half of the price written
-   * down. The open question is whether dark alone should take the mockups'
-   * `--surface-raise` #24282e — a 6/7/8 step off the canvas (1.09:1) against
-   * this rung's 3/3/3 (1.04:1) — since the light objection above does not
-   * reach dark. Measured, it costs the seam: `--shell-line-soft` is #242830,
-   * which is 1.00:1 on #24282e and 1.05:1 on this fill. The mockups' own
-   * composer therefore has NO visible seam, and this shell's two-zone
-   * geometry — the whole reason `padding` and `gap` are zero above — is that
-   * line. Taking the raise would mean either losing it or paying for it with
-   * `--border-primary` #2f343b, which is 1.18:1 on the raise and BRIGHTER than
-   * the composer's own #2c3138 outer edge: the inversion the border fix five
-   * declarations up exists to end.
+   * `.launch{background:their --surface}` is #24282e, which `--surface-raise`
+   * names in dark. Naming that token here would take light with it, and in
+   * light it resolves to shared.css's `--bg-tertiary` #e3e6ea, where the
+   * placeholder — `.input::placeholder` is --text-secondary, #6f6f6f —
+   * measures 4.01:1, under the 4.5 a placeholder owes. That is the objection
+   * this rule carried while the question was open, and re-read at HEAD it is
+   * about LIGHT ALONE: the floor it protects is a light floor, and in dark the
+   * same placeholder clears everything on either rung. So the decision taken
+   * is the one the objection never reached — take the mockups' step in dark,
+   * leave light exactly where it is.
    *
-   * Left as it ships, because it is on the campaign's decision list rather
-   * than its patch list and this is the measurement it was missing. */
-  background: var(--surface-card);
+   * `--bg-secondary` DELIVERS BOTH HALVES WITH NO SECOND BODY TO DRIFT.
+   * `00-tokens.css` declares `--bg-secondary: var(--surface-raise)` in both
+   * dark bodies, and shared.css declares it #f4f6f7 in light, which is
+   * `--surface-card`'s own light value to the byte. So this line is #24282e in
+   * dark and byte-identical in light without an `@media` or a `[data-theme]`
+   * rule anywhere — and the alternative, a dark-only override, would have to
+   * be written TWICE (`docs/audit.js` has walked the attribute as an axis of
+   * its own since #165) for a result the token already gives once.
+   * `95-transcript.css` makes the same trade over `.bubble.user` and writes it
+   * up at the same length; this is the second of the two.
+   *
+   * MEASURED, DARK: the fill was #212429 at 1.037:1 off the canvas — a 3/3/3
+   * step — and is #24282e at 1.090:1, which is the 6/7/8 the mockup draws. The
+   * placeholder on it is 5.66:1 (was 5.95), the chips' --text-secondary the
+   * same number, --text-primary 12.49:1, the send's --accent outline 6.17:1.
+   * MEASURED, LIGHT: unmoved, and that is the half worth proving rather than
+   * asserting. A whole-tree computed-style dump over all 21 captured desktop
+   * states in the theme cells the audit walks — 126 cells, 32,100 elements —
+   * moves **0 of 63 light cells** and 12 of 63 dark ones, which is every dark
+   * cell of the four states that hold a `.home-compose` (`desktop-chats`,
+   * `-chats-confirm`, `-code-list`, `-code-list-picker`) and no other. Inside
+   * those, exactly TWO declarations move in the whole tree: this fill, and the
+   * seam below. The `attr-dark, system-light` cells move too, which is what
+   * says the seam's second body was written.
+   *
+   * IT LANDS ON THE CODE HALF AS WELL, by design rather than by leakage:
+   * `.home-compose` is the composer of both home screens — `97-home-code.css`
+   * puts it in `.home-dock` and gives it no fill of its own — so the two
+   * planes' composers stay one control. That is why four states move and not
+   * two.
+   *
+   * IT COSTS THE SEAM, AND THE SEAM IS PAID FOR RATHER THAN WRITTEN OFF:
+   * `--shell-line-soft` #242830 is 1.002:1 on this fill against 1.054:1 on the
+   * old one, which is no line at all. `.home-compose-row` below is the other
+   * declaration that moves, and the paragraph there is the whole of it. */
+  background: var(--bg-secondary);
 }
 
 .home-compose .input {
@@ -261,6 +286,52 @@
    * `var(--border-primary)` #e3e6ea in the base block and only dark overrides
    * it. */
   border-top: 1px solid var(--shell-line-soft);
+}
+
+/* …AND IN DARK THE SEAM IS NOW THE CANVAS SHOWING THROUGH, because the fill
+ * moved out from under it.
+ *
+ * `--shell-line-soft` #242830 was 1.054:1 on the old #212429 fill and is
+ * 1.002:1 on the #24282e one the rule above now paints. The mockups' own
+ * composer has no visible seam for exactly this reason — they paint
+ * `.launch{background:their --surface}` and draw `.bar`'s top border in
+ * their --line-soft, two values four hundredths apart — and this shell's
+ * two-zone geometry, the whole reason `padding` and `gap` are zero on
+ * `.home-compose`, IS that line. So it moves rather than being lost.
+ *
+ * DARKER, AND NOT BRIGHTER, which is the half the fill's record never
+ * considered: it priced the seam only in brighter lines, found that all of
+ * them inverted the tier order, and stopped. The paragraph above is an ORDER —
+ * the seam softer than the composer's own `--shell-line` edge, 1.131:1 on the
+ * new fill — and both brighter candidates still break it, `--border-primary`
+ * #2f343b at 1.181:1 and `--slab-sunken` #1a1d22 at 1.141:1, each ABOVE the
+ * edge, which is the inversion the edge's own paragraph five declarations up
+ * exists to end. `--surface-canvas` #1e2126 is 1.090:1: under the edge, and a
+ * shade STRONGER than the 1.054 this seam has been shipping. The page reads as
+ * showing through between the two zones.
+ *
+ * A DARK-ONLY RULE AND NOT A TOKEN, because `--surface-canvas` is #ffffff in
+ * light and the light seam is right where it is — `--border-primary` #e3e6ea
+ * at 1.155:1 under a #cbd1d6 edge at 1.421:1, the same order in the only pair
+ * light has. This is the case the fill above does NOT have, which is why that
+ * one is a single line and this one is a pair.
+ *
+ * BOTH BODIES, and it is not belt-and-braces. `docs/audit.js` has walked
+ * `data-theme` as an axis of its own since #165: a rule written in the media
+ * query alone paints the LIGHT seam on a dark window the moment anything sets
+ * the attribute, which is the failure `00-tokens.css` records at length over
+ * its own two bodies. `20-plane-switch.css` is the shape being copied.
+ *
+ * `border-top-color` and not `border-top`, so the width and the style are
+ * still stated once. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .home-compose-row {
+    border-top-color: var(--surface-canvas);
+  }
+}
+
+:root[data-theme="dark"] .home-compose-row {
+  border-top-color: var(--surface-canvas);
 }
 
 /* THE HOME COMPOSER'S SEND, and it is `assets/shared.css`'s `.send` with two
@@ -427,10 +498,12 @@
   /* 11.5px, up one rung from --text-2xs. `.mini{font-size:11.5px}` and
    * `.mini .mono{font-size:11px}` — these are the composer's facts, they sit
    * beside a 32px send button, and 10.5 put them below the mockups' own value
-   * for the same element. --text-secondary on --surface-card is 5.95:1 dark and
-   * 4.64:1 light. (The dark figure read 7.85 until #52's lane re-measured it:
-   * that was #b8b8b8, the PHONE's dark secondary, which the ink ladder in
-   * `00-tokens.css` replaced with #98a1ac. The choice is unchanged.) */
+   * for the same element. --text-secondary on the composer's own fill is 5.66:1
+   * dark and 4.64:1 light. (The dark figure read 7.85 until #52's lane
+   * re-measured it: that was #b8b8b8, the PHONE's dark secondary, which the ink
+   * ladder in `00-tokens.css` replaced with #98a1ac. It then read 5.95 until
+   * the fill above took the mockups' rung in dark, #212429 -> #24282e. The
+   * choice is unchanged through all three.) */
   font-size: var(--text-xs);
   line-height: var(--lh-sm);
   white-space: nowrap;
@@ -447,10 +520,11 @@
    *
    * docs/audit.js's contrast walk keys on `[...el.childNodes].some(n =>
    * n.nodeType === 3 …)` — a `::before` is not a child node, so this glyph has
-   * never been measured. Measured by hand it is 2.03:1 on the light card and
-   * 2.91:1 on the dark one; a separator is a non-text indicator and owes 3:1,
-   * and it fails in both. Secondary is 4.64 and 5.95 — see the note one rule up
-   * for why the dark figure is not the 7.85 this line used to carry.
+   * never been measured. Measured by hand it is 2.03:1 on the light fill and
+   * 2.77:1 on the dark one; a separator is a non-text indicator and owes 3:1,
+   * and it fails in both. Secondary is 4.64 and 5.66 — see the note one rule up
+   * for why the dark figure is neither the 7.85 nor the 5.95 this line has
+   * carried before.
    *
    * The mockups' own `.sep-dot{color:#454c56}` is fainter still (about 1.4:1)
    * and is one of the places rule 3 outranks them. */
@@ -478,11 +552,13 @@
  * control's is the control, and this one has to be findable at a glance among
  * bare text. Non-text and decorative all the same, so no 3:1 is owed.
  *
- * Transparent, because it sits INSIDE `.home-compose`'s own `--surface-card`
- * fill. A second fill here would be a box drawn on a box, which is what the
- * filled pill this row used to carry was doing. Hover fills it, the same
- * one-tier move `.home-starter` makes: an outline is a thing that could become,
- * and pointing at it is the moment it does. */
+ * Transparent, because it sits INSIDE `.home-compose`'s own fill — the card
+ * rung in light and the mockups' raise in dark, which is why the hover below
+ * can no longer name a rung and mixes one instead. A second fill here would be
+ * a box drawn on a box, which is what the filled pill this row used to carry
+ * was doing. Hover fills it, the same one-tier move `.home-starter` makes: an
+ * outline is a thing that could become, and pointing at it is the moment it
+ * does. */
 .home-chip.picker {
   display: inline-flex;
   align-items: center;
@@ -502,9 +578,30 @@
   transition: border-color 120ms ease, background-color 120ms ease;
 }
 
+/* THE HOVER FILL IS A MIX AND NOT THE RAISE RUNG, because the box under it IS
+ * the raise rung in dark now.
+ *
+ * `background: var(--surface-raise)` was 1.051:1 over `.home-compose`'s old
+ * #212429 and is 1.000:1 over the #24282e that rule now paints — a hover state
+ * that is not there, and it would have shipped green by a change to a
+ * different declaration in a different section of this file. No gate in the
+ * repo could have caught it: `docs/gallery-states.json` holds no hovered
+ * element, so every `:hover` in this sheet is unmeasured by `docs/audit.js`.
+ *
+ * `20-plane-switch.css` hit the identical failure when its track took the same
+ * rung, and the value here is its answer: half of `--bg-tertiary` over
+ * `--surface-raise` is #272c32, which is 1.053:1 on the new fill — the step
+ * this hover already had, to two decimal places. Stated as a mix of the two
+ * ends rather than as a literal, so it follows either end when it moves.
+ *
+ * UNCONDITIONAL, and that is a property of the operands rather than an
+ * oversight: in light `--surface-raise` IS `var(--bg-tertiary)`, so the mix is
+ * one colour mixed with itself and light paints the #e3e6ea it painted before.
+ * Dark is the only theme in which the two ends differ, which is why this needs
+ * no theme body where the seam above needs two. */
 .home-chip.picker:hover {
   border-color: var(--accent);
-  background: var(--surface-raise);
+  background: color-mix(in srgb, var(--bg-tertiary) 50%, var(--surface-raise));
 }
 
 /* The glyphs are chrome on a control whose VALUE is the point, so they take the

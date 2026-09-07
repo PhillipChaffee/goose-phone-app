@@ -616,15 +616,33 @@
  * out at length over `.home-compose`, which is the model being copied here.
  *
  * `--surface-card` AND NOT `--bg-secondary`, which is the opposite of the call
- * two sections up and is deliberate. The mockups paint `.user`, `.tool` and
- * `.composer` on one value, and in dark `--bg-secondary` IS that value — but
- * this control has a twin one click away and the whole complaint is that the
- * two do not look like the same app. `.home-compose` paints `--surface-card`
- * and says why: on `--surface-raise` in light the placeholder
- * (--text-secondary #6f6f6f on #e3e6ea) is 4.01:1, under the 4.5 it owes. On
- * `--surface-card` it is 4.64:1 light and 5.95:1 dark. So the composer follows
- * its twin, and what it gives up is three units of fill in dark — recorded
- * here rather than left to be re-measured as a defect.
+ * two sections up and was deliberate: the mockups paint `.user`, `.tool` and
+ * `.composer` on one value, in dark `--bg-secondary` IS that value, but this
+ * control has a twin one click away and the whole complaint is that the two do
+ * not look like the same app. So it followed `.home-compose`, which paints the
+ * card rung because on `--surface-raise` in LIGHT the placeholder
+ * (--text-secondary #6f6f6f on #e3e6ea) is 4.01:1, under the 4.5 it owes; on
+ * the card it is 4.64:1 light and 5.95:1 dark. What it gave up was three units
+ * of fill in dark, recorded here rather than left to be re-measured.
+ *
+ * AND THE TWIN HAS SINCE MOVED, WHICH IS WHY THE LINE BELOW SAYS
+ * `--bg-secondary` NOW. #87 took the mockups' rung in dark alone —
+ * `.home-compose` is `var(--bg-secondary)`, #24282e dark and byte-identical
+ * light, because the light objection above never reached dark — and this
+ * control following it a second time is not a consequence of that change but
+ * the SAME decision arriving at the screen the mockups drew it on. The
+ * paragraph above is now a record: for one commit the two composers were three
+ * units apart in dark (1.05:1) where they had been one value, and that gap was
+ * filed as #275 rather than closed silently.
+ *
+ * The mockups paint `.user`, `.tool` and `.composer` on ONE value and in dark
+ * `--bg-secondary` is that value, so this is the reading that was right all
+ * along; what held it back was a LIGHT floor, and `--bg-secondary` clears that
+ * floor because shared.css declares it #f4f6f7 in light, which is
+ * `--surface-card`'s own light value to the byte. Measured on the new fill in
+ * dark: the placeholder is 5.66:1 (was 5.95 on the card rung), the chips'
+ * `--text-secondary` the same number, `--text-primary` 12.49:1. Light does not
+ * move at all — same token, same bytes.
  *
  * 14px is a literal for the reason the tool card's 9px is: `--radius-lg` is 12
  * and `--radius-xl` is 16 and the mockup is exactly between them.
@@ -638,7 +656,7 @@
   gap: 0;
   padding: 0;
   overflow: hidden;
-  background: var(--surface-card);
+  background: var(--bg-secondary);
   border: 1px solid var(--shell-line);
   border-radius: 14px;
   /* "Borders separate, shadows float" — docs/design.md. On the phone this card
@@ -686,6 +704,28 @@
 .pane-main .composer .composer-row {
   padding: 7px 10px 8px 12px;
   border-top: 1px solid var(--shell-line-soft);
+}
+
+/* …AND THE SEAM MOVES WITH THE FILL, exactly as `40-home-chat.css`'s does and
+ * for the reason written there: `--shell-line-soft` #242830 was a hairline ON
+ * the card rung and is nearly the fill itself once the fill is #24282e, so the
+ * seam that separated the field zone from the control zone stops separating
+ * anything. `--surface-canvas` is the page the card sits on, which makes the
+ * seam read as the canvas showing through a gap rather than as a line drawn on
+ * a surface — the same thing the mockup's own seam is.
+ *
+ * BOTH BODIES, because `docs/audit.js` has walked `data-theme` as an axis of
+ * its own since #165 and a rule written in the media query alone is invisible
+ * to the attribute. `border-top-color` and not `border-top`, so the width and
+ * the style stay stated once, above. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .pane-main .composer .composer-row {
+    border-top-color: var(--surface-canvas);
+  }
+}
+
+:root[data-theme="dark"] .pane-main .composer .composer-row {
+  border-top-color: var(--surface-canvas);
 }
 
 /* THE SEND, and it is the home composer's rule arriving at the control it was
