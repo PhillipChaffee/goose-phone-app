@@ -2195,6 +2195,7 @@ mod tests {
                         status: "running".to_owned(),
                         model: None,
                         last_active: 0.0,
+                        stat: None,
                     },
                     opencode_client::ChatMeta {
                         id: "b".to_owned(),
@@ -2205,6 +2206,7 @@ mod tests {
                         status: "stopped".to_owned(),
                         model: None,
                         last_active: 0.0,
+                        stat: None,
                     },
                     opencode_client::ChatMeta {
                         id: "c".to_owned(),
@@ -2215,6 +2217,7 @@ mod tests {
                         status: "stopped".to_owned(),
                         model: None,
                         last_active: 0.0,
+                        stat: None,
                     },
                 ]);
             },
@@ -3042,6 +3045,7 @@ mod tests {
             status: status.to_owned(),
             model: None,
             last_active: last,
+            stat: None,
         }
     }
 

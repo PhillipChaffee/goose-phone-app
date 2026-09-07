@@ -971,6 +971,7 @@ mod tests {
                     status: "running".to_owned(),
                     model: None,
                     last_active: 1_788_177_600.0,
+                    stat: None,
                 }]);
             },
             |ctx| code_rows(ctx, NOW),
@@ -1192,6 +1193,7 @@ mod tests {
             status: "stopped".to_owned(),
             model: None,
             last_active: 1_788_177_600.0,
+            stat: None,
         }
     }
 
@@ -1420,6 +1422,7 @@ mod tests {
                     status: "stopped".to_owned(),
                     model: None,
                     last_active: 1_788_177_600.0,
+                    stat: None,
                 }]);
             },
             || rsx! { SidebarList { plane: Plane::Code } },

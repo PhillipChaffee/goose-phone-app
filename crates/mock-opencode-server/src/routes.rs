@@ -57,16 +57,14 @@ pub(crate) fn manager(state: &mut State, method: &str, path: &str, body: &Value)
             }
         }
 
-        ("GET", ["chats"]) => {
-            // NEWEST FIRST, which the real manager does and the app relies on:
-            // `views::code` renders the list in wire order.
-            let mut chats = state.chats.clone();
-            chats.sort_by(|a, b| b.last_active.total_cmp(&a.last_active));
-            Reply::Json(
-                200,
-                json!({ "chats": chats.iter().map(wire::chat).collect::<Vec<_>>() }),
-            )
-        }
+        ("GET", ["chats"]) => Reply::Json(200, chat_index(state)),
+
+        // EVERY CHAT'S PULL REQUESTS AT ONCE, which is the route the app's
+        // board polls in place of one request per chat. A MAP keyed by chat
+        // id, not a list — a list could not say which chat a row belongs to,
+        // and it is the key's PRESENCE that tells "asked, and none are open"
+        // apart from "not answered for".
+        ("GET", ["pulls"]) => Reply::Json(200, all_pulls(state)),
 
         ("POST", ["chats"]) => {
             let repo = body.get("repo").and_then(Value::as_str).unwrap_or("");
@@ -336,6 +334,61 @@ pub(crate) fn chat_server(
 
         _ => return None,
     })
+}
+
+/// The body of `GET /api/chats`: the metadata index, newest first.
+///
+/// The order is not a detail — the real manager sends the index that way and
+/// `views::code` renders it in wire order, so a mock that sorted differently
+/// would put the phone's list in an order the phone never shows.
+fn chat_index(state: &State) -> Value {
+    let mut chats = state.chats.clone();
+    chats.sort_by(|a, b| b.last_active.total_cmp(&a.last_active));
+    json!({
+        "chats": chats.iter().map(wire::chat).collect::<Vec<_>>(),
+        // The sweep's own freshness, which the real manager puts on this route
+        // as well as on `/api/pulls`. The client reads neither, like `port`
+        // and `url` on a row.
+        "github": sweep_block(),
+    })
+}
+
+/// The body of `GET /api/pulls`: every chat's pull requests keyed by chat id,
+/// with the sweep's freshness block on the same object.
+///
+/// A function of its own, like [`chat_index`], so the routing stays one
+/// readable `match` — an arm that is one line is the shape every other arm has.
+fn all_pulls(state: &State) -> Value {
+    let by_chat: serde_json::Map<String, Value> = state
+        .chats
+        .iter()
+        .map(|c| {
+            (
+                c.id.clone(),
+                json!(c.pulls.iter().map(wire::pull).collect::<Vec<_>>()),
+            )
+        })
+        .collect();
+    let mut v = sweep_block();
+    v["pulls"] = Value::Object(by_chat);
+    v
+}
+
+/// The freshness block the manager's GitHub sweep puts on `/api/chats` and on
+/// `/api/pulls` alike: when the last pass ran, and the chats it could not
+/// answer for.
+///
+/// **Both lists are empty here on purpose.** A chat named in either is a chat
+/// with NO key in the pulls map, so naming one would take a build off a board
+/// row — and the four builds on it are #84's whole fixture. The path that
+/// matters is the client's, where an absent key must not become an empty list,
+/// and it is asserted there rather than bought at the cost of a row.
+///
+/// `as_of` is `now()` because this mock has no sweep thread: its answer is
+/// always the current one. `0.0` is the real manager's "no pass has completed",
+/// which is a different claim and not this one.
+fn sweep_block() -> Value {
+    json!({ "as_of": now(), "unreachable": [], "no_remote": [] })
 }
 
 /// A chat id that reached a route expecting `chats/<id>`; never taken, and

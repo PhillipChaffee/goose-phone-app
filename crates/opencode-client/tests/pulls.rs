@@ -1,16 +1,18 @@
 //! The pull-request routes, end to end against a stub session manager.
 //!
-//! These two routes do not exist on the real manager yet — this file *is* the
-//! contract, written down as something that runs. Every fixture below is the
-//! JSON the manager is being asked to send, and every status is one of the
-//! failures it is being asked to send it with, so a manager built to match
-//! makes these pass unchanged.
+//! This file was written as the CONTRACT — the JSON a manager was being asked
+//! to send, and the statuses it was being asked to fail with — before any of
+//! it existed. `PhillipChaffee/personal-ai-setup#47` built it, and `465bb14`
+//! added the third route below, the plane-wide aggregate that answers a whole
+//! board in one request. So these fixtures are now a description rather than a
+//! request, and the file's job changed with them: it is what notices if the two
+//! sides drift apart.
 //!
 //! The one thing a decode test cannot cover and this can: that the client asks
-//! the right question. Both routes hang off `/api/`, never `/chat/<id>/`, and
-//! that is not cosmetic — the `/chat/` prefix is the manager's wake-on-request
-//! proxy, so a pull-request list served from there would boot a container
-//! every time a chat was opened.
+//! the right question. All three routes hang off `/api/`, never `/chat/<id>/`,
+//! and that is not cosmetic — the `/chat/` prefix is the manager's
+//! wake-on-request proxy, so a pull-request list served from there would boot a
+//! container every time a chat was opened.
 
 // Test code: a failing unwrap, or a panic on the wrong variant, IS the failing
 // check. Both are denied for shipped code. `expect` rather than `allow`: if a
@@ -59,6 +61,26 @@ fn answer(method: &str, path: &str) -> (&'static str, Value) {
                 pull(13, "open", "pending", &json!(true)),
                 pull(12, "merged", "passing", &json!(null)),
             ]}),
+        ),
+        // The whole plane, out of the manager's sweep cache. `notes-9f2c1a`
+        // has pull requests; `quiet` was asked about and has none; `offline`
+        // and `_probe-1` are named rather than given an empty list, and the
+        // difference between those two lines is the difference between "try
+        // again" and "there was never anything to ask".
+        ("GET", "/api/pulls") => (
+            "200 OK",
+            json!({
+                "pulls": {
+                    "notes-9f2c1a": [
+                        pull(13, "open", "pending", &json!(true)),
+                        pull(12, "merged", "passing", &json!(null)),
+                    ],
+                    "quiet": [],
+                },
+                "as_of": 1_756_000_000.0,
+                "unreachable": ["offline"],
+                "no_remote": ["_probe-1"],
+            }),
         ),
         ("GET", "/api/chats/ghost/pulls") => ("404 Not Found", json!({"error": "unknown chat"})),
         ("GET", "/api/chats/dropped/pulls") => (
@@ -191,6 +213,51 @@ async fn the_list_comes_off_a_manager_route_and_decodes_in_order() {
     );
     assert_eq!(pulls[1].state, PullState::Merged);
     assert!(!pulls[1].is_mergeable());
+}
+
+/// **The whole board in one request**, and the three things its map says.
+///
+/// This is the route that retired the app's per-chat fan-out, so the request
+/// line matters as much as the body: one `GET /api/pulls`, not one call per
+/// row. A chat named in `unreachable` or `no_remote` is OMITTED from the map
+/// rather than given an empty list, and the client must keep it omitted — the
+/// caller merges, so an empty list here would overwrite a good answer with
+/// "this branch has no pull request".
+#[tokio::test]
+async fn the_whole_plane_comes_off_one_route_keyed_by_chat() {
+    let (client, seen) = stub().await;
+    let by_chat = client.all_pulls().await.unwrap();
+
+    assert_eq!(
+        requests(&seen),
+        ["GET /api/pulls auth=yes"],
+        "one request for the board, and a manager route: /chat/<id>/ would \
+         wake every container on it"
+    );
+    assert_eq!(by_chat.len(), 2);
+    assert_eq!(
+        by_chat["notes-9f2c1a"]
+            .iter()
+            .map(|p| p.number)
+            .collect::<Vec<_>>(),
+        [13, 12],
+        "the manager sorts newest first and the order has to survive the map"
+    );
+    assert_eq!(by_chat["notes-9f2c1a"][0].state, PullState::Open);
+    assert_eq!(by_chat["notes-9f2c1a"][0].checks, Checks::Pending);
+    assert!(
+        by_chat["quiet"].is_empty(),
+        "asked about, and nothing is open — a measurement"
+    );
+    assert!(
+        !by_chat.contains_key("offline"),
+        "GitHub would not answer for this chat; an empty list would say it has \
+         no pull request, which is a different claim"
+    );
+    assert!(
+        !by_chat.contains_key("_probe-1"),
+        "and a chat with no remote to ask about is settled, not empty"
+    );
 }
 
 #[tokio::test]
