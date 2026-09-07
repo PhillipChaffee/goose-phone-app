@@ -27,6 +27,8 @@ pub(crate) fn handle(method: &str, params: &Value, state: &Shared, out: &Out) ->
             Ok(json!({}))
         }
         "session/close" => Ok(json!({})),
+        "_goose/unstable/config/read" => Ok(config_read(params, state)),
+        "_goose/unstable/providers/list" => Ok(providers_list(state)),
         _ => return None,
     };
     Some(result)
@@ -238,12 +240,7 @@ fn config_options(config: &SessionConfig) -> Value {
             "category": "model",
             "type": "select",
             "currentValue": config.model,
-            "options": [
-                {"value": "claude-opus-5", "name": "Claude Opus 5"},
-                {"value": "claude-sonnet-5", "name": "Claude Sonnet 5"},
-                {"value": "gpt-5.2", "name": "GPT-5.2"},
-                {"value": "qwen3-coder-480b", "name": "Qwen3 Coder 480B"},
-            ]
+            "options": model_choices()
         },
         {
             "configId": "thinking_effort",
@@ -256,6 +253,99 @@ fn config_options(config: &SessionConfig) -> Value {
             "options": efforts
         }
     ])
+}
+
+/// The models this agent offers, once.
+///
+/// Read by BOTH the session's `model` option and `providers/list`, because on
+/// a real goose they are one list: `session/new` builds its `model` choices
+/// out of the catalogue of the provider named by `GOOSE_PROVIDER`. Measured
+/// against `goose 1.46.0`, the 168 choices on a loaded session's `model`
+/// option were that provider's 168 catalogue entries, in the same order with
+/// the same names — so a fake that answered the two questions differently
+/// would let a client ship that only worked against itself.
+fn model_choices() -> Value {
+    json!([
+        {"value": "claude-opus-5", "name": "Claude Opus 5"},
+        {"value": "claude-sonnet-5", "name": "Claude Sonnet 5"},
+        {"value": "gpt-5.2", "name": "GPT-5.2"},
+        {"value": "qwen3-coder-480b", "name": "Qwen3 Coder 480B"},
+    ])
+}
+
+/// One global config value, by key.
+///
+/// The two keys that matter are `GOOSE_MODEL` and `GOOSE_PROVIDER`: they are
+/// how a client learns what a session it has not created yet would run on,
+/// which is the only thing the chat home composer can ask before there is a
+/// conversation (#280). Everything else answers `{"value": null}` rather than
+/// an error, which is what the real server does for a key it has no value for
+/// — including one that does not exist.
+///
+/// It never answers a secret, and it cannot: the mock has no secret store, and
+/// the client's own `GlobalKey` has two variants and no way to name a third.
+fn config_read(params: &Value, state: &Shared) -> Value {
+    let key = params
+        .get("key")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let config = state.lock().unwrap().config.clone();
+    let value = match key {
+        "GOOSE_MODEL" => Some(config.model),
+        "GOOSE_PROVIDER" => Some(config.provider),
+        _ => None,
+    };
+    json!({"value": value})
+}
+
+/// Every provider the agent knows about, with its catalogue.
+///
+/// Three entries, and the third is unconfigured on purpose: fourteen of the
+/// seventy-six on the server this shape was taken from answered `configured:
+/// true`, so a fake in which every provider is configured would never exercise
+/// the half of a client that has to tell them apart.
+///
+/// The unmodelled keys are here for the same reason they are on the wire —
+/// `configKeys` carries the NAMES of a provider's settings and a `secret` flag
+/// beside each, never a value, and the client's round-trip check can only see
+/// a field the fixture carries.
+fn providers_list(state: &Shared) -> Value {
+    let config = state.lock().unwrap().config.clone();
+    let entry = |id: &str, name: &str, configured: bool, models: Value| {
+        json!({
+            "providerId": id,
+            "providerName": name,
+            "providerType": "Declarative",
+            "category": "model",
+            "description": format!("{name} models."),
+            "configured": configured,
+            "defaultModel": config.model,
+            "models": models,
+            "configKeys": [
+                {"name": format!("{}_API_KEY", id.to_uppercase()), "default": null,
+                 "required": true, "secret": true, "primary": true,
+                 "oauthFlow": false, "deviceCodeFlow": false}
+            ],
+            "setupSteps": [],
+            "stale": false,
+            "refreshing": false,
+            "supportsRefresh": false,
+        })
+    };
+    // The catalogue is the session option's, so whichever way a client asks it
+    // gets one answer — see `model_choices`. `value`/`name` there is the
+    // select-option spelling; a provider's catalogue keys on `id`/`name`.
+    let catalogue: Value = model_choices()
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .map(|choice| json!({"id": choice["value"], "name": choice["name"]}))
+        .collect();
+    json!({"entries": [
+        entry("anthropic", "Anthropic", true, catalogue),
+        entry("openai", "OpenAI", true, json!([{"id": "gpt-5.2", "name": "GPT-5.2"}])),
+        entry("alibaba", "Alibaba (Qwen)", false, json!([])),
+    ]})
 }
 
 /// The kinds asked for in `_meta.types`. Absent, null or empty means all of

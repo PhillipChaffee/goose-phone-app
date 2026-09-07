@@ -66,6 +66,9 @@ pub use scheduler::*;
 mod extensions;
 pub use extensions::*;
 
+mod providers;
+pub use providers::*;
+
 // session history — PR 7 replaces this line
 
 use std::collections::HashSet;
