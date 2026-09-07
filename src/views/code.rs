@@ -351,9 +351,20 @@ const ROW_EFFORT: &str = "effort";
 /// window and restarts the chat's server, taking the event stream with it. So
 /// the sentence names a cost the app is refusing to spend, where goose's names
 /// a route that is not there.
+///
+/// **And it now says WHICH question the number answers (#289).** "Context
+/// length" is two questions and this row only ever modelled the first: the
+/// model's window, which is catalogue metadata and genuinely fixed, and a
+/// ceiling the reader sets under it to bound cost or to compact earlier. The
+/// owner asked for the second and was shown the first with no sign that they
+/// were different, which reads as the request having been refused rather than
+/// as it never having been asked. Naming the distinction is all this app can
+/// honestly do here — no id the manager routes carries a ceiling, and building
+/// the control is #289's own open half.
 pub(crate) const CODE_CONTEXT_NOTE: &str =
-    "Fixed by the model. The one route that changes it restarts this chat's \
-     server, so this app reports it instead.";
+    "Fixed by the model. This is the window it comes with rather than a \
+     ceiling set under it, and the one route that would move it restarts this \
+     chat's server.";
 
 /// The chip's face: the model the next message will run on, by its catalogue
 /// name once that has loaded and by its bare id before then.
@@ -519,8 +530,6 @@ fn agent_choices(agents: &[Agent]) -> Vec<SettingChoice> {
         .collect()
 }
 
-/// Catalogue entries as choices. A name shared by two providers is shown as
-/// `provider/model` instead, so two rows are never indistinguishable.
 /// Shared by the effort row and the context-length row so the two can never
 /// give different reasons for the same missing catalogue.
 const fn unknown_model_note(
@@ -574,7 +583,36 @@ fn withheld_note(withheld: usize) -> Option<String> {
     ))
 }
 
+/// Catalogue entries as choices: the model's name, and — when there is more
+/// than one provider to choose between — whose it is, underneath.
+///
+/// **The name alone was never the choice (#282).** A model is addressed
+/// `provider/model` everywhere the app speaks to the manager, and two
+/// providers serving one model differ in price, latency, region and, through
+/// privacy hard rule 1, who sees the code. Until now the provider surfaced
+/// only on an EXACT name collision, so a provider that labels its build even
+/// slightly differently produced two rows that looked like two models and
+/// routed to two companies.
+///
+/// Under the name rather than beside it, because that is where
+/// [`repo_choices`] puts a repo's owner and where every settings row puts its
+/// explanation — one grammar, not two.
+///
+/// **Only when there is more than one provider in the offered list.** A
+/// lone-provider server — which is what `mock-opencode-server` is, and what a
+/// single-key deployment is — would otherwise print the same word under every
+/// row, which is noise standing exactly where the one distinguishing fact is
+/// supposed to be.
+///
+/// The provider is said once per row and never twice: where the name alone
+/// does not identify the model the LABEL falls back to the full reference, and
+/// that row has no note, because "opencode/claude-sonnet-4-5" over "opencode"
+/// is the same word stacked on itself.
 fn model_choices(offered: &[&ModelInfo]) -> Vec<SettingChoice> {
+    let mut providers: Vec<&str> = offered.iter().map(|m| m.provider_id.as_str()).collect();
+    providers.sort_unstable();
+    providers.dedup();
+    let choosing_provider = providers.len() > 1;
     offered
         .iter()
         .map(|m| {
@@ -592,7 +630,10 @@ fn model_choices(offered: &[&ModelInfo]) -> Vec<SettingChoice> {
             } else {
                 m.name.clone()
             };
-            SettingChoice::new(m.reference(), label)
+            // `label == m.name` is exactly "the label is the bare name", which
+            // is the only shape that leaves the provider unsaid.
+            let note = (choosing_provider && label == m.name).then(|| m.provider_id.clone());
+            SettingChoice::new(m.reference(), label).with_note(note)
         })
         .collect()
 }
@@ -1372,6 +1413,42 @@ pub(crate) fn chat_crumb(ctx: &AppCtx) -> Crumb {
     Crumb::detailed(chat.title.clone(), chat_where(&chat.repo, &chat.branch))
 }
 
+/// Which of the action row's two chips there is anything behind — Diff, then
+/// Pull requests. `None` on either side means that half has not answered yet.
+///
+/// **A chip is a claim that there is something to look at**, and #284 is that
+/// claim made unconditionally: a session that had changed nothing and opened
+/// nothing still offered `Diff` and `Pull requests · 0`, two controls leading
+/// to two empty screens. So an answered-and-empty half loses its chip, and a
+/// chat where both are empty loses the row.
+///
+/// **BOTH ANSWERS OR NEITHER, and that is the anti-flicker rule.** Until every
+/// half has answered, the row is the row it has always been, so no chip can
+/// ever arrive after the screen — not as a matter of timing but by
+/// construction, since nothing is ever withheld while its answer is unknown.
+///
+/// MEASURED RATHER THAN FEARED, and the measurement corrected the fear. The
+/// composer does not move: it is the last child of a column whose scroller
+/// takes the slack, so `.composer`'s top is 756.44 on `desktop-code-chat` at
+/// 1440x860 and 772 on `code-chat` at 402x874 with the row, without it, and
+/// with it empty. What the row costs is 46px of TRANSCRIPT — 726 against 772
+/// on the phone, 612.44 against 658.44 in the window — under a scroller
+/// pinned to its bottom, so a chip landing late takes 46px off the top of
+/// what is being read. That is the flicker, and it is worth avoiding without
+/// being worth a chip that lies.
+///
+/// Settling the two halves independently would also cost the commonest empty
+/// chat TWO of those instead of one, since the answers land far apart: the
+/// pull requests come from the manager's own GitHub credential and need no
+/// container, while the diff waits on the wake and the history load behind
+/// `attach_chat`.
+const fn action_chips(diff: Option<bool>, pulls: Option<bool>) -> (bool, bool) {
+    match (diff, pulls) {
+        (Some(diff), Some(pulls)) => (diff, pulls),
+        _ => (true, true),
+    }
+}
+
 #[component]
 pub fn CodeChatView() -> Element {
     let ctx = use_app_ctx();
@@ -1409,19 +1486,25 @@ pub fn CodeChatView() -> Element {
     // and the server's own record arrives already filtered, so whatever is
     // here is a tier the next turn will really ask for.
     let effort = chip_effort(chat.effort.as_deref());
-    // None until the fetch on chat open lands, and None for a session that has
-    // changed nothing — the chip says "Diff" alone rather than "+0 −0", which
-    // would be a claim it cannot back before the diff has been read.
-    let diff_totals = {
+    // Three states per half, and both the chip and its count are decided out
+    // of them: not asked yet, asked and empty, asked and not empty. `None`
+    // here is the first of those — `loaded` is what tells it from the second
+    // on each side (`DiffState::loaded`, `PullsState::loaded`).
+    //
+    // The count keeps the rule it always had: a number is only ever shown once
+    // an answer backs it, so a diff nobody has read says "Diff" and not
+    // "+0 −0".
+    let (diff_answer, diff_totals) = {
         let d = ctx.code_diff.read();
-        (!d.files.is_empty()).then(|| d.totals())
+        let has = (!d.files.is_empty()).then(|| d.totals());
+        (d.loaded.then(|| has.is_some()), has)
     };
-    // Likewise None until GitHub has answered — and `0` is a claim too, so it
-    // is only shown once there is an answer to back it.
-    let pull_count = {
+    let (pulls_answer, pull_count) = {
         let p = ctx.code_pulls.read();
-        p.loaded.then(|| p.pulls.len())
+        let count = p.loaded.then(|| p.pulls.len());
+        (count.map(|n| n > 0), count)
     };
+    let (show_diff, show_pulls) = action_chips(diff_answer, pulls_answer);
 
     let mut submit = move || {
         let text = draft.peek().trim().to_string();
@@ -1514,29 +1597,43 @@ pub fn CodeChatView() -> Element {
         // the session has produced; the composer is about the next thing you
         // say to it. Putting them in the chip row also put them in a fixed
         // budget of horizontal space they had to share with the model name.
-        div { class: "action-row",
-            button {
-                class: "action-chip",
-                title: "Review the session's changes",
-                onclick: move |_| load_code_diff(&ctx),
-                Icon { name: "diff" }
-                "Diff"
-                if let Some((added, removed)) = diff_totals {
-                    span { class: "stat add", "+{added}" }
-                    span { class: "stat del", "−{removed}" }
+        //
+        // The row itself goes when both chips do, rather than rendering empty:
+        // it carries 2px of its own padding and an 8px bottom margin
+        // (`assets/shared.css`, and `assets/desktop/80-measure.css` for the
+        // gutter it takes from `--measure`), so an empty one leaves 12px of
+        // nothing between the transcript and the composer. Measured on
+        // `code-chat` at 402x874: 46px of gap with both chips, 12 with the row
+        // kept and emptied, 0 with the row gone.
+        if show_diff || show_pulls {
+            div { class: "action-row",
+                if show_diff {
+                    button {
+                        class: "action-chip",
+                        title: "Review the session's changes",
+                        onclick: move |_| load_code_diff(&ctx),
+                        Icon { name: "diff" }
+                        "Diff"
+                        if let Some((added, removed)) = diff_totals {
+                            span { class: "stat add", "+{added}" }
+                            span { class: "stat del", "−{removed}" }
+                        }
+                    }
                 }
-            }
-            // Never disabled, unlike the composer beside it: the manager
-            // answers this from GitHub, so it works while the container is
-            // still waking and while a turn is running.
-            button {
-                class: "action-chip",
-                title: "Pull requests from this branch",
-                onclick: move |_| open_code_pulls(&ctx),
-                Icon { name: "pull-request" }
-                "Pull requests"
-                if let Some(count) = pull_count {
-                    span { class: "stat count", "{count}" }
+                // Never disabled, unlike the composer beside it: the manager
+                // answers this from GitHub, so it works while the container is
+                // still waking and while a turn is running.
+                if show_pulls {
+                    button {
+                        class: "action-chip",
+                        title: "Pull requests from this branch",
+                        onclick: move |_| open_code_pulls(&ctx),
+                        Icon { name: "pull-request" }
+                        "Pull requests"
+                        if let Some(count) = pull_count {
+                            span { class: "stat count", "{count}" }
+                        }
+                    }
                 }
             }
         }
@@ -2286,8 +2383,8 @@ fn merge_confirm_body(pull: &PullRequest) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_choices, branch_chip_label, branch_choices, can_start, chat_ask, chat_crumb,
-        chat_where, choose_repo, code_chip_label, code_mode_label, code_setting_rows,
+        action_chips, agent_choices, branch_chip_label, branch_choices, can_start, chat_ask,
+        chat_crumb, chat_where, choose_repo, code_chip_label, code_mode_label, code_setting_rows,
         compose_placeholder, diff_crumb, diff_seen_title, initial_mode, merge_confirm_body,
         mode_icon, model_choices, model_sheet_choices, new_crumb, new_model_label,
         new_session_sheet, offered_models, pulls_crumb, pulls_subtitle, repo_chip_label,
@@ -2531,6 +2628,10 @@ mod tests {
     /// The same display name from two providers is the case the label test
     /// exists for: one is the vendor direct, the other a proxy, and which one
     /// runs decides who sees the code.
+    ///
+    /// The label carries the provider here, so the note must not: one row
+    /// reading "opencode/claude-sonnet-4-5" over "opencode" is the same word
+    /// stacked on itself.
     #[test]
     fn two_providers_offering_one_name_get_told_apart() {
         let a = model("anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5");
@@ -2541,6 +2642,10 @@ mod tests {
             labels,
             ["anthropic/claude-sonnet-4-5", "opencode/claude-sonnet-4-5"],
             "identical names must fall back to the full reference"
+        );
+        assert!(
+            choices.iter().all(|c| c.note.is_none()),
+            "the provider is said once per row, and the label already said it"
         );
     }
 
@@ -2560,15 +2665,68 @@ mod tests {
     }
 
     /// Distinct names stay readable — the fallback is for collisions only.
+    ///
+    /// **And the provider is under each of them (#282).** The owner's question
+    /// was "I can't choose between Zen and Together AI", and under the old rule
+    /// two providers were told apart only when their names collided EXACTLY:
+    /// these two rows differ in who runs them and in nothing a reader could
+    /// see, which is the case a name collision never catches.
     #[test]
-    fn distinct_names_are_left_alone() {
+    fn distinct_names_are_left_alone_and_still_say_whose_they_are() {
         let a = model("anthropic", "claude-opus-4-1", "Claude Opus 4.1");
         let b = model("opencode", "claude-sonnet-4-5", "Claude Sonnet 4.5");
-        let labels: Vec<String> = model_choices(&[&a, &b])
-            .into_iter()
-            .map(|c| c.label)
-            .collect();
+        let choices = model_choices(&[&a, &b]);
+        let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
         assert_eq!(labels, ["Claude Opus 4.1", "Claude Sonnet 4.5"]);
+        let notes: Vec<Option<&str>> = choices.iter().map(|c| c.note.as_deref()).collect();
+        assert_eq!(
+            notes,
+            [Some("anthropic"), Some("opencode")],
+            "a catalogue with more than one provider says whose each model is"
+        );
+    }
+
+    /// The case the fake produces and the case a single-key deployment
+    /// produces: one provider, and its name under every row would be a column
+    /// of the same word standing where the distinguishing fact belongs.
+    #[test]
+    fn a_lone_provider_is_not_printed_under_every_model() {
+        let a = model("opencode", "claude-sonnet-4-5", "Claude Sonnet 4.5");
+        let b = model("opencode", "claude-opus-4-1", "Claude Opus 4.1");
+        let c = model("opencode", "minimax-m2.7", "MiniMax M2.7");
+        let choices = model_choices(&[&a, &b, &c]);
+        assert!(
+            choices.iter().all(|c| c.note.is_none()),
+            "one provider answers nothing, so it is not said: {:?}",
+            choices.iter().map(|c| c.note.clone()).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            choices.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(),
+            ["Claude Sonnet 4.5", "Claude Opus 4.1", "MiniMax M2.7"]
+        );
+    }
+
+    /// The case the old rule could never catch, and the one the owner hit:
+    /// two providers serving ONE model under labels that differ by a space.
+    /// No name collides, so nothing fell back to a reference, and the sheet
+    /// drew two rows that looked like two models and routed to two companies.
+    #[test]
+    fn a_provider_that_labels_its_build_differently_is_still_told_apart() {
+        let a = model("togetherai", "qwen3-coder", "Qwen3 Coder");
+        let b = model("zen", "qwen3-coder", "Qwen 3 Coder");
+        let choices = model_choices(&[&a, &b]);
+        assert_eq!(
+            choices
+                .iter()
+                .map(|c| (c.label.as_str(), c.note.as_deref()))
+                .collect::<Vec<_>>(),
+            [
+                ("Qwen3 Coder", Some("togetherai")),
+                ("Qwen 3 Coder", Some("zen")),
+            ],
+            "neither name collides, so the collide-only rule left both rows \
+             silent about the one thing that differs"
+        );
     }
 
     /// The chip names the model before the catalogue has loaded, and after a
@@ -4419,6 +4577,11 @@ mod tests {
     /// "+0 −0" and a pull-request count of 0 are claims, and before either
     /// fetch lands the app cannot back them — so the chips carry no numbers at
     /// all until there is an answer, and the real ones once there is.
+    ///
+    /// The unanswered half of it is also #284's anti-flicker rule under its
+    /// own name: an open whose two fetches are still in flight is the row this
+    /// screen has always drawn, because a chip that arrives after the screen
+    /// moves the composer under a reader already reaching for it.
     #[test]
     fn the_action_chips_carry_numbers_only_once_there_is_an_answer() {
         let silent = render(|| rsx! { CodeChatView {} });
@@ -4440,6 +4603,7 @@ mod tests {
                         diff_file("src/a.rs", FileStatus::Modified, 9, 2, MODIFIED_PATCH),
                         diff_file("src/b.rs", FileStatus::Added, 3, 1, MODIFIED_PATCH),
                     ],
+                    loaded: true,
                     ..DiffState::default()
                 });
                 let mut pulls = ctx.code_pulls;
@@ -4461,6 +4625,123 @@ mod tests {
         assert!(
             answered.contains("stat count\">2<"),
             "the pull chip counts what GitHub answered for this branch: {answered:.400}"
+        );
+    }
+
+    /// #284's truth table, away from the renderer.
+    ///
+    /// The diagonal is the fix — an answered-and-empty half loses its chip —
+    /// and the whole top row is the anti-flicker rule: one unanswered half
+    /// keeps BOTH chips, so nothing can appear late even on the side that has
+    /// already come back.
+    #[test]
+    fn a_half_that_answered_empty_loses_its_chip_and_an_unanswered_one_never_does() {
+        assert_eq!(action_chips(None, None), (true, true));
+        assert_eq!(action_chips(None, Some(false)), (true, true));
+        assert_eq!(action_chips(Some(false), None), (true, true));
+
+        assert_eq!(action_chips(Some(true), Some(true)), (true, true));
+        assert_eq!(action_chips(Some(true), Some(false)), (true, false));
+        assert_eq!(action_chips(Some(false), Some(true)), (false, true));
+        assert_eq!(action_chips(Some(false), Some(false)), (false, false));
+    }
+
+    /// The owner's three sentences, rendered (#284): *"If there's no diff and
+    /// there are no pull requests, I want them to just disappear. If there's
+    /// only a diff, only the diff. If there are only pull requests and no
+    /// current diff, then only pull requests."*
+    ///
+    /// The empty case checks for the ROW and not just the chips, because
+    /// `.action-row` carries `--measure`'s gutter and 2px of its own padding
+    /// (`assets/desktop/80-measure.css`): left behind empty it is 12px of
+    /// nothing holding the composer off the transcript.
+    #[test]
+    fn a_session_that_has_produced_nothing_loses_the_row_that_leads_to_nothing() {
+        let nothing = render_seeded(
+            |ctx| {
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    loaded: true,
+                    ..DiffState::default()
+                });
+                let mut pulls = ctx.code_pulls;
+                pulls.set(PullsState {
+                    loaded: true,
+                    ..PullsState::default()
+                });
+            },
+            || rsx! { CodeChatView {} },
+        );
+        assert!(
+            !nothing.contains("action-row"),
+            "a chat that has changed nothing and opened nothing still offered \
+             two controls leading to two empty screens: {nothing:.400}"
+        );
+
+        let only_diff = render_seeded(
+            |ctx| {
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    files: vec![diff_file(
+                        "src/a.rs",
+                        FileStatus::Modified,
+                        9,
+                        2,
+                        MODIFIED_PATCH,
+                    )],
+                    loaded: true,
+                    ..DiffState::default()
+                });
+                let mut pulls = ctx.code_pulls;
+                pulls.set(PullsState {
+                    loaded: true,
+                    ..PullsState::default()
+                });
+            },
+            || rsx! { CodeChatView {} },
+        );
+        assert!(
+            only_diff.contains("action-row") && only_diff.contains("stat add\">+9<"),
+            "the half with something behind it keeps its chip and its numbers: \
+             {only_diff:.400}"
+        );
+        assert!(
+            !only_diff.contains("Pull requests"),
+            "`Pull requests \u{b7} 0` prints the very zero the count's own rule \
+             refuses: {only_diff:.400}"
+        );
+
+        let only_pulls = render_seeded(
+            |ctx| {
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    loaded: true,
+                    ..DiffState::default()
+                });
+                let mut pulls = ctx.code_pulls;
+                pulls.set(PullsState {
+                    pulls: vec![pull(
+                        42,
+                        "Rotate",
+                        PullState::Open,
+                        Checks::Passing,
+                        Some(true),
+                    )],
+                    loaded: true,
+                    ..PullsState::default()
+                });
+            },
+            || rsx! { CodeChatView {} },
+        );
+        assert!(
+            only_pulls.contains("stat count\">1<"),
+            "a branch with a pull request open keeps the chip that reaches it: \
+             {only_pulls:.400}"
+        );
+        assert!(
+            !only_pulls.contains("Diff</button>"),
+            "a session whose working tree is clean still offered a review of \
+             nothing: {only_pulls:.400}"
         );
     }
 
