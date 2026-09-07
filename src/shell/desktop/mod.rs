@@ -136,6 +136,33 @@ const REFRESH_KEY: &str = r"
 /// `preventDefault` only when something was actually dismissed, so Escape
 /// keeps whatever meaning it has elsewhere — a native `<select>`, an IME —
 /// when no dialog is up.
+///
+/// AND THE OVERLAID SIDEBAR, which is the second thing in this shell that is
+/// over the page rather than on it. Below 628 the two columns do not both fit
+/// — `NAV` 268 plus `CONTENT_MIN` 360 is exactly 628 — so `65-responsive.css`
+/// floats the panel on the content, and until the scrim landed there was no
+/// way out of it but the band toggle it came in by. #215 is that, and 25 of
+/// `docs/audit.js`'s 27 occlusion pairs were it.
+///
+/// It joins this listener rather than bringing its own, and it does so on this
+/// one's own terms: no message back to Rust, no registry, just a press on the
+/// control already on screen that already means dismiss. `.nav-scrim` has an
+/// `onclick` that shuts the nav, so clicking it IS the dismissal — the key and
+/// the pointer reach the sidebar through one path, and a scrim that ever stops
+/// closing the panel stops answering Escape in the same commit.
+///
+/// AFTER the dialog and not before, because a confirm raised from the content
+/// column can be open with the sidebar over it, and Escape means the innermost
+/// thing first. That ordering is why the sidebar's arm lives inside the
+/// `!back` branch instead of ahead of it.
+///
+/// THE COMPUTED VISIBILITY, AND NOT THE ELEMENT'S EXISTENCE. The scrim is
+/// rendered in every state — the shell's standing rule, the one the inspector
+/// column is rendered under — so `querySelector` finds it at 1440 too, where
+/// the sidebar is a COLUMN and Escape must leave it alone. Whether the panel
+/// is an overlay is a fact only the sheet has, `nav_open` being `true` in both
+/// cases, so this asks the sheet: `65-responsive.css` reveals the scrim in one
+/// rule under one width query, and `visibility` is what that rule flips.
 const DISMISS_KEY: &str = r"
 (() => {
   if (window.__dismissKeyWired) return;
@@ -143,7 +170,13 @@ const DISMISS_KEY: &str = r"
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     const back = document.querySelector('.modal-backdrop');
-    if (!back) return;
+    if (!back) {
+      const scrim = document.querySelector('.nav-scrim');
+      if (!scrim || getComputedStyle(scrim).visibility === 'hidden') return;
+      e.preventDefault();
+      scrim.click();
+      return;
+    }
     const dialog = back.querySelector('.modal');
     const cancel = dialog && dialog.querySelector('.modal-body')
       ? dialog.querySelector('.modal-actions > .btn.secondary')
@@ -1129,6 +1162,52 @@ pub(crate) fn AppShell() -> Element {
 
             div { class: "shell-body",
 
+            // THE DIM BEHIND THE PANEL, AND THE WAY OUT OF IT.
+            //
+            // Below 628 the sidebar cannot be a column — 268 + 360 is exactly
+            // 628 — so `65-responsive.css` floats it on the content. That is
+            // forced and stays; what was missing was everything that makes an
+            // overlay an overlay rather than 268px parked over the reader's
+            // work. There was no dim, no click-away and no Escape, so the only
+            // way out was the band toggle it came in by, and 25 of
+            // `docs/audit.js`'s 27 occlusion pairs were that one fact (#215).
+            //
+            // RENDERED IN EVERY STATE and shown by the sheet in one, which is
+            // this shell's standing rule and is the same reason the inspector
+            // column is unconditional: width decides how many columns and Rust
+            // never listens to a resize. It also keeps the check honest —
+            // `docs/audit.js` flips `data-nav` on captured markup, so a scrim
+            // that Rust rendered only while the nav was open would still be in
+            // the DOM in the `nav closed` cells and would silence the
+            // occlusion walk in a state where nothing is overlaid at all.
+            //
+            // A `div` and not `.drawer-scrim`, though the phone's is the same
+            // element doing the same job. `assets/shared.css`'s header names
+            // `.drawer-scrim` as one of the four classes that are the phone's
+            // alone, and `src/inherit.rs`'s
+            // `the_scan_agrees_with_the_sheet_about_what_is_the_phones_alone`
+            // holds it to that: rendering it here would fail that test, and
+            // rightly — the claim would have stopped being true.
+            //
+            // A Rust `onclick` is allowed where a Rust `onkeydown` is not:
+            // `REFRESH_KEY`'s rule is about events that fire per frame or per
+            // keystroke, because each costs a synchronous XHR. This is one
+            // press, and it is the press `DISMISS_KEY` reaches for so that the
+            // key and the pointer cannot disagree.
+            //
+            // WHAT IT DELIBERATELY IS NOT is auto-close-on-selection. Picking
+            // a conversation from the overlay still leaves the panel over the
+            // conversation it just opened — one scrim click away now, where it
+            // used to be a hunt for the toggle. Closing it from the row would
+            // mean `nav_open` leaving this file, and the signal is local
+            // precisely because nothing outside it reads it (see its own
+            // comment above); that is a change to where the shell keeps its
+            // state, not a scrim.
+            div {
+                class: "nav-scrim",
+                onclick: move |_| nav_open.set(false),
+            }
+
             // NOT `.drawer.open`. Three reasons, all load-bearing: `.drawer`
             // is `position: absolute` with `translateX(-100%)` and would have
             // to be fought rather than reused; `src/domdump.rs` files any dump
@@ -1993,6 +2072,60 @@ mod tests {
             !card.contains("(nav::primary(plane).go)(&ctx)"),
             "something in the sidebar still navigates with `go` where the \
              plane is already the one on screen, which is the shape of #197"
+        );
+    }
+
+    /// The scrim is rendered in every state, it is the first thing in the
+    /// body, and pressing it shuts the nav.
+    ///
+    /// All three are load-bearing and none is visible to the compiler.
+    ///
+    /// UNCONDITIONAL, which is the shell's standing rule and here is also what
+    /// keeps the gate that measures this feature honest. `docs/audit.js` flips
+    /// `data-nav` on captured markup rather than re-capturing, so a scrim Rust
+    /// rendered only while the nav was open would still be in the DOM in the
+    /// `nav closed` cells — full-screen, above everything, and exempting every
+    /// control in the window from the occlusion walk in a state where nothing
+    /// is overlaid at all. The check would go on reporting Clean while saying
+    /// nothing.
+    ///
+    /// AHEAD OF THE PANEL, so that DOM order agrees with the z-index rather
+    /// than fighting it: `65-responsive.css` puts the panel one rung above the
+    /// scrim, and a scrim written after it would need that rung to be right to
+    /// avoid dimming the thing it belongs to.
+    ///
+    /// AND IT WRITES `nav_open`, because `DISMISS_KEY` dismisses the sidebar by
+    /// CLICKING this element. Escape sends nothing back to Rust by design, so
+    /// this `onclick` is the whole of what the key does; a scrim that stopped
+    /// closing the panel would take Escape with it silently.
+    #[test]
+    fn the_overlay_scrim_is_unconditional_and_ahead_of_the_panel() {
+        let code = shell_code();
+        let head = block(
+            &code,
+            "div { class: \"shell-body\",",
+            "aside { class: \"navpane\",",
+        );
+        assert!(
+            head.contains("class: \"nav-scrim\""),
+            "the shell body no longer renders a scrim before the sidebar. \
+             Below 628 the panel overlays the content unconditionally, so \
+             without it there is no dim, no click-away and — because \
+             `DISMISS_KEY` presses this element — no Escape either, which is \
+             the whole of #215"
+        );
+        assert!(
+            head.contains("nav_open.set(false)"),
+            "the scrim no longer closes the nav, so clicking it does nothing \
+             and Escape, which works by clicking it, does nothing either"
+        );
+        assert!(
+            !head.contains("if "),
+            "something between the body and the panel is now conditional. The \
+             scrim must be rendered in every state: docs/audit.js flips \
+             `data-nav` on captured markup, so a scrim present only while the \
+             nav is open would sit full-screen over the `nav closed` cells and \
+             exempt the whole window from the occlusion walk"
         );
     }
 
@@ -3399,6 +3532,89 @@ mod tests {
         );
     }
 
+    /// The scrim arrives at exactly the width the panel starts overlaying at,
+    /// it covers the whole window, and it stays one rung under the panel.
+    ///
+    /// Three facts the compiler cannot see, each of which fails by looking
+    /// right.
+    ///
+    /// THE SAME WIDTH QUERY. The scrim is declared at rest and revealed by one
+    /// rule; if that rule drifted into a different `@media` there would be a
+    /// band of windows where the panel sits on the content with nothing behind
+    /// it, or a band where a column has a wash over the page beside it. Read
+    /// the same way `the_inspector_keycap_goes_at_the_width_its_control_does`
+    /// reads its pair, and for the same reason.
+    ///
+    /// THE WHOLE WINDOW, which is read off the check rather than chosen.
+    /// `docs/audit.js`'s occlusion walk exempts a covered control only when
+    /// something between it and its blocker spans the viewport in BOTH axes —
+    /// "the page as a WHOLE has gone behind something". A scrim inset to
+    /// `--chrome-h`, which is where the panel itself starts, is 45px short of
+    /// that: it photographs identically and leaves all 25 pairs on the ledger.
+    ///
+    /// ONE RUNG UNDER THE PANEL. `.navpane` came off a bare `z-index: 3` onto
+    /// `--z-modal` in the same change, because a scrim at `--z-modal - 1` over
+    /// a panel at 3 would have dimmed the panel it belongs to. The pair is the
+    /// phone's, `.drawer` and `.drawer-scrim` in `assets/shared.css`.
+    #[test]
+    fn the_scrim_arrives_with_the_overlay_and_stays_under_the_panel() {
+        let sheet = crate::css::SHELL;
+        // The `@media (max-width: N)` a rule sits directly inside, or `None`
+        // when it sits in none — `the_inspector_keycap_goes_at_the_width_its_control_does`'s
+        // reader, which the comment above it explains in full.
+        let breakpoint = |needle: &str| -> Option<String> {
+            const OPEN: &str = "@media (max-width: ";
+            let at = sheet.find(needle)?;
+            let query = sheet[..at].rfind(OPEN)? + OPEN.len();
+            if sheet[query..at].contains("\n}") {
+                return None;
+            }
+            Some(sheet[query..].split(')').next()?.to_owned())
+        };
+        let panel = breakpoint(".navpane {\n    position: absolute;");
+        let reveal = breakpoint(".shell[data-nav=\"open\"] .nav-scrim {");
+        assert!(
+            panel.is_some() && reveal.is_some(),
+            "one of the two rules is gone or has left its width query: the \
+             panel becomes an overlay at {panel:?} and the scrim appears at \
+             {reveal:?}"
+        );
+        assert_eq!(
+            reveal, panel,
+            "the scrim now appears at a different width from the one the panel \
+             starts overlaying at, so there is a band of windows with a panel \
+             on the content and nothing behind it — or a wash over a page \
+             beside a column"
+        );
+
+        let scrim = sheet
+            .split_once(".nav-scrim {")
+            .and_then(|(_, rest)| rest.split_once('}'))
+            .map(|(body, _)| body)
+            .unwrap_or_default();
+        assert!(
+            scrim.contains("position: absolute;") && scrim.contains("inset: 0;"),
+            "the scrim no longer covers the whole window. docs/audit.js's \
+             occlusion walk exempts a covered control only when what is between \
+             it and its blocker spans the viewport in both axes, so a scrim \
+             inset to the band's height looks identical and clears nothing"
+        );
+        assert!(
+            scrim.contains("z-index: calc(var(--z-modal) - 1);"),
+            "the scrim has left the rung directly under the panel, so it is \
+             either over the sidebar it belongs to or under content it is \
+             supposed to dim"
+        );
+        assert!(
+            sheet.contains("z-index: var(--z-modal);"),
+            "the overlaid panel is no longer at --z-modal. It was a bare \
+             `z-index: 3` — below every rung this app declares for something \
+             over the page, which is what let a static .topbar's 20 paint \
+             across it (#214) — and a scrim at --z-modal minus one would now \
+             cover the panel itself"
+        );
+    }
+
     /// The glyph the toggle asks for has to exist. `Icon` renders nothing at
     /// all for a name it does not know (`src/icons.rs`), so a typo here is an
     /// invisible button in an empty corner rather than a compile error — and
@@ -3619,6 +3835,55 @@ mod tests {
             "Escape now reports back to Rust, which would mean a registry of \
              open dialogs for the shell to close — state every sheet in this \
              app deliberately keeps in its own view"
+        );
+    }
+
+    /// Escape reaches the overlaid sidebar — after any dialog, and only where
+    /// the sheet says the panel is an overlay.
+    ///
+    /// Both orderings are findings rather than tidiness.
+    ///
+    /// THE DIALOG IS ASKED FIRST because a confirm raised from the content
+    /// column can be open with the panel over it, and Escape means the
+    /// innermost thing. Reversed, the first press would fold the navigation
+    /// away and leave the dialog exactly where it was.
+    ///
+    /// THE SHEET IS ASKED AT ALL because the scrim is rendered in every state
+    /// and `nav_open` is `true` at 1440 as well, where the sidebar is a column
+    /// beside the page rather than a panel on it. Whether the panel overlays is
+    /// a fact `65-responsive.css` holds and Rust does not, so the listener
+    /// reads it back off the element — and an Escape that skipped that would
+    /// be a key that shuts the navigation on a window where nothing is covered.
+    #[test]
+    fn escape_reaches_the_sidebar_after_the_dialog_and_only_while_it_overlays() {
+        let js = super::DISMISS_KEY;
+        let dialog = js
+            .find(".modal-backdrop")
+            .expect("Escape no longer looks for a dialog at all");
+        let scrim = js.find(".nav-scrim").expect(
+            "Escape no longer reaches the overlaid sidebar, so below 628 the \
+             band toggle is again the only way out of a panel sitting on the \
+             reader's content — which is #215",
+        );
+        assert!(
+            dialog < scrim,
+            "Escape reaches for the sidebar before it looks for a dialog, so a \
+             confirm opened with the panel over it takes two presses and the \
+             first one moves the wrong thing"
+        );
+        assert!(
+            js.contains("getComputedStyle(scrim).visibility === 'hidden'"),
+            "Escape presses the scrim without asking the sheet whether the \
+             panel is an overlay. The element is rendered at every width, so \
+             this shuts the sidebar at 1440 too — where it is a column and \
+             nothing at all is covered"
+        );
+        assert!(
+            js.contains("scrim.click();"),
+            "Escape no longer PRESSES the scrim. The reason this listener sends \
+             nothing back to Rust is that it works the controls already on \
+             screen; a second route into `nav_open` is the registry of open \
+             panels this shell deliberately does not have"
         );
     }
 

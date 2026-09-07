@@ -1231,42 +1231,38 @@ for (const [desktop, found] of Object.entries(REFERENCE)) {
 // an issue against it; the OCCLUDED walk below is what the check asks and #226
 // is why it asks it that way.
 //
-//   aside.navpane  #215 and #212. The desktop sidebar is an overlay below 628
-//                  with neither a scrim nor a dismissal — so it is not a panel
-//                  you open and close, it is 268px over the content column
-//                  until the reader shuts it again. 25 of these 28 pairs are
-//                  that one panel, and they fire at 480 and 627 and at no
-//                  other window size, which is exactly the tier the sheet
-//                  makes it an overlay in.
+//   aside.navpane  GONE, all 25 of them, and this is what the entry it
+//                  replaces was for. The desktop sidebar is an overlay below
+//                  628 — 268 + 360 is exactly 628, so under that width the
+//                  two columns cannot both fit at any setting and the panel
+//                  HAS to overlay. What it never had was the other half of
+//                  being an overlay: a scrim, a click-away, an Escape. So it
+//                  was not a panel you opened and closed, it was 268px over
+//                  the content column until you hunted the toggle down again,
+//                  and 25 pairs on this list were that one fact.
 //
-//                  FOUR OF THEM HAVE COME OFF, and `button.fab >>
-//                  button.drawer-item` with them, which is what a ledger that
-//                  may only shrink is for. #215's fork was decided in favour
-//                  of (B): in 704..971, where two of the three columns fit,
-//                  the sidebar keeps its column and the INSPECTOR yields —
-//                  `assets/desktop/90-inspector.css` hides the inspector's
-//                  toggle and its keycap while the nav is open there rather
-//                  than making the sidebar a second overlay, which is what
-//                  `65-responsive.css` used to do. Measured over the whole
-//                  grid: `button.btn.danger-outline`, `button.home-tile.live`,
-//                  `button.icon-btn` and `button.row-action` fired at 704
-//                  ALONE and stopped producing, and every remaining entry lost
-//                  its 704 and 971 cells while keeping its 480 and 627 ones.
+//                  `src/shell/desktop/mod.rs` renders `.nav-scrim` now and
+//                  `65-responsive.css` reveals it with the panel, which is
+//                  what makes the occlusion legitimate rather than a defect:
+//                  the walk below exempts a layer with something full-screen
+//                  between it and what it covers, and that predicate is why
+//                  the element is a full-bleed sibling at `--z-modal - 1`
+//                  rather than a shadow on the panel. Measured after the
+//                  capture that photographed it: all 25 stopped being
+//                  produced, in both themes, at every window size — the run
+//                  named them back as stale entries, which is the reverse half
+//                  of this check doing the deleting rather than a person.
 //
-//                  AND THAT IS WHY #215 IS STILL OPEN. This paragraph used to
-//                  say all 29 pairs died together and called it the test of
-//                  the fix; the measurement says otherwise and the ledger is
-//                  the thing that caught it. Below 628 there is no arbitration
-//                  to make — 268 + 360 is 628 — so the sidebar cannot be a
-//                  column there whatever is decided about the band above it.
-//                  Measured on the branch that tried: let it be one at 480 and
-//                  `node docs/audit.js light` reports 8 finding-blocks at
-//                  480x560, `div.home-starter-grid` leaving its box by 120px
-//                  and `span.recent-quote` clipped three times, because
-//                  480 - 268 is 212px of content against the measure system's
-//                  own 360 floor. What clears the remaining 25 is a dismissal
-//                  — scrim, click-away, Escape — and that is a class literal
-//                  in src/shell/desktop/mod.rs, so it waits on a capture.
+//                  It took two goes and the ledger caught the first. The
+//                  paragraph here used to say all 29 pairs would die with
+//                  #215's fork, and when (B) shipped — in 704..971 the sidebar
+//                  keeps its column and the INSPECTOR yields — only FIVE did:
+//                  `button.btn.danger-outline`, `button.home-tile.live`,
+//                  `button.icon-btn`, `button.row-action` and `button.fab >>
+//                  button.drawer-item`, every one of them firing at 704 alone.
+//                  The other 25 kept their 480 and 627 cells, because that
+//                  band was never an arbitration. Two facts, two fixes; the
+//                  list is what stopped them being told as one.
 //   button.fab     On the PHONE, where there is no sidebar, a floating button
 //                  covers the bottom of the list it floats on: `chats` at
 //                  402x874 with a long title, the fab at 264,806 121x48 over
@@ -1295,31 +1291,6 @@ for (const [desktop, found] of Object.entries(REFERENCE)) {
 // produced it — `assets/desktop/80-measure.css` had answered the same question
 // for that shell since #209, and it is unchanged.
 const OCCLUSION_KNOWN = [
-  'aside.navpane >> button.action-chip',
-  'aside.navpane >> button.home-chip.picker',
-  'aside.navpane >> button.home-tile',
-  'aside.navpane >> button.home-tile.urgent',
-  'aside.navpane >> button.btn.primary',
-  'aside.navpane >> button.btn.secondary',
-  'aside.navpane >> button.btn.small.primary',
-  'aside.navpane >> button.composer-chip.action.attach',
-  'aside.navpane >> button.composer-chip.action.branch',
-  'aside.navpane >> button.composer-chip.action.mode',
-  'aside.navpane >> button.composer-chip.action.model',
-  'aside.navpane >> button.composer-chip.action.model.needed',
-  'aside.navpane >> button.composer-chip.action.repo',
-  'aside.navpane >> button.home-starter',
-  'aside.navpane >> button.icon-btn.back',
-  'aside.navpane >> button.recent',
-  'aside.navpane >> button.setting-row',
-  'aside.navpane >> button.tree',
-  'aside.navpane >> button.tree.awake',
-  'aside.navpane >> button.tree.waiting',
-  'aside.navpane >> input.field',
-  'aside.navpane >> summary',
-  'aside.navpane >> summary.diff-file-head',
-  'aside.navpane >> textarea.compose-field',
-  'aside.navpane >> textarea.input',
   'button.fab >> button.btn.secondary.grow',
   'div.toast >> button.icon-btn.back',
 ];
