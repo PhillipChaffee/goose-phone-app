@@ -84,6 +84,9 @@ pub(crate) struct Chat {
     pub(crate) diff: Vec<FileDiff>,
     /// What `/api/chats/:id/pulls` answers.
     pub(crate) pulls: Vec<Pull>,
+    /// The `stat` block spliced onto this chat's `/api/chats` entry, or
+    /// [`None`] for a branch the manager's compare could not measure.
+    pub(crate) stat: Option<Stat>,
 }
 
 #[derive(Clone)]
@@ -159,6 +162,43 @@ pub(crate) struct Pull {
     /// that is how the manager loses them — they ride one response, so they
     /// arrive together or not at all.
     pub(crate) counts: Option<PullCounts>,
+}
+
+/// One tree measured against its base — the manager's `compare_to_stat`, off
+/// one container-free `GET /repos/<slug>/compare/<base>...<branch>`.
+///
+/// A WHOLE struct rather than seven options, because that is how the manager
+/// builds it: `compare_to_stat` returns the dict with all seven keys or returns
+/// nothing at all. The absence is [`Chat::stat`]'s `None`, which is a fixture
+/// in its own right — see `waiting_chat`.
+///
+/// `commits` is not a field here for the same reason it is not one on the wire
+/// twice over: the manager sends `ahead_by` under both names, so [`wire::chat`]
+/// writes `ahead` into both and a fixture cannot make them disagree.
+///
+/// [`wire::chat`]: crate::wire::chat
+/// **No fixture below sets `truncated`, and that is a limit rather than an
+/// oversight.** GitHub's compare stops listing files at 300, so a truncated
+/// stat says `files: 300` — and every tree here states its size a second time,
+/// through its pull request's `changed_files` or through the file list
+/// `session/:id/diff` answers with. A fixture claiming the cap beside a pull
+/// request claiming five files would be teaching a shape one branch cannot
+/// make, which is the incoherence [`PullCounts`]'s own note warns against. The
+/// two trees whose pull states no size are `waiting_chat`, which is the absent
+/// case and needs to stay it, and `awake_chat`, whose task is a documentation
+/// pass. Reaching the flag honestly needs a fixture whose title is a sweep, and
+/// a title is on the captured board — so it belongs to the change that
+/// re-captures, not to this one.
+#[derive(Clone, Copy)]
+pub(crate) struct Stat {
+    pub(crate) ahead: u32,
+    pub(crate) behind: u32,
+    pub(crate) files: u32,
+    pub(crate) additions: u32,
+    pub(crate) deletions: u32,
+    /// The compare hit GitHub's 300-file cap, so `files`, `additions` and
+    /// `deletions` are lower bounds while `ahead` and `behind` stay exact.
+    pub(crate) truncated: bool,
 }
 
 /// The four numbers GitHub answers only on a pull request's **detail** form,
@@ -290,6 +330,19 @@ impl State {
                         changed_files: 3,
                     }),
                 )],
+                // `behind: 0` is the compare's own measured zero, and it is
+                // the half of the block that `deletions: 0` on the merged
+                // fixture below is for the counts: a branch that has not
+                // fallen behind has been measured and found level, which is a
+                // different answer from a branch nobody compared.
+                Some(Stat {
+                    ahead: 4,
+                    behind: 0,
+                    files: 3,
+                    additions: 77,
+                    deletions: 33,
+                    truncated: false,
+                }),
             ),
             asleep_chat(
                 t,
@@ -314,6 +367,19 @@ impl State {
                         changed_files: 5,
                     }),
                 )],
+                // The branch landed, and the compare still answers for it: a
+                // squash merge puts a new commit on the base, so the branch is
+                // one ahead and one behind at once. A tree whose work is done
+                // is not a tree that stopped being measurable, and a board that
+                // dropped its numbers on merge would say it changed nothing.
+                Some(Stat {
+                    ahead: 1,
+                    behind: 1,
+                    files: 5,
+                    additions: 84,
+                    deletions: 0,
+                    truncated: false,
+                }),
             ),
         ];
         // One container the manager swept and could not reach. The app has a
@@ -449,6 +515,19 @@ fn waiting_chat(t: f64) -> Chat {
         }],
         diff: vec![],
         pulls: vec![],
+        // **THE UNMEASURED TREE**, and the fixture set's only one. The manager
+        // measures a branch with `compare/<base>...<branch>`, which 404s until
+        // the branch has been pushed — and `allow_push` defaults to false, so
+        // pushing is a permission ask. This chat is parked on exactly that ask
+        // (`git push -u origin agent/…` above), so it is the honest absent
+        // case rather than a contrived one: nothing has been pushed, so there
+        // is nothing to compare, so there is no stat.
+        //
+        // Without it every tree on the board would carry numbers, `None` would
+        // be unreachable in every local run and every capture, and a renderer
+        // that printed `0 files changed` for "nobody measured" would pass all
+        // of them.
+        stat: None,
     }
 }
 
@@ -501,6 +580,21 @@ fn awake_chat(t: f64) -> Chat {
             title: "Document the code-agent ports".to_owned(),
             ..pull(126, "open", "pending", None, None)
         }],
+        // **THE TREE THAT IS MEASURED WHILE ITS PULL REQUEST IS NOT.** The two
+        // measurements are orthogonal and come off different GitHub calls: the
+        // counts above ride the pull's detail form, which the manager's
+        // `chat_pulls` could not fetch here, while this rides the compare on
+        // the sweep thread, which answered. A board that read its sizes off the
+        // pull request alone would draw nothing for this row and would look
+        // right doing it.
+        stat: Some(Stat {
+            ahead: 2,
+            behind: 5,
+            files: 1,
+            additions: 18,
+            deletions: 4,
+            truncated: false,
+        }),
     }
 }
 
@@ -575,6 +669,20 @@ fn reviewed_chat(t: f64) -> Chat {
                 changed_files: 2,
             }),
         }],
+        // Three statements of one branch's size, and they agree because they
+        // are one branch: the compare, the pull request's detail form and the
+        // file list above all measure `main...agent/goose-phone-app-7b13de`.
+        // `behind` is the one thing only the compare knows — a pull request
+        // does not carry how far its base has moved on underneath it — so this
+        // is the fixture that number is visible on.
+        stat: Some(Stat {
+            ahead: 3,
+            behind: 7,
+            files: 2,
+            additions: 23,
+            deletions: 2,
+            truncated: false,
+        }),
     }
 }
 
@@ -602,7 +710,18 @@ fn pull(
     }
 }
 
-fn asleep_chat(t: f64, repo: &str, title: &str, ago: f64, mut pulls: Vec<Pull>) -> Chat {
+/// A tree whose container is down. `stat` is separate from `pulls` because the
+/// two are separate GitHub calls on the manager's sweep and a tree can have
+/// either without the other — `awake_chat` is the fixture that has one and not
+/// the other, and this helper must not be able to hide that.
+fn asleep_chat(
+    t: f64,
+    repo: &str,
+    title: &str,
+    ago: f64,
+    mut pulls: Vec<Pull>,
+    stat: Option<Stat>,
+) -> Chat {
     let id = format!(
         "{repo}-{:x}",
         (ago as u64).wrapping_mul(2_654_435_761) & 0xff_ffff
@@ -631,6 +750,7 @@ fn asleep_chat(t: f64, repo: &str, title: &str, ago: f64, mut pulls: Vec<Pull>) 
         asks: vec![],
         diff: vec![],
         pulls,
+        stat,
     }
 }
 
@@ -750,5 +870,10 @@ pub(crate) fn new_chat(repo: &str, task: &str, base: &str, model: Option<&str>) 
         asks: Vec::new(),
         diff: Vec::new(),
         pulls: Vec::new(),
+        // A branch that exists only in a container the manager has just
+        // started has never been pushed, so the compare 404s and there is no
+        // stat. Anything else here would put a size on a row the moment it
+        // appears, which is the one thing the real manager cannot do.
+        stat: None,
     }
 }

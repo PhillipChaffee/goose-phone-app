@@ -542,6 +542,173 @@ async fn the_fleet_measures_some_pull_requests_and_admits_it_measured_others_not
     );
 }
 
+/// The tree's own size, over the real socket — and the fixture that has none.
+///
+/// The counts above ride a PULL REQUEST's detail form, so a branch nobody
+/// opened one for had no numbers at all. `stat` rides one container-free
+/// compare per tree instead, so every tree that has been pushed carries a size
+/// whether or not there is a pull request on it — which is what makes a board
+/// row possible for the trees that are just working.
+///
+/// **Absent has to survive the trip too.** `allow_push` defaults to false on
+/// the manager, so pushing is a permission ask and a branch that has never been
+/// pushed 404s the compare — the dominant steady state for a sleeping fleet.
+/// One fixture is exactly that tree, parked on the push ask itself. Without it
+/// `Option::None` is unreachable in every local run, and a renderer that drew
+/// `0 files changed` for "nobody measured" would pass here, pass locally and
+/// pass every capture.
+#[tokio::test]
+async fn the_fleet_measures_the_trees_it_can_reach_and_says_nothing_about_the_rest() {
+    let server = Server::start();
+    let client = server.client();
+    let chats = client.chats().await.expect("chats");
+
+    let unmeasured: Vec<&str> = chats
+        .iter()
+        .filter(|c| c.stat.is_none())
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(
+        unmeasured.len(),
+        1,
+        "exactly one fixture is the branch that was never pushed; without it \
+         \"not measured\" is unreachable against the whole local stack: \
+         {unmeasured:?}"
+    );
+
+    let mut measured = 0_usize;
+    let mut zero_behind = 0_usize;
+    for chat in chats.iter().filter_map(|c| c.stat.map(|s| (c, s))) {
+        let (chat, stat) = chat;
+        measured += 1;
+        zero_behind += usize::from(stat.behind == Some(0));
+        assert_eq!(
+            stat.commits, stat.ahead,
+            "the manager sends GitHub's `ahead_by` under both names, so a \
+             fixture may not make them disagree: {}",
+            chat.id
+        );
+        assert!(
+            stat.diffstat().is_some() && stat.files.is_some(),
+            "the block arrives whole or not at all, so a half-filled one is a \
+             shape the manager cannot make: {}",
+            chat.id
+        );
+    }
+    assert!(
+        measured >= 3,
+        "one measured tree cannot show a list what a size column looks like; \
+         found {measured}"
+    );
+    assert_eq!(
+        zero_behind, 1,
+        "a branch measured and found level with its base has to be in the \
+         fleet: `Some(0)` and `None` are different answers and only a fixture \
+         can prove the mock keeps them apart"
+    );
+
+    // The tree that is measured while its pull request is NOT. The two come
+    // off different GitHub calls, so a board reading its sizes off the pull
+    // request alone would draw nothing for this row and look right doing it.
+    let orthogonal = chats
+        .iter()
+        .find(|c| c.title.contains("code-agent ports"))
+        .expect("the mid-turn fixture");
+    assert!(
+        orthogonal.stat.is_some(),
+        "its branch was pushed: it has a pull"
+    );
+    assert_eq!(
+        client
+            .pulls(&orthogonal.id)
+            .await
+            .expect("pulls")
+            .first()
+            .and_then(opencode_client::PullRequest::diffstat),
+        None,
+        "and its pull request's detail call is the one that did not land"
+    );
+
+    // One branch, one size, however it is asked for: the compare and the pull
+    // request's detail form measure `main...agent/goose-phone-app-7b13de`, and
+    // so does the file list. A fixture whose three answers disagreed would look
+    // like a client bug in every screenshot it appeared in.
+    let reviewed = chats
+        .iter()
+        .find(|c| c.title.contains("search box"))
+        .expect("the fixture with a diff and a pull");
+    let stat = reviewed.stat.expect("a pushed branch is measured");
+    let pull = client
+        .pulls(&reviewed.id)
+        .await
+        .expect("pulls")
+        .into_iter()
+        .next()
+        .expect("one pull");
+    assert_eq!(stat.diffstat(), pull.diffstat());
+    assert_eq!(stat.files, pull.changed_files);
+    assert_eq!(stat.ahead, pull.commits);
+    assert!(
+        stat.behind.is_some_and(|b| b > 0),
+        "how far a branch has fallen behind is the one number ONLY the compare \
+         knows — a pull request does not carry it — so a fixture has to state it"
+    );
+}
+
+/// **One request for the whole board**, and the three answers its map makes.
+///
+/// The per-chat route stays and is the interactive one; this is the one a table
+/// polls, and the manager answers it from the cache its own sweep fills. The
+/// key's PRESENCE is what tells "asked, and none are open" apart from "not
+/// answered for" — a chat the manager could not reach is omitted rather than
+/// given an empty list, because an empty list means nothing is open.
+#[tokio::test]
+async fn the_whole_planes_pull_requests_arrive_in_one_request() {
+    let server = Server::start();
+    let client = server.client();
+    let chats = client.chats().await.expect("chats");
+    let by_chat = client.all_pulls().await.expect("the aggregate");
+
+    assert_eq!(
+        by_chat.len(),
+        chats.len(),
+        "every chat in the index is answered for, or the board loses a row's \
+         build to a route that was supposed to give it one"
+    );
+    let mut with_pulls = 0_usize;
+    let mut answered_empty = 0_usize;
+    for chat in &chats {
+        let rows = by_chat.get(&chat.id).expect("an entry per chat");
+        if rows.is_empty() {
+            answered_empty += 1;
+        } else {
+            with_pulls += 1;
+        }
+        // The aggregate and the per-chat route are two readings of one fact.
+        let alone = client.pulls(&chat.id).await.expect("pulls");
+        assert_eq!(
+            rows.iter().map(|p| p.number).collect::<Vec<_>>(),
+            alone.iter().map(|p| p.number).collect::<Vec<_>>(),
+            "the two routes disagree about {}, so one of them is wrong and \
+             nothing on screen could say which",
+            chat.id
+        );
+    }
+    assert!(
+        with_pulls >= 3,
+        "found {with_pulls} trees with a pull request"
+    );
+    assert!(
+        answered_empty >= 1,
+        "a tree the manager asked about and found nothing open on is the \
+         answer an empty list is FOR, and it has to exist here"
+    );
+    assert!(
+        !by_chat.contains_key("no-such-chat"),
+        "the map is keyed by chat id and carries no others"
+    );
+}
+
 /// The transcript, and the field that decides whose turn a message was.
 #[tokio::test]
 async fn a_transcript_comes_back_with_its_roles() {

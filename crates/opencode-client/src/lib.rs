@@ -125,20 +125,12 @@ pub struct BranchRef {
 
 /// One chat from the manager's metadata index.
 ///
-/// **What a board row wants and this does not have** (this repo's #82, filed
-/// upstream as `PhillipChaffee/personal-ai-setup#29`). No commit count, no
-/// ahead-count, no behind-count, no diffstat, no merge state. This struct is
-/// the whole of `Chat.to_wire` in `scripts/vps/code-agent-manager.py` minus
-/// the manager's own bookkeeping, and the manager keeps none of those either
-/// — it holds no clone; the working tree is inside the chat's container.
-///
-/// The absence is a server gap and not a decoding one, so nothing is added
-/// here speculatively. One `GET /repos/<slug>/compare/<base>...<branch>` on
-/// the manager's side answers all of them at once, container-free and within
-/// the documented PAT's `Contents: read`; the app's only diffstat today is
-/// `CodeClient::diff`, which is proxied to the container and therefore wakes
-/// it, so a list cannot be filled from it without starting every container on
-/// the board.
+/// Everything but [`Self::stat`] is `Chat.to_wire` in
+/// `scripts/vps/code-agent-manager.py` minus the manager's own bookkeeping.
+/// `stat` is not a `Chat` field at all — `route_list_chats` splices it on from
+/// the sweep thread's cache, deliberately, because `to_wire` is `asdict()` and
+/// `Index.save` persists every field, so a field there would rot into
+/// `index.json` and evaporate on the next save.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct ChatMeta {
     pub id: String,
@@ -163,12 +155,112 @@ pub struct ChatMeta {
     pub model: Option<String>,
     #[serde(default)]
     pub last_active: f64,
+    /// How far this tree has moved from its base, or [`None`] when the manager
+    /// has nothing to say about it. See [`ChatStat`]: absent is a fourth
+    /// answer, not a small one.
+    #[serde(default)]
+    pub stat: Option<ChatStat>,
 }
 
 impl ChatMeta {
     #[must_use]
     pub fn is_running(&self) -> bool {
         self.status == "running"
+    }
+}
+
+/// How far one chat's branch has moved from the ref it was cut from — the
+/// `stat` block on each `GET /api/chats` entry.
+///
+/// The manager measures it with **one container-free**
+/// `GET /repos/<slug>/compare/<base>...<branch>` per tree on its own sweep
+/// thread (`compare_to_stat`, `PhillipChaffee/personal-ai-setup#29`), so a
+/// board can carry a size for a tree whose container is asleep. That is the
+/// property [`CodeClient::diff`] cannot have: the diff is proxied to the
+/// container and therefore wakes it, so a list could never have been filled
+/// from it without starting every container on the board.
+///
+/// **The whole block is absent when the compare returned nothing usable**, and
+/// that is a fourth answer rather than a small one. `allow_push` defaults to
+/// false on the manager, so pushing is a permission ask and "never pushed" is
+/// the DOMINANT steady state for a sleeping tree — its compare 404s and it has
+/// no stat. GitHub also answers a renamed repo with a 301 whose body is a JSON
+/// object, and read leniently that body would arrive on a screen as "this
+/// branch changed nothing". Only `status: identical` produces a real all-zero
+/// stat, and that one IS a measurement.
+///
+/// Every count is therefore [`Option`] rather than `#[serde(default)]` `u32`,
+/// which is [`PullRequest`]'s rule for [`PullRequest`]'s reason: a `0` this
+/// client invented is a claim about the branch, "nobody measured" is a
+/// different thing entirely, and a client has no way to disbelieve a number it
+/// was sent. **"Not fetched" is not "no changes".** A stat that arrives at all
+/// carries all seven keys — `compare_to_stat` builds the dict whole or returns
+/// nothing — so the per-field `Option` is for a manager this app has not met
+/// rather than for the one it has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
+pub struct ChatStat {
+    /// Commits on this branch that its base does not have.
+    pub ahead: Option<u32>,
+    /// Commits on the base that this branch does not have — how far it has
+    /// fallen behind while it slept.
+    pub behind: Option<u32>,
+    /// The same number as [`Self::ahead`], by construction: the manager sends
+    /// GitHub's `ahead_by` here and not `total_commits`, because the two agree
+    /// below GitHub's 10,000-commit cap and only `ahead_by` stays exact above
+    /// it — `total_commits` would be a row contradicting its own ahead count.
+    /// Decoded rather than derived from `ahead` so that the day the manager
+    /// stops making them equal, a reader of this type can see it.
+    pub commits: Option<u32>,
+    /// Files the compare listed. A LOWER BOUND when [`Self::truncated`].
+    pub files: Option<u32>,
+    /// Lines added across the whole branch, against its base. A lower bound
+    /// when [`Self::truncated`], because the manager sums it over the file
+    /// list — compare carries no top-level total.
+    pub additions: Option<u32>,
+    /// Lines removed. A real `0` is a measurement and arrives as `Some(0)`;
+    /// absent is [`None`] and means nobody measured.
+    pub deletions: Option<u32>,
+    /// GitHub stops listing files at 300, so past the cap [`Self::files`],
+    /// [`Self::additions`] and [`Self::deletions`] are lower bounds while
+    /// [`Self::ahead`], [`Self::behind`] and [`Self::commits`] stay exact.
+    ///
+    /// A plain `bool` and not an [`Option`]: it is a flag ON a measurement that
+    /// arrived, written into the same dict as the counts, so there is no wire
+    /// on which a count is present and this is missing.
+    pub truncated: bool,
+}
+
+impl ChatStat {
+    /// `(additions, deletions)`, and only when **both** arrived — the pair one
+    /// tree's own row draws.
+    ///
+    /// [`PullRequest::diffstat`]'s rule for its reason: a `+65` with nothing
+    /// beside it reads as `−0`, which is a claim about the other half that
+    /// nothing made.
+    #[must_use]
+    pub const fn diffstat(&self) -> Option<(u32, u32)> {
+        match (self.additions, self.deletions) {
+            (Some(plus), Some(minus)) => Some((plus, minus)),
+            _ => None,
+        }
+    }
+
+    /// The same pair, and only when it is a WHOLE measurement — the pair a
+    /// **total** over several trees may add.
+    ///
+    /// [`Self::truncated`] makes both sums lower bounds. One tree's own row may
+    /// still draw them, because the reader can see which tree they belong to
+    /// and the row can say it stopped counting; a total may not, because a sum
+    /// of four trees where one is a lower bound is a number with no name, and
+    /// it is *plausible*, which is worse than absent.
+    #[must_use]
+    pub const fn total_diffstat(&self) -> Option<(u32, u32)> {
+        if self.truncated {
+            None
+        } else {
+            self.diffstat()
+        }
     }
 }
 
@@ -311,9 +403,10 @@ pub struct PullRequest {
     pub updated_at: String,
     /// Commits in the pull request — which is also how far the branch is
     /// **ahead** of its base, since that is what a pull request is a request
-    /// to land. A branch with no pull request has neither number here; only
-    /// `compare/<base>...<branch>` answers that one
-    /// (`PhillipChaffee/personal-ai-setup#29`).
+    /// to land. A branch with no pull request has no number here, and that is
+    /// what [`ChatStat`] now answers instead: it measures the branch itself,
+    /// so every tree has a size whether or not anybody opened a pull request
+    /// for it.
     pub commits: Option<u32>,
     /// Lines added across the whole pull request, against its base.
     pub additions: Option<u32>,
@@ -391,18 +484,43 @@ pub struct MergeOutcome {
     pub pull: Option<PullRequest>,
 }
 
-/// Decode `{"pulls": [...]}`, entry by entry.
+/// Decode one array of pull requests, entry by entry.
 ///
 /// An entry this client cannot make sense of is dropped on its own rather
 /// than collapsing the answer to "no pull requests" — and it would be
 /// unrenderable anyway, having neither a number nor a URL.
-fn parse_pulls(body: &Value) -> Vec<PullRequest> {
-    body.get("pulls")
-        .and_then(Value::as_array)
+fn parse_pull_list(items: &Value) -> Vec<PullRequest> {
+    items
+        .as_array()
         .map(|items| {
             items
                 .iter()
                 .filter_map(|item| serde_json::from_value(item.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Decode `{"pulls": [...]}` — one chat's own list.
+fn parse_pulls(body: &Value) -> Vec<PullRequest> {
+    body.get("pulls").map(parse_pull_list).unwrap_or_default()
+}
+
+/// Decode `{"pulls": {chat id: [...]}}` — the whole plane's, chat by chat.
+///
+/// The same leniency [`parse_pulls`] takes, and here it is safe for a second
+/// reason: the caller MERGES this map into what it already holds rather than
+/// replacing it, so a body this client cannot read costs the board nothing it
+/// already had. That is the difference from
+/// [`CodeClient::decode_permission_report`], which is read as authority over
+/// what is *not* pending and so must refuse a shape it does not recognise.
+fn parse_pulls_by_chat(body: &Value) -> std::collections::HashMap<String, Vec<PullRequest>> {
+    body.get("pulls")
+        .and_then(Value::as_object)
+        .map(|chats| {
+            chats
+                .iter()
+                .map(|(id, list)| (id.clone(), parse_pull_list(list)))
                 .collect()
         })
         .unwrap_or_default()
@@ -1325,6 +1443,45 @@ impl CodeClient {
         )
         .await?;
         Ok(parse_pulls(&body))
+    }
+
+    /// **Every** chat's pull requests in one request (`GET /api/pulls`), keyed
+    /// by chat id.
+    ///
+    /// The manager answers this one out of the cache its own sweep thread
+    /// fills, so it costs a dict read and spends **no GitHub call at any
+    /// rate** — which is what makes it the route a whole board may poll, and
+    /// what retires the app's per-chat fan-out over the route above.
+    /// [`Self::pulls`] itself stays and is unchanged: that is the interactive
+    /// request, made because a reader just opened one chat, and it may spend
+    /// GitHub calls for exactly that reason.
+    ///
+    /// **A chat with no entry in the map was not answered for.** The manager
+    /// names it in `unreachable` (asked, would not say — retryable) or in
+    /// `no_remote` (nothing to ask: a `_probe` chat, or a repo that left the
+    /// allowlist — settled, and not the same fact), and it is never given an
+    /// empty list, because an empty list means "nothing is open" and a failure
+    /// is not that. Neither list is decoded here, and that is a decision rather
+    /// than an omission: the caller merges this map into what it already has,
+    /// so a chat missing from it keeps its last answer — which is what
+    /// `unreachable` asks for — and one that never had an answer stays at "not
+    /// asked", which is what `no_remote` asks for.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::Http`] if the gateway is unreachable or the request
+    /// outruns the client timeout, and [`CodeError::Status`] on a non-2xx
+    /// answer — 401 for a wrong `password`, 404 from a manager predating the
+    /// route. A GitHub outage is **not** an error here: this serves a cache and
+    /// the failure is per chat, already on the wire, and already handled by the
+    /// paragraph above. A 2xx body that is not the contracted shape yields an
+    /// empty map rather than an error, for [`parse_pulls_by_chat`]'s reason.
+    pub async fn all_pulls(
+        &self,
+    ) -> Result<std::collections::HashMap<String, Vec<PullRequest>>, CodeError> {
+        let body =
+            Self::json_of(self.req(reqwest::Method::GET, "/api/pulls").send().await?).await?;
+        Ok(parse_pulls_by_chat(&body))
     }
 
     /// Merge one of this chat's pull requests
@@ -2466,6 +2623,152 @@ mod tests {
     fn a_body_without_a_pulls_array_is_no_pulls() {
         assert!(parse_pulls(&json!({"error": "unknown chat"})).is_empty());
         assert!(parse_pulls(&Value::Null).is_empty());
+    }
+
+    /// The plane's aggregate is a MAP, and its three answers are three
+    /// different claims: a list, an empty list, and no key at all.
+    ///
+    /// An empty list is the manager saying "nothing is open" and is a
+    /// measurement. A missing key is a chat it could not answer for — named in
+    /// `unreachable` or `no_remote` — and it must not become an empty list on
+    /// the way in, because the caller merges and an empty list would overwrite
+    /// a good answer with "no pull requests".
+    #[test]
+    fn the_plane_aggregate_keeps_an_empty_list_apart_from_an_absent_chat() {
+        let by_chat = parse_pulls_by_chat(&json!({
+            "pulls": {
+                "notes-1": [{"number": 13, "state": "open"}],
+                "notes-2": [],
+            },
+            "as_of": 1_756_000_000.0,
+            "unreachable": ["notes-3"],
+            "no_remote": ["_probe-1"],
+        }));
+        assert_eq!(by_chat.len(), 2);
+        assert_eq!(by_chat["notes-1"].len(), 1);
+        assert_eq!(by_chat["notes-1"][0].number, 13);
+        assert!(by_chat["notes-2"].is_empty(), "asked, and none are open");
+        assert!(
+            !by_chat.contains_key("notes-3"),
+            "a chat GitHub would not answer for must not arrive as an empty \
+             list, which reads as \"this branch has no pull request\""
+        );
+        assert!(!by_chat.contains_key("_probe-1"));
+    }
+
+    /// One chat's bad entry loses that entry; one chat's bad list loses that
+    /// chat; a body with no map at all loses everything and costs the caller
+    /// nothing, because it merges.
+    #[test]
+    fn a_garbled_aggregate_degrades_one_key_at_a_time() {
+        let by_chat = parse_pulls_by_chat(&json!({"pulls": {
+            "notes-1": [{"number": "twelve"}, {"number": 13}],
+            "notes-2": "not a list",
+        }}));
+        assert_eq!(by_chat["notes-1"].len(), 1);
+        assert!(by_chat["notes-2"].is_empty());
+
+        assert!(parse_pulls_by_chat(&json!({"pulls": []})).is_empty());
+        assert!(parse_pulls_by_chat(&json!({"error": "no such route"})).is_empty());
+        assert!(parse_pulls_by_chat(&Value::Null).is_empty());
+    }
+
+    fn meta(stat: &Value) -> ChatMeta {
+        let mut raw = json!({"id": "notes-9f2c1a", "repo": "notes", "status": "stopped"});
+        if !stat.is_null() {
+            raw["stat"] = stat.clone();
+        }
+        serde_json::from_value(raw).unwrap()
+    }
+
+    /// The tree's own size, and the one distinction the decode exists for:
+    /// **an absent stat is not a measured zero.**
+    ///
+    /// A branch that was never pushed 404s the compare and arrives with no
+    /// `stat` at all, which is the dominant steady state for a sleeping fleet;
+    /// a branch identical to its base arrives with every count at `0`, which is
+    /// a measurement. A `#[serde(default)] u32` would make those one answer.
+    #[test]
+    fn a_tree_that_was_never_measured_is_not_a_tree_that_changed_nothing() {
+        let never_pushed = meta(&Value::Null);
+        assert_eq!(never_pushed.stat, None);
+
+        let identical = meta(&json!({
+            "ahead": 0, "behind": 0, "commits": 0, "files": 0,
+            "additions": 0, "deletions": 0, "truncated": false
+        }));
+        let identical = identical.stat.unwrap();
+        assert_eq!(identical.ahead, Some(0));
+        assert_eq!(identical.diffstat(), Some((0, 0)));
+        assert_eq!(
+            identical.total_diffstat(),
+            Some((0, 0)),
+            "`status: identical` is the one real all-zero compare, and it is a \
+             number a total may add"
+        );
+    }
+
+    /// Every field of the block the manager splices onto a chat.
+    #[test]
+    fn a_tree_stat_decodes_every_field_of_the_contract() {
+        let stat = meta(&json!({
+            "ahead": 3, "behind": 7, "commits": 3, "files": 2,
+            "additions": 23, "deletions": 2, "truncated": false
+        }))
+        .stat
+        .unwrap();
+        assert_eq!(stat.ahead, Some(3));
+        assert_eq!(stat.behind, Some(7));
+        assert_eq!(
+            stat.commits, stat.ahead,
+            "the manager sends `ahead_by` for both"
+        );
+        assert_eq!(stat.files, Some(2));
+        assert_eq!(stat.diffstat(), Some((23, 2)));
+        assert!(!stat.truncated);
+    }
+
+    /// Half a diffstat is no diffstat here either, and a manager that sent one
+    /// count without the other is the only wire that can produce it — which is
+    /// why the per-field `Option` exists rather than a whole-block one.
+    #[test]
+    fn half_a_tree_diffstat_is_no_diffstat() {
+        assert_eq!(
+            meta(&json!({"additions": 77})).stat.unwrap().diffstat(),
+            None
+        );
+        assert_eq!(
+            meta(&json!({"deletions": 33})).stat.unwrap().diffstat(),
+            None
+        );
+    }
+
+    /// **A truncated stat may be drawn and may not be totalled.**
+    ///
+    /// GitHub stops listing files at 300, so past the cap the three sums are
+    /// lower bounds while the three commit counts stay exact. One tree's row
+    /// can say so; a sum across trees cannot, because the reader would have no
+    /// way to tell a total of four trees from a lower bound on one of them.
+    #[test]
+    fn a_truncated_measurement_is_a_size_but_never_a_total() {
+        let cut = meta(&json!({
+            "ahead": 9, "behind": 1, "commits": 9, "files": 300,
+            "additions": 12_040, "deletions": 8_113, "truncated": true
+        }))
+        .stat
+        .unwrap();
+        assert!(cut.truncated);
+        assert_eq!(
+            cut.ahead,
+            Some(9),
+            "the commit counts stay exact past the cap"
+        );
+        assert_eq!(cut.diffstat(), Some((12_040, 8_113)));
+        assert_eq!(
+            cut.total_diffstat(),
+            None,
+            "a lower bound inside a sum is a number with no name"
+        );
     }
 
     /// The merge gate, case by case. Everything here is a state GitHub really

@@ -3038,6 +3038,7 @@ mod tests {
             status: "stopped".to_owned(),
             model: None,
             last_active: 0.0,
+            stat: None,
         }
     }
 

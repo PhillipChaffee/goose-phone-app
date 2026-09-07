@@ -68,7 +68,15 @@ fn chats() -> Value {
         {
             "id": CHAT, "repo": "notes", "title": "Tighten the quickstart",
             "branch": "agent/notes-9f2c1a", "base": "main", "status": "running",
-            "model": "opencode/deepseek-v4", "last_active": 1_756_000_000.0
+            "model": "opencode/deepseek-v4", "last_active": 1_756_000_000.0,
+            // Spliced on by the manager's route from its sweep cache, and only
+            // for a branch its compare could measure. The second row has no
+            // `stat` at all, which is what a branch that was never pushed
+            // looks like — the dominant steady state for a sleeping fleet.
+            "stat": {
+                "ahead": 3, "behind": 7, "commits": 3, "files": 2,
+                "additions": 23, "deletions": 2, "truncated": false
+            }
         },
         {"id": "scratch-1", "repo": "scratch", "status": "stopped"}
     ]})
@@ -481,6 +489,18 @@ async fn the_chat_index_decodes_with_its_status_and_model() {
     assert_eq!(
         stopped.base, "",
         "a chat made before the base picker existed names no base"
+    );
+
+    let stat = running.stat.expect("a pushed branch is measured");
+    assert_eq!(stat.ahead, Some(3));
+    assert_eq!(stat.behind, Some(7));
+    assert_eq!(stat.files, Some(2));
+    assert_eq!(stat.diffstat(), Some((23, 2)));
+    assert!(!stat.truncated);
+    assert_eq!(
+        stopped.stat, None,
+        "a branch that was never pushed 404s the compare, and `0` there would \
+         be the claim that it changed nothing"
     );
 }
 
@@ -976,6 +996,10 @@ async fn a_gateway_talking_nonsense_degrades_route_by_route() {
 
     assert!(client.repos().await.unwrap().is_empty());
     assert!(client.chats().await.unwrap().is_empty());
+    // An empty map and not an error, unlike the pending-ask aggregate beside
+    // it: the caller MERGES this one into what it already holds, so a body the
+    // client cannot read costs the board nothing it had.
+    assert!(client.all_pulls().await.unwrap().is_empty());
     assert!(client.sessions(CHAT).await.unwrap().is_empty());
     assert!(client.messages(CHAT, "ses_1").await.unwrap().is_empty());
     assert!(client.diff(CHAT, "ses_1").await.unwrap().is_empty());
@@ -1110,6 +1134,7 @@ async fn every_route_reports_an_unreachable_gateway_rather_than_an_empty_answer(
     dead!("stop_chat", client.stop_chat(CHAT));
     dead!("delete_chat", client.delete_chat(CHAT, false));
     dead!("pulls", client.pulls(CHAT));
+    dead!("all_pulls", client.all_pulls());
     dead!("merge_pull", client.merge_pull(CHAT, 12));
     dead!("default_model", client.default_model(CHAT));
     dead!("sessions", client.sessions(CHAT));

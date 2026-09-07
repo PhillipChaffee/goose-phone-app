@@ -18,8 +18,14 @@ use serde_json::{json, Value};
 use crate::state::{Ask, Chat, FileDiff, Message, Part, Pull, Repo, Session};
 
 /// `ChatMeta`. `last_active` and `created` are float SECONDS.
+///
+/// `stat` is **inserted, not defaulted**, the way [`pull`]'s four counts are
+/// and for a stronger reason: `route_list_chats` splices the block on only when
+/// the sweep has one, and an all-zero stat is the positive claim "this branch
+/// changed nothing" — which a compare 404 does not make. A mock that always
+/// sent the key would leave `Option::None` unreachable in every local run.
 pub(crate) fn chat(c: &Chat) -> Value {
-    json!({
+    let mut v = json!({
         "id": c.id,
         "repo": c.repo,
         "title": c.title,
@@ -34,7 +40,23 @@ pub(crate) fn chat(c: &Chat) -> Value {
         // reader that the subset is all there is.
         "port": 4310,
         "url": format!("/chat/{}", c.id),
-    })
+    });
+    if let Some(s) = c.stat {
+        v["stat"] = json!({
+            "ahead": s.ahead,
+            "behind": s.behind,
+            // `ahead` TWICE, not a field of its own. The manager sends
+            // GitHub's `ahead_by` under both names — `total_commits` would
+            // contradict the ahead count above 10,000 commits — so a fixture
+            // is not allowed to make them disagree.
+            "commits": s.ahead,
+            "files": s.files,
+            "additions": s.additions,
+            "deletions": s.deletions,
+            "truncated": s.truncated,
+        });
+    }
+    v
 }
 
 /// `RepoEntry`. `name` is the only required field; the rest are `serde(default)`

@@ -348,13 +348,17 @@ pub(crate) struct PullsState {
     pub error: Option<String>,
     /// The number whose merge is in flight.
     pub merging: Option<u64>,
-    /// chat id -> that chat's pull requests, for every chat
-    /// [`refresh_plane_pulls`] has reached. A chat that is absent has not been
-    /// asked about; a chat mapped to an empty list has, and has none. The two
-    /// must stay distinguishable for the same reason `loaded` exists.
+    /// chat id -> that chat's pull requests, for every chat the manager has
+    /// answered for. A chat that is absent has not been answered for — the
+    /// sweep has not run, or the manager named it `unreachable` or
+    /// `no_remote`; a chat mapped to an empty list has been asked about and
+    /// has none. The two must stay distinguishable for the same reason
+    /// `loaded` exists, which is why [`refresh_plane_pulls`] MERGES the
+    /// manager's map into this one rather than replacing it.
     pub by_chat: HashMap<String, Vec<PullRequest>>,
-    /// Unix seconds at which the last sweep started. The floor that keeps the
-    /// ten-second poll off GitHub's hourly budget — see [`SWEEP_FLOOR_SECS`].
+    /// Unix seconds at which the last sweep started — see
+    /// [`SWEEP_FLOOR_SECS`], which is no longer a rate limit and says what it
+    /// is instead.
     pub swept: u64,
 }
 
@@ -366,24 +370,27 @@ impl PullsState {
     /// `sort=created&direction=desc`. A branch with two pull requests is a
     /// branch someone reopened, and the row is about what is happening now.
     ///
-    /// **This is where a row's numbers come from, so this is where their three
-    /// limits are written down.** Everything a row can say about size —
-    /// `PullRequest::diffstat`, `commits`, `changed_files` — is read off what
-    /// this returns, and inherits all three from [`refresh_plane_pulls`]:
+    /// **This is where a row's BUILD comes from, and it is no longer where its
+    /// size comes from.** `state`, `draft`, `checks` and `mergeable` are facts
+    /// about a pull request and have nowhere else to live. A tree's size now
+    /// arrives on the tree itself, as `ChatMeta::stat` — one container-free
+    /// compare per tree on the manager's sweep — so a branch with no pull
+    /// request has a size and this is not the thing to ask for it.
     ///
-    /// 1. **A tree with no open pull request has no numbers at all.** Not
-    ///    zero: nothing. The manager measures a branch by reading its pull
-    ///    request, so a branch that has not opened one was never measured.
-    ///    `compare/<base>...<branch>` is the answer and it is upstream's
-    ///    `PhillipChaffee/personal-ai-setup#29`, not this client's.
-    /// 2. **Rows past the [`SWEEP_MAX_CHATS`]th are never swept**, so they
-    ///    answer `None` here however many pull requests they have.
-    /// 3. **A number can be up to [`SWEEP_FLOOR_SECS`] old** — the same
-    ///    freshness the build state beside it already ships with (#84), for
-    ///    the same rate-limit reason.
+    /// Two limits are left, and both belong to [`refresh_plane_pulls`]:
     ///
-    /// All three are properties to design around rather than around: the row
-    /// draws nothing for what it was not sent.
+    /// 1. **A tree the manager could not answer for has no pull request
+    ///    here.** Not "none": nothing. The sweep may not have run yet, or the
+    ///    manager named the chat `unreachable` (GitHub would not say) or
+    ///    `no_remote` (there is nothing to ask). All three arrive as an absent
+    ///    key, and an absent key is not an empty list.
+    /// 2. **A pull request can be up to one manager sweep plus
+    ///    [`SWEEP_FLOOR_SECS`] old.** The manager answers this out of a cache
+    ///    its own thread rebuilds on ITS interval, so most of that staleness is
+    ///    now upstream and no floor here can take it back.
+    ///
+    /// Both are properties to design around rather than around: the row draws
+    /// nothing for what it was not sent.
     pub(crate) fn plane_pull(&self, chat_id: &str) -> Option<&PullRequest> {
         self.by_chat.get(chat_id)?.first()
     }
@@ -402,11 +409,17 @@ impl PullsState {
     /// A group of one measured tree is a real total and answers, because that
     /// sum is a number the server did send.
     ///
-    /// Today this is `None` for any group holding a tree with no pull request
-    /// — which is most of them — and it becomes generally answerable when
-    /// `PhillipChaffee/personal-ai-setup#29` lands and every branch can be
-    /// measured whether or not it has a pull request. Nothing else has to
-    /// change here when it does.
+    /// **It still reads the pull request, and that is now the thing to change
+    /// about it.** `PhillipChaffee/personal-ai-setup#29` has landed, so every
+    /// tree carries `ChatMeta::stat` whether or not anybody opened a pull
+    /// request for it, and totalling those instead is what makes a group figure
+    /// answerable for most groups rather than for almost none. The refusal does
+    /// **not** go with it: one unmeasured tree in the group still means there
+    /// is no total, and `ChatStat::truncated` is a second reason a number is
+    /// not one — which is why `ChatStat` offers `total_diffstat` beside
+    /// `diffstat` rather than leaving the caller to remember. That switch is
+    /// the render's (#81, #82); this is the note that it is not a no-op, which
+    /// is what the sentence standing here used to say.
     ///
     /// The repo header IS built now — `shell::desktop::home`'s `code_board`
     /// fills `RepoGroup::num` from this, once per group — so the unconditional
@@ -2071,30 +2084,36 @@ pub(crate) fn refresh_pulls(ctx: &AppCtx) {
 
 /// How long a plane-wide sweep's answer stands before another is allowed.
 ///
-/// Five minutes, and the number is a rate limit rather than a taste. See
-/// [`refresh_plane_pulls`] for the arithmetic; the short version is that this
-/// sweep on the ten-second poll would spend seven times GitHub's whole hourly
-/// budget, and at this floor it spends between 5% and 23% of it. A build that
-/// turns red is on the rows within five minutes, which is inside the time the
-/// build itself takes.
-const SWEEP_FLOOR_SECS: u64 = 300;
-
-/// How many chats one sweep will ask about, most recently active first.
+/// **It used to be GitHub's rate limit and it is not one any more.** The sweep
+/// was 96 GitHub calls at 24 chats, so 300s was sized against a 5,000/hour PAT
+/// budget; it is now one request to `/api/pulls`, which the manager answers
+/// from its own cache for the cost of a dict read and **no GitHub call at any
+/// rate**. Sizing this against a budget it can no longer spend would be sizing
+/// it against a cost that does not exist.
 ///
-/// The manager sends the index newest-first and this app renders it in wire
-/// order, so the cap falls on the rows a reader has to scroll to reach. It is
-/// a ceiling on the worst case, not a target: it exists so that a fleet that
-/// grows to eighty trees cannot quietly turn a status dot into a
-/// rate-limit outage.
-const SWEEP_MAX_CHATS: usize = 24;
+/// What it is sized against instead is staleness, and there the arithmetic
+/// changed sign. The manager rebuilds that cache on ITS own interval
+/// (`GITHUB_INTERVAL`, 300s), so the age of a number on screen is that
+/// interval **plus** this floor, and the two are unaligned — a 300s floor here
+/// would make the worst case ten minutes for a build the old code put on the
+/// rows in five. So this drops to a minute: worst case 360s, of which the app
+/// contributes 60 — a sixth — and the aggregate still rides one poll tick in
+/// six rather than all of them.
+///
+/// Not zero, which is the other thing it still buys. The tick is ten seconds
+/// and the answer provably cannot change that fast, so riding the poll would be
+/// 360 requests an hour where 60 buy the same screen: 300 of them returning
+/// bytes the app already has, over a phone radio, to a service reached across a
+/// tailnet.
+const SWEEP_FLOOR_SECS: u64 = 60;
 
 /// Whether a sweep is allowed to start, given when the last one did.
 ///
 /// A function of its own for [`poll_tick`]'s reason: this is the whole of the
-/// rate limit, and it is worth being able to say in a test that a sweep two
-/// seconds after a sweep does not happen while one six minutes after one
-/// does. `swept == 0` is "never swept", which is always due — the first list
-/// to arrive should carry its build states, not wait five minutes for them.
+/// floor, and it is worth being able to say in a test that a sweep two seconds
+/// after a sweep does not happen while one two minutes after one does.
+/// `swept == 0` is "never swept", which is always due — the first list to
+/// arrive should carry its build states, not wait out a floor for them.
 ///
 /// `saturating_sub` is not decoration: `now_secs` reads the wall clock, and a
 /// clock that steps backwards (a phone crossing a time-zone-less NTP
@@ -2104,110 +2123,81 @@ const fn sweep_due(swept: u64, now: u64) -> bool {
     swept == 0 || now.saturating_sub(swept) >= SWEEP_FLOOR_SECS
 }
 
-/// Which chats one sweep asks about, or `None` for "not this time".
+/// The whole of the sweep's decision, out where a test can reach it. What is
+/// left inside [`refresh_plane_pulls`] is the request, which needs a socket.
 ///
-/// The whole of the sweep's decision, out where a test can reach it: the
-/// floor, the cap, and the empty list. What is left inside
-/// [`refresh_plane_pulls`] is the request loop, which needs a socket.
-///
-/// The cap falls on the END of the list because the manager sends the index
-/// newest-first and this app renders it in wire order, so the rows it drops
-/// are the ones a reader has to scroll to reach.
-fn sweep_targets(chats: &[ChatMeta], swept: u64, now: u64) -> Option<Vec<String>> {
-    if !sweep_due(swept, now) {
-        return None;
-    }
-    let ids: Vec<String> = chats
-        .iter()
-        .take(SWEEP_MAX_CHATS)
-        .map(|c| c.id.clone())
-        .collect();
-    // Not `Some(vec![])`: an empty list would still claim `swept` and put the
-    // first real list five minutes behind the connection that produced it.
-    (!ids.is_empty()).then_some(ids)
+/// A COUNT rather than the list, because the sweep no longer picks rows out of
+/// it: one request answers for every chat there is, which is what took the cap
+/// out. The count still decides, for one case — see below.
+const fn sweep_wanted(chats: usize, swept: u64, now: u64) -> bool {
+    // An empty fleet would claim `swept` for nothing and put the first real
+    // list a floor behind the connection that produced it.
+    chats > 0 && sweep_due(swept, now)
 }
 
-/// Fill in every row's build state: one `/api/chats/<id>/pulls` per chat,
-/// floored to one sweep per [`SWEEP_FLOOR_SECS`] and capped at
-/// [`SWEEP_MAX_CHATS`] chats.
+/// Fill in every row's build state: **one** `GET /api/pulls`, floored to one
+/// sweep per [`SWEEP_FLOOR_SECS`].
 ///
-/// **Why a fan-out is allowed here and is not allowed for the diff.** This
-/// route is the manager talking to GitHub with its own credential
-/// (`chat_pulls`, personal-ai-setup `scripts/vps/code-agent-manager.py`); it
-/// is never proxied to a container, so a sweep wakes nothing and keeps
-/// nothing awake. The per-session diff is the opposite — `/chat/<id>/…` goes
-/// through the transparent proxy — which is why issue #81's numbers are not
-/// fetched this way and are absent instead.
+/// **Why this is a manager route and the diff is not.** These are GitHub calls
+/// the manager makes with its own credential (`github_pass`, personal-ai-setup
+/// `scripts/vps/code-agent-manager.py`), never proxied to a container, so a
+/// sweep wakes nothing and keeps nothing awake. The per-session diff is the
+/// opposite — `/chat/<id>/…` goes through the transparent proxy — which is why
+/// a board's sizes cannot be filled from it and arrive on `ChatMeta::stat`
+/// instead.
 ///
-/// **The cost, measured rather than asserted.** The manager spends `1 + 3P`
-/// GitHub calls per chat: one list call, then per pull request on the branch
-/// one detail call (the list form carries no `mergeable` — confirmed against
-/// the real API, `GET /repos/…/pulls?per_page=1` answers without it) and two
-/// in `summarise_checks` (check runs, then combined status). A fine-grained
-/// PAT gets 5,000 REST requests an hour.
+/// **What one route replaced.** The sweep used to be `/api/chats/<id>/pulls`
+/// once per chat, and the manager spends `1 + 3P` GitHub calls answering each
+/// one: a list call, then per pull request a detail call (the list form carries
+/// no `mergeable`) and two in `summarise_checks`. At 24 chats with one pull
+/// each that was 96 calls a sweep, 1,152 an hour, 23% of a fine-grained PAT's
+/// 5,000 — which is what forced both a five-minute floor and a 24-chat cap, and
+/// **the cap meant a fleet's 25th row and everything below it had never carried
+/// a build at all.** The manager now makes those calls on its own thread and
+/// serves the answer from a cache, so this is one request that spends none of
+/// that budget, the cap is gone with the reason for it, and the floor is left
+/// doing a different and much smaller job.
 ///
-/// | policy | calls/sweep | calls/hour | share of 5,000 |
-/// |---|---|---|---|
-/// | 24 chats, 1 pull each, every 10s poll | 96 | 34,560 | 691% |
-/// | 24 chats, 1 pull each, this floor | 96 | 1,152 | 23% |
-/// | 10 chats, 4 with a pull, this floor | 22 | 264 | 5.3% |
-///
-/// The first row is why the sweep does not ride the poll, and 23% for a
-/// status dot is still more than it is worth. **The fix is one aggregate
-/// route on the manager**, the shape `/api/permissions` already has, which
-/// would make the whole table one call — filed upstream as
-/// `PhillipChaffee/personal-ai-setup#29` and linked from #84.
+/// **A chat missing from the map keeps what it had.** That is the merge below,
+/// and it is the same rule the fan-out kept by only writing on success: the
+/// manager omits a chat it could not answer for rather than sending it an empty
+/// list, an empty list means "nothing is open", and the two must not collapse.
 pub(crate) fn refresh_plane_pulls(ctx: &AppCtx) {
     let mut pulls = ctx.code_pulls;
     let Some(client) = ctx.code_client.peek().clone() else {
         return;
     };
     let now = now_secs();
-    let ids = {
+    {
         let mut p = pulls.write();
-        let Some(ids) = sweep_targets(&ctx.code_chats.peek(), p.swept, now) else {
+        if !sweep_wanted(ctx.code_chats.peek().len(), p.swept, now) {
             return;
-        };
+        }
         // `swept` is claimed here rather than when the sweep finishes, so the
-        // poll tick that lands while a slow sweep is still walking the list
-        // does not start a second one behind it.
+        // poll tick that lands while a slow sweep is still in flight does not
+        // start a second one behind it.
         p.swept = now;
-        ids
-    };
+    }
     let ctx = *ctx;
     spawn_forever(async move {
-        for id in &ids {
-            // Sequential, not joined: a burst of twenty-four TLS requests at
-            // once is twenty-four threads on the manager's
-            // `ThreadingHTTPServer`, each holding a 20-second GitHub timeout.
-            // Nothing on screen is waiting for the last row.
-            if ctx.code_client.peek().is_none() {
-                return;
-            }
-            if let Ok(list) = client.pulls(id).await {
-                // Only a success writes. A chat GitHub could not answer for
-                // keeps the answer it had, because a row that drops its build
-                // state on one flaky request reads as "this branch has no
-                // pull request", which is a different claim.
-                ctx.code_pulls
-                    .clone()
-                    .write()
-                    .by_chat
-                    .insert(id.clone(), list);
-            }
+        let Ok(by_chat) = client.all_pulls().await else {
+            // A failed sweep writes nothing, so every row keeps the build it
+            // had. A board that blanked itself on one flaky request would be
+            // saying that every branch on it has no pull request.
+            return;
+        };
+        if ctx.code_client.peek().is_none() {
+            return;
         }
         // A deleted chat's answer would otherwise sit in the map for the life
-        // of the process, and its id can be reused. Kept against the WHOLE
-        // index and not against `ids`: a chat past the cap was never asked
-        // about, which is not the same as one that is gone, and dropping it
-        // would also throw away the open chat's own answer whenever it sits
-        // below row twenty-four.
+        // of the process, and its id can be reused. Applied to the merged map
+        // so that a chat the manager has and this app has not listed yet does
+        // not accumulate either.
         let live: HashSet<String> = ctx.code_chats.peek().iter().map(|c| c.id.clone()).collect();
-        ctx.code_pulls
-            .clone()
-            .write()
-            .by_chat
-            .retain(|id, _| live.contains(id));
+        let mut slot = ctx.code_pulls;
+        let mut p = slot.write();
+        p.by_chat.extend(by_chat);
+        p.by_chat.retain(|id, _| live.contains(id));
     });
 }
 
@@ -2540,9 +2530,9 @@ pub(crate) fn status_label(
 mod tests {
     use super::{
         checks_label, fold_part_into, merge_permission_report, mergeability_label, poll_tick,
-        pull_state_label, row_checks_label, row_pull_word, status_label, sweep_due, sweep_targets,
+        pull_state_label, row_checks_label, row_pull_word, status_label, sweep_due, sweep_wanted,
         ChatItem, ChatMeta, Checks, CodePermission, GapSink, HashMap, HashSet, PermissionReport,
-        PullRequest, PullState, PullsState, Tab, Tick, SWEEP_FLOOR_SECS, SWEEP_MAX_CHATS,
+        PullRequest, PullState, PullsState, Tab, Tick, SWEEP_FLOOR_SECS,
     };
     use opencode_client::{Part, PendingAsk};
 
@@ -2772,14 +2762,15 @@ mod tests {
             ..pull(PullState::Open, false, Some(true), Checks::Passing)
         };
 
-        // Past SWEEP_MAX_CHATS, or simply not reached yet.
+        // Not answered for: the sweep has not run, or the manager named this
+        // chat `unreachable` or `no_remote`.
         assert_eq!(
             state.plane_pull("unswept").and_then(PullRequest::diffstat),
             None
         );
 
-        // Swept, and the branch has no pull request to measure — the case
-        // `personal-ai-setup#29` exists for.
+        // Answered for, and the branch has no pull request to measure — the
+        // case `ChatMeta::stat` now covers, off the branch itself.
         state.by_chat.insert("no-pull".to_owned(), Vec::new());
         assert_eq!(
             state.plane_pull("no-pull").and_then(PullRequest::diffstat),
@@ -2862,7 +2853,7 @@ mod tests {
         assert_eq!(
             state.group_diffstat(["a", "never-swept"]),
             None,
-            "and so is a tree the sweep's cap dropped"
+            "and so is a tree the sweep was never answered for"
         );
         assert_eq!(
             state.group_diffstat(std::iter::empty()),
@@ -2885,9 +2876,10 @@ mod tests {
         assert_eq!(state.group_diffstat(["huge"]), Some((u32::MAX, 0)));
     }
 
-    /// The whole of the rate limit. A sweep two seconds after a sweep must not
-    /// happen — that is the ten-second poll multiplying the cost by thirty —
-    /// and the first list to arrive must not wait five minutes for its builds.
+    /// The whole of the floor. A sweep two seconds after a sweep must not
+    /// happen — that is the ten-second poll asking six times a minute for an
+    /// answer that cannot change that fast — and the first list to arrive must
+    /// not wait out a floor for its builds.
     #[test]
     fn a_sweep_waits_out_its_floor_and_survives_a_clock_that_steps_back() {
         assert!(sweep_due(0, 0), "never swept is always due");
@@ -2901,46 +2893,31 @@ mod tests {
         );
     }
 
-    /// The rest of the sweep's decision: the cap, and the empty list that must
-    /// not claim the floor.
+    /// The rest of the sweep's decision, and **the size of a fleet is no
+    /// longer part of it.**
     ///
-    /// The cap is the ceiling on the worst case in the cost table — 24 chats
-    /// is 96 GitHub calls a sweep — so a fleet that grows past it must lose
-    /// rows rather than lose the budget, and it must lose the ones furthest
-    /// down a newest-first list.
+    /// There used to be a cap of 24, because the sweep was 96 GitHub calls at
+    /// that size and a fleet of eighty would have turned a status dot into a
+    /// rate-limit outage. It fell on the END of a newest-first list, so a
+    /// fleet's 25th row and everything below it had never carried a build in
+    /// the life of the feature. One aggregate route took the cost out and the
+    /// cap with it; what is left is the floor and the empty fleet.
     #[test]
-    fn a_sweep_asks_about_the_newest_rows_and_never_more_than_the_cap() {
-        let fleet: Vec<ChatMeta> = (0..SWEEP_MAX_CHATS + 6)
-            .map(|n| ChatMeta {
-                id: format!("c{n}"),
-                repo: String::new(),
-                title: String::new(),
-                branch: String::new(),
-                base: String::new(),
-                status: "stopped".to_owned(),
-                model: None,
-                last_active: 0.0,
-            })
-            .collect();
-
-        let picked = sweep_targets(&fleet, 0, 1_000).unwrap_or_default();
-        assert!(!picked.is_empty(), "a first sweep is due");
-        assert_eq!(picked.len(), SWEEP_MAX_CHATS);
-        assert_eq!(picked.first().map(String::as_str), Some("c0"));
-        assert_eq!(
-            picked.last().map(String::as_str),
-            Some(format!("c{}", SWEEP_MAX_CHATS - 1).as_str()),
-            "the cap has to fall off the END of a newest-first list"
-        );
-
+    fn a_sweep_asks_about_every_row_however_many_there_are() {
         assert!(
-            sweep_targets(&fleet, 1_000, 1_002).is_none(),
+            sweep_wanted(80, 0, 1_000),
+            "eighty trees is one request now, and a fleet that big is exactly \
+             the one the old cap silently stopped answering for"
+        );
+        assert!(sweep_wanted(1, 0, 1_000), "a first sweep is due");
+        assert!(
+            !sweep_wanted(80, 1_000, 1_002),
             "inside the floor, nothing is asked"
         );
         assert!(
-            sweep_targets(&[], 0, 1_000).is_none(),
-            "an empty list must not claim the floor, or the first real list \
-             arrives five minutes before its builds do"
+            !sweep_wanted(0, 0, 1_000),
+            "an empty fleet must not claim the floor, or the first real list \
+             arrives a floor before its builds do"
         );
     }
 
@@ -3531,6 +3508,7 @@ mod tests {
             status: status.to_owned(),
             model: None,
             last_active: 0.0,
+            stat: None,
         }
     }
 
