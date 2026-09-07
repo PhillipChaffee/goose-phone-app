@@ -2639,7 +2639,8 @@ mod tests {
         );
     }
 
-    /// THE FILL IS THE CODE HALF'S, AND THE CHAT HALF WEARS AN OUTLINE — #57.
+    /// THE FILL IS THE CODE HALF'S, AND THE CHAT HALF WEARS AN AMBER TINT —
+    /// #57, then #292.
     ///
     /// The mockups are unanimous: 10-home-chat is the only Chat-plane file
     /// among them and the only one that emits `class="plane-badge chat"`, and
@@ -2647,6 +2648,22 @@ mod tests {
     /// The app painted the fill in both halves — byte-identical on
     /// `desktop-chats` and `desktop-code-list` — so the badge named the APP
     /// rather than the HALF, which is the one thing it is there to say.
+    ///
+    /// #292 gave the Chat half a colour of its own without giving it a second
+    /// saturated fill: a tint, an amber line and the warning ink. The values
+    /// and the two measurements behind them are in
+    /// `assets/desktop/50-band.css`; what is pinned here is that all four
+    /// declarations are present, that NO `border` is, and that the two dark
+    /// bodies say the same thing.
+    ///
+    /// NO BORDER IS AN ASSERTION AND NOT AN OMISSION. `box-sizing: border-box`
+    /// only caps a DECLARED length, and this chip declares `height`, so a 1px
+    /// border comes out of the 19px and leaves a 17px interior where the filled
+    /// chip has 19 — measured, that 1px is the whole of the "the code pill has
+    /// slightly more vertical padding" the badge was reported for, since the
+    /// padding, the height and the y are identical in both halves. The line is
+    /// an inset shadow for exactly that reason, and a border added back beside
+    /// it would restore the defect while the tint hid it.
     ///
     /// THE LAST TWO ASSERTIONS ARE THE POINT, and they are here because the
     /// declarations they name look deletable and are not. `chat` is also the
@@ -2656,9 +2673,8 @@ mod tests {
     /// Measured against the real sheet list with only the three face
     /// declarations in place: the chip laid out glyph-over-word, 49.58x19
     /// against the Code chip's 65.97x19, with 28px of content in a 19px box.
-    /// With the two guards: 67.58x19 against 65.97x19, one row, one gap — and
-    /// with the same word in both chips, 67.97 against 65.97, which is the
-    /// hairline and nothing else.
+    /// With the two guards: 65.58x19 against 65.97x19, one row, one gap, both
+    /// y 7.50..26.50 and both interiors 19px.
     ///
     /// IT FAILS IN BOTH DIRECTIONS, which is what stops the guards rotting
     /// into cargo cult. The last assertion asks `assets/shared.css` whether
@@ -2666,10 +2682,11 @@ mod tests {
     /// names the guards and says to delete them.
     ///
     /// REPRODUCED: drop either arm of the `class:` and the first assertion
-    /// fails; drop any of the four declarations from `.plane-badge.chat` and
-    /// the one that names it does.
+    /// fails; drop any of the four declarations from `.plane-badge.chat`, put
+    /// a `border` back, or change either dark body alone, and the one that
+    /// names it does.
     #[test]
-    fn the_chat_halfs_badge_is_outlined_where_the_code_halfs_is_filled() {
+    fn the_chat_halfs_badge_is_tinted_where_the_code_halfs_is_filled() {
         let band = chrome_band();
         let badge = block(&band, "class: if plane == Plane::Chat", "crumb_parts(");
         assert!(
@@ -2690,15 +2707,16 @@ mod tests {
             .map_or("", |(body, _)| body);
         for (decl, why) in [
             (
-                "background: none",
+                "background: #f3eddd",
                 "the Chat chip keeps the accent fill the mockups reserve for Code",
             ),
             (
-                "border: 1px solid var(--shell-line)",
-                "the Chat chip has no outline, so with no fill it is a word floating in the band",
+                "box-shadow: inset 0 0 0 1px #c9ab62",
+                "the Chat chip has no edge, and a tint one rung off the band with no line \
+                 around it is a word floating in the band",
             ),
             (
-                "color: var(--text-secondary)",
+                "color: var(--text-warning)",
                 "the Chat chip keeps --accent-ink, which is near-black on nothing",
             ),
             (
@@ -2712,6 +2730,34 @@ mod tests {
                 "`.plane-badge.chat` has no `{decl}`: {why}. The rule reads: {rule}"
             );
         }
+        assert!(
+            !rule.contains("border:"),
+            "`.plane-badge.chat` draws its edge as a border again, which comes \
+             out of the declared 19px height and leaves the chip a 17px \
+             interior beside the filled one's 19 — the defect #292 was reported \
+             as, with the tint now hiding it. The rule reads: {rule}"
+        );
+
+        // The two dark bodies, which docs/audit.js walks as separate axes:
+        // `prefers-color-scheme` and `data-theme` are different questions, and
+        // 00-tokens.css's own history is what one body drifting costs.
+        for anchor in [
+            ":root:not([data-theme=\"light\"]) .plane-badge.chat {",
+            ":root[data-theme=\"dark\"] .plane-badge.chat {",
+        ] {
+            let body = sheet
+                .split_once(anchor)
+                .and_then(|(_, rest)| rest.split_once('}'))
+                .map_or("", |(body, _)| body);
+            for decl in ["background: #3a2f14", "box-shadow: inset 0 0 0 1px #5c4a1f"] {
+                assert!(
+                    body.contains(decl),
+                    "`{anchor}` has no `{decl}`, so one of the two dark arms \
+                     paints the light tint on a dark band. The body reads: {body}"
+                );
+            }
+        }
+
         assert!(
             sheet.contains(".plane-badge.chat::before"),
             "assets/shared.css's `.chat::before` joins this chip's flex row as \

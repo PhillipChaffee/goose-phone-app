@@ -146,7 +146,8 @@
   white-space: nowrap;
 }
 
-/* THE FILL IS THE CODE PLANE'S, AND THE CHAT PLANE WEARS AN OUTLINE. #57.
+/* THE FILL IS THE CODE PLANE'S, AND THE CHAT PLANE WEARS AN AMBER TINT.
+ * #57, then #292.
  *
  * The mockups are unanimous and the app was not: 11-home-code, 20, 21, 22, 30,
  * 31 and 32 all emit the bare `class="plane-badge"` and take the base rule's
@@ -162,29 +163,100 @@
  * ("a colour this shell spends on exactly one thing per screen") and #251 has
  * since spent it on the primary action. A static label was outbidding a button.
  *
- * THE TOKENS ARE THE MOCKUP'S OWN VALUES RATHER THAN NEAR ONES.
- * `--shell-line` is #2c3138 in dark, which is `.plane-badge.chat`'s border
- * exactly, and `--text-secondary` is #98a1ac, which is its ink exactly — an
- * identity, not the substitution the finding was filed as. Measured on the
- * band's own surface: 6.66:1 in dark and 4.64:1 in light, against the 4.5 a
- * 10px/650 string owes (the large-text relaxation needs 14px AND 700, or
- * 18.66px, so it does not apply here any more than it does to the fill above).
- * The outline itself is 1.33:1 and is meant to be — the mockup draws a chip
- * that is barely there.
+ * A TINT AND NOT A SECOND FILL, which is #292 and is that same argument
+ * answered rather than reversed. The chip read as the one grey object in a
+ * strip whose other half is saturated, and the ask was for a colour of its own
+ * — "a yellowish colour, like one we've used before". A saturated amber fill
+ * was rendered beside the tint and refused on two counts, and both are this
+ * sheet's own rules rather than taste:
  *
- * `background: none` and not `transparent`: the base rule sets `background`,
- * so the override has to reset the same shorthand or the fill survives in the
+ *   THE ECONOMY. The paragraph above spends the accent on one thing per
+ *   screen. A second saturated fill 200px away spends a second, in a 34px
+ *   strip that is on screen in every state of every window.
+ *
+ *   THE HUE IS ALREADY BUSY. `--text-warning` is what this shell says
+ *   WAITING ON YOU with — `40-home-chat.css`'s urgent tile, `.tree.waiting`
+ *   in `assets/desktop/97-home-code.css`, the sidebar's needs mark. A
+ *   permanent saturated amber badge teaches the eye that amber means "chat"
+ *   three inches above a board where it means "this one needs you".
+ *
+ * A tint carries the colour without either cost: the hue arrives, the chip
+ * stays quieter than the filled one beside it, and nothing on screen has to
+ * compete with it.
+ *
+ * THE DARK PAIR IS THE RENDERED MOCK'S, VERBATIM: fill #3a2f14 behind
+ * #f0b429 ink inside a #5c4a1f line, measured at **7.06:1** on the dark band
+ * — against the 4.5 a 10px/650 string owes, the large-text relaxation needing
+ * 14px AND 700, or 18.66px, so it does not apply here any more than it does to
+ * the accent fill above. The fill is 1.32:1 off the band and the line 2.04:1,
+ * which is what makes the chip an object without making it a slab.
+ *
+ * THE INK IS THE TOKEN AND NOT A THIRD LITERAL, and in dark that is an
+ * identity rather than a substitution: `00-tokens.css`'s two dark bodies
+ * declare `--text-warning: #f0b429`, which is the mock's ink to the byte. It
+ * is also the one declaration light needs no override for — see below.
+ *
+ * LIGHT IS DERIVED AND MEASURED, NOT COPIED, because the mock was rendered in
+ * dark and only the ink token changes with the theme while the band's own
+ * surface does. Read back as HSL the whole family is ONE HUE: the mock's fill
+ * is hue 42.6 at saturation 0.49, its line hue 42.3 at 0.50, its ink hue 41.9,
+ * and light's `--text-warning` #8a6100 is hue 42.2. So light keeps the hue and
+ * the saturation and re-solves only the LIGHTNESS against a light band, which
+ * makes the two themes one decision rather than two.
+ *
+ *   fill #f3eddd  1.08:1 off the band — light's own rung, the same step
+ *                 `00-tokens.css` measures for `--card-on-panel` on the panel
+ *                 (1.08) and for the panel on white (1.09).
+ *   line #c9ab62  2.04:1 off the band, which is the dark line's 2.04 exactly.
+ *   ink  #8a6100  4.74:1 on that fill, over the 4.5 this string owes — and
+ *                 over the 4.64:1 the outlined chip measures today, so the
+ *                 change costs the reader nothing.
+ *
+ * AND LIGHT COULD NOT SIMPLY TAKE THE DARK STEP, which is the measurement that
+ * decided the rung. Light's warning ink is #8a6100, already only 5.11:1 on the
+ * band before anything is put behind it, so every step the fill takes DOWN
+ * comes off the ink: at the dark tint's own 1.32:1 the light fill is #e5d6b3
+ * and the ink measures 3.85:1, a fail. One rung is what there is, and the tint
+ * is therefore quieter in light than in dark by arithmetic rather than by
+ * choice.
+ *
+ * `background` and not `background-color`: the base rule sets the shorthand,
+ * so an override has to reset the same one or the accent fill survives in the
  * longhands it also wrote.
  *
- * THE BORDER COSTS THE HEIGHT NOTHING AND THE WIDTH 2px, which is not the same
- * sentence and was measured rather than assumed. `box-sizing: border-box` is
- * global (`assets/shared.css:377-378`, the `*` rule), but it only caps a
- * DECLARED length: `height: 1.1875rem` is one, so the hairline comes out of the
- * 19px; the width is `auto`, so there is nothing to come out of and the chip
- * grows. Measured with the same word in both chips, dark, 1440x860: 65.97x19
- * filled against 67.97x19 outlined, and every other computed property that
- * differs between them is one of the three declarations below or a colour
- * derived from `color`.
+ * ── THE OUTLINE IS AN INSET SHADOW AND NOT A BORDER ────────────────────────
+ *
+ * The other half of #292, and it is the half the report was actually about:
+ * "the code pill has slightly more vertical padding". It does not. Measured on
+ * `desktop-chats` and `desktop-code-list` at 1440x860 against the sheet list
+ * `docs/audit.js` links, both themes, before this change:
+ *
+ *              box            y             padding    height  border
+ *   chat       67.58 x 19.00  7.50..26.50   0px 8px    19px    1px
+ *   code       65.97 x 19.00  7.50..26.50   0px 8px    19px    0px
+ *
+ * Same box, same centre line, same padding, same declared height. What differs
+ * is the border: `box-sizing: border-box` is global (`assets/shared.css`'s `*`
+ * rule) but it only caps a DECLARED length, and `height: 1.1875rem` is one —
+ * so the hairline comes out of the 19px and leaves a **17px interior** where
+ * the filled chip has 19. The perception was right and the cause was not
+ * padding.
+ *
+ * `box-shadow: inset 0 0 0 1px` draws the same line inside the padding box, so
+ * the interior is 19px either way. Measured after: 65.58 x 19.00, y unchanged
+ * at 7.50..26.50, interior 19.00. The height and the centre line the long
+ * paragraph above establishes do not move at all; the WIDTH gives back the 2px
+ * the border was spending, which is the one size that changes and is a
+ * measurement rather than a surprise — the border cost the height nothing and
+ * the width 2px, and always did.
+ *
+ * ONE MECHANISM, WHICH IS WHY THIS IS SAFE HERE AND WAS REFUSED ON THE TOGGLE.
+ * `.nav-toggle` rejects the identical prescription eleven rules down, and the
+ * reason it gives is a STATE LADDER: its shut state already spends the inset
+ * shadow and does not reset `border-color`, so a bordered resting state would
+ * draw two 1px lines on one control. This chip has one state and now one
+ * mechanism, and the rule it is honouring is the same one — not two answers to
+ * one edge.
  *
  * THE MODIFIER'S NAME COLLIDES, AND THE TWO DECLARATIONS BELOW ARE THAT AND
  * NOTHING ELSE — do not delete them as redundant. `chat` is the mockups' own
@@ -207,14 +279,35 @@
  * than satisfy it, where `chat` is a name twenty captured desktop states
  * already carry. */
 .plane-badge.chat {
-  background: none;
-  border: 1px solid var(--shell-line);
-  color: var(--text-secondary);
+  background: #f3eddd;
+  box-shadow: inset 0 0 0 1px #c9ab62;
+  color: var(--text-warning);
   flex-direction: row;
 }
 
 .plane-badge.chat::before {
   content: none;
+}
+
+/* BOTH BODIES, because `docs/audit.js` walks `data-theme` as an axis of its
+ * own as well as `prefers-color-scheme`: a rule written in the media query
+ * alone is unmeasured in the attribute arm, and `00-tokens.css`'s own history
+ * is what that costs — seven declarations drifted out of the attribute body
+ * and painted light values on a dark window until a test held the two equal.
+ *
+ * Only the two surfaces are here. The ink is `--text-warning` in the rule
+ * above and the token is already the right value in each theme, so restating
+ * it in a dark body would be a second place for one decision to drift. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .plane-badge.chat {
+    background: #3a2f14;
+    box-shadow: inset 0 0 0 1px #5c4a1f;
+  }
+}
+
+:root[data-theme="dark"] .plane-badge.chat {
+  background: #3a2f14;
+  box-shadow: inset 0 0 0 1px #5c4a1f;
 }
 
 /* THE MARK IS NOT SET AT THE LABEL'S SIZE, which is the one place the usual
@@ -979,19 +1072,24 @@
  * and unmeasurable in the other three. Decided here, all four cells render the
  * rule.
  *
- * A LABEL AND NOT A CONTROL, which is why this takes `.plane-badge.chat`'s
- * face rather than the toggle chip's: no fill, a `--shell-line` hairline and
+ * A LABEL AND NOT A CONTROL: no fill, a `--shell-line` hairline and
  * `--text-secondary` ink. Two filled 32px objects already sit in this strip
  * and a third filled object between them would be read as a button and
  * pressed — a keycap has nothing to do when it is clicked. `.insp-key` in the
  * legend IS filled, and the difference is its neighbours: a list of keycaps
  * with no buttons in it has nothing to be mistaken for.
  *
- * The measurement is the badge's own, because the tokens and the surface are,
- * and it was re-read off this chip rather than copied: `--text-secondary` on
- * `--surface-panel` is 6.66:1 in dark and 4.64:1 in light, against the 4.5 a
- * 10.5px string owes. The hairline is 1.33:1 and 1.42:1 and is meant to be —
- * the same "barely there" edge the chat badge draws.
+ * THIS FACE IS NOW THIS CHIP'S ALONE. It was written as "`.plane-badge.chat`'s
+ * face", and #292 has since given that badge an amber tint and an amber line —
+ * so the two are no longer one decision and the sentence above is the whole
+ * argument rather than a cross-reference. It is also why the keycap did NOT
+ * follow the badge: a chord is not an identity, and there is nothing about ⌘/
+ * that the reader has to be told in colour.
+ *
+ * The measurement is this chip's own, on the band's own surface:
+ * `--text-secondary` on `--surface-panel` is 6.66:1 in dark and 4.64:1 in
+ * light, against the 4.5 a 10.5px string owes. The hairline is 1.33:1 and
+ * 1.42:1 and is meant to be — the "barely there" edge the mockups draw.
  *
  * WHAT IT COSTS THE TITLE, measured on `desktop-chat` with the longest heading
  * this app holds, over six widths x four shell cells x two themes: the chip is
