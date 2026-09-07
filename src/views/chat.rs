@@ -13,8 +13,8 @@ use crate::state::{
 };
 use crate::views::attach::{attachment_list, AttachButton, AttachTray};
 use crate::views::session_settings::{
-    chip_effort, mode_icon, option_choices, ChoicePickerSheet, SessionSettingsSheet, SettingChoice,
-    SettingRow,
+    chip_effort, choice_label, mode_icon, option_choices, ChoicePickerSheet, SessionSettingsSheet,
+    SettingChoice, SettingRow,
 };
 use crate::views::{
     ConfirmDelete, MenuItem, OverflowButton, OverflowSheet, RenameSheet, ScrollToBottom,
@@ -210,19 +210,7 @@ pub fn ChatView() -> Element {
                             Icon {
                                 name: mode_icon(mode.current_value.as_deref().unwrap_or_default()),
                             }
-                            // The one place in this app a chip can end up
-                            // naming its own control, and it is a fallback
-                            // rather than a state the app can produce: goose
-                            // ships `currentValue` inside the `configOptions`
-                            // of `session/new`, so `current_label` answers on
-                            // every build that has one. Hiding the chip
-                            // instead would hide the picker with it — the mode
-                            // is filtered out of the settings sheet
-                            // (`goose_setting_rows`) precisely because this
-                            // chip is where it lives.
-                            span { class: "chip-label",
-                                {mode.current_label().unwrap_or("Mode")}
-                            }
+                            span { class: "chip-label", {mode_chip_label(mode)} }
                         }
                     }
                     if let Some(percent) = crowding(usage) {
@@ -362,13 +350,69 @@ pub fn ChatView() -> Element {
 /// and the setting still exists, so it is reported rather than hidden.
 ///
 /// The names and descriptions on that picker are the AGENT'S, all the way
-/// down: "Smart approve" is a string this repo never writes. `git grep` is one
-/// way to see that and `docs/approval-modes.md` is the other — the trace from
-/// this predicate to `session/set_config_option` and back, written down
-/// because a user asked whether a safety control was really wired.
+/// down; what the app supplies is CASE, and only where the agent supplied no
+/// name at all. `docs/approval-modes.md` is the trace from this predicate to
+/// `session/set_config_option` and back, written down because a user asked
+/// whether a safety control was really wired, and it carries the exact
+/// boundary: every word on a mode row and on the chip is goose's, spelt as
+/// goose spelt it, except that a value goose names after itself — `auto`, or a
+/// `smart_approve` its own option list does not enumerate — reaches the screen
+/// through [`choice_label`], which uppercases the first letter and turns `_`
+/// into a space. "Smart approve" is therefore a string this repo can now
+/// produce and still not one it can invent: drop goose's `smart_approve` and
+/// nothing here says it.
 fn is_mode_chip(option: &ConfigOption) -> bool {
     (option.category.as_deref() == Some("mode") || option.config_id == "mode")
         && option.is_adjustable()
+}
+
+/// What the mode chip says, in the same words the picker under it uses.
+///
+/// ONE RENDERING OF ONE VALUE, and there were two. The chip used to read
+/// [`ConfigOption::current_label`], which finds `current_value` in `options`
+/// and hands back the raw wire string when it is not there — a real state,
+/// because goose reports a mode set from its own config or by another client
+/// whether or not the option list it sends enumerates it. Against the real
+/// server that fallback put `smart_approve` on screen, and a wire enum on a
+/// chip reads as the app leaking rather than as the agent speaking (#210 made
+/// the same argument for `tool_kind_phrase`). The sheet's own answer to the
+/// identical situation is already better and already tested:
+/// `a_current_value_outside_the_choices_still_shows` renders `retired_model` as
+/// "Retired model".
+///
+/// So this asks [`choice_label`] both times, which is what the picker's rows
+/// ask (`mode_choices` → `option_choices`), and the chip cannot disagree with
+/// the row it is about to open. THE SECOND HALF MATTERS AS MUCH AS THE FIRST:
+/// goose 1.46.0 sends its mode options with `name` EQUAL to `value` — measured,
+/// and written down at `crates/goose-acp-client/src/types/config.rs:158` — so
+/// the found branch was rendering a lowercase `auto` beside a picker row
+/// reading "Auto". Only the fake's modes carry names of their own, which is
+/// why nothing here could see it.
+///
+/// `None` is the empty label rather than the raw value: the chip can end up
+/// naming its own control, and that is a fallback rather than a state the app
+/// can produce — goose ships `currentValue` inside the `configOptions` of
+/// `session/new`, so this answers on every build that has one. Hiding the chip
+/// instead would hide the picker with it, because the mode is filtered out of
+/// the settings sheet (`goose_setting_rows`) precisely because this chip is
+/// where it lives.
+fn mode_chip_label(option: &ConfigOption) -> String {
+    let Some(current) = option
+        .current_value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return "Mode".to_owned();
+    };
+    option
+        .options
+        .iter()
+        .find(|choice| choice.value == current)
+        .map_or_else(
+            || choice_label(current, current),
+            |choice| choice_label(&choice.name, &choice.value),
+        )
 }
 
 /// The mode picker's rows, in the order the agent sent them.
@@ -1296,9 +1340,9 @@ fn permission_label(name: Option<&str>, option_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        clock_label, crowding, format_tokens, goose_setting_rows, is_mode_chip, mode_choices,
-        permission_button_class, permission_label, tool_icon, tool_kind_phrase, tool_kind_word,
-        tool_run_summary, tool_status_label, ConfigOption,
+        clock_label, crowding, format_tokens, goose_setting_rows, is_mode_chip, mode_chip_label,
+        mode_choices, permission_button_class, permission_label, tool_icon, tool_kind_phrase,
+        tool_kind_word, tool_run_summary, tool_status_label, ConfigOption,
     };
     use crate::ask_journal::{AskRecord, AskState, LostCause};
     use crate::shell::Shell;
@@ -2700,6 +2744,61 @@ mod tests {
             "the mode chip is missing or unnamed, and mode is filtered out of \
              the settings sheet precisely because this chip is where it \
              lives: {html}"
+        );
+    }
+
+    /// THE CHIP AND THE PICKER SAY THE SAME WORDS, in all three cases the
+    /// wire can produce — and it said different ones in two of them.
+    ///
+    /// The fixture above is the fake's shape, where every mode carries a
+    /// label of its own, and that is exactly why nothing here could see
+    /// either fault. Real goose 1.46.0 names its mode options after their
+    /// values (`crates/goose-acp-client/src/types/config.rs:158`), and it
+    /// reports values its own list does not enumerate.
+    #[test]
+    fn the_mode_chip_speaks_the_apps_words_whatever_the_wire_sent() {
+        let mut named_after_its_value = mode_option();
+        named_after_its_value.options = vec![
+            choice("auto", "auto", Some("Automatically approve tool calls")),
+            choice("approve", "approve", Some("Ask before every tool call")),
+        ];
+        assert_eq!(
+            mode_chip_label(&named_after_its_value),
+            "Auto",
+            "the chip printed goose's own lowercase id while the picker row \
+             under it read \"Auto\" — one value, two renderings, in the shape \
+             the real server actually sends"
+        );
+
+        let mut off_the_list = mode_option();
+        off_the_list.current_value = Some("smart_approve".to_owned());
+        assert_eq!(
+            mode_chip_label(&off_the_list),
+            "Smart approve",
+            "a mode set elsewhere — from config, or by another client — is \
+             not in the option list goose sends, and the chip printed the \
+             wire enum. `SettingRow::select` has always title-cased the same \
+             fallback (`a_current_value_outside_the_choices_still_shows`)"
+        );
+
+        for missing in [None, Some(String::new()), Some("   ".to_owned())] {
+            let mut unset = mode_option();
+            unset.current_value = missing.clone();
+            assert_eq!(
+                mode_chip_label(&unset),
+                "Mode",
+                "with {missing:?} on the wire the chip has to name its own \
+                 control: hiding it would hide the picker with it, because \
+                 mode is filtered out of the settings sheet precisely because \
+                 this chip is where it lives"
+            );
+        }
+
+        assert_eq!(
+            mode_chip_label(&mode_option()),
+            "Auto",
+            "a backend that does send labels of its own must still get them \
+             through unchanged"
         );
     }
 
