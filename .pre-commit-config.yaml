@@ -1,0 +1,27 @@
+# Pre-commit gate: secret scanning. This repo is public, and a secret is the
+# one class of mistake that a red CI check cannot undo — by the time the build
+# goes red the value is already in a clone somebody else can fetch. So it is
+# caught before the commit exists, and `.github/workflows/secret-scan.yml`
+# stays the backstop rather than the only line.
+#
+# One-time setup, per checkout:
+#   pipx install pre-commit    (or: brew install pre-commit)
+#   pre-commit install
+#
+# Manual full run: pre-commit run --all-files
+#
+# ONLY GITLEAKS LIVES HERE, deliberately. Everything else this repo gates —
+# fmt, clippy, the workspace tests, the iOS target check, the UI audit — takes
+# minutes and belongs in CI, where a machine waits instead of a person. A hook
+# that makes `git commit` take two minutes is a hook people learn to `--no-verify`.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    # PINNED, AND IN LOCKSTEP WITH TWO OTHER PLACES: `GITLEAKS_VERSION` in
+    # .github/workflows/secret-scan.yml, which that file hands to both the
+    # incremental action and the checksum-verified backstop binary. Bumping one
+    # and not the others means the hook and CI enforce different rules and
+    # disagree about the same commit — which reads as a flaky check rather than
+    # as the version drift it is. Bump all three together.
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
