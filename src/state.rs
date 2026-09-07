@@ -116,6 +116,32 @@ pub(crate) struct Settings {
 /// a `goose serve` holding its own TLS is self-signed, and without the pin the
 /// client falls back to chain verification and refuses the certificate.
 ///
+/// # A SEED IS ONLY THE DEFAULT, AND A SAVED FILE OUTRANKS IT
+///
+/// This macro is read by `Settings::default()`, and since #220 `settings` is
+/// fs-backed: a saved `settings` file is loaded in PREFERENCE to that default,
+/// so the seeds decide only on a machine that has never pressed Save. Until
+/// #220 the two were the same thing — `use_persistent` was in-memory
+/// `SessionStorage` off wasm and nothing survived a restart — which is why this
+/// doc, and `scripts/serve-real.sh` with it, used to say the fields simply
+/// arrive filled.
+///
+/// EXACTLY FOUR FIELDS ARE OUTRANKED, and the interesting half is which are
+/// not. `server_url`, `fingerprint`, `working_dir` and `code_server_url` are
+/// what the file holds, so a stored value replaces the seed. `secret_key` and
+/// `code_password` are `#[serde(skip_serializing)]`, so they are MISSING from
+/// every saved file and `serde(default)` refills them from here on each load —
+/// the two seeds that cannot be beaten are the two that are never written.
+///
+/// The failure that correction is worth is silent and points the WRONG WAY
+/// (#279): `scripts/serve-real.sh` printed `ai-brain...:3284` while the app
+/// connected to `127.0.0.1:3285`, a mock left over from a capture run the day
+/// before, and the reader trusts the launcher because the launcher is the thing
+/// they just ran. It failed loudly only because that mock happened to be dead;
+/// a live one would have looked entirely correct. That launcher now decodes the
+/// saved file and names any field that disagrees, and takes `--fresh` to move
+/// it aside — but the ordering is this macro's to document, not a script's.
+///
 /// `option_env!` is read by the COMPILER, not at run time. Cargo does track it
 /// — rustc records env dependencies in its dep-info, so changing a seed does
 /// rebuild this crate, and no `build.rs` is needed to make that happen
