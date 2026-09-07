@@ -896,12 +896,69 @@ pub(crate) async fn establish(ctx: &AppCtx) -> bool {
             conn.set(ConnState::Connected { agent });
             let ctx = *ctx;
             spawn_forever(async move { pump(&ctx, events).await });
+            // Beside the pump rather than awaited before the return, because
+            // this is three round trips and `establish` is what the Save &
+            // Connect button is waiting on. Nothing on screen depends on it
+            // having finished; the chip appears when the answer does.
+            spawn_forever(async move { learn_default_model(&ctx).await });
             true
         }
         Err(e) => {
             conn.set(ConnState::Failed(e.to_string()));
             false
         }
+    }
+}
+
+/// Ask the server what a conversation started right now would run on, so the
+/// chat home has a model to show before there is a conversation to read it off.
+///
+/// THE HOME COMPOSER HAD NO MODEL PICKER AT ALL against a real server, and the
+/// cause was not one of `ctx.config_options`' guards swallowing an answer — it
+/// was that nothing had asked. That signal is written by `session/new`, by the
+/// two `session/load` arms and by [`set_config_option`], and on a cold launch
+/// none of the four has run: connect lists sessions and stops. Measured on
+/// `goose 1.46.0` over a tailnet, the whole chip row was a host and an
+/// extension count (#280). The `session/load` reply on that same server
+/// carries four options and 168 models, so no guard was involved.
+///
+/// WHAT THE HOME SHOWS WHEN IT GENUINELY HAS NOT BEEN TOLD.
+/// `src/shell/desktop/home.rs`'s `compose_chips` accepts the empty case —
+/// *"with no option at all … there is no chip, which is what shipped and stays
+/// true"* — and that was defensible for the instant before anything is known
+/// and indefensible as the steady state, which is what it had become: a
+/// connected server, fifty conversations each with a model, and a composer
+/// whose job is to start the fifty-first. This call makes it an instant again
+/// (635 ms, measured, once per connection) rather than replacing the rule.
+/// Design rule 11 forbids a control that does nothing, and the two states left
+/// after the ask are exactly the two where one would: a goose with no model
+/// configured at all, which answers `Ok(None)`, and a goose too old for either
+/// method, which answers `Unsupported`. Both keep no chip — and that is now a
+/// statement about the server rather than about what the app bothered to ask.
+///
+/// SILENT ON EVERY FAILURE, because nobody pressed anything. This runs off the
+/// back of a connection the reader asked for, and a toast naming a model
+/// catalogue would land on whatever screen they are actually reading. The cost
+/// of an old server is two refused requests per connection: `goose_request`
+/// caches a `-32601` per client, and `establish` builds a new client each time.
+///
+/// AND ONLY INTO AN EMPTY SET, checked again after the await. A reconnect runs
+/// [`reload_chat`] at the same moment, and that answers with the OPEN
+/// conversation's own options, which are the truth for the screen the reader is
+/// on. Three round trips make this the slow half of that race, so it is the
+/// half that stands down.
+pub(crate) async fn learn_default_model(ctx: &AppCtx) {
+    if !ctx.config_options.peek().is_empty() {
+        return;
+    }
+    let Some(client) = ctx.client.peek().clone() else {
+        return;
+    };
+    let Ok(Some(option)) = client.default_model_option().await else {
+        return;
+    };
+    if ctx.config_options.peek().is_empty() {
+        ctx.config_options.clone().set(vec![option]);
     }
 }
 
@@ -4595,7 +4652,7 @@ mod tests {
     /// came up without setting it would never come back from a tailnet blink.
     #[test]
     fn connecting_names_the_agent_and_arms_the_reconnect_loop() {
-        let app = App::mount();
+        let mut app = App::mount();
         let server = serve(happy);
         assert!(
             app.dial(&server),
@@ -4618,10 +4675,18 @@ mod tests {
                 "a connection that came up did not arm the reconnect loop"
             );
         });
-        assert!(
-            server.methods().is_empty(),
-            "connecting asked the server for something else: {:?}",
-            server.methods()
+        // ONE QUESTION, AND IT IS NOT ABOUT A SESSION. This assertion read
+        // `is_empty()` until connecting started asking what model a chat begun
+        // right now would run on ([`learn_default_model`], #280) — and it is
+        // settled for rather than raced, because the ask is spawned beside the
+        // pump and would otherwise be caught or missed by timing. This
+        // `happy` has no value for `GOOSE_MODEL`, so the walk stops at the
+        // first read and never reaches the 134 KB catalogue.
+        app.settle_until(Duration::from_millis(500), |_| false);
+        assert_eq!(
+            server.methods(),
+            ["_goose/unstable/config/read"],
+            "connecting asked the server for something else"
         );
     }
 
@@ -4852,8 +4917,16 @@ mod tests {
                 "the loop gave up after one refused connection"
             );
         });
+        // NAMED RATHER THAN COUNTED, and the difference is one method: a
+        // connection that comes up now asks `config/read` what a new chat
+        // would run on ([`learn_default_model`]), which is a question about
+        // the SERVER and not about a session. What this assertion has always
+        // been about is the other kind.
         assert!(
-            server.methods().is_empty(),
+            !server
+                .methods()
+                .iter()
+                .any(|method| method == "session/load"),
             "a reconnect with no chat open asked the server to replay one: {:?}",
             server.methods()
         );
@@ -5286,6 +5359,320 @@ mod tests {
                 "the chat is stuck on a replay that will never arrive"
             );
         });
+    }
+
+    // ------------------------------------- the model the home composer shows
+    //
+    // THE GAP #280 FELL THROUGH, and it was not in the rendering.
+    // `home::compose_chips` has always drawn the chip correctly given the
+    // data, and its own tests seed `ctx.config_options` directly to prove it.
+    // What no test in the repository asked was whether the data ARRIVES —
+    // against a real server it did not, and the whole chip row was a host and
+    // an extension count. Everything below is about arrival, and the fixtures
+    // are recorded responses rather than invented ones for the same reason.
+
+    /// The three questions the chat home asks of `ctx.config_options` before
+    /// it draws its model chip, as one answer: the label, and whether the
+    /// chip is a control or a fact.
+    ///
+    /// A stand-in for the screen, so a test here can say "there would be a
+    /// chip" without mounting it — `src/shell/desktop/home.rs` finds the
+    /// `model` entry, reads `current_label`, and asks `is_adjustable` to
+    /// decide between `Chip::control` and `Chip::fact`. `None` is the state
+    /// this whole section exists to make rare: no chip at all.
+    fn home_model_chip(ctx: &AppCtx) -> Option<(String, bool)> {
+        let options = ctx.config_options.peek();
+        let option = options.iter().find(|o| o.config_id == "model")?;
+        Some((option.current_label()?.to_owned(), option.is_adjustable()))
+    }
+
+    /// A `session/load` reply from `goose 1.46.0`, VERBATIM — the envelope,
+    /// the `_meta`, the `modes` block and all four options, `id`-keyed the way
+    /// that server keys them, with only the long lists cut: 19 extension
+    /// results to two and each option's choices to two of theirs (`model` had
+    /// 168).
+    ///
+    /// The point of carrying the whole shape rather than the one array this
+    /// module reads is that the failure being guarded against is a decode
+    /// that stops working — a renamed key, a nested `configOptions`, an
+    /// envelope that grows a wrapper — and none of those is visible in a
+    /// fixture trimmed to what already parses.
+    fn a_real_session_load_reply() -> Value {
+        json!({
+          "_meta": {
+            "extensionResults": [
+              {"name": "workspace-mcp", "success": true},
+              {"name": "Extension Manager", "success": true}
+            ]
+          },
+          "configOptions": [
+            {"category": null, "currentValue": "together", "id": "provider", "name": "Provider",
+             "options": [{"name": "Goose (Default)", "value": "goose"},
+                         {"name": "Alibaba (Qwen)", "value": "alibaba"}],
+             "type": "select"},
+            {"category": "mode", "currentValue": "auto", "id": "mode", "name": "Mode",
+             "options": [{"description": "Automatically approve tool calls",
+                          "name": "auto", "value": "auto"},
+                         {"description": "Ask before every tool call",
+                          "name": "approve", "value": "approve"}],
+             "type": "select"},
+            {"category": "model", "currentValue": "deepseek-ai/DeepSeek-V4-Pro-0813",
+             "id": "model", "name": "Model",
+             "options": [{"name": "Hcompany/Holo3-35B-A3B", "value": "Hcompany/Holo3-35B-A3B"},
+                         {"name": "MiniMaxAI/MiniMax-M1-40k", "value": "MiniMaxAI/MiniMax-M1-40k"}],
+             "type": "select"},
+            {"category": "thought_level", "currentValue": "off",
+             "description": "Controls reasoning effort for models that support extended thinking.",
+             "id": "thinking_effort", "name": "Thinking effort",
+             "options": [{"name": "off", "value": "off"}],
+             "type": "select"}
+          ],
+          "modes": {
+            "availableModes": [
+              {"description": "Automatically approve tool calls", "id": "auto", "name": "auto"},
+              {"description": "Ask before every tool call", "id": "approve", "name": "approve"}
+            ],
+            "currentModeId": "auto"
+          }
+        })
+    }
+
+    /// THE HOLE, CLOSED: a real `session/load` reply has to leave a chip
+    /// behind it.
+    ///
+    /// The recorded workaround for #280's cold launch was "open a conversation
+    /// first, then come back", and this is the test that says the workaround
+    /// still works — which nothing asserted before, because the only tests
+    /// over this path used a two-field script option of their own invention.
+    /// If goose renames a key, nests the array, or stops sending
+    /// `currentValue`, this fails and names the screen it broke.
+    #[test]
+    fn a_real_session_load_reply_gives_the_home_composer_a_model() {
+        fn brain(method: &str, params: &Value) -> Reply {
+            if method == "session/load" {
+                return ok(a_real_session_load_reply());
+            }
+            happy(method, params)
+        }
+        let mut app = App::mount();
+        let server = serve(brain);
+        let _events = app.attach(&server);
+
+        assert_eq!(
+            app.run(home_model_chip),
+            None,
+            "the home had a model before anything had said one"
+        );
+
+        let info: SessionInfo = serde_json::from_value(
+            json!({"sessionId": "20260907_17", "title": "Greeting", "cwd": "/home/agent"}),
+        )
+        .unwrap();
+        app.run(|ctx| open_session(ctx, info));
+        app.settle_until(Duration::from_secs(5), |ctx| !ctx.chat.peek().loading);
+
+        assert_eq!(
+            app.run(home_model_chip),
+            Some(("deepseek-ai/DeepSeek-V4-Pro-0813".to_owned(), true)),
+            "a real replay left nothing for the composer to show"
+        );
+        // And the other three options survived the same reply, because a
+        // decode that dropped them would leave the chip standing and the
+        // session settings sheet empty.
+        app.run(|ctx| {
+            let ids: Vec<String> = ctx
+                .config_options
+                .peek()
+                .iter()
+                .map(|o| o.config_id.clone())
+                .collect();
+            assert_eq!(ids, ["provider", "mode", "model", "thinking_effort"]);
+        });
+        assert_eq!(app.toast(), None);
+    }
+
+    /// `providers/list`, cut to what a test needs and shaped as the server
+    /// sends it: `providerId` beside `configured`, models keyed on `id`.
+    fn a_real_provider_list() -> Value {
+        json!({"entries": [
+            {"providerId": "alibaba", "providerName": "Alibaba (Qwen)", "configured": false,
+             "defaultModel": "qwen3.7-max", "models": [{"id": "qwen3.7-max",
+                                                        "name": "Qwen3.7 Max"}]},
+            {"providerId": "together", "providerName": "Together AI", "configured": true,
+             "defaultModel": "Hcompany/Holo3-35B-A3B",
+             "models": [{"id": "Hcompany/Holo3-35B-A3B", "name": "Hcompany/Holo3-35B-A3B"},
+                        {"id": "MiniMaxAI/MiniMax-M1-40k", "name": "MiniMaxAI/MiniMax-M1-40k"}]}
+        ]})
+    }
+
+    /// A goose that answers both of the session-free questions.
+    fn a_configured_goose(method: &str, params: &Value) -> Reply {
+        match method {
+            "_goose/unstable/config/read" => match params.get("key").and_then(Value::as_str) {
+                Some("GOOSE_MODEL") => ok(json!({"value": "deepseek-ai/DeepSeek-V4-Pro-0813"})),
+                Some("GOOSE_PROVIDER") => ok(json!({"value": "together"})),
+                _ => ok(json!({"value": null})),
+            },
+            "_goose/unstable/providers/list" => ok(a_real_provider_list()),
+            _ => happy(method, params),
+        }
+    }
+
+    /// THE FIX ITSELF: the composer knows what the next chat will run on
+    /// before there is a chat, which is the whole of #280.
+    ///
+    /// It is a control and not a fact, because the catalogue has more than one
+    /// model in it — and the value it reads is `GOOSE_MODEL` rather than the
+    /// provider's own `defaultModel`, which on the measured server was a
+    /// different model entirely.
+    #[test]
+    fn a_cold_home_learns_its_model_before_any_conversation_exists() {
+        let mut app = App::mount();
+        let server = serve(a_configured_goose);
+        let _events = app.attach(&server);
+
+        app.drive(|ctx| async move { learn_default_model(&ctx).await });
+        app.settle_until(Duration::from_secs(5), |ctx| {
+            !ctx.config_options.peek().is_empty()
+        });
+
+        assert_eq!(
+            app.run(home_model_chip),
+            Some(("deepseek-ai/DeepSeek-V4-Pro-0813".to_owned(), true)),
+            "a connected server left the composer with nothing to press"
+        );
+        assert_eq!(
+            server.methods(),
+            [
+                "_goose/unstable/config/read",
+                "_goose/unstable/config/read",
+                "_goose/unstable/providers/list"
+            ],
+            "the walk asked for something it did not need, or in the wrong order"
+        );
+        assert_eq!(
+            server.params("_goose/unstable/config/read", 0),
+            json!({"key": "GOOSE_MODEL"}),
+            "the model is read first, so an unconfigured goose never pays for the catalogue"
+        );
+        assert_eq!(app.toast(), None);
+    }
+
+    /// The one state where there is still nothing to show, and it is now a
+    /// statement about the server: a goose nobody has run `goose configure`
+    /// against has no model, so there is no chip and no menu — design rule
+    /// 11's control that does nothing, refused. It costs one request, not
+    /// three: the catalogue is never fetched.
+    #[test]
+    fn a_goose_with_no_model_configured_leaves_the_composer_saying_nothing() {
+        fn unconfigured(method: &str, params: &Value) -> Reply {
+            if method == "_goose/unstable/config/read" {
+                return ok(json!({"value": null}));
+            }
+            happy(method, params)
+        }
+        let mut app = App::mount();
+        let server = serve(unconfigured);
+        let _events = app.attach(&server);
+
+        app.drive(|ctx| async move { learn_default_model(&ctx).await });
+        app.settle_until(Duration::from_millis(300), |_| false);
+
+        assert_eq!(app.run(home_model_chip), None);
+        assert_eq!(server.count("_goose/unstable/providers/list"), 0);
+        assert_eq!(app.toast(), None, "nobody asked, so nobody is told");
+    }
+
+    /// An older goose has neither method. `-32601` is its own signal for "this
+    /// feature is absent", and the answer is the same silence: the reader gets
+    /// the composer that shipped, and no toast about a catalogue they never
+    /// asked for.
+    #[test]
+    fn a_goose_too_old_to_answer_leaves_the_composer_alone_and_stays_quiet() {
+        fn older(method: &str, params: &Value) -> Reply {
+            if method.starts_with("_goose/unstable/") {
+                return rpc_error(-32601, "Method not found");
+            }
+            happy(method, params)
+        }
+        let mut app = App::mount();
+        let server = serve(older);
+        let _events = app.attach(&server);
+
+        app.drive(|ctx| async move { learn_default_model(&ctx).await });
+        app.settle_until(Duration::from_millis(300), |_| false);
+
+        assert_eq!(app.run(home_model_chip), None);
+        assert_eq!(app.toast(), None);
+        assert_eq!(
+            server.count("_goose/unstable/config/read"),
+            1,
+            "a refusal was retried rather than believed"
+        );
+    }
+
+    /// A catalogue that will not come costs the reader the MENU and not the
+    /// FACT. The composer says what the next chat runs on; it just cannot
+    /// offer to change it, which `is_adjustable` already draws as a fact
+    /// rather than as a dead control.
+    #[test]
+    fn a_model_without_a_catalogue_is_still_worth_saying() {
+        fn half(method: &str, params: &Value) -> Reply {
+            if method == "_goose/unstable/providers/list" {
+                return rpc_error(-32603, "the provider index is being rebuilt");
+            }
+            a_configured_goose(method, params)
+        }
+        let mut app = App::mount();
+        let server = serve(half);
+        let _events = app.attach(&server);
+
+        app.drive(|ctx| async move { learn_default_model(&ctx).await });
+        app.settle_until(Duration::from_secs(5), |ctx| {
+            !ctx.config_options.peek().is_empty()
+        });
+
+        assert_eq!(
+            app.run(home_model_chip),
+            Some(("deepseek-ai/DeepSeek-V4-Pro-0813".to_owned(), false)),
+            "a failed catalogue took the model down with it"
+        );
+        assert_eq!(server.count("_goose/unstable/providers/list"), 1);
+        assert_eq!(app.toast(), None);
+    }
+
+    /// AN OPEN CONVERSATION OUTRANKS THE DEFAULT, and the ask does not even
+    /// happen. A reconnect runs the replay and this walk at the same moment;
+    /// the replay answers with the options of the session the reader is
+    /// looking at, which are the truth for that screen.
+    #[test]
+    fn the_open_conversations_options_are_not_replaced_by_the_default() {
+        let mut app = App::mount();
+        let server = serve(a_configured_goose);
+        let _events = app.attach(&server);
+        app.run(|ctx| {
+            ctx.config_options
+                .clone()
+                .set(vec![
+                    serde_json::from_value(wire_option("model", "sonnet")).unwrap()
+                ]);
+        });
+
+        app.drive(|ctx| async move { learn_default_model(&ctx).await });
+        app.settle_until(Duration::from_millis(300), |_| false);
+
+        app.run(|ctx| {
+            assert_eq!(
+                ctx.config_options.peek()[0].current_value.as_deref(),
+                Some("sonnet"),
+                "the conversation on screen was overwritten by the server's default"
+            );
+        });
+        assert!(
+            server.methods().is_empty(),
+            "the walk ran anyway: {:?}",
+            server.methods()
+        );
     }
 
     /// `_meta` is how goose is told *why* a session exists — a recipe launch is
