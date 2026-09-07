@@ -37,6 +37,26 @@
  * whole of the two-column and one-column tiers. Nothing here is inside a
  * breakpoint for exactly that reason.
  *
+ * AND IT DOES NOT WIDEN WHEN THE PANELS CLOSE. That is what #136 asked for and
+ * what #97 asked for before it, and both were declined; the property is
+ * deliberate rather than an oversight, and it is written here because the
+ * screen makes it look like one. Measured on `desktop-settings` at 1440 with
+ * the sheets `docs/audit.js` links: with both panels open the pane is 828px
+ * and the gutter 94px a side; with both shut the pane is 1440 and the gutter
+ * is 400. The pane gains **612px and the reader gains nothing** — the column
+ * is 640px either way, because 640 is the whole point. At 1600 it is the same
+ * 612, 988 → 1600 with the gutter going 174 → 480.
+ *
+ * The cost of the alternative is what settles it. Widening on collapse means
+ * putting a `data-nav` / `data-insp` term on `--measure`, which is the one
+ * coupling this file exists to avoid: the shell's arrangement would start
+ * deciding how many characters a line holds, so a reader who shut a panel to
+ * see more of a diff would find every sentence in the app reflowed. It also
+ * collides with two numbers pinned by tests in `src/shell/desktop/home.rs` —
+ * #86's 44.5rem and #76's 48.5rem — which a variable measure could not hold.
+ * 612px of nothing is the price of a line length that does not depend on
+ * furniture, and it is worth it.
+ *
  * THE MOCKUP DOES IT THE OTHER WAY AND THE ANSWER IS STILL THIS ONE. Settled,
  * with the measurement, so it is not re-litigated: 22-nav-disclosure's
  * `.thread` is `padding: 20px 30px 6px` and its first `.who-line` is "298,66
