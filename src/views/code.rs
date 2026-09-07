@@ -519,8 +519,6 @@ fn agent_choices(agents: &[Agent]) -> Vec<SettingChoice> {
         .collect()
 }
 
-/// Catalogue entries as choices. A name shared by two providers is shown as
-/// `provider/model` instead, so two rows are never indistinguishable.
 /// Shared by the effort row and the context-length row so the two can never
 /// give different reasons for the same missing catalogue.
 const fn unknown_model_note(
@@ -574,7 +572,36 @@ fn withheld_note(withheld: usize) -> Option<String> {
     ))
 }
 
+/// Catalogue entries as choices: the model's name, and — when there is more
+/// than one provider to choose between — whose it is, underneath.
+///
+/// **The name alone was never the choice (#282).** A model is addressed
+/// `provider/model` everywhere the app speaks to the manager, and two
+/// providers serving one model differ in price, latency, region and, through
+/// privacy hard rule 1, who sees the code. Until now the provider surfaced
+/// only on an EXACT name collision, so a provider that labels its build even
+/// slightly differently produced two rows that looked like two models and
+/// routed to two companies.
+///
+/// Under the name rather than beside it, because that is where
+/// [`repo_choices`] puts a repo's owner and where every settings row puts its
+/// explanation — one grammar, not two.
+///
+/// **Only when there is more than one provider in the offered list.** A
+/// lone-provider server — which is what `mock-opencode-server` is, and what a
+/// single-key deployment is — would otherwise print the same word under every
+/// row, which is noise standing exactly where the one distinguishing fact is
+/// supposed to be.
+///
+/// The provider is said once per row and never twice: where the name alone
+/// does not identify the model the LABEL falls back to the full reference, and
+/// that row has no note, because "opencode/claude-sonnet-4-5" over "opencode"
+/// is the same word stacked on itself.
 fn model_choices(offered: &[&ModelInfo]) -> Vec<SettingChoice> {
+    let mut providers: Vec<&str> = offered.iter().map(|m| m.provider_id.as_str()).collect();
+    providers.sort_unstable();
+    providers.dedup();
+    let choosing_provider = providers.len() > 1;
     offered
         .iter()
         .map(|m| {
@@ -592,7 +619,10 @@ fn model_choices(offered: &[&ModelInfo]) -> Vec<SettingChoice> {
             } else {
                 m.name.clone()
             };
-            SettingChoice::new(m.reference(), label)
+            // `label == m.name` is exactly "the label is the bare name", which
+            // is the only shape that leaves the provider unsaid.
+            let note = (choosing_provider && label == m.name).then(|| m.provider_id.clone());
+            SettingChoice::new(m.reference(), label).with_note(note)
         })
         .collect()
 }
@@ -2531,6 +2561,10 @@ mod tests {
     /// The same display name from two providers is the case the label test
     /// exists for: one is the vendor direct, the other a proxy, and which one
     /// runs decides who sees the code.
+    ///
+    /// The label carries the provider here, so the note must not: one row
+    /// reading "opencode/claude-sonnet-4-5" over "opencode" is the same word
+    /// stacked on itself.
     #[test]
     fn two_providers_offering_one_name_get_told_apart() {
         let a = model("anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5");
@@ -2541,6 +2575,10 @@ mod tests {
             labels,
             ["anthropic/claude-sonnet-4-5", "opencode/claude-sonnet-4-5"],
             "identical names must fall back to the full reference"
+        );
+        assert!(
+            choices.iter().all(|c| c.note.is_none()),
+            "the provider is said once per row, and the label already said it"
         );
     }
 
@@ -2560,15 +2598,68 @@ mod tests {
     }
 
     /// Distinct names stay readable — the fallback is for collisions only.
+    ///
+    /// **And the provider is under each of them (#282).** The owner's question
+    /// was "I can't choose between Zen and Together AI", and under the old rule
+    /// two providers were told apart only when their names collided EXACTLY:
+    /// these two rows differ in who runs them and in nothing a reader could
+    /// see, which is the case a name collision never catches.
     #[test]
-    fn distinct_names_are_left_alone() {
+    fn distinct_names_are_left_alone_and_still_say_whose_they_are() {
         let a = model("anthropic", "claude-opus-4-1", "Claude Opus 4.1");
         let b = model("opencode", "claude-sonnet-4-5", "Claude Sonnet 4.5");
-        let labels: Vec<String> = model_choices(&[&a, &b])
-            .into_iter()
-            .map(|c| c.label)
-            .collect();
+        let choices = model_choices(&[&a, &b]);
+        let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
         assert_eq!(labels, ["Claude Opus 4.1", "Claude Sonnet 4.5"]);
+        let notes: Vec<Option<&str>> = choices.iter().map(|c| c.note.as_deref()).collect();
+        assert_eq!(
+            notes,
+            [Some("anthropic"), Some("opencode")],
+            "a catalogue with more than one provider says whose each model is"
+        );
+    }
+
+    /// The case the fake produces and the case a single-key deployment
+    /// produces: one provider, and its name under every row would be a column
+    /// of the same word standing where the distinguishing fact belongs.
+    #[test]
+    fn a_lone_provider_is_not_printed_under_every_model() {
+        let a = model("opencode", "claude-sonnet-4-5", "Claude Sonnet 4.5");
+        let b = model("opencode", "claude-opus-4-1", "Claude Opus 4.1");
+        let c = model("opencode", "minimax-m2.7", "MiniMax M2.7");
+        let choices = model_choices(&[&a, &b, &c]);
+        assert!(
+            choices.iter().all(|c| c.note.is_none()),
+            "one provider answers nothing, so it is not said: {:?}",
+            choices.iter().map(|c| c.note.clone()).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            choices.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(),
+            ["Claude Sonnet 4.5", "Claude Opus 4.1", "MiniMax M2.7"]
+        );
+    }
+
+    /// The case the old rule could never catch, and the one the owner hit:
+    /// two providers serving ONE model under labels that differ by a space.
+    /// No name collides, so nothing fell back to a reference, and the sheet
+    /// drew two rows that looked like two models and routed to two companies.
+    #[test]
+    fn a_provider_that_labels_its_build_differently_is_still_told_apart() {
+        let a = model("togetherai", "qwen3-coder", "Qwen3 Coder");
+        let b = model("zen", "qwen3-coder", "Qwen 3 Coder");
+        let choices = model_choices(&[&a, &b]);
+        assert_eq!(
+            choices
+                .iter()
+                .map(|c| (c.label.as_str(), c.note.as_deref()))
+                .collect::<Vec<_>>(),
+            [
+                ("Qwen3 Coder", Some("togetherai")),
+                ("Qwen 3 Coder", Some("zen")),
+            ],
+            "neither name collides, so the collide-only rule left both rows \
+             silent about the one thing that differs"
+        );
     }
 
     /// The chip names the model before the catalogue has loaded, and after a
