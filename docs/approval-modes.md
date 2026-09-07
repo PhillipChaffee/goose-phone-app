@@ -33,22 +33,43 @@ of each citation, and `src/citations.rs` is the gate that holds the paths.
 
 ### 1. The chip is goose's words
 
-`src/views/chat.rs:205-227` renders the mode chip in the composer.
-`is_mode_chip` (`chat.rs:369-372`) picks the option out of goose's
+`src/views/chat.rs:205-215` renders the mode chip in the composer.
+`is_mode_chip` (`chat.rs:364-367`) picks the option out of goose's
 `configOptions` by either the ACP `mode` **category** or the `mode` **id** —
 either will do, so an agent that sends only one of them is still understood —
 and only when the option is *adjustable*, which
 `ConfigOption::is_adjustable` (`crates/goose-acp-client/src/types/config.rs:67`)
-defines as having more than one value. `mode_choices` (`chat.rs:383-391`) builds
+defines as having more than one value. `mode_choices` (`chat.rs:427-435`) builds
 the picker's rows out of `option_choices`
 (`src/views/session_settings.rs:243-252`), which reads each choice's `name` and
 its `description` straight off the wire.
 
 So **"Smart approve" and "Ask only for sensitive tool calls" are goose's
-strings**, and that is checkable from the other side: neither phrase is in any
-source file here. `git grep -i "smart approve" -- src crates assets scripts`
-matches nothing, and this document is the one place in the tree the words are
-written down at all. The fake in
+strings**, down to the words. What the app supplies is CASE, and only where
+goose supplied no name of its own — which is the whole of #291 and is worth
+stating precisely, because "the app never writes these words" was the claim
+this section used to make and it is no longer exactly true.
+
+`choice_label` (`src/views/session_settings.rs:224-232`) rewrites a choice
+whose `name` is *identical* to its `value`, and only then: it uppercases the
+first letter and turns `_` into a space. Real goose does exactly that — measured
+against `goose serve` 1.46.0 and recorded at
+`crates/goose-acp-client/src/types/config.rs:158`, every mode arrives as
+`{"value": "auto", "name": "auto", …}` — so a row reading "Auto" is goose's
+`auto` with one letter raised, and a real label like `Claude Opus 5` is never
+touched. `mode_chip_label` (`chat.rs:362-416`) puts the composer's chip through
+the same function so the chip and the row it opens cannot disagree, including
+in the one case the option list does not cover: goose reports a
+`currentValue` set from its own config or by another client, the list it sends
+does not enumerate it, and the chip renders `smart_approve` as "Smart approve"
+rather than printing the wire enum. `the_mode_chip_speaks_the_apps_words_whatever_the_wire_sent`
+is that in all three shapes.
+
+So the honest version of the check is: `git grep -i "smart approve" -- src
+crates assets scripts` matches only that test's expectation and one measurement
+in a stylesheet comment. Nothing here holds a LIST of modes, nothing invents
+one, and a goose that stops offering `smart_approve` takes the words off the
+screen with it. The fake in
 `crates/mock-goose-server/src/features/core.rs:222-234` ships a different set
 again — `auto` / `approve` / `chat`, "Run tools without asking." / "Ask before
 every tool call." / "No tools at all." — because the fixtures are one server's
@@ -63,7 +84,7 @@ about what it does.
 
 ### 2. Picking one sends a real RPC
 
-The picker's `onchoose` (`chat.rs:300-306`) calls
+The picker's `onchoose` (`chat.rs:288-294`) calls
 `crate::state::set_config_option`, which is `src/state.rs:2086-2104`, which
 calls `SessionClient::set_config_option`
 (`crates/goose-acp-client/src/client/session.rs:209-229`). That emits:
@@ -160,7 +181,7 @@ Written down so the next reader can check rather than re-derive:
   server-first into optimistic, and a refused switch would then paint a safety
   setting the server is not using.
 - **The mode is filtered out of the settings sheet on purpose**
-  (`goose_setting_rows`, `chat.rs:448`), because the chip is where it lives.
+  (`goose_setting_rows`, `chat.rs:476`), because the chip is where it lives.
   Hiding the chip therefore hides the control entirely rather than moving it.
 - **`is_mode_chip` requires more than one value.** An agent that offers exactly
   one mode gets a fact in the sheet and no chip — a chip opening a one-row

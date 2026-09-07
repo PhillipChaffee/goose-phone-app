@@ -2649,41 +2649,66 @@ body.away-from-bottom .scroll-bottom {
  * Written after that rule deliberately: equal specificity, so source order is
  * what decides.
  *
- * The cap is what keeps a chip that cannot shrink from eating the row, and 7ch
- * is not a taste: it is the widest cap at which a 360pt goose composer — model
- * chip, mode chip, context chip and send — still renders a short model name in
- * full. Anything larger and `GPT-5.2` came out as `GPT…` on a small phone
- * whatever the mode was called. It holds every mode OpenCode ships and all of
- * goose's but `Manual approval`.
+ * WHAT IT MAY NOT TAKE IS 7ch; WHAT IT MAY KEEP IS 7ch, and #291 is the whole
+ * distance between those two sentences. A chip that cannot shrink has to be
+ * bounded or it eats the row, and the bound used to be a flat `max-width: 7ch`
+ * on the label. THE NUMBER IS RIGHT AND IS STILL HERE: 7ch is the widest bound
+ * at which a 360pt goose composer — model chip, mode chip, context chip and
+ * send — renders a short model name in full, and anything larger had `GPT-5.2`
+ * coming out as `GPT…` whatever the mode was called. What was wrong is that a
+ * flat cap cannot know whether the row is full, so it cut a complete word on a
+ * window with hundreds of unclaimed pixels beside it.
  *
- * With the row on one line the cap is now the ONLY thing bounding this chip,
- * because it does not shrink at all. Re-measured at
- * 280/320/360/375/390/393/402/430, every tier: a short name is rendered in
- * full at all of them. */
+ * Measured against the mode goose really reported — `smart_approve`, which the
+ * chip now renders `Smart approve` — on the captured `chat` and `desktop-chat`
+ * bodies, six phone sizes plus eight window sizes x four shell states, 38
+ * frames: the label wanted 80px and got 50.7, and was cut in all 38, 16 of
+ * them with 43.8 to 87.8px of the chip block unclaimed. With a
+ * seven-character model id beside it instead, 36 of the 38 were cut with 7.2
+ * to 319.2px spare. On the 1440x860 reference window the 43-character model id
+ * was rendered IN FULL while the app's own one-word label was ellipsised.
+ *
+ * So the 7ch becomes the flex BASIS and the content becomes the cap. The chip
+ * starts at the width the old rule pinned it to, grows into free space if the
+ * row has any, and stops at `max-content` — the label's own width — so it can
+ * never take a pixel it has nothing to put in. `flex-shrink: 0` is unchanged
+ * and is what carries the paragraph above: under pressure the basis is the
+ * whole story again and the model name is still the only elastic item.
+ *
+ * The two ends both matter and both are measured. A label SHORTER than the
+ * basis is clamped down to its content by the same `max-width`, so `Auto`
+ * measures 68.7px here exactly as it did with the cap — the chip did not
+ * widen. And after the change, 0 of the 38 frames cut the label while the row
+ * had room, at either model length.
+ *
+ * `max-content` rather than a second length because the width being asked for
+ * is the label's, which is a font metric and not a number this sheet can
+ * write down. Checked in WebKit as well as Chromium — WKWebView is what
+ * ships, every rendered gate in this repo is Chromium, and an intrinsic
+ * keyword inside the flex algorithm is exactly where those two have differed
+ * before. */
 .composer-chip.mode {
-  /* Rigid, which is what states the new rule exactly: the model name is the
-   * only elastic item in the row.
-   *
-   * 0.1 was chosen for a wrapping row — "the mode label is short and had
-   * nothing to give… it stopped being right when the model chip grew a tier".
-   * Under one line it is measurably worse than 0: at 0.1 the mode label is cut
-   * in 1257 of 3780 compositions, including `Auto` reading `Aut…` at 320pt,
-   * while at 0 no mode label of five characters or fewer is ever cut at any
-   * width from 320 to 430. A lone ellipsis where the mode should be is the
-   * exact failure the comment above was written to prevent. */
   flex-shrink: 0;
+  flex-grow: 1;
+  flex-basis: calc(2 * 12px + 2 * 1px + 6px + 1em + 7ch);
+  max-width: max-content;
 }
 
 /* Block, not the flex row .chip-label is by default: this label carries one
  * fact rather than two, and a bare text node inside a flex container is an
  * anonymous flex item — which `text-overflow` does not apply to. That is why
- * the cap below rendered `Manual approval` as `Manual ap`: cut mid-word, with
- * nothing to say it had been cut. `overflow: hidden` comes from .chip-label
- * and `white-space: nowrap` from the chip, so a block box is the only piece
- * missing. .chip-model escapes this only by being a real element. */
+ * the basis above rendered `Manual approval` as `Manual ap` while it was a cap
+ * on this element: cut mid-word, with nothing to say it had been cut.
+ * `overflow: hidden` comes from .chip-label and `white-space: nowrap` from the
+ * chip, so a block box is the only piece missing. .chip-model escapes this
+ * only by being a real element.
+ *
+ * The `max-width: 7ch` that used to sit here moved onto the chip as its flex
+ * basis, and had to: a cap on this element is a cap on the LABEL, which the
+ * chip cannot grow past even when the row is empty. It is the same 7ch either
+ * way at the width it was measured at, plus the pill's furniture. */
 .composer-chip.mode .chip-label {
   display: block;
-  max-width: 7ch;
   text-overflow: ellipsis;
 }
 

@@ -133,8 +133,13 @@ const settings = (label, effort) =>
 
 // The mode chip. It does not shrink at all — its label is short, the sheet
 // does not restate it, and the model name beside it is the one thing this row
-// is allowed to give away — so the cap on this label is what stops a long mode
-// name taking the row instead.
+// is allowed to give away — so its flex BASIS is what stops a long mode name
+// taking the row instead. That basis used to be a flat `max-width: 7ch` on the
+// label, which is the same number and a different rule: a cap cannot tell a
+// full row from an empty one, so it cut `Manual approval` at every width in
+// this sweep including the ones with a hundred points going spare, and every
+// number below stayed in range while it did. `modeCutWithRoom` is the question
+// that was missing.
 const mode = (label) =>
   `<button class="composer-chip action mode">${icon}<span class="chip-label">${label}</span></button>`;
 
@@ -415,6 +420,26 @@ const EFFORTS = [
               ? modeLabel.scrollWidth > modeLabel.clientWidth + 1
                 && getComputedStyle(modeLabel).textOverflow !== 'ellipsis'
               : false,
+            // CUT WITH THE ROW NOT FULL, which is the one question none of the
+            // others can put. Every check above asks whether something that
+            // gave way did so legibly; this asks whether it should have given
+            // way at all. A flat cap on the mode label answered "cut" at every
+            // width in the sweep — one line, nothing spilling, an ellipsis
+            // where it belongs, and a complete word truncated with room beside
+            // it. Measured as room the CHIP BLOCK still has: the chips are what
+            // divide it, `.chip-row` is the box they divide, and its column gap
+            // is part of the arithmetic rather than part of the slack.
+            modeCutWithRoom: modeLabel
+              ? modeLabel.scrollWidth > modeLabel.clientWidth + 1
+                && [...document.querySelectorAll('.chip-row')].some((box) => {
+                  const mine = chips.filter((c) => box.contains(c));
+                  if (!mine.some((c) => c.classList.contains('mode'))) return false;
+                  const gap = parseFloat(getComputedStyle(box).columnGap) || 0;
+                  const used = mine.reduce((sum, c) => sum + c.getBoundingClientRect().width, 0)
+                    + gap * Math.max(0, mine.length - 1);
+                  return box.clientWidth - used > 1;
+                })
+              : false,
             sendRight: Math.round(sendBox.right),
             composerWidth: Math.round(document.querySelector('.composer').getBoundingClientRect().width),
             vw: document.documentElement.clientWidth,
@@ -454,6 +479,9 @@ const EFFORTS = [
         }
         if (r.sendOffCentre) problems.push('the send button is not centred on the chip block');
         if (r.modeHardClip) problems.push('the mode label is clipped with no ellipsis');
+        if (r.modeCutWithRoom) {
+          problems.push('the mode label is cut while the chip block still has room');
+        }
         if (r.hardClip.length) {
           problems.push(`cut by its parent, with no ellipsis: ${r.hardClip.join(', ')}`);
         }
@@ -549,7 +577,7 @@ const EFFORTS = [
   console.log(
     `\nClean at ${WIDTHS.join('/')}pt x root ${ROOTS.join('/')}px: every chip block is one`
     + ' line, send stays on screen and centred on its own row, nothing spills a pill, a cut'
-    + ' name and a cut mode both say they were cut, and the name never shrinks as the phone'
-    + ' grows.',
+    + ' name and a cut mode both say they were cut, no mode label is cut while the row still'
+    + ' has room, and the name never shrinks as the phone grows.',
   );
 })();
