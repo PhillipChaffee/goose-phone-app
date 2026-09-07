@@ -224,6 +224,19 @@ pub(crate) struct CodeChatState {
 pub(crate) struct DiffState {
     pub files: Vec<DiffFile>,
     pub loading: bool,
+    /// An answer has landed for this chat, exactly as [`PullsState::loaded`]
+    /// means it — and it exists for the same reason one level over: `files`
+    /// being empty is true both before the fetch and after a fetch that found
+    /// nothing, so without this the Diff chip cannot tell "not asked yet" from
+    /// "nothing changed" and has to draw itself for both (#284).
+    ///
+    /// A chat with no session is `loaded` too. It is not an unanswered
+    /// question: `OpenCode` keeps the working tree under a session, so a chat
+    /// that has never been prompted has nothing to diff, and that is an answer
+    /// [`fetch_diff`] can give without asking anyone. Only a failure leaves
+    /// this false with the fetch behind it, because a failure is the one state
+    /// where the chip still has somewhere to lead — the error.
+    pub loaded: bool,
     pub error: Option<String>,
     /// Per-file review state, keyed by path.
     pub view: HashMap<String, FileView>,
@@ -1320,6 +1333,13 @@ async fn pump_events(ctx: &AppCtx, client: &CodeClient, chat_id: &str, epoch: u6
                 if c.peek().session_id.as_deref() == Some(sid.as_str()) {
                     c.write().running = false;
                     write_cache(ctx);
+                    // A finished turn is the one moment the diff is known to
+                    // have moved, and until now the only fetch was on chat
+                    // open — so the chip's `+N −M` was whatever the tree
+                    // looked like before anything was said to it, for the
+                    // whole life of the screen. Free, because the container
+                    // has just answered a turn and is as awake as it gets.
+                    refresh_diff_counts(ctx);
                 }
             }
             CodeEvent::Disconnected { .. } => {
@@ -1662,6 +1682,13 @@ pub(crate) fn send_code_prompt(
         });
         c.running = true;
     }
+    // The diff answer is now stale, and saying so is what puts the Diff chip
+    // back while the turn runs. A turn is exactly when what the tree has
+    // changed is unknown — the agent is editing files as this returns — and
+    // `views::code::action_chips` draws a chip for every half that has not
+    // answered, so an unanswered diff is a chip you can open mid-turn. It is
+    // answered again by `refresh_diff_counts` on `SessionIdle`.
+    ctx.code_diff.clone().write().loaded = false;
     // Held for the length of the request, so a failure has something to give
     // back. It costs a second copy of the payload until the POST is answered,
     // which is the price of not making a sleeping container eat the photo.
@@ -1901,6 +1928,13 @@ fn fetch_diff(ctx: &AppCtx, loud: bool) -> bool {
         if loud {
             show_toast(ctx, "No changes yet — the chat has no session");
         }
+        drop(chat);
+        // Answered, not unanswered: a chat with no session has no working tree
+        // and so has no diff, and that is the whole state of the most common
+        // empty chat there is — one nobody has prompted yet. Left `false`, the
+        // Diff chip would wait forever for a fetch that is never going to
+        // start (`DiffState::loaded`).
+        ctx.code_diff.clone().write().loaded = true;
         return false;
     };
     drop(chat);
@@ -1932,6 +1966,7 @@ fn fetch_diff(ctx: &AppCtx, loud: bool) -> bool {
             Ok(files) => {
                 d.view = marks_to_view(&d.marks());
                 d.files = files.into_iter().map(DiffFile::from).collect();
+                d.loaded = true;
                 d.error = None;
             }
             Err(e) => d.error = Some(e.to_string()),
@@ -3555,6 +3590,47 @@ mod tests {
         assert_eq!(
             status_label(&chat_meta("stopped"), false, true),
             ("dot wait", "waiting on you".to_owned())
+        );
+    }
+
+    /// The commonest empty chat there is — created, never prompted — and the
+    /// one that decides whether #284's rule can ever fire.
+    ///
+    /// `fetch_diff` returns early on a chat with no session and asks nobody
+    /// anything, which is right: `OpenCode` keeps the working tree under a
+    /// session, so there is nothing to diff and the app already knows it.
+    /// What it must not do is leave that as an unanswered question — the Diff
+    /// chip holds itself open while a half has not answered
+    /// (`views::code::action_chips`), so a fetch that never starts would keep
+    /// a chip on screen for the whole life of the chat pointing at a review of
+    /// nothing.
+    #[test]
+    fn a_chat_with_no_session_has_answered_the_diff_question_rather_than_ducked_it() {
+        use dioxus::prelude::*;
+
+        crate::testkit::with_ctx(
+            |ctx| {
+                let mut chat = ctx.code_chat;
+                chat.set(super::CodeChatState {
+                    chat_id: Some("chat_a".to_owned()),
+                    session_id: None,
+                    ..super::CodeChatState::default()
+                });
+            },
+            |ctx| {
+                assert!(
+                    !ctx.code_diff.peek().loaded,
+                    "a chat starts having asked nothing"
+                );
+                super::refresh_diff_counts(ctx);
+                let diff = ctx.code_diff.peek();
+                assert!(
+                    diff.loaded,
+                    "no session is an answer — there is no tree to have \
+                     changed — and leaving it unanswered strands the chip"
+                );
+                assert!(diff.files.is_empty(), "and the answer is: nothing");
+            },
         );
     }
 }

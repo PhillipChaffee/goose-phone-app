@@ -1413,6 +1413,42 @@ pub(crate) fn chat_crumb(ctx: &AppCtx) -> Crumb {
     Crumb::detailed(chat.title.clone(), chat_where(&chat.repo, &chat.branch))
 }
 
+/// Which of the action row's two chips there is anything behind — Diff, then
+/// Pull requests. `None` on either side means that half has not answered yet.
+///
+/// **A chip is a claim that there is something to look at**, and #284 is that
+/// claim made unconditionally: a session that had changed nothing and opened
+/// nothing still offered `Diff` and `Pull requests · 0`, two controls leading
+/// to two empty screens. So an answered-and-empty half loses its chip, and a
+/// chat where both are empty loses the row.
+///
+/// **BOTH ANSWERS OR NEITHER, and that is the anti-flicker rule.** Until every
+/// half has answered, the row is the row it has always been, so no chip can
+/// ever arrive after the screen — not as a matter of timing but by
+/// construction, since nothing is ever withheld while its answer is unknown.
+///
+/// MEASURED RATHER THAN FEARED, and the measurement corrected the fear. The
+/// composer does not move: it is the last child of a column whose scroller
+/// takes the slack, so `.composer`'s top is 756.44 on `desktop-code-chat` at
+/// 1440x860 and 772 on `code-chat` at 402x874 with the row, without it, and
+/// with it empty. What the row costs is 46px of TRANSCRIPT — 726 against 772
+/// on the phone, 612.44 against 658.44 in the window — under a scroller
+/// pinned to its bottom, so a chip landing late takes 46px off the top of
+/// what is being read. That is the flicker, and it is worth avoiding without
+/// being worth a chip that lies.
+///
+/// Settling the two halves independently would also cost the commonest empty
+/// chat TWO of those instead of one, since the answers land far apart: the
+/// pull requests come from the manager's own GitHub credential and need no
+/// container, while the diff waits on the wake and the history load behind
+/// `attach_chat`.
+const fn action_chips(diff: Option<bool>, pulls: Option<bool>) -> (bool, bool) {
+    match (diff, pulls) {
+        (Some(diff), Some(pulls)) => (diff, pulls),
+        _ => (true, true),
+    }
+}
+
 #[component]
 pub fn CodeChatView() -> Element {
     let ctx = use_app_ctx();
@@ -1450,19 +1486,25 @@ pub fn CodeChatView() -> Element {
     // and the server's own record arrives already filtered, so whatever is
     // here is a tier the next turn will really ask for.
     let effort = chip_effort(chat.effort.as_deref());
-    // None until the fetch on chat open lands, and None for a session that has
-    // changed nothing — the chip says "Diff" alone rather than "+0 −0", which
-    // would be a claim it cannot back before the diff has been read.
-    let diff_totals = {
+    // Three states per half, and both the chip and its count are decided out
+    // of them: not asked yet, asked and empty, asked and not empty. `None`
+    // here is the first of those — `loaded` is what tells it from the second
+    // on each side (`DiffState::loaded`, `PullsState::loaded`).
+    //
+    // The count keeps the rule it always had: a number is only ever shown once
+    // an answer backs it, so a diff nobody has read says "Diff" and not
+    // "+0 −0".
+    let (diff_answer, diff_totals) = {
         let d = ctx.code_diff.read();
-        (!d.files.is_empty()).then(|| d.totals())
+        let has = (!d.files.is_empty()).then(|| d.totals());
+        (d.loaded.then(|| has.is_some()), has)
     };
-    // Likewise None until GitHub has answered — and `0` is a claim too, so it
-    // is only shown once there is an answer to back it.
-    let pull_count = {
+    let (pulls_answer, pull_count) = {
         let p = ctx.code_pulls.read();
-        p.loaded.then(|| p.pulls.len())
+        let count = p.loaded.then(|| p.pulls.len());
+        (count.map(|n| n > 0), count)
     };
+    let (show_diff, show_pulls) = action_chips(diff_answer, pulls_answer);
 
     let mut submit = move || {
         let text = draft.peek().trim().to_string();
@@ -1555,29 +1597,43 @@ pub fn CodeChatView() -> Element {
         // the session has produced; the composer is about the next thing you
         // say to it. Putting them in the chip row also put them in a fixed
         // budget of horizontal space they had to share with the model name.
-        div { class: "action-row",
-            button {
-                class: "action-chip",
-                title: "Review the session's changes",
-                onclick: move |_| load_code_diff(&ctx),
-                Icon { name: "diff" }
-                "Diff"
-                if let Some((added, removed)) = diff_totals {
-                    span { class: "stat add", "+{added}" }
-                    span { class: "stat del", "−{removed}" }
+        //
+        // The row itself goes when both chips do, rather than rendering empty:
+        // it carries 2px of its own padding and an 8px bottom margin
+        // (`assets/shared.css`, and `assets/desktop/80-measure.css` for the
+        // gutter it takes from `--measure`), so an empty one leaves 12px of
+        // nothing between the transcript and the composer. Measured on
+        // `code-chat` at 402x874: 46px of gap with both chips, 12 with the row
+        // kept and emptied, 0 with the row gone.
+        if show_diff || show_pulls {
+            div { class: "action-row",
+                if show_diff {
+                    button {
+                        class: "action-chip",
+                        title: "Review the session's changes",
+                        onclick: move |_| load_code_diff(&ctx),
+                        Icon { name: "diff" }
+                        "Diff"
+                        if let Some((added, removed)) = diff_totals {
+                            span { class: "stat add", "+{added}" }
+                            span { class: "stat del", "−{removed}" }
+                        }
+                    }
                 }
-            }
-            // Never disabled, unlike the composer beside it: the manager
-            // answers this from GitHub, so it works while the container is
-            // still waking and while a turn is running.
-            button {
-                class: "action-chip",
-                title: "Pull requests from this branch",
-                onclick: move |_| open_code_pulls(&ctx),
-                Icon { name: "pull-request" }
-                "Pull requests"
-                if let Some(count) = pull_count {
-                    span { class: "stat count", "{count}" }
+                // Never disabled, unlike the composer beside it: the manager
+                // answers this from GitHub, so it works while the container is
+                // still waking and while a turn is running.
+                if show_pulls {
+                    button {
+                        class: "action-chip",
+                        title: "Pull requests from this branch",
+                        onclick: move |_| open_code_pulls(&ctx),
+                        Icon { name: "pull-request" }
+                        "Pull requests"
+                        if let Some(count) = pull_count {
+                            span { class: "stat count", "{count}" }
+                        }
+                    }
                 }
             }
         }
@@ -2327,8 +2383,8 @@ fn merge_confirm_body(pull: &PullRequest) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_choices, branch_chip_label, branch_choices, can_start, chat_ask, chat_crumb,
-        chat_where, choose_repo, code_chip_label, code_mode_label, code_setting_rows,
+        action_chips, agent_choices, branch_chip_label, branch_choices, can_start, chat_ask,
+        chat_crumb, chat_where, choose_repo, code_chip_label, code_mode_label, code_setting_rows,
         compose_placeholder, diff_crumb, diff_seen_title, initial_mode, merge_confirm_body,
         mode_icon, model_choices, model_sheet_choices, new_crumb, new_model_label,
         new_session_sheet, offered_models, pulls_crumb, pulls_subtitle, repo_chip_label,
@@ -4521,6 +4577,11 @@ mod tests {
     /// "+0 −0" and a pull-request count of 0 are claims, and before either
     /// fetch lands the app cannot back them — so the chips carry no numbers at
     /// all until there is an answer, and the real ones once there is.
+    ///
+    /// The unanswered half of it is also #284's anti-flicker rule under its
+    /// own name: an open whose two fetches are still in flight is the row this
+    /// screen has always drawn, because a chip that arrives after the screen
+    /// moves the composer under a reader already reaching for it.
     #[test]
     fn the_action_chips_carry_numbers_only_once_there_is_an_answer() {
         let silent = render(|| rsx! { CodeChatView {} });
@@ -4542,6 +4603,7 @@ mod tests {
                         diff_file("src/a.rs", FileStatus::Modified, 9, 2, MODIFIED_PATCH),
                         diff_file("src/b.rs", FileStatus::Added, 3, 1, MODIFIED_PATCH),
                     ],
+                    loaded: true,
                     ..DiffState::default()
                 });
                 let mut pulls = ctx.code_pulls;
@@ -4563,6 +4625,123 @@ mod tests {
         assert!(
             answered.contains("stat count\">2<"),
             "the pull chip counts what GitHub answered for this branch: {answered:.400}"
+        );
+    }
+
+    /// #284's truth table, away from the renderer.
+    ///
+    /// The diagonal is the fix — an answered-and-empty half loses its chip —
+    /// and the whole top row is the anti-flicker rule: one unanswered half
+    /// keeps BOTH chips, so nothing can appear late even on the side that has
+    /// already come back.
+    #[test]
+    fn a_half_that_answered_empty_loses_its_chip_and_an_unanswered_one_never_does() {
+        assert_eq!(action_chips(None, None), (true, true));
+        assert_eq!(action_chips(None, Some(false)), (true, true));
+        assert_eq!(action_chips(Some(false), None), (true, true));
+
+        assert_eq!(action_chips(Some(true), Some(true)), (true, true));
+        assert_eq!(action_chips(Some(true), Some(false)), (true, false));
+        assert_eq!(action_chips(Some(false), Some(true)), (false, true));
+        assert_eq!(action_chips(Some(false), Some(false)), (false, false));
+    }
+
+    /// The owner's three sentences, rendered (#284): *"If there's no diff and
+    /// there are no pull requests, I want them to just disappear. If there's
+    /// only a diff, only the diff. If there are only pull requests and no
+    /// current diff, then only pull requests."*
+    ///
+    /// The empty case checks for the ROW and not just the chips, because
+    /// `.action-row` carries `--measure`'s gutter and 2px of its own padding
+    /// (`assets/desktop/80-measure.css`): left behind empty it is 12px of
+    /// nothing holding the composer off the transcript.
+    #[test]
+    fn a_session_that_has_produced_nothing_loses_the_row_that_leads_to_nothing() {
+        let nothing = render_seeded(
+            |ctx| {
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    loaded: true,
+                    ..DiffState::default()
+                });
+                let mut pulls = ctx.code_pulls;
+                pulls.set(PullsState {
+                    loaded: true,
+                    ..PullsState::default()
+                });
+            },
+            || rsx! { CodeChatView {} },
+        );
+        assert!(
+            !nothing.contains("action-row"),
+            "a chat that has changed nothing and opened nothing still offered \
+             two controls leading to two empty screens: {nothing:.400}"
+        );
+
+        let only_diff = render_seeded(
+            |ctx| {
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    files: vec![diff_file(
+                        "src/a.rs",
+                        FileStatus::Modified,
+                        9,
+                        2,
+                        MODIFIED_PATCH,
+                    )],
+                    loaded: true,
+                    ..DiffState::default()
+                });
+                let mut pulls = ctx.code_pulls;
+                pulls.set(PullsState {
+                    loaded: true,
+                    ..PullsState::default()
+                });
+            },
+            || rsx! { CodeChatView {} },
+        );
+        assert!(
+            only_diff.contains("action-row") && only_diff.contains("stat add\">+9<"),
+            "the half with something behind it keeps its chip and its numbers: \
+             {only_diff:.400}"
+        );
+        assert!(
+            !only_diff.contains("Pull requests"),
+            "`Pull requests \u{b7} 0` prints the very zero the count's own rule \
+             refuses: {only_diff:.400}"
+        );
+
+        let only_pulls = render_seeded(
+            |ctx| {
+                let mut diff = ctx.code_diff;
+                diff.set(DiffState {
+                    loaded: true,
+                    ..DiffState::default()
+                });
+                let mut pulls = ctx.code_pulls;
+                pulls.set(PullsState {
+                    pulls: vec![pull(
+                        42,
+                        "Rotate",
+                        PullState::Open,
+                        Checks::Passing,
+                        Some(true),
+                    )],
+                    loaded: true,
+                    ..PullsState::default()
+                });
+            },
+            || rsx! { CodeChatView {} },
+        );
+        assert!(
+            only_pulls.contains("stat count\">1<"),
+            "a branch with a pull request open keeps the chip that reaches it: \
+             {only_pulls:.400}"
+        );
+        assert!(
+            !only_pulls.contains("Diff</button>"),
+            "a session whose working tree is clean still offered a review of \
+             nothing: {only_pulls:.400}"
         );
     }
 
