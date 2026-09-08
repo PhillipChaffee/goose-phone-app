@@ -484,12 +484,18 @@ mod tests {
     /// the process that wrote it is gone.
     ///
     /// This is a gate and not a demonstration. The obvious backing —
-    /// `use_persistent`, which `settings` still uses — resolves to an
-    /// in-memory `HashMap` on every target this app builds for. Everything
-    /// else in this file would still typecheck and still pass with it, and
-    /// the journal would evaporate on exactly the event it exists to survive.
-    /// So the alias is what `crate::state` is required to name, and this is
-    /// what the alias is required to be.
+    /// `use_persistent`, which every persisted key in this app went through
+    /// until #220 — resolves to an in-memory `HashMap` on every target this
+    /// app builds for. Everything else in this file would still typecheck and
+    /// still pass with it, and the journal would evaporate on exactly the
+    /// event it exists to survive. So the alias is what `crate::state` is
+    /// required to name, and this is what the alias is required to be.
+    ///
+    /// Nothing in `src/` calls `use_persistent` any more: `settings`,
+    /// `code_cache` and `inspector_open` joined the journal on [`Backing`] in
+    /// #220's two halves, and `code::tests::the_transcript_cache_reaches_the_disk`
+    /// is the same gate for the largest of them. This test is still the one
+    /// that proves the BACKING, which is why it is here and not there.
     ///
     /// `set_directory` writes a process-wide `OnceLock` and `.unwrap()`s the
     /// result, so exactly ONE caller in a test binary may set it. This test
