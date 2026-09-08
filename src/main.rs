@@ -71,6 +71,12 @@ mod state;
 #[cfg(test)]
 mod testkit;
 
+// Times the three round trips the reader waits on, and prints them.
+// `debug_assertions` like `domdump` above, and for its reason: an instrument
+// is not something a shipped binary should carry as dead code.
+#[cfg(debug_assertions)]
+mod timing;
+
 mod viewport;
 
 mod views;

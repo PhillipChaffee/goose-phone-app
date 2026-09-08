@@ -901,8 +901,16 @@ pub(crate) async fn establish(ctx: &AppCtx) -> bool {
     }
     conn.set(ConnState::Connecting);
 
+    // Around the connect rather than around the function, so the number is
+    // TLS + the WebSocket upgrade + `initialize` and not the signal writes
+    // either side of it. The failure arm is marked too: a refused or timed-out
+    // connect is the wait a reader is most likely to complain about.
+    #[cfg(debug_assertions)]
+    let t = crate::timing::start();
     match AcpClient::connect(&cfg).await {
         Ok((client, events, info)) => {
+            #[cfg(debug_assertions)]
+            crate::timing::done("establish", t);
             client_slot.set(Some(client));
             want.set(true);
             let agent = if info.agent_version.is_empty() {
@@ -921,6 +929,8 @@ pub(crate) async fn establish(ctx: &AppCtx) -> bool {
             true
         }
         Err(e) => {
+            #[cfg(debug_assertions)]
+            crate::timing::done("establish.failed", t);
             conn.set(ConnState::Failed(e.to_string()));
             false
         }
@@ -1194,7 +1204,13 @@ async fn reload_chat(ctx: &AppCtx, session_id: String, cwd: String) {
         c.items.clear();
         c.loading = true;
     }
+    #[cfg(debug_assertions)]
+    let t = crate::timing::start();
+    #[cfg(debug_assertions)]
+    crate::timing::watch_replay("session/load.reload.first-frame", &session_id, t);
     let result = client.session_load(&session_id, &cwd).await;
+    #[cfg(debug_assertions)]
+    crate::timing::done("session/load.reload.resolve", t);
     if chat.peek().session_id.as_deref() == Some(session_id.as_str()) {
         chat.write().loading = false;
         match result {
@@ -1210,6 +1226,12 @@ async fn reload_chat(ctx: &AppCtx, session_id: String, cwd: String) {
 }
 
 fn apply_update(ctx: &AppCtx, session_id: &str, update: SessionUpdate) {
+    // Above the match, so the mark is "a frame for this session reached the
+    // fold" rather than "a frame of a shape this arm happens to handle".
+    // Silent unless a `session/load` for this same session is in flight.
+    #[cfg(debug_assertions)]
+    crate::timing::replay_frame(session_id);
+
     let mut chat = ctx.chat;
     let is_current = chat.peek().session_id.as_deref() == Some(session_id);
 
@@ -1514,7 +1536,11 @@ pub(crate) async fn refresh_sessions(ctx: &AppCtx, more: bool) {
     epoch.set(fetch.generation);
 
     loading.set(true);
+    #[cfg(debug_assertions)]
+    let t = crate::timing::start();
     let result = client.session_list(&fetch.query).await;
+    #[cfg(debug_assertions)]
+    crate::timing::done("session/list", t);
     let latest = *epoch.peek();
     match result {
         Ok(page) => {
@@ -1683,7 +1709,18 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
             show_toast(&ctx, "Not connected — reconnect in Settings");
             return;
         };
+        // Three marks, not two: the watch is armed BEFORE the request goes
+        // out, because the replayed frames the second mark is waiting for may
+        // arrive before this call returns — which is the claim
+        // `docs/where-state-lives.md` records as unverified, and the whole
+        // reason this instrument exists.
+        #[cfg(debug_assertions)]
+        let t = crate::timing::start();
+        #[cfg(debug_assertions)]
+        crate::timing::watch_replay("session/load.first-frame", &info.session_id, t);
         let result = client.session_load(&info.session_id, &cwd).await;
+        #[cfg(debug_assertions)]
+        crate::timing::done("session/load.resolve", t);
         let mut chat = ctx.chat;
         if chat.peek().session_id.as_deref() == Some(info.session_id.as_str()) {
             chat.write().loading = false;
