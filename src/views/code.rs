@@ -1,8 +1,8 @@
 //! Code tab views: the chat list (with lifecycle status), the new-session
 //! form, the chat screen (cached-instant open, live streaming), the review
 //! screen, the pull-request screen, and the permission modal for code chats.
-//! Transcript items render through the same `chat::render_item` the Home tab
-//! uses.
+//! Transcript items render through the same `chat::render_transcript` — and so
+//! the same per-item `chat::TranscriptItem` — the Home tab uses.
 
 use std::collections::HashMap;
 

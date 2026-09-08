@@ -251,7 +251,7 @@ pub fn ChatView() -> Element {
 /// `value: "{draft}"` is a read of `AppCtx::chat_draft`, so whichever scope
 /// performs that read is the scope one character marks dirty. That used to be
 /// [`ChatView`]'s own body — which also calls [`render_transcript`], which
-/// hands every item to [`render_item`], which calls `markdown::to_html` on
+/// hands every item to [`TranscriptItem`], which calls `markdown::to_html` on
 /// every Assistant and every Thought. So typing re-parsed the whole
 /// conversation to produce ONE DOM edit, the textarea's own value. Measured
 /// here, dev profile, best of 32 renders on a mounted `VirtualDom` over a
@@ -729,7 +729,7 @@ pub(crate) fn render_transcript(items: &[ChatItem], marks: &[(usize, i64)]) -> E
             });
         }
         if !matches!(items[i], ChatItem::Tool { .. }) {
-            out.push(render_item(i, &items[i]));
+            out.push(item_card(i, &items[i]));
             i += 1;
             continue;
         }
@@ -744,14 +744,14 @@ pub(crate) fn render_transcript(items: &[ChatItem], marks: &[(usize, i64)]) -> E
         });
         if run.len() < 2 || unsettled {
             for (offset, item) in run.iter().enumerate() {
-                out.push(render_item(start + offset, item));
+                out.push(item_card(start + offset, item));
             }
         } else {
             let summary = tool_run_summary(run);
             let cards = run
                 .iter()
                 .enumerate()
-                .map(|(offset, item)| render_item(start + offset, item));
+                .map(|(offset, item)| item_card(start + offset, item));
             out.push(rsx! {
                 details { key: "run-{start}", class: "tool-run",
                     summary { "{summary}" }
@@ -841,13 +841,79 @@ fn tool_kind_phrase(kind: &str, n: usize) -> Option<String> {
     })
 }
 
-/// Shared transcript renderer — the Code tab reuses it (views/code.rs).
-pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
-    match item {
+/// One transcript item, keyed by its position, for [`render_transcript`] and
+/// only for it.
+///
+/// The key is here rather than inside [`TranscriptItem`] because a key is a
+/// statement about SIBLINGS — it tells the fragment diff which of last frame's
+/// nodes this one continues — and the siblings are the who-lines, the time
+/// marks and the folded runs this function's caller interleaves. Putting the
+/// index on the component's props instead would be a different thing entirely
+/// and a worse one: inserting an item at the front would renumber every item
+/// after it, so every card's props would differ and nothing would be memoised.
+/// The index decides IDENTITY here and content decides EQUALITY there, which is
+/// exactly the split dioxus's keyed diff wants.
+fn item_card(index: usize, item: &ChatItem) -> Element {
+    rsx! {
+        TranscriptItem { key: "{index}", item: item.clone() }
+    }
+}
+
+/// ONE CARD, AND ITS OWN COMPONENT SO AN APPENDED TOKEN DOES NOT RE-PARSE THE
+/// CONVERSATION.
+///
+/// The Code tab reaches this through the same [`render_transcript`]
+/// (`src/views/code.rs`), so both transcripts are this.
+///
+/// `push_chunk` (`src/state.rs`) appends a streamed chunk to the trailing
+/// bubble inside a `chat.write()`, which marks the signal dirty; the item COUNT
+/// does not even change. That re-ran [`render_transcript`], which called this
+/// for every item — and this calls `markdown::to_html` on every Assistant and
+/// every Thought. It was a plain `fn` called in a loop inside one component's
+/// body, so dioxus's props memo had nothing to hold: it memoises COMPONENTS,
+/// and there were none here.
+///
+/// As a component with `ChatItem` by value it has something to hold, because
+/// `ChatItem` already derives `Clone, PartialEq, Eq` for the Code tab's
+/// on-device cache. Measured, dev profile, best of 32 renders on a mounted
+/// `VirtualDom`, a chunk landing on the trailing bubble of a transcript of this
+/// repo's own markdown split into paragraph-sized items: **12.49 ms → 4.63 ms
+/// at 600 items**, 4.14 → 1.57 at 200, 0.98 → 0.48 at 50. Instrumented over the
+/// same run, the count that says what happened: **one** item body runs per
+/// chunk at every one of those sizes, where all of them used to.
+///
+/// TWO THINGS THAT SURVIVED THE MEASUREMENT, and both are worth having in
+/// writing.
+///
+/// The per-render clone is NOT the memcpy #316 called it — `ChatItem` is made
+/// of `String`s, so it is a heap allocation per item — and it is also not the
+/// cost. Cloning all 600 items and comparing all 600 for equality, which is
+/// exactly what building and memoising this component's props does, is
+/// **0.055 ms**: about one part in eighty of the frame it sits in.
+///
+/// So the 4.63 ms that is left is not the parse and not the props. It is
+/// [`render_transcript`] rebuilding six hundred `rsx!` nodes and dioxus keyed-
+/// diffing them, every frame, to hand back a list whose last entry is the only
+/// one that changed. That is the next thing to take, and it is a different
+/// change from this one.
+///
+/// IT DOES NOT MAKE THE GROWING BUBBLE FREE either. Appending to a 40 KB
+/// assistant message still re-parses 40 KB — that item's props really did
+/// change. What it takes out of every frame is the other 599.
+///
+/// WHAT MAKES THE MOVE SAFE is that this markup is already pinned as text: 26
+/// calls to `crate::testkit::render_seeded` in this file's test module read the
+/// rendered HTML back as a string. A Dioxus `#[component]` emits its returned
+/// nodes with no wrapper element, so a correct refactor changes no bytes and
+/// all of them pass unedited — and `docs/gallery-states.json` is the second
+/// net.
+#[component]
+fn TranscriptItem(item: ChatItem) -> Element {
+    match &item {
         ChatItem::User { text, attachments } => {
             let html = markdown::escape_text(text);
             rsx! {
-                div { key: "{index}", class: "bubble user",
+                div { class: "bubble user",
                     if !attachments.is_empty() {
                         {attachment_list(attachments)}
                     }
@@ -862,7 +928,7 @@ pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
         ChatItem::Assistant { text, .. } => {
             let html = markdown::to_html(text);
             rsx! {
-                div { key: "{index}", class: "bubble assistant",
+                div { class: "bubble assistant",
                     div { class: "md", dangerous_inner_html: "{html}" }
                 }
             }
@@ -870,7 +936,7 @@ pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
         ChatItem::Thought { text, .. } => {
             let html = markdown::to_html(text);
             rsx! {
-                details { key: "{index}", class: "thought",
+                details { class: "thought",
                     summary { "Thinking" }
                     div { class: "md", dangerous_inner_html: "{html}" }
                 }
@@ -905,7 +971,7 @@ pub(crate) fn render_item(index: usize, item: &ChatItem) -> Element {
                 && edits.iter().all(|edit| edit.cut == 0);
             let has_output = !output.is_empty() && !drawn_it_all;
             rsx! {
-                div { key: "{index}", class: "tool status-{status}",
+                div { class: "tool status-{status}",
                     div { class: "tool-head",
                         // One leading mark, never two and never none. The word
                         // when there is one, the phone's glyph when there is
@@ -1856,7 +1922,7 @@ mod tests {
 
         // THE PHONE'S ARM, which is the branch a `cargo test` on this host can
         // reach no other way — `Shell::CURRENT` is `Desktop` here, and
-        // `render_item` renders whichever mark this returns. `None` for every
+        // `TranscriptItem` renders whichever mark this returns. `None` for every
         // kind is the whole statement that the phone's tool card did not
         // change: it keeps the glyph, in the slot it has always been in.
         for kind in [
