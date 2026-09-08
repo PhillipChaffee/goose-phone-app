@@ -168,6 +168,27 @@ pub(crate) struct Row {
     /// `None` on every chat row, and that is not an omission either: a
     /// conversation is not a working tree and has no diff to be the size of.
     pub stat: Option<Stat>,
+    /// When the row was last touched, in unix seconds: what the list is
+    /// ordered by, and what [`Row::age`] beside it is formatted from.
+    ///
+    /// A FIELD RATHER THAN A KEY REBUILT PER COMPARISON, which is the whole
+    /// of #311. `sort_by_key` is `sort_by(|a, b| f(a).lt(&f(b)))`, so it calls
+    /// its key function TWICE PER COMPARISON rather than once per element, and
+    /// the key each plane used to build opened by cloning the plane's whole
+    /// list back out of its signal and then doing a linear `find` in the copy.
+    /// An already-ordered list of n costs exactly 2(n-1) of those — 98 at
+    /// fifty conversations, 798 at four hundred — to put rows in the order
+    /// they arrived in. Both loops below had already computed this number for
+    /// the age badge and dropped it.
+    ///
+    /// AN `Option` AND NOT AN `i64` WITH A SENTINEL, because the two halves
+    /// have two different ways of having no timestamp and both are real:
+    /// `updated_at` absent or unparseable on the chat side, `last_active` of
+    /// `0.0` — a tree the manager has never run — on the code side. They mean
+    /// the same thing to a reader, which is what [`Band::Undated`] is for. The
+    /// fold to `i64::MIN` happens at the sort, where it is a statement about
+    /// ORDER rather than a date this row is claiming to have.
+    pub epoch: Option<i64>,
     /// The age badge, already formatted.
     pub age: Option<String>,
     /// HOW LONG AN ASK HAS BEEN WAITING, where that is knowable at all.
@@ -328,12 +349,12 @@ impl Mark {
 
 /// The chat plane's rows, newest first inside each band.
 ///
-/// `now` is threaded through from the caller for [`band_of`]'s reason.
-pub(crate) fn chat_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
-    // What the pane is showing, so a row can say it is the one. Read once
-    // rather than per row: `ctx.chat` is a signal and a list of fifty rows
-    // would otherwise take fifty subscriptions to the same value.
-    let open_chat = (ctx.chat)().session_id;
+/// `now` is threaded through from the caller for [`band_of`]'s reason, and
+/// `open_chat` — which conversation the pane is showing, so a row can say it
+/// is the one — for a sharper one this function is the wrong place to make:
+/// it is a parameter so that the only read of `ctx.chat` in this file is the
+/// memo in [`SidebarList`], which is where the argument lives (#313).
+pub(crate) fn chat_rows(ctx: &AppCtx, now: i64, open_chat: Option<&str>) -> Vec<Row> {
     let running = (ctx.running_sessions)();
     let waiting: std::collections::HashSet<String> = (ctx.permission)()
         .iter()
@@ -400,6 +421,7 @@ pub(crate) fn chat_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
                     .contains(&info.session_id)
                     .then(|| asked_at.get(&info.session_id).copied().map(relative_time))
                     .flatten(),
+                epoch,
                 age: epoch.map(relative_time),
                 mark: if waiting.contains(&info.session_id) {
                     Mark::Waiting
@@ -409,23 +431,22 @@ pub(crate) fn chat_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
                     Mark::Idle
                 },
                 band: band_of_stamp(info.updated_at.as_deref(), now),
-                selected: open_chat.as_deref() == Some(info.session_id.as_str()),
+                selected: open_chat == Some(info.session_id.as_str()),
             }
         })
         .collect();
     // Newest first, and undated last within its own band — a stable sort so
     // the server's own order survives between equal timestamps rather than
     // being shuffled by the sort itself.
-    rows.sort_by_key(|row| {
-        std::cmp::Reverse(
-            (ctx.sessions)()
-                .iter()
-                .find(|s| s.session_id == row.id)
-                .and_then(|s| s.updated_at.as_deref())
-                .and_then(rfc3339_to_epoch)
-                .unwrap_or(i64::MIN),
-        )
-    });
+    //
+    // EVERY WORD OF THAT STILL HOLDS, and the key is the same number it
+    // always was. `sort_by_key` is a stable sort, so equal timestamps are
+    // still left in the order goose sent them; an undated row still folds to
+    // `i64::MIN` and still lands last. What went is where the number came
+    // from: the key used to clone `ctx.sessions` and `find` the row's own
+    // entry inside the copy, twice per comparison, to recover an epoch this
+    // loop parsed forty lines up and threw away. See [`Row::epoch`].
+    rows.sort_by_key(|row| std::cmp::Reverse(row.epoch.unwrap_or(i64::MIN)));
     rows
 }
 
@@ -458,8 +479,12 @@ fn tree_size(chat: &opencode_client::ChatMeta) -> Option<Stat> {
 /// the mockup's wide home screen does. The sidebar is 268px and a repo heading
 /// per tree would spend more of it on headings than on trees; the repo goes on
 /// the row's own second line instead, where it is still on screen.
-pub(crate) fn code_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
-    let open_chat = (ctx.code_chat)().chat_id;
+///
+/// `open_chat` arrives from the caller for [`chat_rows`]'s reason, and it is
+/// the code half's own: `ctx.code_chat` is a `CodeChatState`, which carries
+/// `items` plus a `part_index` and a `roles` map, and the Code plane streams
+/// into it exactly as the Chat plane streams into `ctx.chat`.
+pub(crate) fn code_rows(ctx: &AppCtx, now: i64, open_chat: Option<&str>) -> Vec<Row> {
     let waiting: std::collections::HashSet<String> = (ctx.code_permissions)()
         .iter()
         .map(|(chat, _)| chat.clone())
@@ -474,81 +499,87 @@ pub(crate) fn code_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
 
     let mut rows: Vec<Row> = (ctx.code_chats)()
         .iter()
-        .map(|chat| Row {
-            id: chat.id.clone(),
-            title: if chat.title.trim().is_empty() {
-                chat.id.clone()
-            } else {
-                chat.title.clone()
-            },
-            // Repo AND branch, which is what a working tree IS. Both are
-            // identifiers, so the row sets them in mono — see `subtitle_mono`.
-            subtitle: {
-                let repo = chat.repo.trim();
-                let branch = chat.branch.trim();
-                match (repo.is_empty(), branch.is_empty()) {
-                    (false, false) => Some(format!("{repo} \u{b7} {branch}")),
-                    (false, true) => Some(repo.to_owned()),
-                    (true, false) => Some(branch.to_owned()),
-                    (true, true) => None,
-                }
-            },
-            subtitle_mono: true,
-            // HOW BIG THE TREE IS, and only where a server said so. See
-            // `Row::stat` for the two ways this is `None` and why each of them
-            // draws nothing instead of `+0 −0`.
-            stat: tree_size(chat),
-            // NO TIMESTAMP EXISTS on this wire. The row still says it is
-            // blocked — that is the one state a reader must not miss — and
-            // says nothing about how long, rather than reaching into
-            // `CodePermission::metadata` for a field this app does not model.
-            blocked_for: None,
-            age: (chat.last_active > 0.0).then(|| {
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "an epoch in seconds is many orders of magnitude inside i64, and a \
-                              row badge has no use for the fraction"
-                )]
-                relative_time(chat.last_active as i64)
-            }),
-            mark: if waiting.contains(&chat.id) {
-                Mark::Waiting
-            } else if chat.is_running() {
-                Mark::Running
-            } else {
-                Mark::Idle
-            },
-            band: {
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "see the age badge above; the same epoch, the same reasoning"
-                )]
-                if chat.last_active > 0.0 {
-                    band_of(chat.last_active as i64, now)
+        .map(|chat| {
+            // WHEN THE MANAGER LAST RAN THIS TREE, once, for the three things
+            // that want it: the badge, the band and the order. It arrives as
+            // an `f64` of seconds and `0.0` is the manager's "never ran", so
+            // the `Option` is made here rather than three times below — and
+            // the fraction goes here rather than in the sort, which is where
+            // it was already going for the other two. Two trees inside the
+            // same second now compare equal and the stable sort leaves them
+            // in the manager's own order, which is what it is for.
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "an epoch in seconds is many orders of magnitude inside i64, and \
+                          neither a row badge nor a list order has any use for the fraction"
+            )]
+            let epoch = (chat.last_active > 0.0).then_some(chat.last_active as i64);
+            Row {
+                id: chat.id.clone(),
+                title: if chat.title.trim().is_empty() {
+                    chat.id.clone()
                 } else {
-                    Band::Undated
-                }
-            },
-            selected: open_chat.as_deref() == Some(chat.id.as_str()),
+                    chat.title.clone()
+                },
+                // Repo AND branch, which is what a working tree IS. Both are
+                // identifiers, so the row sets them in mono — see
+                // `subtitle_mono`.
+                subtitle: {
+                    let repo = chat.repo.trim();
+                    let branch = chat.branch.trim();
+                    match (repo.is_empty(), branch.is_empty()) {
+                        (false, false) => Some(format!("{repo} \u{b7} {branch}")),
+                        (false, true) => Some(repo.to_owned()),
+                        (true, false) => Some(branch.to_owned()),
+                        (true, true) => None,
+                    }
+                },
+                subtitle_mono: true,
+                // HOW BIG THE TREE IS, and only where a server said so. See
+                // `Row::stat` for the two ways this is `None` and why each of
+                // them draws nothing instead of `+0 −0`.
+                stat: tree_size(chat),
+                // NO TIMESTAMP EXISTS on this wire. The row still says it is
+                // blocked — that is the one state a reader must not miss — and
+                // says nothing about how long, rather than reaching into
+                // `CodePermission::metadata` for a field this app does not
+                // model.
+                blocked_for: None,
+                epoch,
+                age: epoch.map(relative_time),
+                mark: if waiting.contains(&chat.id) {
+                    Mark::Waiting
+                } else if chat.is_running() {
+                    Mark::Running
+                } else {
+                    Mark::Idle
+                },
+                band: epoch.map_or(Band::Undated, |at| band_of(at, now)),
+                selected: open_chat == Some(chat.id.as_str()),
+            }
         })
         .collect();
-    rows.sort_by(|a, b| {
-        let key = |row: &Row| {
-            (ctx.code_chats)()
-                .iter()
-                .find(|c| c.id == row.id)
-                .map_or(f64::MIN, |c| c.last_active)
-        };
-        key(b).total_cmp(&key(a))
-    });
+    // Newest first, dormant trees last, and the manager's own order between
+    // equal stamps — the chat half's sort, on the chat half's key, for the
+    // reasons written over it. This one had the defect in the source rather
+    // than hidden inside `sort_by_key`: a `key` closure called twice by hand,
+    // each call cloning `ctx.code_chats` whole to `find` a row that came out
+    // of that very list.
+    rows.sort_by_key(|row| std::cmp::Reverse(row.epoch.unwrap_or(i64::MIN)));
     rows
 }
 
 /// The plane's rows, whichever plane it is.
-pub(crate) fn rows_for(ctx: &AppCtx, plane: Plane, now: i64) -> Vec<Row> {
+///
+/// `open_chat` is the id the plane's own pane has open — see [`chat_rows`].
+/// One parameter for both halves and not one each, because a `SidebarList` is
+/// one plane's list: the caller has already chosen which of the two signals
+/// the id came out of, and a second parameter would be a value neither arm
+/// could use.
+pub(crate) fn rows_for(ctx: &AppCtx, plane: Plane, now: i64, open_chat: Option<&str>) -> Vec<Row> {
     match plane {
-        Plane::Chat => chat_rows(ctx, now),
-        Plane::Code => code_rows(ctx, now),
+        Plane::Chat => chat_rows(ctx, now, open_chat),
+        Plane::Code => code_rows(ctx, now, open_chat),
     }
 }
 
@@ -583,7 +614,34 @@ fn now_secs() -> i64 {
 #[component]
 pub(crate) fn SidebarList(plane: Plane) -> Element {
     let ctx = crate::state::use_app_ctx();
-    let rows = rows_for(&ctx, plane, now_secs());
+
+    // WHICH ROW THE PANE HAS OPEN, and these three lines are the whole of
+    // #313.
+    //
+    // Both are memos rather than reads, and the reason is the same one
+    // `views::sessions::SessionsView` already gives for the phone's list:
+    // each of these signals holds an ENTIRE TRANSCRIPT, so reading any part
+    // of one here subscribes this list to every streamed chunk — and on the
+    // desktop that transcript is streaming in the column next door, into a
+    // list that is on screen at all times. `push_chunk` takes `chat.write()`
+    // per chunk even on the append path, where nothing about the id can have
+    // changed. A memo re-runs on each of those and wakes this component only
+    // when the id it returns actually changes, which is once per open.
+    //
+    // `peek()` reads without subscribing too, and on its own it would be
+    // wrong here: nothing would then wake the list when you opened a
+    // different chat, and the mark would stay on the row you left.
+    //
+    // Two hooks and one read, because a hook may not be conditional but a
+    // subscription is: the half that is not on screen re-runs its memo and
+    // wakes nobody.
+    let open_chat = use_memo(move || ctx.chat.read().session_id.clone());
+    let open_tree = use_memo(move || ctx.code_chat.read().chat_id.clone());
+    let open = match plane {
+        Plane::Chat => open_chat(),
+        Plane::Code => open_tree(),
+    };
+    let rows = rows_for(&ctx, plane, now_secs(), open.as_deref());
 
     // The two sheets a row can raise. Held here rather than on `AppCtx`,
     // following the rule `views/chat.rs` and the rest already follow: a sheet
@@ -1028,7 +1086,8 @@ mod tests {
 
     #[test]
     fn a_session_that_is_running_and_asking_reads_as_asking() {
-        let rows = crate::testkit::with_ctx(seed_running_and_asking, |ctx| chat_rows(ctx, NOW));
+        let rows =
+            crate::testkit::with_ctx(seed_running_and_asking, |ctx| chat_rows(ctx, NOW, None));
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0].mark,
@@ -1040,6 +1099,13 @@ mod tests {
 
     /// Newest first. A list ordered by whatever the server happened to send is
     /// a list the reader has to search rather than scan.
+    ///
+    /// THE UNDATED ROW IS THE FOURTH BECAUSE THE FALLBACK IS PART OF THE
+    /// ORDER. `Row::epoch` is an `Option` and the sort folds `None` to
+    /// `i64::MIN` — the same fold the key it replaced ended with (#311) — so
+    /// a session the server sent no usable stamp for lands after everything
+    /// it can date. Held both ways round: this assertion passes on either
+    /// implementation, which is what makes it worth having.
     #[test]
     fn the_newest_row_is_the_first_one() {
         let rows = crate::testkit::with_ctx(
@@ -1048,16 +1114,18 @@ mod tests {
                 sessions.set(vec![
                     session("old", "Older", Some("2026-08-25T09:00:00Z")),
                     session("new", "Newer", Some("2026-08-31T09:00:00Z")),
+                    session("undated", "No stamp", None),
                     session("mid", "Middle", Some("2026-08-30T09:00:00Z")),
                 ]);
             },
-            |ctx| chat_rows(ctx, NOW),
+            |ctx| chat_rows(ctx, NOW, None),
         );
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids, ["new", "mid", "old"]);
+        assert_eq!(ids, ["new", "mid", "old", "undated"]);
         assert_eq!(rows[0].band, Band::Today);
         assert_eq!(rows[1].band, Band::Yesterday);
         assert_eq!(rows[2].band, Band::Earlier);
+        assert_eq!(rows[3].band, Band::Undated);
     }
 
     /// An untitled session still needs a name on screen. A row rendering an
@@ -1078,7 +1146,7 @@ mod tests {
                     session("b", "   ", None),
                 ]);
             },
-            |ctx| chat_rows(ctx, NOW),
+            |ctx| chat_rows(ctx, NOW, None),
         );
         for row in &rows {
             assert!(
@@ -1086,6 +1154,43 @@ mod tests {
                 "a row rendered a blank title, which reads as a broken row"
             );
         }
+    }
+
+    /// Newest first on the code half too, and the tree nobody has run after
+    /// all of them.
+    ///
+    /// The chat plane has asserted its own order since the sidebar landed and
+    /// this half asserted nothing about its, so `code_rows` could have been
+    /// re-sorted — or lost its sort outright — with the whole module still
+    /// green. The list arrives scrambled here for that reason: a version that
+    /// merely kept the manager's order would pass a fixture handed over in the
+    /// order it expects.
+    ///
+    /// THE DORMANT TREE IS THE ROW THE SORT IS ACTUALLY ABOUT. `last_active`
+    /// is a plain `f64` and the manager sends `0.0` for a tree it has never
+    /// run, so there is no `Option` to make the fallback obvious; a fallback
+    /// that read as "unknown, therefore first" would push every live tree
+    /// below one nobody has touched.
+    #[test]
+    fn the_newest_tree_is_the_first_one() {
+        let rows = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    active("old", NOW - 6 * DAY),
+                    active("never", 0),
+                    active("new", NOW),
+                    active("mid", NOW - DAY),
+                ]);
+            },
+            |ctx| code_rows(ctx, NOW, None),
+        );
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["new", "mid", "old", "never"]);
+        assert_eq!(rows[0].band, Band::Today);
+        assert_eq!(rows[1].band, Band::Yesterday);
+        assert_eq!(rows[2].band, Band::Earlier);
+        assert_eq!(rows[3].band, Band::Undated);
     }
 
     /// The code plane's rows carry the repo AND the branch, because neither
@@ -1109,7 +1214,7 @@ mod tests {
                     stat: None,
                 }]);
             },
-            |ctx| code_rows(ctx, NOW),
+            |ctx| code_rows(ctx, NOW, None),
         );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "inbox-triage");
@@ -1142,7 +1247,7 @@ mod tests {
                     tree("c3", "", ""),
                 ]);
             },
-            |ctx| code_rows(ctx, NOW),
+            |ctx| code_rows(ctx, NOW, None),
         );
         let subs: Vec<Option<&str>> = rows.iter().map(|r| r.subtitle.as_deref()).collect();
         assert!(
@@ -1213,7 +1318,7 @@ mod tests {
                     .by_chat
                     .insert("has-pull".to_owned(), vec![sized_pull(Some((77, 33)))]);
             },
-            |ctx| code_rows(ctx, NOW),
+            |ctx| code_rows(ctx, NOW, None),
         );
         let stat = |id: &str| {
             rows.iter()
@@ -1250,7 +1355,7 @@ mod tests {
                 let mut chats = ctx.code_chats;
                 chats.set(vec![sized("c1", compare(Some(84), Some(0), false))]);
             },
-            |ctx| code_rows(ctx, NOW),
+            |ctx| code_rows(ctx, NOW, None),
         );
         assert_eq!(
             rows[0].stat,
@@ -1324,7 +1429,7 @@ mod tests {
                     Some("2026-08-31T09:00:00Z"),
                 )]);
             },
-            |ctx| chat_rows(ctx, NOW),
+            |ctx| chat_rows(ctx, NOW, None),
         );
         assert_eq!(rows[0].stat, None);
     }
@@ -1414,6 +1519,24 @@ mod tests {
             additions: size.map(|(plus, _)| plus),
             deletions: size.map(|(_, minus)| minus),
             ..opencode_client::PullRequest::default()
+        }
+    }
+
+    /// A tree the manager last ran at `at`, in the code plane's own units:
+    /// `ChatMeta::last_active` is seconds in an `f64` where the chat plane's
+    /// `updated_at` is an RFC 3339 string, so a test about ordering has to say
+    /// which wire it is on.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the mirror of the two casts `code_rows` already carries and \
+                  for the same reason: an epoch in seconds is far inside the \
+                  range f64 represents integers exactly (2^53), so every stamp \
+                  this suite uses survives the trip"
+    )]
+    fn active(id: &str, at: i64) -> opencode_client::ChatMeta {
+        opencode_client::ChatMeta {
+            last_active: at as f64,
+            ..tree(id, "goose-phone-app", &format!("agent/{id}"))
         }
     }
 
@@ -1539,6 +1662,12 @@ mod tests {
     /// It matters more in the sidebar than it did in a pane, because the
     /// sidebar is on screen at every width and in every state — an unmarked
     /// list is permanently silent about what you are looking at.
+    ///
+    /// Both halves are here, and they are one line each now that the id is a
+    /// parameter (#313) rather than a read each function did for itself.
+    /// WHICH SIGNAL the id came out of is the component's question, and
+    /// `the_marked_row_carries_the_class_the_sheet_paints` below is what asks
+    /// it.
     #[test]
     fn the_open_row_is_the_marked_one() {
         let rows = crate::testkit::with_ctx(
@@ -1548,10 +1677,8 @@ mod tests {
                     session("s1", "First", Some("2026-08-31T09:00:00Z")),
                     session("s2", "Second", Some("2026-08-30T09:00:00Z")),
                 ]);
-                let mut chat = ctx.chat;
-                chat.write().session_id = Some("s2".to_owned());
             },
-            |ctx| chat_rows(ctx, NOW),
+            |ctx| chat_rows(ctx, NOW, Some("s2")),
         );
         let marked: Vec<&str> = rows
             .iter()
@@ -1564,32 +1691,78 @@ mod tests {
             "exactly the open session should be marked; the sidebar is on \
              screen always and an unmarked list never says what is open"
         );
+
+        let rows = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    tree("c1", "goose-phone-app", "agent/x"),
+                    tree("c2", "goose-phone-app", "agent/y"),
+                ]);
+            },
+            |ctx| code_rows(ctx, NOW, Some("c2")),
+        );
+        let marked: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.selected)
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(
+            marked,
+            ["c2"],
+            "the code half marked nothing, so the sidebar says which row is \
+             open on one plane and stays silent on the other"
+        );
     }
 
-    /// And it reaches the markup, not just the struct.
+    /// And it reaches the markup, not just the struct — through the component,
+    /// which is the half `the_open_row_is_the_marked_one` cannot see.
+    ///
+    /// SINCE #313 THIS IS ALSO THE ONLY TEST OF THE MEMO. Nothing below
+    /// `SidebarList` reads `ctx.chat` any more, so a memo that returned the
+    /// wrong field, or read the other plane's signal, or was never wired to
+    /// the call at all, shows up here and nowhere else in the module.
+    ///
+    /// Two sessions rather than one for the same reason: with a single row, a
+    /// mark on the RIGHT row and a mark on EVERY row are the same markup.
     #[test]
     fn the_marked_row_carries_the_class_the_sheet_paints() {
         let html = crate::testkit::render_seeded(
             |ctx| {
                 let mut sessions = ctx.sessions;
-                sessions.set(vec![session(
-                    "s1",
-                    "The open one",
-                    Some("2026-08-31T09:00:00Z"),
-                )]);
+                sessions.set(vec![
+                    session("s1", "The other one", Some("2026-08-31T09:00:00Z")),
+                    session("s2", "The open one", Some("2026-08-30T09:00:00Z")),
+                ]);
                 let mut chat = ctx.chat;
-                chat.write().session_id = Some("s1".to_owned());
+                chat.write().session_id = Some("s2".to_owned());
             },
             || rsx! { SidebarList { plane: Plane::Chat } },
         );
-        assert!(
-            html.contains(r#"class="nav-row on""#),
-            "the open row does not carry `nav-row on`, so assets/desktop/ \
-             has nothing to paint the selection with: {}",
+        // Each row, from its wrapping div to the next one, keeping the ones
+        // the modifier is on. Split rather than `contains`, because the row's
+        // own children are `nav-row-open`, `nav-row-text` and
+        // `nav-row-actions` — a substring test for the base class would match
+        // all three, and one for `nav-row on` could not say which row it
+        // landed on.
+        let marked: Vec<&str> = html
+            .split(r#"<div class="nav-row"#)
+            .filter(|row| row.starts_with(" on\""))
+            .collect();
+        assert_eq!(
+            marked.len(),
+            1,
+            "{} rows carry `nav-row on` — either assets/desktop/ has nothing \
+             to paint the selection with, or it paints all of it: {}",
+            marked.len(),
             &html[..html.len().min(500)]
         );
         assert!(
-            html.contains(r#"aria-current="true""#),
+            marked[0].contains(r#"title="The open one""#),
+            "the mark is on the row the pane does NOT have open"
+        );
+        assert!(
+            marked[0].contains(r#"aria-current="true""#),
             "the selection is colour only — a reader who cannot see the fill \
              is told nothing about which row is open"
         );
