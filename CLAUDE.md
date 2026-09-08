@@ -142,10 +142,15 @@ The desktop's window chrome is inside the app: one band across the top holding
 the traffic lights' reservation, the nav toggle, the plane badge, a crumb
 naming whatever is open with the half's counts beside it, the plane's own
 connection, and the inspector toggle. `crumb_parts` is TOTAL — every screen
-has a name — so `assets/desktop/`'s `:has(.chrome-title)` takes that
-heading back out of the pane unconditionally and there is one title per
-window. The name travels as data on `nav::Destination` (`Detail`'s `Crumb`),
-because Dioxus has no portal.
+has a name — but since #286 the **pane header** shows it and the band's copy is
+what goes: `assets/desktop/55-panes.css` hides the band's three name spans
+whenever `:has(.pane-main .topbar > .title, … > .titlegroup)` says the pane is
+carrying a heading. The band keeps the name on the four states whose pane has
+none (both plane homes, whose `home::Home` renders no `.topbar`, and the code
+composer), keeps the half's counts everywhere in `.chrome-sub`, and hands the
+same crumb to macOS through `document::Title` so the Window menu still says
+what is open. The name travels as data on `nav::Destination` (`Detail`'s
+`Crumb`), because Dioxus has no portal.
 
 **The desktop's sheet is a directory, and the sort is the cascade.**
 `assets/desktop/` holds thirteen region files — `00-tokens.css` through

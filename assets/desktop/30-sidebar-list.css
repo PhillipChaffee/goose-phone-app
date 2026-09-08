@@ -972,7 +972,7 @@
  * the only defence is to render the change.)
  *
  * KEYED OFF THE MARK THE ROW ALREADY RENDERS, so no markup changes. `:has()`
- * is the sheet's own idiom (`:has(.chrome-title)` decides the pane's heading)
+ * is the sheet's own idiom (a `:has()` on the pane's heading decides the band's)
  * and 450 is a real variable-font weight WKWebView resolves — the mockups'
  * source line is `.row.idle .t{color:#c2c8cf;font-weight:450}`, so it is not a
  * rounding artefact of a measurement.

@@ -29,10 +29,10 @@
  * `data-detail` — the attribute existed only so the sheet could say WHICH of
  * two columns held something, and one column does not need telling.
  *
- * What replaced the attribute is `:has(.chrome-title)` further down, and it is
- * strictly better: the pane hides its own heading when the BAND is actually
- * showing one, rather than when a hand-maintained attribute says the band
- * ought to be. The two can no longer drift. */
+ * What replaced the attribute is a `:has()`, and it is strictly better than an
+ * attribute either way round: one side hides its heading when the OTHER is
+ * actually showing one, rather than when a hand-maintained flag says it ought
+ * to be, so the two can no longer drift. Which side hides is #286's, below. */
 
 /* ONE COLUMN, AND THE SIDEBAR FLOATS OVER IT.
  *
@@ -59,6 +59,120 @@
  *
  * MIN_INNER stays (480, 560): the floor is now a content column with an
  * overlay available, which is a usable window, so nothing forces it up. */
+
+/* ── THE PANE NAMES WHAT IT HAS OPEN, AND THE BAND YIELDS TO IT ─────────
+ *
+ * #286, and it is the same rule `80-measure.css` used to carry, turned round.
+ *
+ * WHAT WAS WRONG. `crumb_parts` is total, so the band always had a title, so
+ * `.shell:has(.chrome-title) .pane-main .topbar > .title` hid the pane's own
+ * heading on every screen — leaving a 4rem header that was a back chevron, a
+ * `+`, a `…` and 514px of nothing in the middle of it. Measured on
+ * `desktop-code-chat` at 1440x860 against the sheet list `docs/audit.js`
+ * builds, transitions killed, sidebar open: `.icon-btn.back` 534,50 32x32 and
+ * `.topbar-actions` 1080,44 94x44, with `.titlegroup` between them reporting
+ * no boxes at all. The name of the thing you had open was 500pt away and one
+ * strip up, at 12.5px, sharing its line with a plane badge, a connection pill
+ * and two toggles.
+ *
+ * WHAT DECIDES. Not `.pane-main` alone and not an attribute: the band's copy
+ * must go only where the pane is ACTUALLY showing one, and four of the
+ * twenty-one captured desktop states are not. `desktop-chats` and
+ * `desktop-code-list` are the two plane homes and `home::Home` renders no
+ * `.topbar` at all; `desktop-code-new` renders one holding a chevron and
+ * nothing else. On those three the band is the only thing that can name the
+ * screen, and it does, unchanged.
+ *
+ * THE SELECTOR IS THE OLD ONE'S SUBJECT, WORD FOR WORD. `.pane-main .topbar >
+ * .title, .pane-main .topbar > .titlegroup` was what the sheet used to hide;
+ * it is what the sheet now asks about. Keeping the two identical is the whole
+ * of why this cannot drift — the question "is the pane showing a heading" and
+ * the answer "then hide the band's" are one string. `.topbar >` for the reason
+ * that string was written with: it reaches the six headers `views/code.rs` and
+ * `views/chat.rs` hand-roll exactly as it reaches `views::chrome::TopBar`'s,
+ * where a Rust-side conditional in the component would have covered eight of
+ * fourteen call sites.
+ *
+ * THE NAME AND NOT THE WHOLE CELL, and that is the one place this is not a
+ * mirror image of the rule it replaces. `.chrome-title` is the mockups'
+ * `.band-mid`, not "the crumb": it holds the parent, the separator, the leaf
+ * AND `.chrome-sub`, which since #215 is where the half's counts go when the
+ * sidebar that otherwise carries them is shut. That arrangement is a DETAIL
+ * screen by definition — a chat open behind a collapsed column — so hiding the
+ * cell whole would take the counts off screen in the one state they were added
+ * for. The three name spans go; the qualifier stays and is the band's middle
+ * cell entire.
+ *
+ * All three at (0,1,0) inside `:is()`, so this is (0,5,0) against
+ * `50-band.css`'s (0,1,0) — specificity decides it and the file order does not
+ * have to.
+ *
+ * MEASURED, both sides, `desktop-code-chat` 1440x860 dark, transitions killed,
+ * against the sheet list `docs/audit.js` builds:
+ *
+ *   before   band .chrome-heading 402.5,8.0 179.8x18.0   pane .titlegroup no box
+ *   after    band .chrome-heading no box                 pane .titlegroup 570.0,47.0 287.3x38.0
+ *                                                        pane .title      570.0,47.0 218.2x22.0
+ *                                                        pane .subtitle   570.0,69.0 287.3x16.0
+ *
+ * and the band gives the room straight back: `.window-drag` 585.5,0.0 528.1x33
+ * before, 354.9,0.0 739.4x33 after.
+ *
+ * NOT `visibility: hidden` and not a zero width: `display: none` takes the
+ * spans out of the band's flex line, so the drag strip beside them grows by
+ * what they held rather than the band keeping a hole where a title used to be.
+ * It also takes the heading out of the accessibility tree, which is the right
+ * answer for a duplicate of a heading that is on screen 40px below it. */
+.shell:has(.pane-main .topbar > .title, .pane-main .topbar > .titlegroup)
+  .chrome-title
+  > :is(.chrome-parent, .chrome-sep, .chrome-heading) {
+  display: none;
+}
+
+/* AND THE PANE HEADER'S FLEX LINE HAS TO DISTRIBUTE, WHICH IT HAS NEVER HAD
+ * TO DO.
+ *
+ * This is the latent defect the rule above uncovered, and it is worth being
+ * exact about why nobody could have seen it. On a phone `.topbar > .title` and
+ * `.topbar > .titlegroup` are `position: absolute`, centred on the screen with
+ * a `--topbar-reserve` either side, so the bar's flex line is two control
+ * groups and nothing else. `70-overrides.css` puts the heading back IN FLOW
+ * for this shell ("in a pane header the title starts at the leading edge and
+ * takes what is left") — and then `80-measure.css` hid it, so the in-flow
+ * arrangement that rule describes has never once been laid out. The heading is
+ * on screen now and the line is three items.
+ *
+ * WHAT IT DID, measured on `desktop-code-chat` at 628x700 light against the
+ * sheet list `docs/audit.js` builds, transitions killed. `.titlegroup`
+ * inherits no `flex` at all, so `0 1 auto`: it took its intrinsic 216.3px, and
+ * `.topbar-actions` — also `0 1 auto`, with `min-width: 0` from
+ * `assets/shared.css` — was squeezed to 71.8px around 92px of buttons. `node
+ * docs/audit.js both` reported 370 SPILL ("div.topbar-actions content leaves
+ * the box by 20px") and 148 OVERFLOW-X, the second of the two overflow buttons
+ * painting at x=632 in a 628px window.
+ *
+ * THE NAME YIELDS AND THE CONTROLS DO NOT, which is `docs/audit.js`'s
+ * TITLE-OUTBID discipline stated as CSS rather than as a check: a control's
+ * width is what it holds, a name is a string that can be shortened, so the
+ * deficit comes off the name. `flex: 1 1 0` and not `1 1 auto` for
+ * `.chrome-sub`'s reason one file back — a zero basis means this box asks for
+ * nothing and grows into what is left, so it can never be the thing that
+ * overflows. `min-width: 0` is what lets the ellipsis actually happen; both
+ * `.title` and `.subtitle` carry `.ellipsis` already.
+ *
+ * `.pane-main`, so this is a statement about the CONTENT COLUMN and not about
+ * every `.topbar` a desktop binary can render — the same scoping
+ * `80-measure.css` §7 uses and for the same reason. */
+.pane-main .topbar > .title,
+.pane-main .topbar > .titlegroup {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.pane-main .topbar > .icon-btn,
+.pane-main .topbar > .topbar-actions {
+  flex: 0 0 auto;
+}
 
 .chrome-parent {
   flex: 0 1 auto;

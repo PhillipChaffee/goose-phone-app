@@ -301,67 +301,32 @@ body.away-from-bottom .pane-main .scroll-bottom {
   display: none;
 }
 
-/* AND ONE TITLE PER WINDOW, for the same reason and by the same means.
+/* ONE TITLE PER WINDOW IS STILL THE RULE, AND IT IS NO LONGER THIS FILE'S —
+ * #286 MOVED IT, AND TURNED IT ROUND.
  *
- * The window's bar names whatever the detail column has open, so the pane
- * below it must not name it again — three columns would otherwise show the
- * chat's title twice, 500pt apart and at two different sizes. What is left in
- * the pane's header is the back chevron and the screen's own controls, which
- * are pane-scoped and stay: the chevron closes what is OPEN while the sidebar's
- * list stays on screen, and in the window's bar that would read as a
- * window-level Back.
+ * Two rules stood here. `.shell:has(.chrome-title) .pane-main .topbar >
+ * .title` hid the PANE's heading whenever the band was carrying one, and since
+ * `crumb_parts` is total the band always was — so every pane header in this
+ * shell was a back chevron on the left, a `+` and a `…` on the right, and 514px
+ * of nothing between them at 1440 with the sidebar open (measured on
+ * `desktop-code-chat` against the sheet list `docs/audit.js` builds: the
+ * chevron ends at x=566 and `.topbar-actions` begins at x=1080). Under it a
+ * second rule collapsed that header to `min-height: 0` on the screens where
+ * the emptiness was total.
  *
- * Keyed on `:has(.chrome-title)` rather than on `.pane-main` alone, because
- * the pane's heading must go only when the BAND is carrying one — and it is
- * not always. A non-primary destination's own root (the Recipes grid, the
- * Skills grid) renders with nothing pushed on it, so `nav::Detail` is `None`,
- * so there is no `Crumb` and no `.chrome-title`; the pane's own heading is
- * then the only name the window has and hiding it would leave the window
- * unnamed.
+ * The name is back in the pane, where the reader was looking for it, and
+ * `assets/desktop/55-panes.css` hides the BAND's copy instead. Same mechanism,
+ * same property — one `:has()` asking the markup rather than an attribute two
+ * sides have to keep in step — pointing the other way. The collapse rule went
+ * with it and could not survive on any terms: with the heading visible, the
+ * header it collapsed is the header that now carries the window's name, and
+ * `min-height: 0; overflow: hidden` on `desktop-settings` would take
+ * "Settings" off the screen entirely.
  *
- * This used to be `[data-detail="open"]`, an attribute the shell set from the
- * same fact. `:has()` asks the markup the question directly instead, so the
- * bar's title and the pane's suppression cannot drift apart — the failure the
- * attribute made possible was exactly one of them changing without the other.
- *
- * `.topbar >`, so this reaches the six headers `views/code.rs` and
- * `views/chat.rs` hand-roll exactly as it reaches `views::chrome::TopBar`'s.
- * A Rust-side conditional inside the component would have covered eight of the
- * fourteen call sites and left five of the nine detail screens painting a
- * second title. The bar's height does not change: it is 4rem so that the two
- * panes' headers do not stair-step across the divider between them, and that
- * is still true of a header holding only a chevron. */
-.shell:has(.chrome-title) .pane-main .topbar > .title,
-.shell:has(.chrome-title) .pane-main .topbar > .titlegroup {
-  display: none;
-}
-
-/* …AND WHEN THAT LEAVES NOTHING, THE BAR GOES TOO.
- *
- * The rule above hides the heading, `.topbar > .icon-btn.menu` further up
- * hides the drawer button the desktop has no drawer for, and `.topbar-actions`
- * is often a screen with no controls. On Settings all three are true at once:
- * the captured `desktop-settings` header is a hidden menu button, a hidden
- * `h1`, and an empty actions box — 4rem of blank canvas between the window's
- * bar and the first setting, on eight of thirteen states.
- *
- * The two `:not(:has())` clauses are the whole condition, and each names a
- * thing that WOULD still be visible: a back chevron, or a control in the
- * actions box. `> .topbar-actions > *` and not `:empty`, because an actions
- * box that rendered nothing still contains Dioxus's placeholder comment and
- * `:empty` would not match it — `> *` counts elements, which is the question.
- *
- * The mockups have no pane header on any screen; this does not go that far,
- * because the chevron is real navigation and a window that keeps its list on
- * screen still needs a way to close what is open. It removes the bar only
- * where the bar is empty. */
-.shell:has(.chrome-title)
-  .pane-main
-  .topbar:not(:has(> .icon-btn.back)):not(:has(> .topbar-actions > *)) {
-  min-height: 0;
-  padding: 0;
-  overflow: hidden;
-}
+ * What is left in the pane's header beside the name is what was always left:
+ * the back chevron and the screen's own controls, both pane-scoped. The
+ * chevron closes what is OPEN while the sidebar's list stays on screen, and in
+ * the window's bar that would read as a window-level Back. */
 
 /* ── 7. one line of title over one line of preview ──────────────────────
  *
