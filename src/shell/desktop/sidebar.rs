@@ -168,6 +168,27 @@ pub(crate) struct Row {
     /// `None` on every chat row, and that is not an omission either: a
     /// conversation is not a working tree and has no diff to be the size of.
     pub stat: Option<Stat>,
+    /// When the row was last touched, in unix seconds: what the list is
+    /// ordered by, and what [`Row::age`] beside it is formatted from.
+    ///
+    /// A FIELD RATHER THAN A KEY REBUILT PER COMPARISON, which is the whole
+    /// of #311. `sort_by_key` is `sort_by(|a, b| f(a).lt(&f(b)))`, so it calls
+    /// its key function TWICE PER COMPARISON rather than once per element, and
+    /// the key each plane used to build opened by cloning the plane's whole
+    /// list back out of its signal and then doing a linear `find` in the copy.
+    /// An already-ordered list of n costs exactly 2(n-1) of those — 98 at
+    /// fifty conversations, 798 at four hundred — to put rows in the order
+    /// they arrived in. Both loops below had already computed this number for
+    /// the age badge and dropped it.
+    ///
+    /// AN `Option` AND NOT AN `i64` WITH A SENTINEL, because the two halves
+    /// have two different ways of having no timestamp and both are real:
+    /// `updated_at` absent or unparseable on the chat side, `last_active` of
+    /// `0.0` — a tree the manager has never run — on the code side. They mean
+    /// the same thing to a reader, which is what [`Band::Undated`] is for. The
+    /// fold to `i64::MIN` happens at the sort, where it is a statement about
+    /// ORDER rather than a date this row is claiming to have.
+    pub epoch: Option<i64>,
     /// The age badge, already formatted.
     pub age: Option<String>,
     /// HOW LONG AN ASK HAS BEEN WAITING, where that is knowable at all.
@@ -400,6 +421,7 @@ pub(crate) fn chat_rows(ctx: &AppCtx, now: i64, open_chat: Option<&str>) -> Vec<
                     .contains(&info.session_id)
                     .then(|| asked_at.get(&info.session_id).copied().map(relative_time))
                     .flatten(),
+                epoch,
                 age: epoch.map(relative_time),
                 mark: if waiting.contains(&info.session_id) {
                     Mark::Waiting
@@ -416,16 +438,15 @@ pub(crate) fn chat_rows(ctx: &AppCtx, now: i64, open_chat: Option<&str>) -> Vec<
     // Newest first, and undated last within its own band — a stable sort so
     // the server's own order survives between equal timestamps rather than
     // being shuffled by the sort itself.
-    rows.sort_by_key(|row| {
-        std::cmp::Reverse(
-            (ctx.sessions)()
-                .iter()
-                .find(|s| s.session_id == row.id)
-                .and_then(|s| s.updated_at.as_deref())
-                .and_then(rfc3339_to_epoch)
-                .unwrap_or(i64::MIN),
-        )
-    });
+    //
+    // EVERY WORD OF THAT STILL HOLDS, and the key is the same number it
+    // always was. `sort_by_key` is a stable sort, so equal timestamps are
+    // still left in the order goose sent them; an undated row still folds to
+    // `i64::MIN` and still lands last. What went is where the number came
+    // from: the key used to clone `ctx.sessions` and `find` the row's own
+    // entry inside the copy, twice per comparison, to recover an epoch this
+    // loop parsed forty lines up and threw away. See [`Row::epoch`].
+    rows.sort_by_key(|row| std::cmp::Reverse(row.epoch.unwrap_or(i64::MIN)));
     rows
 }
 
@@ -478,73 +499,73 @@ pub(crate) fn code_rows(ctx: &AppCtx, now: i64, open_chat: Option<&str>) -> Vec<
 
     let mut rows: Vec<Row> = (ctx.code_chats)()
         .iter()
-        .map(|chat| Row {
-            id: chat.id.clone(),
-            title: if chat.title.trim().is_empty() {
-                chat.id.clone()
-            } else {
-                chat.title.clone()
-            },
-            // Repo AND branch, which is what a working tree IS. Both are
-            // identifiers, so the row sets them in mono — see `subtitle_mono`.
-            subtitle: {
-                let repo = chat.repo.trim();
-                let branch = chat.branch.trim();
-                match (repo.is_empty(), branch.is_empty()) {
-                    (false, false) => Some(format!("{repo} \u{b7} {branch}")),
-                    (false, true) => Some(repo.to_owned()),
-                    (true, false) => Some(branch.to_owned()),
-                    (true, true) => None,
-                }
-            },
-            subtitle_mono: true,
-            // HOW BIG THE TREE IS, and only where a server said so. See
-            // `Row::stat` for the two ways this is `None` and why each of them
-            // draws nothing instead of `+0 −0`.
-            stat: tree_size(chat),
-            // NO TIMESTAMP EXISTS on this wire. The row still says it is
-            // blocked — that is the one state a reader must not miss — and
-            // says nothing about how long, rather than reaching into
-            // `CodePermission::metadata` for a field this app does not model.
-            blocked_for: None,
-            age: (chat.last_active > 0.0).then(|| {
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "an epoch in seconds is many orders of magnitude inside i64, and a \
-                              row badge has no use for the fraction"
-                )]
-                relative_time(chat.last_active as i64)
-            }),
-            mark: if waiting.contains(&chat.id) {
-                Mark::Waiting
-            } else if chat.is_running() {
-                Mark::Running
-            } else {
-                Mark::Idle
-            },
-            band: {
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "see the age badge above; the same epoch, the same reasoning"
-                )]
-                if chat.last_active > 0.0 {
-                    band_of(chat.last_active as i64, now)
+        .map(|chat| {
+            // WHEN THE MANAGER LAST RAN THIS TREE, once, for the three things
+            // that want it: the badge, the band and the order. It arrives as
+            // an `f64` of seconds and `0.0` is the manager's "never ran", so
+            // the `Option` is made here rather than three times below — and
+            // the fraction goes here rather than in the sort, which is where
+            // it was already going for the other two. Two trees inside the
+            // same second now compare equal and the stable sort leaves them
+            // in the manager's own order, which is what it is for.
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "an epoch in seconds is many orders of magnitude inside i64, and \
+                          neither a row badge nor a list order has any use for the fraction"
+            )]
+            let epoch = (chat.last_active > 0.0).then_some(chat.last_active as i64);
+            Row {
+                id: chat.id.clone(),
+                title: if chat.title.trim().is_empty() {
+                    chat.id.clone()
                 } else {
-                    Band::Undated
-                }
-            },
-            selected: open_chat == Some(chat.id.as_str()),
+                    chat.title.clone()
+                },
+                // Repo AND branch, which is what a working tree IS. Both are
+                // identifiers, so the row sets them in mono — see
+                // `subtitle_mono`.
+                subtitle: {
+                    let repo = chat.repo.trim();
+                    let branch = chat.branch.trim();
+                    match (repo.is_empty(), branch.is_empty()) {
+                        (false, false) => Some(format!("{repo} \u{b7} {branch}")),
+                        (false, true) => Some(repo.to_owned()),
+                        (true, false) => Some(branch.to_owned()),
+                        (true, true) => None,
+                    }
+                },
+                subtitle_mono: true,
+                // HOW BIG THE TREE IS, and only where a server said so. See
+                // `Row::stat` for the two ways this is `None` and why each of
+                // them draws nothing instead of `+0 −0`.
+                stat: tree_size(chat),
+                // NO TIMESTAMP EXISTS on this wire. The row still says it is
+                // blocked — that is the one state a reader must not miss — and
+                // says nothing about how long, rather than reaching into
+                // `CodePermission::metadata` for a field this app does not
+                // model.
+                blocked_for: None,
+                epoch,
+                age: epoch.map(relative_time),
+                mark: if waiting.contains(&chat.id) {
+                    Mark::Waiting
+                } else if chat.is_running() {
+                    Mark::Running
+                } else {
+                    Mark::Idle
+                },
+                band: epoch.map_or(Band::Undated, |at| band_of(at, now)),
+                selected: open_chat == Some(chat.id.as_str()),
+            }
         })
         .collect();
-    rows.sort_by(|a, b| {
-        let key = |row: &Row| {
-            (ctx.code_chats)()
-                .iter()
-                .find(|c| c.id == row.id)
-                .map_or(f64::MIN, |c| c.last_active)
-        };
-        key(b).total_cmp(&key(a))
-    });
+    // Newest first, dormant trees last, and the manager's own order between
+    // equal stamps — the chat half's sort, on the chat half's key, for the
+    // reasons written over it. This one had the defect in the source rather
+    // than hidden inside `sort_by_key`: a `key` closure called twice by hand,
+    // each call cloning `ctx.code_chats` whole to `find` a row that came out
+    // of that very list.
+    rows.sort_by_key(|row| std::cmp::Reverse(row.epoch.unwrap_or(i64::MIN)));
     rows
 }
 
@@ -1078,6 +1099,13 @@ mod tests {
 
     /// Newest first. A list ordered by whatever the server happened to send is
     /// a list the reader has to search rather than scan.
+    ///
+    /// THE UNDATED ROW IS THE FOURTH BECAUSE THE FALLBACK IS PART OF THE
+    /// ORDER. `Row::epoch` is an `Option` and the sort folds `None` to
+    /// `i64::MIN` — the same fold the key it replaced ended with (#311) — so
+    /// a session the server sent no usable stamp for lands after everything
+    /// it can date. Held both ways round: this assertion passes on either
+    /// implementation, which is what makes it worth having.
     #[test]
     fn the_newest_row_is_the_first_one() {
         let rows = crate::testkit::with_ctx(
@@ -1086,16 +1114,18 @@ mod tests {
                 sessions.set(vec![
                     session("old", "Older", Some("2026-08-25T09:00:00Z")),
                     session("new", "Newer", Some("2026-08-31T09:00:00Z")),
+                    session("undated", "No stamp", None),
                     session("mid", "Middle", Some("2026-08-30T09:00:00Z")),
                 ]);
             },
             |ctx| chat_rows(ctx, NOW, None),
         );
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids, ["new", "mid", "old"]);
+        assert_eq!(ids, ["new", "mid", "old", "undated"]);
         assert_eq!(rows[0].band, Band::Today);
         assert_eq!(rows[1].band, Band::Yesterday);
         assert_eq!(rows[2].band, Band::Earlier);
+        assert_eq!(rows[3].band, Band::Undated);
     }
 
     /// An untitled session still needs a name on screen. A row rendering an
