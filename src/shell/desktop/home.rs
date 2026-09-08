@@ -4539,6 +4539,16 @@ mod tests {
     /// the thing that was missing and the thing a future edit to this list
     /// would drop. `code_of` strips the comments, so the paragraph beside the
     /// effect explaining this cannot satisfy it.
+    ///
+    /// AND IT PINS NAMES, NOT POLICY, which is the gap #317 was about: two of
+    /// these four revalidate on every arrival and two are a cache, so half of
+    /// the one grid this screen draws could be as old as the process. The
+    /// half that is missing here is asserted where it now lives — a new
+    /// connection empties all four (`state::forget_server_lists`), so
+    /// `ensure_loaded` means once per connection rather than once per launch.
+    /// `state::tests::a_new_connection_forgets_the_last_servers_lists` and the
+    /// two-server test under it are that half; this one deliberately stays a
+    /// scan of the source, because a scan is all this file can do.
     #[test]
     fn the_chat_home_fetches_every_list_it_draws() {
         let code = crate::selfscan::code_of("home.rs", include_str!("home.rs"));

@@ -903,9 +903,16 @@ pub(crate) async fn establish(ctx: &AppCtx) -> bool {
         }
     };
 
-    // Drop any previous connection first.
-    if let Some(old) = client_slot.peek().clone() {
+    // Drop any previous connection first — and let go of the handle here,
+    // rather than leaving that to the event its close is about to raise. The
+    // pump now keeps its hands off `client` when a reconnect superseded it
+    // (see the `Disconnected` arm), so this is the only place that can clear
+    // it, and a replacement that fails must not leave a screen holding a
+    // socket that is already shut.
+    let previous = client_slot.peek().clone();
+    if let Some(old) = previous {
         old.close();
+        client_slot.set(None);
     }
     conn.set(ConnState::Connecting);
 
@@ -921,6 +928,10 @@ pub(crate) async fn establish(ctx: &AppCtx) -> bool {
             crate::timing::done("establish", t);
             client_slot.set(Some(client));
             want.set(true);
+            // Before the state says Connected, because every one of the four
+            // mount effects that refills these is keyed on exactly that
+            // signal: they must see the emptied list, not the last server's.
+            forget_server_lists(ctx);
             let agent = if info.agent_version.is_empty() {
                 info.agent_name
             } else {
@@ -943,6 +954,47 @@ pub(crate) async fn establish(ctx: &AppCtx) -> bool {
             false
         }
     }
+}
+
+/// Forget what the last connection said, so "fetched once" means once per
+/// CONNECTION rather than once per process.
+///
+/// Recipes, Skills, Scheduler and Extensions are one screen on the desktop
+/// before they are four in the Library: the Chat home's "Ways to start" grid is
+/// recipes and skills appended under one heading (`starters_for`), and the
+/// dashed row under it is the scheduler. Two of the four fetch through
+/// `refresh` and revalidate on every arrival; the other two fetch through
+/// `ensure_loaded`, whose guard is `items.is_empty() && !loading`. Nothing
+/// emptied those items, so half of one grid was as old as the process (#317).
+///
+/// CONNECT TO ONE GOOSE, OPEN THE CHAT HOME, CHANGE `server_url` IN SETTINGS,
+/// CONNECT TO ANOTHER: the recipes half of the grid re-fetched and the skills
+/// half kept the first server's skills for the rest of the process. Emptying
+/// the four here is the whole fix, and it fixes the phone's Skills and
+/// Scheduler screens with it — on the desktop those two escape through
+/// `refresh_named` on arrival, and on the phone the only escape was a pull.
+///
+/// A RECONNECT TO THE SAME SERVER PAYS FOR THIS, one GET per list per screen
+/// that is up. That is the price `use_arrival_refresh` already names for the
+/// same trade — "a duplicate GET over Tailscale is cheaper than a hand-kept
+/// list of exceptions" — and the alternative is a policy that cannot tell a
+/// reconnect from a different server, because at this point nothing can: an
+/// `AcpClient` is built fresh here every time and carries no identity from the
+/// last one.
+///
+/// THE WHOLE `Remote` GOES, not just `items`. `unsupported` and `sticky` are
+/// statements about a server too, and `Remote::settle` already says so in as
+/// many words — *"a phone that reconnected to a different one must be able to
+/// say so"*. Leaving `unsupported` behind would hide a feature the new server
+/// has; leaving `sticky` behind would keep the last server's failure on screen
+/// under the new one's list.
+fn forget_server_lists(ctx: &AppCtx) {
+    let (mut recipes, mut skills) = (ctx.recipes.list, ctx.skills.list);
+    let (mut scheduler, mut extensions) = (ctx.scheduler.list, ctx.extensions.list);
+    *recipes.write() = Remote::new();
+    *skills.write() = Remote::new();
+    *scheduler.write() = Remote::new();
+    *extensions.write() = Remote::new();
 }
 
 /// Ask the server what a conversation started right now would run on, so the
@@ -1062,7 +1114,36 @@ async fn pump(ctx: &AppCtx, mut events: mpsc::Receiver<AcpEvent>) {
                 }
             }
             AcpEvent::Disconnected { reason, cause } => {
-                client_slot.set(None);
+                // A SOCKET THIS SIDE CLOSED IS NOT A CONNECTION THAT WAS LOST,
+                // and this arm used to read `want_connected` without asking
+                // which. `close()` has exactly two callers: [`disconnect`],
+                // which drops the flag first, and [`establish`], which closes
+                // the old client in the middle of opening its replacement — so
+                // `Local` with the flag still set means a reconnect is already
+                // in flight, or has already finished. `DisconnectCause` exists
+                // for precisely this distinction and says so at its
+                // declaration: "reconnecting from Settings closes the live
+                // client while that flag is still true, so 'we wanted to be
+                // connected and are not' covers both a dropped tailnet and a
+                // deliberate press of Connect".
+                //
+                // Without the guard this event wiped `ctx.client`, painted
+                // "Connection lost" over a connection that was already up, and
+                // armed a dialler against it. Measured: two `establish`es in a
+                // row left the app holding no client and reporting Failed with
+                // a live socket open. With the ramp's sleep still in front of
+                // that dialler the damage was one extra reconnect a couple of
+                // seconds later, which is why it went unnoticed; with the sleep
+                // moved behind the attempt (#319) the same probe made 149
+                // requests before the test gave up, because each replacement
+                // closed the one before it. Bounded rather than merely slowed:
+                // every connection the storm opened was closed by an
+                // `establish`, so every one of those closes is now `Local` and
+                // says nothing.
+                let superseded = cause == DisconnectCause::Local && *ctx.want_connected.peek();
+                if !superseded {
+                    client_slot.set(None);
+                }
                 chat.write().running = false;
                 running_sessions.write().clear();
 
@@ -1106,12 +1187,27 @@ async fn pump(ctx: &AppCtx, mut events: mpsc::Receiver<AcpEvent>) {
                         ),
                     }
                 }
-                if *ctx.want_connected.peek() {
-                    conn.set(ConnState::Failed(format!("Connection lost: {reason}")));
-                    let ctx = *ctx;
-                    spawn_forever(async move { reconnect_loop(&ctx).await });
-                } else {
-                    conn.set(ConnState::Disconnected);
+                // The turns, the asks and the journal above are all statements
+                // about the socket that died, and they are true whichever kind
+                // of death it was. The badge and the dialler are statements
+                // about the app's connection, and a superseded socket does not
+                // get to make those: `establish` owns both from the moment it
+                // closed this one, and will report its own success or failure.
+                //
+                // A reconnect from Settings that FAILS therefore no longer
+                // arms a retry. It never should have: the retry came from this
+                // event wiping a connection that had just been replaced, and a
+                // first-ever connect that fails has never had one either. The
+                // reader is left on Settings, with the failure on screen and
+                // the button that produced it under their thumb.
+                if !superseded {
+                    if *ctx.want_connected.peek() {
+                        conn.set(ConnState::Failed(format!("Connection lost: {reason}")));
+                        let ctx = *ctx;
+                        spawn_forever(async move { reconnect_loop(&ctx).await });
+                    } else {
+                        conn.set(ConnState::Disconnected);
+                    }
                 }
                 break;
             }
@@ -1161,14 +1257,48 @@ pub(crate) fn dismiss_lost_ask(ctx: &AppCtx, tool_call_id: &str) {
     crate::ask_journal::acknowledge(&mut journal.write(), tool_call_id, now_secs());
 }
 
-/// Retry until connected or the user disconnects: quick ramp, then a steady
-/// 30-second cadence (covers long VPN outages and phone sleep — suspended
-/// timers resume on wake).
+/// Retry until connected or the user disconnects: try at once, then a quick
+/// ramp, then a steady 30-second cadence (which covers long VPN outages).
+///
+/// EVERY ATTEMPT IS PRECEDED BY ITS GUARDS RATHER THAN BY A SLEEP (#319), and
+/// that is the whole shape of this loop. It used to sleep first and ask
+/// afterwards, which put a two-second floor under every reconnect — paid in
+/// full by a blip that would have re-dialled instantly, and paid while the
+/// screen says "Connection lost". The two questions are still asked
+/// immediately before each attempt, so what the old order was protecting is
+/// protected: a user who presses Disconnect during the ramp is not dialled
+/// back out, and a phone that came back some other way does not get a second
+/// connection hung off it. Those are properties of where the guards sit
+/// RELATIVE TO THE ATTEMPT; the sleep was never what enforced them.
+///
+/// WHAT THIS DOES NOT FIX, and the comment that used to stand here got wrong.
+/// It said the cadence "covers … phone sleep — suspended timers resume on
+/// wake", which reads as reassurance and is not: they resume with the
+/// REMAINDER. `std::time::Instant` on Apple targets is `CLOCK_UPTIME_RAW` —
+/// "a clock that increments monotonically … but that does not increment while
+/// the system is asleep" (the pinned toolchain quotes the man page at
+/// `library/std/src/sys/time/unix.rs:55-67`, rust 1.98.0; the platform table
+/// at `library/std/src/time.rs:116` says the same) — and tokio's `Instant`
+/// wraps `std::time::Instant`. So a `sleep(30)` in flight when the lid closes
+/// still has almost thirty seconds to serve when it opens, and this reorder
+/// does not shorten it. What the reorder fixes is every reconnect that STARTS
+/// after the wake, which is the ordinary lid case: sleeping kills the socket,
+/// the transport reports it, and the loop spawned off that report now dials
+/// immediately instead of two seconds later.
+///
+/// AND THERE IS NO LIFECYCLE EVENT TO SHORT-CIRCUIT THE OTHER CASE WITH. tao
+/// emits `Resumed`/`Suspended` only from its iOS and Android backends
+/// (`platform_impl/ios/view.rs:615,619`, `platform_impl/android/mod.rs:130,140`
+/// in tao 0.34.8); macOS, where closing a lid is the actual gesture, raises
+/// neither, and dioxus-desktop's loop has no arm for either anyway. iOS is
+/// reachable through `use_wry_event_handler` — `use_fullscreen` already uses
+/// that hook — but `docs/permission-durability.md` argues against acting on
+/// tao's iOS lifecycle events at all, because `will_resign_active` false-fires
+/// on a Control Center pull. This reorder needs none of them and helps all
+/// three platforms.
 async fn reconnect_loop(ctx: &AppCtx) {
     let mut ramp = [2u64, 4, 8, 15].into_iter();
     loop {
-        let delay = ramp.next().unwrap_or(30);
-        tokio::time::sleep(Duration::from_secs(delay)).await;
         if !*ctx.want_connected.peek() {
             return;
         }
@@ -1197,6 +1327,7 @@ async fn reconnect_loop(ctx: &AppCtx) {
             }
             return;
         }
+        tokio::time::sleep(Duration::from_secs(ramp.next().unwrap_or(30))).await;
     }
 }
 
@@ -1658,13 +1789,69 @@ pub(crate) async fn rename_session(ctx: &AppCtx, session_id: &str, title: &str) 
     }
 }
 
-/// Open an existing session: switch to the chat screen and replay history.
+/// Open an existing session: switch to the chat screen, and replay history
+/// unless it is already on screen.
+///
+/// THE CONVERSATION YOU ARE ALREADY READING IS NOT RE-FETCHED (#309). Every
+/// caller reaches this unguarded — the desktop sidebar row that *knows* it is
+/// the selected one, the chat home's list, the phone's list, a scheduled run —
+/// and the three-column shell invites the gesture, because the list sits
+/// permanently beside the conversation it lists. Without the guard below, a
+/// re-click threw away `items`, raised the spinner, and asked goose to replay
+/// a transcript already on screen: one round trip, a transcript that flickers
+/// out and streams back, a composer disabled for the duration
+/// (`can_send = !running && !chat.loading`, `src/views/chat.rs`) and a lost
+/// scroll position, all for no new information.
+///
+/// WHAT THE GUARD ASKS IS NOT "THE SAME ID". It is "the same id, with a
+/// transcript in it, and nothing in flight", and the two extra clauses are
+/// each a button that would otherwise stop working:
+///
+/// * `items` empty means the last attempt brought nothing back — a load that
+///   failed, or one that never went out because there was no connection. The
+///   row is the only retry those two have, so a bare id check would answer a
+///   toast that says "reconnect in Settings" with a screen that then refuses
+///   to. It costs a re-click on a genuinely empty conversation one request,
+///   which flickers nothing because there is nothing on screen to flicker.
+/// * `loading` means a replay is in flight; re-clicking is the reader's way
+///   of restarting one that is taking too long, and there is no transcript to
+///   protect yet either.
+///
+/// WHAT IS DELIBERATELY NOT REFRESHED ON THE SKIPPED PATH is the title, and it
+/// is not an oversight: both channels that can change it already write the open
+/// chat directly — goose's own `session_info` update ([`apply_update`]) and
+/// [`rename_session`] — so `info` has nothing to tell a conversation that is
+/// already up.
+///
+/// WHY NOT KEEP `items` AND STILL RELOAD, which is the other shape #309
+/// offers: goose replays history as live-shaped notifications that
+/// [`apply_update`] APPENDS, so a transcript left in place would be added to
+/// rather than replaced — every message twice. That needs a
+/// clear-on-first-replayed-item rule and an answer for a replay that arrives
+/// empty, which is the transcript cache's design problem (#312), not this
+/// one's. And note that [`reload_chat`] still clears and reloads on every
+/// auto-reconnect, on purpose: the argument for that is in place at its call
+/// site and this guard does not reach it.
 pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
     let mut screen = ctx.screen;
     let mut chat = ctx.chat;
     let mut usage = ctx.usage;
     let cwd = info.cwd.clone().unwrap_or_else(|| "/".to_string());
     let running = ctx.running_sessions.peek().contains(&info.session_id);
+
+    let (same_session, worth_keeping) = {
+        let current = ctx.chat.peek();
+        let same = current.session_id.as_deref() == Some(info.session_id.as_str());
+        (same, same && !current.loading && !current.items.is_empty())
+    };
+    if worth_keeping {
+        // Everything below this line is a write, and the reader asked for
+        // none of them. The one thing a re-click still means is "show me the
+        // chat", which matters on the phone, where the row that was clicked
+        // is on the list screen.
+        screen.set(Screen::Chat);
+        return;
+    }
 
     // An attachment belongs to the message it was picked for, and the tray
     // lives on the context (the picker has to be able to reach it from the app
@@ -1674,14 +1861,14 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
     // Walking out of a chat and back into it replays it from scratch, and the
     // replay cannot say what a photo was called or what it looked like. Only
     // from the same session: two conversations' attachments have nothing to
-    // say about each other.
-    let (same_session, carry) = {
-        let current = ctx.chat.peek();
-        if current.session_id.as_deref() == Some(info.session_id.as_str()) {
-            (true, crate::attach::sent_attachments(&current.items))
-        } else {
-            (false, Vec::new())
-        }
+    // say about each other. Since the guard above, the same-session case that
+    // reaches this is the narrow one — a replay that failed, never started, or
+    // is still running — but each of those still ends in a replay that has to
+    // hand the photos back their names.
+    let carry = if same_session {
+        crate::attach::sent_attachments(&ctx.chat.peek().items)
+    } else {
+        Vec::new()
     };
     // The draft belongs to the conversation for the same reason. It used to be
     // a `use_signal` that died with the screen; hoisting it onto the context
@@ -3978,6 +4165,113 @@ mod tests {
         });
     }
 
+    /// The third combination of cause and flag, and the one that had no test:
+    /// `Local` while `want_connected` is still set.
+    ///
+    /// That is not a reader who disconnected — they would have dropped the
+    /// flag first. It is `establish` closing the old socket in the middle of
+    /// opening its replacement, which is the case `DisconnectCause` was
+    /// declared for. The socket that died is not the app's connection any
+    /// more, so this event may not speak for one: no wiped client, no
+    /// "Connection lost" over a badge that says connected, and above all no
+    /// dialler, which would close the connection that had just come up and
+    /// start the whole thing again.
+    #[test]
+    fn a_socket_a_reconnect_replaced_says_nothing_about_the_one_that_took_over() {
+        let mut app = App::mount();
+        let server = serve(happy);
+        let _events = app.attach(&server);
+        app.run(|ctx| {
+            // Pointed at the server so that a dialler, if one were armed,
+            // would reach it and be counted.
+            ctx.settings.clone().set(Settings {
+                server_url: server.base_url.clone(),
+                ..Settings::default()
+            });
+            ctx.want_connected.clone().set(true);
+            ctx.conn.clone().set(ConnState::Connected {
+                agent: "goose".to_owned(),
+            });
+        });
+
+        pump_events(
+            &app,
+            vec![AcpEvent::Disconnected {
+                reason: "closed by client".to_owned(),
+                cause: DisconnectCause::Local,
+            }],
+        );
+        app.settle();
+
+        app.run(|ctx| {
+            assert!(
+                ctx.client.peek().is_some(),
+                "the socket that was replaced took the replacement's client with it"
+            );
+            assert!(
+                ctx.conn.peek().is_connected(),
+                "the badge says Connection lost over a connection that is up"
+            );
+        });
+        assert!(
+            server.traffic().is_empty(),
+            "a dialler was armed against a connection that had already come \
+             up: {:?}",
+            server.traffic()
+        );
+    }
+
+    /// …AND PRESSING CONNECT TWICE LEAVES THE APP CONNECTED ONCE.
+    ///
+    /// The end-to-end version of the test above, and the shape the defect
+    /// actually had. The socket the second `establish` closed is reported by a
+    /// pump that is still running, and that report used to wipe `ctx.client`,
+    /// paint Failed over the live connection and arm a dialler at it — which
+    /// closed the connection that had just come up, whose own pump then did
+    /// the same thing again. Measured with the reconnect loop's sleep behind
+    /// its attempt rather than in front of it: 149 requests against the second
+    /// server before the harness stopped polling, and the app left holding no
+    /// client at all. With the ramp's sleep still in front, the same run made
+    /// no requests inside the window and ALSO ended with no client — the bug
+    /// was there the whole time and the sleep was hiding its rate, not its
+    /// existence.
+    ///
+    /// The two `config/read`s are `learn_default_model`, one per `establish`.
+    /// Both are spawned on the Dioxus runtime and neither is polled until
+    /// `settle`, by which time the current client is the second server's, so
+    /// both land there. Anything past those two is a connection nobody asked
+    /// for.
+    #[test]
+    fn connecting_over_a_live_connection_leaves_one_connection_and_no_dialler() {
+        let mut app = App::mount();
+        let first = serve(happy);
+        let second = serve(happy);
+        assert!(app.dial(&first), "the first goose refused the handshake");
+        assert!(app.dial(&second), "the second goose refused the handshake");
+        app.settle();
+
+        app.run(|ctx| {
+            assert!(
+                ctx.conn.peek().is_connected(),
+                "two presses of Connect left the app reporting a lost connection"
+            );
+            assert!(
+                ctx.client.peek().is_some(),
+                "two presses of Connect left the app with nothing to send over"
+            );
+        });
+        assert!(
+            first.methods().is_empty(),
+            "the first server was still being talked to: {:?}",
+            first.methods()
+        );
+        assert_eq!(
+            second.methods(),
+            ["_goose/unstable/config/read", "_goose/unstable/config/read"],
+            "a reconnect storm: every connection here closed the one before it"
+        );
+    }
+
     /// Answering an ask over a dead socket is theatre, so `send_prompt`'s
     /// `Closed` arm drops the queue instead. What it must NOT do is decide the
     /// round was lost: it cannot tell a dropped tailnet from a press of
@@ -4150,16 +4444,151 @@ mod tests {
         });
     }
 
-    /// Backing out of a chat and going straight back in replays it from
-    /// scratch, and the replay cannot say what a photo was called or what it
-    /// looked like. So what the transcript knew is carried across — and so is
-    /// what was being typed, because the conversation did not change.
+    /// Backing out of a chat and going straight back in used to replay it from
+    /// scratch; since #309 it does not replay at all. So the transcript keeps
+    /// itself rather than being wiped and rebuilt — photos, scroll position and
+    /// all — and so does what was being typed, because the conversation never
+    /// changed.
     #[test]
     fn reopening_the_same_chat_keeps_what_was_typed_and_what_was_sent() {
         let app = App::mount();
         app.run(|ctx| {
             ctx.chat.clone().set(ChatState {
                 session_id: Some("s3".to_owned()),
+                title: "Roof".to_owned(),
+                cwd: "/srv/app".to_owned(),
+                items: vec![ChatItem::User {
+                    text: "look".to_owned(),
+                    attachments: vec![crate::attach::Attachment {
+                        name: "roof.jpg".to_owned(),
+                        mime: "image/jpeg".to_owned(),
+                        size: 3,
+                        thumb: "THUMB".to_owned(),
+                    }],
+                }],
+                ..ChatState::default()
+            });
+            ctx.chat_draft.clone().set("keep me".to_owned());
+            // The gesture this is about is performed from a list, and on the
+            // phone that list is a screen of its own.
+            ctx.screen.clone().set(Screen::Sessions);
+
+            let info: SessionInfo = serde_json::from_value(
+                json!({"sessionId": "s3", "title": "Roof", "cwd": "/srv/app"}),
+            )
+            .unwrap();
+            open_session(ctx, info);
+
+            let chat = ctx.chat.peek();
+            assert!(
+                matches!(*ctx.screen.peek(), Screen::Chat),
+                "the row that was clicked did not open the chat it names"
+            );
+            assert_eq!(
+                transcript(&chat.items),
+                ["user:look:[roof.jpg]"],
+                "the conversation on screen was thrown away and asked for again"
+            );
+            assert!(
+                !chat.loading,
+                "the spinner went up over a transcript that never left, and the \
+                 composer is disabled while it is"
+            );
+            assert_eq!(chat.title, "Roof");
+            assert_eq!(chat.cwd, "/srv/app");
+            assert_eq!(
+                *ctx.chat_draft.peek(),
+                "keep me",
+                "leaving a chat and coming back ate what was being written"
+            );
+        });
+    }
+
+    /// …AND THE SKIP REACHES THE SOCKET, which is the whole point of it: the
+    /// saving is a round trip, not a signal write.
+    ///
+    /// The replay is folded in by hand between the two opens because the mock
+    /// server answers `session/load` without pushing any history — and goose
+    /// replays as live-shaped `session/update` notifications, so a hand-folded
+    /// chunk is the same thing arriving the same way.
+    #[test]
+    fn reopening_the_open_chat_asks_the_server_for_nothing() {
+        let mut app = App::mount();
+        let server = serve(happy);
+        let _events = app.attach(&server);
+        let info = session("chat_7", Some("Roof"));
+
+        app.run(|ctx| open_session(ctx, info.clone()));
+        app.settle_until(Duration::from_secs(5), |ctx| !ctx.chat.peek().loading);
+        pump_events(
+            &app,
+            vec![notify(
+                "chat_7",
+                json!({"sessionUpdate": "agent_message_chunk",
+                       "content": {"type": "text", "text": "the roof is fine"}}),
+            )],
+        );
+        assert_eq!(
+            server.methods(),
+            ["session/load"],
+            "the first open is the one that has to pay"
+        );
+
+        app.run(|ctx| open_session(ctx, info.clone()));
+        app.settle();
+        assert_eq!(
+            server.methods(),
+            ["session/load"],
+            "a re-click went back over the tailnet for a transcript that was \
+             already on screen: {:?}",
+            server.methods()
+        );
+        assert_eq!(
+            app.items(),
+            ["assistant:-:the roof is fine"],
+            "the transcript was cleared even though nothing was fetched to \
+             replace it"
+        );
+    }
+
+    /// A chat with nothing in it yet is asked for again, and that clause of the
+    /// guard is the difference between a retry and a dead row.
+    ///
+    /// Opening a chat while disconnected leaves the id in place, the items
+    /// empty and a toast telling the reader to go and connect. If the guard
+    /// were "the same id" they would come back, click the same row, and watch
+    /// it do nothing for ever.
+    #[test]
+    fn a_chat_whose_replay_never_landed_is_asked_for_again() {
+        let mut app = App::mount();
+        app.run(|ctx| open_session(ctx, session("s2", Some("Nightly standup"))));
+        app.drain();
+        assert_eq!(
+            app.toast().as_deref(),
+            Some("Not connected — reconnect in Settings"),
+            "the offline open is the setup for this test and it did not happen"
+        );
+        app.run(|ctx| {
+            assert!(!ctx.chat.peek().loading, "the spinner is still up");
+            open_session(ctx, session("s2", Some("Nightly standup")));
+            assert!(
+                ctx.chat.peek().loading,
+                "the second try was refused, so the only way back into an empty \
+                 chat is to open a different one first"
+            );
+        });
+    }
+
+    /// And a replay that is still running restarts rather than being skipped —
+    /// with the photos' names carried across the wipe it does, because that
+    /// path still ends in a replay that cannot name them.
+    #[test]
+    fn reopening_a_chat_mid_replay_restarts_it_and_keeps_the_photos() {
+        let app = App::mount();
+        app.run(|ctx| {
+            ctx.chat.clone().set(ChatState {
+                session_id: Some("s3".to_owned()),
+                loading: true,
                 items: vec![ChatItem::User {
                     text: "look".to_owned(),
                     attachments: vec![crate::attach::Attachment {
@@ -4173,15 +4602,11 @@ mod tests {
             });
             ctx.chat_draft.clone().set("keep me".to_owned());
 
-            let info: SessionInfo = serde_json::from_value(
-                json!({"sessionId": "s3", "title": "Roof", "cwd": "/srv/app"}),
-            )
-            .unwrap();
-            open_session(ctx, info);
+            open_session(ctx, session("s3", Some("Roof")));
 
             let chat = ctx.chat.peek();
-            assert_eq!(chat.title, "Roof");
-            assert_eq!(chat.cwd, "/srv/app");
+            assert!(chat.items.is_empty(), "the restarted replay will double up");
+            assert!(chat.loading);
             let carried: Vec<&str> = chat.attach_replay.iter().map(|a| a.name.as_str()).collect();
             assert_eq!(
                 carried,
@@ -4191,7 +4616,7 @@ mod tests {
             assert_eq!(
                 *ctx.chat_draft.peek(),
                 "keep me",
-                "leaving a chat and coming back ate what was being written"
+                "the conversation did not change, so the draft should not have"
             );
         });
     }
@@ -4752,6 +5177,122 @@ mod tests {
         );
     }
 
+    /// A connection that comes up forgets what the last one was told (#317).
+    ///
+    /// All four are checked because all four are the fix: two of them
+    /// (`recipes`, `extensions`) re-fetch on every arrival anyway and would
+    /// have hidden this, and the two that do not (`skills`, `scheduler`) are
+    /// exactly the ones whose `ensure_loaded` guard is `items.is_empty()`. The
+    /// whole `Remote` is checked and not just `items`, because `unsupported`
+    /// and `sticky` are statements about a server too — a goose that lacks the
+    /// scheduler must not make the next one look as though it lacks it as well.
+    #[test]
+    fn a_new_connection_forgets_the_last_servers_lists() {
+        let app = App::mount();
+        let server = serve(happy);
+        // The shapes the mock server sends, parsed rather than constructed so
+        // a test cannot seed a row no goose could answer with.
+        let skill: goose_acp_client::SourceEntry = serde_json::from_value(json!({
+            "type": "skill", "name": "deploy", "description": "", "content": "",
+            "path": "/skills/deploy", "global": true,
+        }))
+        .unwrap();
+        let extension: goose_acp_client::GooseExtensionEntry = serde_json::from_value(json!({
+            "extension": {"type": "builtin", "name": "developer"}, "enabled": true,
+        }))
+        .unwrap();
+        app.run(|ctx| {
+            let mut skills = ctx.skills.list;
+            skills.write().settle(vec![skill.clone()]);
+            let mut scheduler = ctx.scheduler.list;
+            scheduler.write().unsupported = true;
+            let mut recipes = ctx.recipes.list;
+            recipes.write().sticky = Some("the last goose fell over".to_owned());
+            let mut extensions = ctx.extensions.list;
+            extensions.write().settle(vec![extension.clone()]);
+        });
+
+        assert!(app.dial(&server), "the mock server refused the handshake");
+
+        app.run(|ctx| {
+            assert!(
+                ctx.skills.list.peek().items.is_empty(),
+                "the new goose's Skills screen is showing the old goose's skills"
+            );
+            assert!(
+                !ctx.scheduler.list.peek().unsupported,
+                "a goose without the scheduler taught the app to stop offering \
+                 it against every goose after it"
+            );
+            assert!(
+                ctx.recipes.list.peek().sticky.is_none(),
+                "the last server's failure is on screen under this one's list"
+            );
+            assert!(
+                ctx.extensions.list.peek().items.is_empty(),
+                "the new goose's Extensions screen is showing the old goose's"
+            );
+        });
+    }
+
+    /// …AND THAT IS WHAT MAKES `ensure_loaded` ASK AGAIN, which is the whole
+    /// point of emptying them: the guard it reads is `items.is_empty()`.
+    ///
+    /// Two servers rather than one, because the bug this closes is not "a list
+    /// went stale" — a list is allowed to be as old as its connection — it is
+    /// that a list outlived the goose it came from. Skills is the one checked
+    /// because it is the half of the Chat home's one grid that was never
+    /// refreshed by anything.
+    ///
+    /// THE SERVER HAS TO ANSWER WITH A SKILL, and this test was vacuous until
+    /// it did. `happy` replies `{}` to `sources/list`, which does not parse as
+    /// a `ListSourcesResponse` — so `Remote::fail` leaves `items` EMPTY, and
+    /// `ensure_loaded`'s guard would have re-fetched against the second server
+    /// whether or not anything had been forgotten. A test that passes without
+    /// the change it is for is worse than no test.
+    #[test]
+    fn and_so_the_once_per_connection_lists_are_fetched_from_the_new_server() {
+        fn with_a_skill(method: &str, params: &Value) -> Reply {
+            if method == "_goose/unstable/sources/list" {
+                return ok(json!({"sources": [{
+                    "type": "skill", "name": "deploy", "description": "",
+                    "content": "", "path": "/skills/deploy", "global": true,
+                }]}));
+            }
+            happy(method, params)
+        }
+        let mut app = App::mount();
+        let first = serve(with_a_skill);
+        let second = serve(with_a_skill);
+
+        assert!(app.dial(&first), "the first goose refused the handshake");
+        app.run(crate::skills::ensure_loaded);
+        app.settle();
+        assert_eq!(
+            first.count("_goose/unstable/sources/list"),
+            2,
+            "the first fetch is two calls — filesystem skills and built-ins"
+        );
+        app.run(|ctx| {
+            assert!(
+                !ctx.skills.list.peek().items.is_empty(),
+                "the setup did not land a skill, so the guard under test is \
+                 satisfied for the wrong reason"
+            );
+        });
+
+        assert!(app.dial(&second), "the second goose refused the handshake");
+        app.run(crate::skills::ensure_loaded);
+        app.settle();
+        assert_eq!(
+            second.count("_goose/unstable/sources/list"),
+            2,
+            "connecting to another goose left `ensure_loaded` believing it had \
+             already loaded, so this server was never asked: {:?}",
+            second.methods()
+        );
+    }
+
     /// The other half of the same line. goose's `agentInfo` may carry no
     /// version, and joining on it unconditionally would put a trailing space
     /// in the badge.
@@ -4851,7 +5392,8 @@ mod tests {
             }],
         );
 
-        // The first rung of the ramp is two seconds; the budget is the slack.
+        // The first attempt goes out with no rung of the ramp in front of it,
+        // so the budget is slack for the round trips and nothing else.
         app.settle_until(Duration::from_secs(15), |ctx| {
             !ctx.config_options.peek().is_empty()
         });
@@ -4883,11 +5425,25 @@ mod tests {
         );
     }
 
-    /// The reconnect loop sleeps first and asks afterwards, so both of its
-    /// questions are asked at the moment they matter. A loop that asked before
-    /// sleeping would dial out for a user who pressed Disconnect during the
-    /// ramp, and would hang a second connection off a phone that had already
-    /// come back some other way.
+    /// The reconnect loop asks both of its questions immediately before every
+    /// attempt, so both are asked at the moment they matter.
+    ///
+    /// THIS COMMENT USED TO ARGUE FOR A DIFFERENT ORDER — sleep first, ask
+    /// afterwards — on the grounds that "a loop that asked before sleeping
+    /// would dial out for a user who pressed Disconnect during the ramp, and
+    /// would hang a second connection off a phone that had already come back
+    /// some other way". Both objections are real and both are still answered,
+    /// because they are about where the guards sit RELATIVE TO THE ATTEMPT and
+    /// not about the sleep: an attempt that is preceded by its guards cannot
+    /// dial out for either of those readers whether it sleeps first or not.
+    /// What sleeping first also bought was a two-second floor under every
+    /// reconnect, which is what #319 took away.
+    ///
+    /// So the assertion is unchanged and the property it pins is unchanged —
+    /// and it is now pinned in microseconds rather than in the four seconds
+    /// this test used to spend waiting out two first rungs, because under the
+    /// new order the attempt these guards refuse is the first thing the loop
+    /// would otherwise do.
     #[test]
     fn a_reconnect_gives_up_when_there_is_nothing_left_to_reconnect() {
         let app = App::mount();
@@ -4899,7 +5455,7 @@ mod tests {
             });
         });
 
-        // The user pressed Disconnect while the first rung was sleeping.
+        // The user pressed Disconnect before the loop got its first turn.
         app.drive(|ctx| async move { reconnect_loop(&ctx).await });
         app.run(|ctx| {
             assert!(
@@ -4951,8 +5507,8 @@ mod tests {
             spawn_forever(async move { reconnect_loop(&ctx).await });
         });
 
-        // The first rung of the ramp is two seconds, and the attempt at the end
-        // of it is refused.
+        // The first attempt goes out before any rung of the ramp, and it is
+        // refused.
         app.settle_until(Duration::from_secs(15), |ctx| {
             matches!(*ctx.conn.peek(), ConnState::Failed(_))
         });
@@ -4963,7 +5519,7 @@ mod tests {
             );
         });
 
-        // The tailnet comes up while the second rung is sleeping.
+        // The tailnet comes up while the first rung is sleeping.
         app.run(|ctx| {
             ctx.settings.clone().set(Settings {
                 server_url: server.base_url.clone(),
@@ -4992,6 +5548,39 @@ mod tests {
             "a reconnect with no chat open asked the server to replay one: {:?}",
             server.methods()
         );
+    }
+
+    /// …AND THE FIRST OF THOSE ATTEMPTS COSTS NOTHING TO WAIT FOR.
+    ///
+    /// A budget shorter than the ramp's first rung is the assertion. Under the
+    /// old order — sleep, then guards, then attempt — this connection could not
+    /// have come up in under two seconds no matter how fast the server
+    /// answered, and the banner would have said "Connection lost" for all of
+    /// it. A loopback goose answers the handshake in single-digit milliseconds
+    /// (`establish` is marked and reports about 2 ms here), so a one-second
+    /// budget is three orders of magnitude of slack against the thing being
+    /// measured and half a rung away from the thing being refuted.
+    #[test]
+    fn a_reconnect_tries_before_it_sleeps() {
+        let mut app = App::mount();
+        let server = serve(happy);
+        app.run(|ctx| {
+            ctx.settings.clone().set(Settings {
+                server_url: server.base_url.clone(),
+                ..Settings::default()
+            });
+            ctx.want_connected.clone().set(true);
+            let ctx = *ctx;
+            spawn_forever(async move { reconnect_loop(&ctx).await });
+        });
+        app.settle_until(Duration::from_secs(1), |ctx| ctx.conn.peek().is_connected());
+        app.run(|ctx| {
+            assert!(
+                ctx.conn.peek().is_connected(),
+                "a reconnect that would have succeeded instantly waited out a \
+                 rung of the ramp first"
+            );
+        });
     }
 
     /// A `session/load` takes as long as the transcript is — the server
