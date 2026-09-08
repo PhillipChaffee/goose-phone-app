@@ -645,6 +645,23 @@ pub(crate) struct AppCtx {
     ///
     /// TAKEN, NOT READ. `CodeNewView` empties it as it seeds its field, so a
     /// second visit to that screen does not resurrect a sentence already sent.
+    ///
+    /// **NOTHING WRITES IT ANY MORE, AND THE PARAGRAPHS ABOVE ARE ITS
+    /// HISTORY.** #281 gave the desktop's Code composer the model, the mode
+    /// and the attach tray, so its arrow creates the session in place and no
+    /// longer routes to `CodeNewView` — and that was the only writer.
+    /// `CodeNewView` still takes it, on a phone where it is always empty, so
+    /// the field is a hand-off with one side left.
+    ///
+    /// It is not deleted here, and the reason is arithmetic rather than doubt:
+    /// this struct is built by literal in five places (`state.rs`,
+    /// `serverkit.rs`, `scheduler.rs`, `recipes.rs`, and the harness in
+    /// `views/code.rs`'s tests), and a lane whose files are the desktop home
+    /// and its two sheets should not be reaching into five others to take one
+    /// field out. The removal is `CodeNewView`'s `use_signal(String::new)`
+    /// back, this field, its five initialisers, and the test that asserts the
+    /// hand-off — a change with no behaviour in it, which is the right size
+    /// for its own commit.
     pub new_task: Signal<String>,
     /// WHERE that session gets cut — the repo and the base branch the home
     /// composer's own pickers settled.

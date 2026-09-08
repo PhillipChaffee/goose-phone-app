@@ -408,65 +408,22 @@ impl PullsState {
         self.by_chat.get(chat_id)?.first()
     }
 
-    /// The `+N −M` for a whole **group** of trees — the repo header's total —
-    /// or `None` when even one of them cannot be measured.
-    ///
-    /// It is a function rather than a note because the note is the thing that
-    /// gets ignored. Summing only the trees that happen to have a pull request
-    /// open would put a group figure on screen that no server ever sent, and
-    /// it would be *plausible*, which is worse than absent — the reader has no
-    /// way to tell a total of four trees from a total of two. So the
-    /// all-or-nothing is in the type: one unmeasured tree in the group and
-    /// there is no total, and there is no argument to make at the call site.
-    ///
-    /// A group of one measured tree is a real total and answers, because that
-    /// sum is a number the server did send.
-    ///
-    /// **It still reads the pull request, and that is now the thing to change
-    /// about it.** `PhillipChaffee/personal-ai-setup#29` has landed, so every
-    /// tree carries `ChatMeta::stat` whether or not anybody opened a pull
-    /// request for it, and totalling those instead is what makes a group figure
-    /// answerable for most groups rather than for almost none. The refusal does
-    /// **not** go with it: one unmeasured tree in the group still means there
-    /// is no total, and `ChatStat::truncated` is a second reason a number is
-    /// not one — which is why `ChatStat` offers `total_diffstat` beside
-    /// `diffstat` rather than leaving the caller to remember. That switch is
-    /// the render's (#81, #82); this is the note that it is not a no-op, which
-    /// is what the sentence standing here used to say.
-    ///
-    /// The repo header IS built now — `shell::desktop::home`'s `code_board`
-    /// fills `RepoGroup::num` from this, once per group — so the unconditional
-    /// `expect(dead_code)` that used to stand here has gone, which is exactly
-    /// what its own reason said would happen to it.
-    ///
-    /// What is left of it is the phone. That header is the DESKTOP's, and
-    /// `src/shell/mod.rs` compiles the whole desktop shell out under
-    /// `cfg(any(target_os = "ios", target_os = "android"))` — so on an iOS
-    /// build this genuinely has no caller, and `RUSTFLAGS="-D warnings" cargo
-    /// check --target aarch64-apple-ios` is the gate that says so. Still an
-    /// `expect` rather than an `allow`: the day the phone's own list grows a
-    /// repo heading, that build fails and takes these lines out.
-    #[cfg_attr(
-        all(not(test), any(target_os = "ios", target_os = "android")),
-        expect(
-            dead_code,
-            reason = "the repo heading that reads this is the desktop shell's, \
-                      and the phone does not compile that shell"
-        )
-    )]
-    pub(crate) fn group_diffstat<'a>(
-        &self,
-        chat_ids: impl IntoIterator<Item = &'a str>,
-    ) -> Option<(u32, u32)> {
-        let mut any = false;
-        let mut total = (0_u32, 0_u32);
-        for id in chat_ids {
-            let (plus, minus) = self.plane_pull(id)?.diffstat()?;
-            total = (total.0.checked_add(plus)?, total.1.checked_add(minus)?);
-            any = true;
-        }
-        any.then_some(total)
-    }
+    // THE GROUP TOTAL USED TO LIVE HERE, and it moved with the measurement
+    // it reads.
+    //
+    // `group_diffstat` summed this map's pull requests and refused a group
+    // holding a tree no pull request measured — which was almost every group,
+    // because most trees have no pull request. `ChatMeta::stat` is the size
+    // now, so the sum is over the INDEX rather than over this map, and
+    // `shell::desktop::home`'s `group_total` is where it went. The refusal
+    // went with it unchanged, and gained a second reason: a capped compare is
+    // a floor, and `ChatStat::total_diffstat` is what declines to add one.
+    //
+    // Recorded rather than deleted silently, because the note that stood here
+    // predicted this exact move and a reader who followed it needs to arrive
+    // somewhere. It also took an `expect(dead_code)` with it: the heading is
+    // the desktop's, `src/shell/mod.rs` compiles that shell out on a phone,
+    // and a function that now lives inside the shell needs no `cfg` to say so.
 }
 
 /// On-device transcript cache (issue #2, A11): instant open while the
@@ -2839,76 +2796,6 @@ mod tests {
             state.plane_pull("measured").and_then(|p| p.commits),
             Some(4)
         );
-    }
-
-    /// The repo header's total, and the sum it must refuse to make.
-    ///
-    /// `#28` measures the trees that have a pull request open and no others,
-    /// so a group holding one tree without one has no total — adding up the
-    /// rest would print a group figure no server sent, and a plausible number
-    /// is worse than an absent one because nothing on screen distinguishes it.
-    /// The refusal is the return type rather than a comment, so a caller
-    /// cannot decide otherwise.
-    #[test]
-    fn a_repo_group_gets_no_total_until_every_tree_in_it_is_measured() {
-        let mut state = PullsState::default();
-        let sized = |plus, minus| PullRequest {
-            additions: Some(plus),
-            deletions: Some(minus),
-            ..pull(PullState::Open, false, Some(true), Checks::Passing)
-        };
-        state.by_chat.insert("a".to_owned(), vec![sized(65, 12)]);
-        state.by_chat.insert("b".to_owned(), vec![sized(43, 18)]);
-        state.by_chat.insert("no-pull".to_owned(), Vec::new());
-        state.by_chat.insert(
-            "unmeasured".to_owned(),
-            vec![pull(PullState::Open, false, None, Checks::Pending)],
-        );
-
-        assert_eq!(
-            state.group_diffstat(["a", "b"]),
-            Some((108, 30)),
-            "every tree measured is a real total"
-        );
-        assert_eq!(
-            state.group_diffstat(["a"]),
-            Some((65, 12)),
-            "a group of one measured tree is that tree's own numbers"
-        );
-        assert_eq!(
-            state.group_diffstat(["a", "b", "no-pull"]),
-            None,
-            "a tree with no pull request contributes an unknown, not a zero"
-        );
-        assert_eq!(
-            state.group_diffstat(["a", "unmeasured"]),
-            None,
-            "a pull request with no detail form is unknown for the same reason"
-        );
-        assert_eq!(
-            state.group_diffstat(["a", "never-swept"]),
-            None,
-            "and so is a tree the sweep was never answered for"
-        );
-        assert_eq!(
-            state.group_diffstat(std::iter::empty()),
-            None,
-            "an empty group has nothing to total, and `(0, 0)` would say it \
-             changed nothing"
-        );
-
-        // Unreachable through GitHub and cheap to be right about: a sum that
-        // does not fit is not a sum, and wrapping it would print a small
-        // number for an enormous one.
-        state
-            .by_chat
-            .insert("huge".to_owned(), vec![sized(u32::MAX, 0)]);
-        state
-            .by_chat
-            .insert("huge-cut".to_owned(), vec![sized(0, u32::MAX)]);
-        assert_eq!(state.group_diffstat(["a", "huge"]), None);
-        assert_eq!(state.group_diffstat(["a", "huge-cut"]), None);
-        assert_eq!(state.group_diffstat(["huge"]), Some((u32::MAX, 0)));
     }
 
     /// The whole of the floor. A sweep two seconds after a sweep must not

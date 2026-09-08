@@ -628,6 +628,82 @@
   margin-left: 8px;
 }
 
+/* ── the composer that expands (#281) ───────────────────────────────────
+ *
+ * The Code half's composer creates the session now instead of handing it to a
+ * screen, so the three controls that screen owned are on this row: the `+`, the
+ * model and the mode. They are `.home-chip.picker`s and need no geometry of
+ * their own — the two rules below are the two things the row cannot say
+ * without.
+ *
+ * WHAT IS DELIBERATELY NOT HERE is a rule for the expanded state itself.
+ * `.home-compose[data-open="true"]` styles nothing: the field grows by its
+ * `rows` attribute (2 to 4, which is the 36px this composer gains) and the
+ * extra controls are chips the row already knows how to lay out. A state that
+ * needs no declaration should not be given an empty one to hang a name on.
+ *
+ * THE `+` IS THE ROW'S OWN CHIP, not `views::attach::AttachButton`'s pill —
+ * `home.rs` carries that argument where the markup is. A chip whose whole
+ * content is a glyph is the one shape the rules above get wrong for it, twice:
+ *
+ *  - the chevron rule is `:last-child`, and an only child matches it, so the
+ *    `+` came out at the chevron's 10px instead of a leading glyph's 12;
+ *  - and 8 + 12 + 8 plus two hairlines is a 30x32 BUTTON, which
+ *    `docs/audit.js` fails as `SMALL-TAP` — it fails any button under 32 in
+ *    EITHER axis, and this row's other chips are only over the line because
+ *    they carry a word.
+ *
+ * 14px is what closes both: 8 + 14 + 8 + 2 is exactly 32, measured. It is the
+ * only size on this row that is neither the leading glyph's 12 nor the
+ * chevron's 10, and the reason is the box rather than the mark.
+ *
+ * Subject is `.icon`, which `assets/desktop/` already decides, so this adds no
+ * name to `src/inherit.rs`'s ledger and takes none off it. `:only-child`
+ * rather than `.attach` for the same reason and one better: it says what the
+ * rule is actually about. */
+.home-chip.picker > .icon:only-child {
+  font-size: 14px;
+}
+
+/* THE AMBER DOT ON A CONTROL THE SEND BUTTON IS WAITING FOR — design rule 8,
+ * state is a dot, and `assets/shared.css`'s `.composer-chip.needed::after` is
+ * the same mark on the same question one screen away: the session cannot start
+ * until the model has a value, and a disabled arrow says something is missing
+ * without saying which chip.
+ *
+ * An ATTRIBUTE and not that class, and `home.rs` says why at the render: a
+ * rule whose subject carried `.needed` would strike that name off
+ * `src/inherit.rs`'s `UNDECIDED`, and the name is there for `views::code`'s
+ * pill, which this rule does not touch. `[data-needed]` sits on a subject that
+ * is already two of this sheet's own classes, so the ledger does not move.
+ *
+ * INSIDE THE CHIP, WHERE THE SHARED ONE IS ON ITS CORNER, and that is measured
+ * rather than preferred. `.composer-chip.needed::after` is 10px at `top: -2px;
+ * right: -2px` with a 2px ring — it sits half off the pill. `.home-chips` is a
+ * horizontal scroller (`overflow-x: auto; overflow-y: hidden`) exactly as tall
+ * as its 32px chips, so a mark 2px above the chip's top edge is cut in half by
+ * the scroll box. Inline it is, as a flex item after the value, and the ring
+ * goes with the overlap that needed it.
+ *
+ * `--text-warning` AND NOT `--bg-warning`, which is the shared dot's token and
+ * is the wrong one here by a measurement. A mark owes 3:1 and `--bg-warning`
+ * on this composer's fill is 3.00:1 in light — #b8860b on #f4f6f7, sitting
+ * exactly on the floor `docs/audit.js`'s indicator walk enforces, which is a
+ * pass nobody should ship. `--text-warning` is #8a6100 there and measures
+ * 5.11:1; in dark both tokens are #f0b429 and it is 7.94:1 either way. It is
+ * also the token `97-home-code.css` already spends as a FILL on this shell —
+ * `.tree.waiting`'s mark — for #213's reason: the faint rung is ink for text
+ * nobody has to read, and spent as a fill it is the whole of what a mark
+ * says. */
+.home-chip.picker[data-needed]::after {
+  content: "";
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--text-warning);
+}
+
 /* ── pick up where you left off ─────────────────────────────────────────
  *
  * The mockups' `.crow`, and the densest block on the home screen: a status

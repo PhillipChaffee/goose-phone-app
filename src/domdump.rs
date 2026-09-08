@@ -54,6 +54,15 @@ const DUMP_JS: &str = r"
     // simply replace it, and one of the two would go unaudited — the same
     // way the overlays above used to.
     if (document.querySelector('.session-ask')) on.push('ask');
+    // AND NEITHER IS A COMPOSER THAT EXPANDS (#281). The desktop Code home's
+    // composer gains three controls, a taller field and an attachment tray the
+    // moment it takes focus — 776x126 to 776x158, measured — and that is the
+    // same shape of state as the overlays above: filed under `code-list` it
+    // would simply REPLACE the resting board, and one of the two would go
+    // unaudited. Unlike them it carries no new class, so nothing else in the
+    // repo could have noticed; `every_class_the_desktop_shell_renders_is_in_
+    // the_captured_store` is a scan for names and this state is an attribute.
+    if (document.querySelector('.home-compose[data-open=true]')) on.push('compose');
     const rows = document.querySelectorAll('.session-item');
     if ([...rows].some((r) => r.scrollLeft > 4)) on.push('swiped');
     return on.length ? '-' + on.join('-') : '';

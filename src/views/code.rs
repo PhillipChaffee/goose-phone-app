@@ -506,7 +506,7 @@ fn code_setting_rows(ctx: &AppCtx, models: &[ModelInfo], loading: bool) -> Vec<S
 /// either — the prompt body carries no `agent` field until there is a resolved
 /// name to put in it, and a turn that names none runs as
 /// [`DEFAULT_AGENT`].
-fn code_mode_label(agent: Option<&str>) -> String {
+pub(crate) fn code_mode_label(agent: Option<&str>) -> String {
     let name = agent.unwrap_or(DEFAULT_AGENT);
     choice_label(name, name)
 }
@@ -518,7 +518,7 @@ fn code_mode_label(agent: Option<&str>) -> String {
 /// cannot hold it. Each row carries the agent's own description — the field
 /// its definition is meant to answer "when would I use this" with — and a row
 /// whose author left it out is simply a name.
-fn agent_choices(agents: &[Agent]) -> Vec<SettingChoice> {
+pub(crate) fn agent_choices(agents: &[Agent]) -> Vec<SettingChoice> {
     agents
         .iter()
         .filter(|a| a.is_primary())
@@ -568,7 +568,7 @@ fn offered_models(models: &[ModelInfo], allow_free: bool) -> (Vec<&ModelInfo>, u
 
 /// Why the list is shorter than the catalogue. Said plainly rather than
 /// letting models silently go missing — in one voice, from one place.
-fn withheld_note(withheld: usize) -> Option<String> {
+pub(crate) fn withheld_note(withheld: usize) -> Option<String> {
     if withheld == 0 {
         return None;
     }
@@ -775,7 +775,7 @@ pub(crate) fn branch_chip_label(branch: Option<&str>) -> &str {
 /// there is nothing true to say and the pill is the thing being asked for;
 /// `Default` for the one case the picker offers the manager's own; the
 /// catalogue name otherwise.
-fn new_model_label(model: Option<&str>, models: &[ModelInfo]) -> String {
+pub(crate) fn new_model_label(model: Option<&str>, models: &[ModelInfo]) -> String {
     match model {
         None => "Model".to_owned(),
         Some("") => "Default".to_owned(),
@@ -797,7 +797,7 @@ fn new_model_label(model: Option<&str>, models: &[ModelInfo]) -> String {
 /// falls back to the chat id — so a session started on an attachment alone
 /// arrives in the list called `personal-ai-setup-9f3403`. The attach button
 /// beside the field is for the screenshot the sentence is *about*.
-fn can_start(repo: &str, model: Option<&str>, task: &str) -> bool {
+pub(crate) fn can_start(repo: &str, model: Option<&str>, task: &str) -> bool {
     !repo.is_empty() && model.is_some() && !task.trim().is_empty()
 }
 
@@ -860,7 +860,7 @@ pub(crate) fn branch_choices(list: &BranchList) -> Vec<SettingChoice> {
 /// manager's default the fastest thing on screen every time, which is the
 /// whole of what "a model is chosen, never defaulted into" is against. While
 /// it is in flight this offers nothing and the sheet says why.
-fn model_sheet_choices(
+pub(crate) fn model_sheet_choices(
     models: &[ModelInfo],
     allow_free: bool,
     loading: bool,
@@ -980,11 +980,16 @@ pub fn CodeNewView() -> Element {
     let model = use_signal(|| None::<String>);
     let agent = use_signal(initial_mode);
     // SEEDED FROM WHATEVER STARTED THIS SCREEN, and it used to be seeded from
-    // nothing. The desktop's Code home has a composer of its own, and pressing
-    // its arrow can only bring you here — a working tree needs a repo and a
-    // base branch before it can exist. It wrote the sentence to `ctx.code_draft`
-    // and this line threw it away, so a reader who typed on that screen arrived
-    // at an empty field with nothing to paste and no undo.
+    // nothing. The desktop's Code home had a composer whose arrow could only
+    // bring you here — it wrote the sentence to `ctx.code_draft` and this line
+    // threw it away, so a reader who typed on that screen arrived at an empty
+    // field with nothing to paste and no undo.
+    //
+    // NOTHING FILLS THE CARRIER NOW (#281): that composer gained the model,
+    // the mode and the attach tray and creates the session in place, so it is
+    // no longer two steps and this screen is the phone's alone. The seed is
+    // always empty here, and `crate::state::AppCtx::new_task` says what is
+    // left to do about that and why it was not done there.
     //
     // TAKEN RATHER THAN READ, for the reason the dismiss button below clears
     // its tray: leaving the carrier full would resurrect a sentence already
@@ -3656,11 +3661,18 @@ mod tests {
 
     /// THE FIELD ARRIVES WITH WHAT WAS TYPED ON THE HOME SCREEN IN IT.
     ///
-    /// The desktop's Code home has a composer and its arrow can only bring you
-    /// here — a working tree needs a repo and a base branch before it can
-    /// exist. That sentence used to be written to `ctx.code_draft`, which this
+    /// The desktop's Code home had a composer whose arrow could only bring you
+    /// here. That sentence used to be written to `ctx.code_draft`, which this
     /// screen does not read, and `open_code_chat` then blanked it: the reader
     /// arrived at an empty field with nothing to paste and no undo.
+    ///
+    /// **NO SCREEN FILLS THE CARRIER SINCE #281**, which gave that composer
+    /// the pickers it was missing and let it create the session in place. This
+    /// seeds the carrier itself and still holds, and what it holds is the
+    /// mechanism rather than a live path — `crate::state::AppCtx::new_task`
+    /// carries the note about taking the whole thing out. It is kept until
+    /// then for the second half below, which is a rule about this screen
+    /// rather than about the one that used to feed it.
     ///
     /// The second half is the one that keeps it from coming back the other
     /// way. The carrier is TAKEN, so a second visit to this screen — pressing
