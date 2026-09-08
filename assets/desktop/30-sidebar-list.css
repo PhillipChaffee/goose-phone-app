@@ -1047,18 +1047,43 @@
  * a `var()` inside a comment as a spend, and theirs is not a name this app
  * declares.)
  *
+ * THE MOCKUPS' "EVERY ROW HAS ONE" IS NEARLY REACHABLE NOW, and this rule did
+ * not move to get there. `sidebar.rs` used to fill the box from a pull
+ * request's detail form, so a tree nobody had opened one for drew nothing
+ * however much it had changed; `ChatMeta::stat` is one container-free compare
+ * per tree, so the size is the TREE's. Against the local fake that is four of
+ * five rows where it was three, and the fifth is the honest absence — a branch
+ * parked on the permission ask that would push it, so there is nothing to
+ * compare. What that changed here is the number of rows this box appears on
+ * and not one declaration in it.
+ *
  * NO 132px CAP, AND THAT IS THE CAP. Their branch needs a literal because
  * their `.stat` is pushed to the end by `margin-left:auto` and would otherwise
  * be pushed off it; here `.nav-row-sub` is already `flex: 1 1 auto` with
  * `min-width: 0` and an ellipsis, and this box is `flex: 0 0 auto`, so the
  * branch yields to the size and the size never yields to the branch. Same
  * property, no number, and it holds at a sidebar width the mockups never drew.
- * Measured on the 268px column at 1440x860, `desktop-code-list`'s own rows: the
- * subtitle goes 194.34 -> 152.72 beside a `+84 −0`, -> 146.41 beside `+77 −33`
- * and -> 127.44 beside a four-digit `+1204 −998`, the size taking 35.63, 41.94
- * and 60.91 of the 213px meta line; the age stays at x=238.34 and the row stays
- * 50px tall in every one of them. A row with no size is byte-identical to what
- * it was.
+ * Re-measured on the 268px column at 1440x860, against this directory's
+ * thirteen sheets and `docs/audit.js`'s own pinned faces, on
+ * `desktop-code-list`'s rows: the subtitle goes 194.02 -> 151.56 beside a
+ * `+84 −0`, -> 145.08 beside `+77 −33` and -> 125.63 beside a four-digit
+ * `+1204 −998`, the size taking 36.45, 42.94 and 62.39 of the 213px meta line;
+ * the age stays at x=238.02 and the row stays 50px tall in every one of them.
+ * A row with no size is byte-identical to what it was. (#266 recorded
+ * 194.34 / 152.72 / 146.41 / 127.44 and 35.63 / 41.94 / 60.91 at x=238.34.
+ * Nothing in this change moved them and no declaration below it changed —
+ * they are restated at what the same probe reads today rather than left
+ * standing as though this run had produced them.)
+ *
+ * A CAPPED COMPARE WIDENS THIS BOX AND NOTHING ELSE. `ChatStat::truncated`
+ * means GitHub stopped listing files at 300 and both sums are lower bounds, so
+ * `sidebar.rs`'s `Stat` trails each number with an ellipsis — inside the two
+ * spans below, which is why there is no third rule here for it. Measured the
+ * same way: 36.45 -> 49.42, 42.94 -> 55.91, 62.39 -> 75.36, one mono advance
+ * (6.485px) per number in every case; the subtitle absorbs all of it
+ * (151.56 -> 138.59, 125.63 -> 112.66), the age does not move off x=238.02 and
+ * the row does not leave 50px. That is the same yielding as above, which is
+ * why the widest string this box can hold needed no new arithmetic.
  *
  * `margin-left: auto` is NOT restated here even though the mockups' rule has
  * it: `.nav-row-age` two rules down already carries it and is the last item on
@@ -1072,6 +1097,15 @@
  * owns that file; what must not happen is the alternative, `--diff-add` /
  * `--diff-del` from shared.css, which are deliberately theme-invariant because
  * they are painted on `--code-bg` and measure 2.19:1 here.
+ *
+ * THE DEBT ON THAT NAME GOT LARGER RATHER THAN BEING PAID. The pair was spent
+ * on one inspector cell and three sidebar rows; it is one inspector cell and
+ * four of them now, and against a real manager it is every tree that has ever
+ * been pushed, because the size stopped depending on somebody having opened a
+ * pull request first. `00-tokens.css` is not this file, so this is the record
+ * and not the rename: what the pair IS is a diff counter on the panel rung,
+ * what `insp-` says is a component, and the two have not been the same thing
+ * since #266.
  *
  * Measured in Chromium on this column, both row states and both themes:
  * #7ee0a4 is 10.86:1 on dark's panel and 8.40:1 on a selected row's #2a2f36,
