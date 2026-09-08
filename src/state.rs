@@ -903,9 +903,16 @@ pub(crate) async fn establish(ctx: &AppCtx) -> bool {
         }
     };
 
-    // Drop any previous connection first.
-    if let Some(old) = client_slot.peek().clone() {
+    // Drop any previous connection first — and let go of the handle here,
+    // rather than leaving that to the event its close is about to raise. The
+    // pump now keeps its hands off `client` when a reconnect superseded it
+    // (see the `Disconnected` arm), so this is the only place that can clear
+    // it, and a replacement that fails must not leave a screen holding a
+    // socket that is already shut.
+    let previous = client_slot.peek().clone();
+    if let Some(old) = previous {
         old.close();
+        client_slot.set(None);
     }
     conn.set(ConnState::Connecting);
 
@@ -1062,7 +1069,36 @@ async fn pump(ctx: &AppCtx, mut events: mpsc::Receiver<AcpEvent>) {
                 }
             }
             AcpEvent::Disconnected { reason, cause } => {
-                client_slot.set(None);
+                // A SOCKET THIS SIDE CLOSED IS NOT A CONNECTION THAT WAS LOST,
+                // and this arm used to read `want_connected` without asking
+                // which. `close()` has exactly two callers: [`disconnect`],
+                // which drops the flag first, and [`establish`], which closes
+                // the old client in the middle of opening its replacement — so
+                // `Local` with the flag still set means a reconnect is already
+                // in flight, or has already finished. `DisconnectCause` exists
+                // for precisely this distinction and says so at its
+                // declaration: "reconnecting from Settings closes the live
+                // client while that flag is still true, so 'we wanted to be
+                // connected and are not' covers both a dropped tailnet and a
+                // deliberate press of Connect".
+                //
+                // Without the guard this event wiped `ctx.client`, painted
+                // "Connection lost" over a connection that was already up, and
+                // armed a dialler against it. Measured: two `establish`es in a
+                // row left the app holding no client and reporting Failed with
+                // a live socket open. With the ramp's sleep still in front of
+                // that dialler the damage was one extra reconnect a couple of
+                // seconds later, which is why it went unnoticed; with the sleep
+                // moved behind the attempt (#319) the same probe made 149
+                // requests before the test gave up, because each replacement
+                // closed the one before it. Bounded rather than merely slowed:
+                // every connection the storm opened was closed by an
+                // `establish`, so every one of those closes is now `Local` and
+                // says nothing.
+                let superseded = cause == DisconnectCause::Local && *ctx.want_connected.peek();
+                if !superseded {
+                    client_slot.set(None);
+                }
                 chat.write().running = false;
                 running_sessions.write().clear();
 
@@ -1106,12 +1142,27 @@ async fn pump(ctx: &AppCtx, mut events: mpsc::Receiver<AcpEvent>) {
                         ),
                     }
                 }
-                if *ctx.want_connected.peek() {
-                    conn.set(ConnState::Failed(format!("Connection lost: {reason}")));
-                    let ctx = *ctx;
-                    spawn_forever(async move { reconnect_loop(&ctx).await });
-                } else {
-                    conn.set(ConnState::Disconnected);
+                // The turns, the asks and the journal above are all statements
+                // about the socket that died, and they are true whichever kind
+                // of death it was. The badge and the dialler are statements
+                // about the app's connection, and a superseded socket does not
+                // get to make those: `establish` owns both from the moment it
+                // closed this one, and will report its own success or failure.
+                //
+                // A reconnect from Settings that FAILS therefore no longer
+                // arms a retry. It never should have: the retry came from this
+                // event wiping a connection that had just been replaced, and a
+                // first-ever connect that fails has never had one either. The
+                // reader is left on Settings, with the failure on screen and
+                // the button that produced it under their thumb.
+                if !superseded {
+                    if *ctx.want_connected.peek() {
+                        conn.set(ConnState::Failed(format!("Connection lost: {reason}")));
+                        let ctx = *ctx;
+                        spawn_forever(async move { reconnect_loop(&ctx).await });
+                    } else {
+                        conn.set(ConnState::Disconnected);
+                    }
                 }
                 break;
             }
@@ -1161,14 +1212,48 @@ pub(crate) fn dismiss_lost_ask(ctx: &AppCtx, tool_call_id: &str) {
     crate::ask_journal::acknowledge(&mut journal.write(), tool_call_id, now_secs());
 }
 
-/// Retry until connected or the user disconnects: quick ramp, then a steady
-/// 30-second cadence (covers long VPN outages and phone sleep — suspended
-/// timers resume on wake).
+/// Retry until connected or the user disconnects: try at once, then a quick
+/// ramp, then a steady 30-second cadence (which covers long VPN outages).
+///
+/// EVERY ATTEMPT IS PRECEDED BY ITS GUARDS RATHER THAN BY A SLEEP (#319), and
+/// that is the whole shape of this loop. It used to sleep first and ask
+/// afterwards, which put a two-second floor under every reconnect — paid in
+/// full by a blip that would have re-dialled instantly, and paid while the
+/// screen says "Connection lost". The two questions are still asked
+/// immediately before each attempt, so what the old order was protecting is
+/// protected: a user who presses Disconnect during the ramp is not dialled
+/// back out, and a phone that came back some other way does not get a second
+/// connection hung off it. Those are properties of where the guards sit
+/// RELATIVE TO THE ATTEMPT; the sleep was never what enforced them.
+///
+/// WHAT THIS DOES NOT FIX, and the comment that used to stand here got wrong.
+/// It said the cadence "covers … phone sleep — suspended timers resume on
+/// wake", which reads as reassurance and is not: they resume with the
+/// REMAINDER. `std::time::Instant` on Apple targets is `CLOCK_UPTIME_RAW` —
+/// "a clock that increments monotonically … but that does not increment while
+/// the system is asleep" (the pinned toolchain quotes the man page at
+/// `library/std/src/sys/time/unix.rs:55-67`, rust 1.98.0; the platform table
+/// at `library/std/src/time.rs:116` says the same) — and tokio's `Instant`
+/// wraps `std::time::Instant`. So a `sleep(30)` in flight when the lid closes
+/// still has almost thirty seconds to serve when it opens, and this reorder
+/// does not shorten it. What the reorder fixes is every reconnect that STARTS
+/// after the wake, which is the ordinary lid case: sleeping kills the socket,
+/// the transport reports it, and the loop spawned off that report now dials
+/// immediately instead of two seconds later.
+///
+/// AND THERE IS NO LIFECYCLE EVENT TO SHORT-CIRCUIT THE OTHER CASE WITH. tao
+/// emits `Resumed`/`Suspended` only from its iOS and Android backends
+/// (`platform_impl/ios/view.rs:615,619`, `platform_impl/android/mod.rs:130,140`
+/// in tao 0.34.8); macOS, where closing a lid is the actual gesture, raises
+/// neither, and dioxus-desktop's loop has no arm for either anyway. iOS is
+/// reachable through `use_wry_event_handler` — `use_fullscreen` already uses
+/// that hook — but `docs/permission-durability.md` argues against acting on
+/// tao's iOS lifecycle events at all, because `will_resign_active` false-fires
+/// on a Control Center pull. This reorder needs none of them and helps all
+/// three platforms.
 async fn reconnect_loop(ctx: &AppCtx) {
     let mut ramp = [2u64, 4, 8, 15].into_iter();
     loop {
-        let delay = ramp.next().unwrap_or(30);
-        tokio::time::sleep(Duration::from_secs(delay)).await;
         if !*ctx.want_connected.peek() {
             return;
         }
@@ -1197,6 +1282,7 @@ async fn reconnect_loop(ctx: &AppCtx) {
             }
             return;
         }
+        tokio::time::sleep(Duration::from_secs(ramp.next().unwrap_or(30))).await;
     }
 }
 
@@ -4034,6 +4120,113 @@ mod tests {
         });
     }
 
+    /// The third combination of cause and flag, and the one that had no test:
+    /// `Local` while `want_connected` is still set.
+    ///
+    /// That is not a reader who disconnected — they would have dropped the
+    /// flag first. It is `establish` closing the old socket in the middle of
+    /// opening its replacement, which is the case `DisconnectCause` was
+    /// declared for. The socket that died is not the app's connection any
+    /// more, so this event may not speak for one: no wiped client, no
+    /// "Connection lost" over a badge that says connected, and above all no
+    /// dialler, which would close the connection that had just come up and
+    /// start the whole thing again.
+    #[test]
+    fn a_socket_a_reconnect_replaced_says_nothing_about_the_one_that_took_over() {
+        let mut app = App::mount();
+        let server = serve(happy);
+        let _events = app.attach(&server);
+        app.run(|ctx| {
+            // Pointed at the server so that a dialler, if one were armed,
+            // would reach it and be counted.
+            ctx.settings.clone().set(Settings {
+                server_url: server.base_url.clone(),
+                ..Settings::default()
+            });
+            ctx.want_connected.clone().set(true);
+            ctx.conn.clone().set(ConnState::Connected {
+                agent: "goose".to_owned(),
+            });
+        });
+
+        pump_events(
+            &app,
+            vec![AcpEvent::Disconnected {
+                reason: "closed by client".to_owned(),
+                cause: DisconnectCause::Local,
+            }],
+        );
+        app.settle();
+
+        app.run(|ctx| {
+            assert!(
+                ctx.client.peek().is_some(),
+                "the socket that was replaced took the replacement's client with it"
+            );
+            assert!(
+                ctx.conn.peek().is_connected(),
+                "the badge says Connection lost over a connection that is up"
+            );
+        });
+        assert!(
+            server.traffic().is_empty(),
+            "a dialler was armed against a connection that had already come \
+             up: {:?}",
+            server.traffic()
+        );
+    }
+
+    /// …AND PRESSING CONNECT TWICE LEAVES THE APP CONNECTED ONCE.
+    ///
+    /// The end-to-end version of the test above, and the shape the defect
+    /// actually had. The socket the second `establish` closed is reported by a
+    /// pump that is still running, and that report used to wipe `ctx.client`,
+    /// paint Failed over the live connection and arm a dialler at it — which
+    /// closed the connection that had just come up, whose own pump then did
+    /// the same thing again. Measured with the reconnect loop's sleep behind
+    /// its attempt rather than in front of it: 149 requests against the second
+    /// server before the harness stopped polling, and the app left holding no
+    /// client at all. With the ramp's sleep still in front, the same run made
+    /// no requests inside the window and ALSO ended with no client — the bug
+    /// was there the whole time and the sleep was hiding its rate, not its
+    /// existence.
+    ///
+    /// The two `config/read`s are `learn_default_model`, one per `establish`.
+    /// Both are spawned on the Dioxus runtime and neither is polled until
+    /// `settle`, by which time the current client is the second server's, so
+    /// both land there. Anything past those two is a connection nobody asked
+    /// for.
+    #[test]
+    fn connecting_over_a_live_connection_leaves_one_connection_and_no_dialler() {
+        let mut app = App::mount();
+        let first = serve(happy);
+        let second = serve(happy);
+        assert!(app.dial(&first), "the first goose refused the handshake");
+        assert!(app.dial(&second), "the second goose refused the handshake");
+        app.settle();
+
+        app.run(|ctx| {
+            assert!(
+                ctx.conn.peek().is_connected(),
+                "two presses of Connect left the app reporting a lost connection"
+            );
+            assert!(
+                ctx.client.peek().is_some(),
+                "two presses of Connect left the app with nothing to send over"
+            );
+        });
+        assert!(
+            first.methods().is_empty(),
+            "the first server was still being talked to: {:?}",
+            first.methods()
+        );
+        assert_eq!(
+            second.methods(),
+            ["_goose/unstable/config/read", "_goose/unstable/config/read"],
+            "a reconnect storm: every connection here closed the one before it"
+        );
+    }
+
     /// Answering an ask over a dead socket is theatre, so `send_prompt`'s
     /// `Closed` arm drops the queue instead. What it must NOT do is decide the
     /// round was lost: it cannot tell a dropped tailnet from a press of
@@ -5038,7 +5231,8 @@ mod tests {
             }],
         );
 
-        // The first rung of the ramp is two seconds; the budget is the slack.
+        // The first attempt goes out with no rung of the ramp in front of it,
+        // so the budget is slack for the round trips and nothing else.
         app.settle_until(Duration::from_secs(15), |ctx| {
             !ctx.config_options.peek().is_empty()
         });
@@ -5070,11 +5264,25 @@ mod tests {
         );
     }
 
-    /// The reconnect loop sleeps first and asks afterwards, so both of its
-    /// questions are asked at the moment they matter. A loop that asked before
-    /// sleeping would dial out for a user who pressed Disconnect during the
-    /// ramp, and would hang a second connection off a phone that had already
-    /// come back some other way.
+    /// The reconnect loop asks both of its questions immediately before every
+    /// attempt, so both are asked at the moment they matter.
+    ///
+    /// THIS COMMENT USED TO ARGUE FOR A DIFFERENT ORDER — sleep first, ask
+    /// afterwards — on the grounds that "a loop that asked before sleeping
+    /// would dial out for a user who pressed Disconnect during the ramp, and
+    /// would hang a second connection off a phone that had already come back
+    /// some other way". Both objections are real and both are still answered,
+    /// because they are about where the guards sit RELATIVE TO THE ATTEMPT and
+    /// not about the sleep: an attempt that is preceded by its guards cannot
+    /// dial out for either of those readers whether it sleeps first or not.
+    /// What sleeping first also bought was a two-second floor under every
+    /// reconnect, which is what #319 took away.
+    ///
+    /// So the assertion is unchanged and the property it pins is unchanged —
+    /// and it is now pinned in microseconds rather than in the four seconds
+    /// this test used to spend waiting out two first rungs, because under the
+    /// new order the attempt these guards refuse is the first thing the loop
+    /// would otherwise do.
     #[test]
     fn a_reconnect_gives_up_when_there_is_nothing_left_to_reconnect() {
         let app = App::mount();
@@ -5086,7 +5294,7 @@ mod tests {
             });
         });
 
-        // The user pressed Disconnect while the first rung was sleeping.
+        // The user pressed Disconnect before the loop got its first turn.
         app.drive(|ctx| async move { reconnect_loop(&ctx).await });
         app.run(|ctx| {
             assert!(
@@ -5138,8 +5346,8 @@ mod tests {
             spawn_forever(async move { reconnect_loop(&ctx).await });
         });
 
-        // The first rung of the ramp is two seconds, and the attempt at the end
-        // of it is refused.
+        // The first attempt goes out before any rung of the ramp, and it is
+        // refused.
         app.settle_until(Duration::from_secs(15), |ctx| {
             matches!(*ctx.conn.peek(), ConnState::Failed(_))
         });
@@ -5150,7 +5358,7 @@ mod tests {
             );
         });
 
-        // The tailnet comes up while the second rung is sleeping.
+        // The tailnet comes up while the first rung is sleeping.
         app.run(|ctx| {
             ctx.settings.clone().set(Settings {
                 server_url: server.base_url.clone(),
@@ -5179,6 +5387,39 @@ mod tests {
             "a reconnect with no chat open asked the server to replay one: {:?}",
             server.methods()
         );
+    }
+
+    /// …AND THE FIRST OF THOSE ATTEMPTS COSTS NOTHING TO WAIT FOR.
+    ///
+    /// A budget shorter than the ramp's first rung is the assertion. Under the
+    /// old order — sleep, then guards, then attempt — this connection could not
+    /// have come up in under two seconds no matter how fast the server
+    /// answered, and the banner would have said "Connection lost" for all of
+    /// it. A loopback goose answers the handshake in single-digit milliseconds
+    /// (`establish` is marked and reports about 2 ms here), so a one-second
+    /// budget is three orders of magnitude of slack against the thing being
+    /// measured and half a rung away from the thing being refuted.
+    #[test]
+    fn a_reconnect_tries_before_it_sleeps() {
+        let mut app = App::mount();
+        let server = serve(happy);
+        app.run(|ctx| {
+            ctx.settings.clone().set(Settings {
+                server_url: server.base_url.clone(),
+                ..Settings::default()
+            });
+            ctx.want_connected.clone().set(true);
+            let ctx = *ctx;
+            spawn_forever(async move { reconnect_loop(&ctx).await });
+        });
+        app.settle_until(Duration::from_secs(1), |ctx| ctx.conn.peek().is_connected());
+        app.run(|ctx| {
+            assert!(
+                ctx.conn.peek().is_connected(),
+                "a reconnect that would have succeeded instantly waited out a \
+                 rung of the ramp first"
+            );
+        });
     }
 
     /// A `session/load` takes as long as the transcript is — the server
