@@ -20,7 +20,6 @@ resolve and §4.13's finding has been fixed there. That is now recorded in the
 header, at the top of §2, on §4.13 itself and as the last item of §6, rather than
 re-audited — re-deriving §2 against a pinned gateway is its own piece of work. -->
 
-
 # Where chats and sessions actually live
 
 Two backends, two different answers. This is the model, with citations, and with the places where the obvious reading of the code turns out to be wrong.
@@ -103,7 +102,7 @@ The app opens on Settings, disconnected (`src/state.rs:790-796`) — but not on 
 
 ## 2. The code plane
 
-> **Dated.** Every `:NNNN` in this section points into `code-agent-manager.py` at a snapshot that was never pinned, and the file has since grown to 2,489 lines; none of those numbers resolve. The names — `Chat`, `Index`, `run_container`, `wake_chat`, `next_port`, `wait_for_chat`, `render_chat_config`, `seed_auth`, `oneshot`, `reaper_loop`, `route_delete_chat` — all still exist and are how to find them. The model this section describes was not re-checked against today's gateway; §6's last item says what that costs.
+> **Dated.** Every `:NNNN` in this section points into `code-agent-manager.py` at a snapshot that was never pinned, and the file has since grown to 2,489 lines; none of those numbers resolve. The names — `Chat`, `Index`, `run_container`, `wake_chat`, `next_port`, `wait_for_chat`, `render_chat_config`, `seed_auth`, `oneshot`, `reaper_loop`, `route_delete_chat` — all still exist and are how to find them. Bare paths in this section are the **gateway's** repo, not this one, which matters for `docs/` because both trees have one. The model this section describes was not re-checked against today's gateway; §6's last item says what that costs.
 
 ### Layer one: the index row
 
@@ -150,7 +149,7 @@ The manager itself loses nothing, because it holds nothing: every route does `In
 
 ### The git tree is half the chat
 
-`workspace/` is a real clone on a real branch, on the host bind mount. Uncommitted work survives spin-down, manager restart, image upgrade and reboot. It is destroyed by exactly two things: `?purge=1` on delete (`:1461-1462`, `shutil.rmtree`) and the create-failure rollback (`:1044`). This is why the design pushes toward a PR — the pushed branch is the only copy that outlives the volume (`docs/code-agents.md:50`).
+`workspace/` is a real clone on a real branch, on the host bind mount. Uncommitted work survives spin-down, manager restart, image upgrade and reboot. It is destroyed by exactly two things: `?purge=1` on delete (`:1461-1462`, `shutil.rmtree`) and the create-failure rollback (`:1044`). This is why the design pushes toward a PR — the pushed branch is the only copy that outlives the volume (the gateway repo's `docs/code-agents.md`, "The pieces"; it said so at `:50` then and that line is now blank).
 
 ---
 
