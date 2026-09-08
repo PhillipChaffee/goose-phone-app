@@ -203,12 +203,22 @@ cargo check --workspace          # must be warning-free
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace           # unit + integration tests
 cargo llvm-cov -p goose-acp-client -p opencode-client --summary-only  # coverage
-dx serve --desktop               # run the app
+dx serve --desktop --profile fast  # run the app (see the profile note below)
 node docs/audit.js               # UI geometry + contrast, every state, both themes
 scripts/capture-gallery.py       # regenerate the gallery from the running app
 scripts/shoot-simulator.sh chat  # regenerate a README image from the simulator
 node scripts/make-og-card.js     # regenerate the project page's social preview
 ```
+
+`--profile fast` is `[profile.fast]` in the root `Cargo.toml`: `inherits =
+"dev"` plus `opt-level = 2`. Plain `dx serve` compiles every dependency at
+`opt-level = 0`, which is a 6.6x tax on everything the app does at run time (a
+600-item markdown re-parse: 13.67 ms against 2.08 ms). It is not
+`--release`, and cannot be: `--release` turns off `debug_assertions`, which is
+what the `GOOSE_DEV_*` build seeds in `src/state.rs` are gated on, so a release
+build starts with every settings field blank. The one cost is a cold build of
+the profile's own target directory — 2m31s against 49s — after which a save
+costs the same as it did.
 
 `docs/audit.js` rebuilds every captured state as a standalone document, at six
 phone sizes from 320×568 to 440×956 — five iPhones and Android's modal 360×800
