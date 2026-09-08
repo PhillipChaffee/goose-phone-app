@@ -312,8 +312,17 @@ pub(crate) struct Step {
 ///
 /// Newest last, capped, because the block is pinned above two others in a
 /// 344px column and a fifty-tool turn would push the meter off the screen.
+///
+/// `read()` AND NOT `(ctx.chat)()`, which is the same signal call spelled two
+/// ways: `(signal)()` is `read().clone()`, and the clone here was a whole
+/// `ChatState` — every item of the transcript, plus the attachments each user
+/// message carries — allocated and dropped to walk it once. The SUBSCRIPTION
+/// it takes is not the waste and stays: a timeline of what the agent has been
+/// doing has to change when the agent does something. That is what separates
+/// this site from `shell::desktop::sidebar`'s, where the same expression was
+/// buying one `Option<String>` (#313).
 pub(crate) fn tool_timeline(ctx: &AppCtx, limit: usize) -> Vec<Step> {
-    let chat = (ctx.chat)();
+    let chat = ctx.chat.read();
     let mut steps: Vec<Step> = chat
         .items
         .iter()

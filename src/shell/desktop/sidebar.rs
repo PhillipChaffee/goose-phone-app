@@ -328,12 +328,12 @@ impl Mark {
 
 /// The chat plane's rows, newest first inside each band.
 ///
-/// `now` is threaded through from the caller for [`band_of`]'s reason.
-pub(crate) fn chat_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
-    // What the pane is showing, so a row can say it is the one. Read once
-    // rather than per row: `ctx.chat` is a signal and a list of fifty rows
-    // would otherwise take fifty subscriptions to the same value.
-    let open_chat = (ctx.chat)().session_id;
+/// `now` is threaded through from the caller for [`band_of`]'s reason, and
+/// `open_chat` — which conversation the pane is showing, so a row can say it
+/// is the one — for a sharper one this function is the wrong place to make:
+/// it is a parameter so that the only read of `ctx.chat` in this file is the
+/// memo in [`SidebarList`], which is where the argument lives (#313).
+pub(crate) fn chat_rows(ctx: &AppCtx, now: i64, open_chat: Option<&str>) -> Vec<Row> {
     let running = (ctx.running_sessions)();
     let waiting: std::collections::HashSet<String> = (ctx.permission)()
         .iter()
@@ -409,7 +409,7 @@ pub(crate) fn chat_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
                     Mark::Idle
                 },
                 band: band_of_stamp(info.updated_at.as_deref(), now),
-                selected: open_chat.as_deref() == Some(info.session_id.as_str()),
+                selected: open_chat == Some(info.session_id.as_str()),
             }
         })
         .collect();
@@ -458,8 +458,12 @@ fn tree_size(chat: &opencode_client::ChatMeta) -> Option<Stat> {
 /// the mockup's wide home screen does. The sidebar is 268px and a repo heading
 /// per tree would spend more of it on headings than on trees; the repo goes on
 /// the row's own second line instead, where it is still on screen.
-pub(crate) fn code_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
-    let open_chat = (ctx.code_chat)().chat_id;
+///
+/// `open_chat` arrives from the caller for [`chat_rows`]'s reason, and it is
+/// the code half's own: `ctx.code_chat` is a `CodeChatState`, which carries
+/// `items` plus a `part_index` and a `roles` map, and the Code plane streams
+/// into it exactly as the Chat plane streams into `ctx.chat`.
+pub(crate) fn code_rows(ctx: &AppCtx, now: i64, open_chat: Option<&str>) -> Vec<Row> {
     let waiting: std::collections::HashSet<String> = (ctx.code_permissions)()
         .iter()
         .map(|(chat, _)| chat.clone())
@@ -529,7 +533,7 @@ pub(crate) fn code_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
                     Band::Undated
                 }
             },
-            selected: open_chat.as_deref() == Some(chat.id.as_str()),
+            selected: open_chat == Some(chat.id.as_str()),
         })
         .collect();
     rows.sort_by(|a, b| {
@@ -545,10 +549,16 @@ pub(crate) fn code_rows(ctx: &AppCtx, now: i64) -> Vec<Row> {
 }
 
 /// The plane's rows, whichever plane it is.
-pub(crate) fn rows_for(ctx: &AppCtx, plane: Plane, now: i64) -> Vec<Row> {
+///
+/// `open_chat` is the id the plane's own pane has open — see [`chat_rows`].
+/// One parameter for both halves and not one each, because a `SidebarList` is
+/// one plane's list: the caller has already chosen which of the two signals
+/// the id came out of, and a second parameter would be a value neither arm
+/// could use.
+pub(crate) fn rows_for(ctx: &AppCtx, plane: Plane, now: i64, open_chat: Option<&str>) -> Vec<Row> {
     match plane {
-        Plane::Chat => chat_rows(ctx, now),
-        Plane::Code => code_rows(ctx, now),
+        Plane::Chat => chat_rows(ctx, now, open_chat),
+        Plane::Code => code_rows(ctx, now, open_chat),
     }
 }
 
@@ -583,7 +593,34 @@ fn now_secs() -> i64 {
 #[component]
 pub(crate) fn SidebarList(plane: Plane) -> Element {
     let ctx = crate::state::use_app_ctx();
-    let rows = rows_for(&ctx, plane, now_secs());
+
+    // WHICH ROW THE PANE HAS OPEN, and these three lines are the whole of
+    // #313.
+    //
+    // Both are memos rather than reads, and the reason is the same one
+    // `views::sessions::SessionsView` already gives for the phone's list:
+    // each of these signals holds an ENTIRE TRANSCRIPT, so reading any part
+    // of one here subscribes this list to every streamed chunk — and on the
+    // desktop that transcript is streaming in the column next door, into a
+    // list that is on screen at all times. `push_chunk` takes `chat.write()`
+    // per chunk even on the append path, where nothing about the id can have
+    // changed. A memo re-runs on each of those and wakes this component only
+    // when the id it returns actually changes, which is once per open.
+    //
+    // `peek()` reads without subscribing too, and on its own it would be
+    // wrong here: nothing would then wake the list when you opened a
+    // different chat, and the mark would stay on the row you left.
+    //
+    // Two hooks and one read, because a hook may not be conditional but a
+    // subscription is: the half that is not on screen re-runs its memo and
+    // wakes nobody.
+    let open_chat = use_memo(move || ctx.chat.read().session_id.clone());
+    let open_tree = use_memo(move || ctx.code_chat.read().chat_id.clone());
+    let open = match plane {
+        Plane::Chat => open_chat(),
+        Plane::Code => open_tree(),
+    };
+    let rows = rows_for(&ctx, plane, now_secs(), open.as_deref());
 
     // The two sheets a row can raise. Held here rather than on `AppCtx`,
     // following the rule `views/chat.rs` and the rest already follow: a sheet
@@ -1028,7 +1065,8 @@ mod tests {
 
     #[test]
     fn a_session_that_is_running_and_asking_reads_as_asking() {
-        let rows = crate::testkit::with_ctx(seed_running_and_asking, |ctx| chat_rows(ctx, NOW));
+        let rows =
+            crate::testkit::with_ctx(seed_running_and_asking, |ctx| chat_rows(ctx, NOW, None));
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0].mark,
@@ -1051,7 +1089,7 @@ mod tests {
                     session("mid", "Middle", Some("2026-08-30T09:00:00Z")),
                 ]);
             },
-            |ctx| chat_rows(ctx, NOW),
+            |ctx| chat_rows(ctx, NOW, None),
         );
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, ["new", "mid", "old"]);
@@ -1078,7 +1116,7 @@ mod tests {
                     session("b", "   ", None),
                 ]);
             },
-            |ctx| chat_rows(ctx, NOW),
+            |ctx| chat_rows(ctx, NOW, None),
         );
         for row in &rows {
             assert!(
@@ -1115,7 +1153,7 @@ mod tests {
                     active("mid", NOW - DAY),
                 ]);
             },
-            |ctx| code_rows(ctx, NOW),
+            |ctx| code_rows(ctx, NOW, None),
         );
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, ["new", "mid", "old", "never"]);
@@ -1146,7 +1184,7 @@ mod tests {
                     stat: None,
                 }]);
             },
-            |ctx| code_rows(ctx, NOW),
+            |ctx| code_rows(ctx, NOW, None),
         );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "inbox-triage");
@@ -1179,7 +1217,7 @@ mod tests {
                     tree("c3", "", ""),
                 ]);
             },
-            |ctx| code_rows(ctx, NOW),
+            |ctx| code_rows(ctx, NOW, None),
         );
         let subs: Vec<Option<&str>> = rows.iter().map(|r| r.subtitle.as_deref()).collect();
         assert!(
@@ -1250,7 +1288,7 @@ mod tests {
                     .by_chat
                     .insert("has-pull".to_owned(), vec![sized_pull(Some((77, 33)))]);
             },
-            |ctx| code_rows(ctx, NOW),
+            |ctx| code_rows(ctx, NOW, None),
         );
         let stat = |id: &str| {
             rows.iter()
@@ -1287,7 +1325,7 @@ mod tests {
                 let mut chats = ctx.code_chats;
                 chats.set(vec![sized("c1", compare(Some(84), Some(0), false))]);
             },
-            |ctx| code_rows(ctx, NOW),
+            |ctx| code_rows(ctx, NOW, None),
         );
         assert_eq!(
             rows[0].stat,
@@ -1361,7 +1399,7 @@ mod tests {
                     Some("2026-08-31T09:00:00Z"),
                 )]);
             },
-            |ctx| chat_rows(ctx, NOW),
+            |ctx| chat_rows(ctx, NOW, None),
         );
         assert_eq!(rows[0].stat, None);
     }
@@ -1594,6 +1632,12 @@ mod tests {
     /// It matters more in the sidebar than it did in a pane, because the
     /// sidebar is on screen at every width and in every state — an unmarked
     /// list is permanently silent about what you are looking at.
+    ///
+    /// Both halves are here, and they are one line each now that the id is a
+    /// parameter (#313) rather than a read each function did for itself.
+    /// WHICH SIGNAL the id came out of is the component's question, and
+    /// `the_marked_row_carries_the_class_the_sheet_paints` below is what asks
+    /// it.
     #[test]
     fn the_open_row_is_the_marked_one() {
         let rows = crate::testkit::with_ctx(
@@ -1603,10 +1647,8 @@ mod tests {
                     session("s1", "First", Some("2026-08-31T09:00:00Z")),
                     session("s2", "Second", Some("2026-08-30T09:00:00Z")),
                 ]);
-                let mut chat = ctx.chat;
-                chat.write().session_id = Some("s2".to_owned());
             },
-            |ctx| chat_rows(ctx, NOW),
+            |ctx| chat_rows(ctx, NOW, Some("s2")),
         );
         let marked: Vec<&str> = rows
             .iter()
@@ -1619,32 +1661,78 @@ mod tests {
             "exactly the open session should be marked; the sidebar is on \
              screen always and an unmarked list never says what is open"
         );
+
+        let rows = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    tree("c1", "goose-phone-app", "agent/x"),
+                    tree("c2", "goose-phone-app", "agent/y"),
+                ]);
+            },
+            |ctx| code_rows(ctx, NOW, Some("c2")),
+        );
+        let marked: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.selected)
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(
+            marked,
+            ["c2"],
+            "the code half marked nothing, so the sidebar says which row is \
+             open on one plane and stays silent on the other"
+        );
     }
 
-    /// And it reaches the markup, not just the struct.
+    /// And it reaches the markup, not just the struct — through the component,
+    /// which is the half `the_open_row_is_the_marked_one` cannot see.
+    ///
+    /// SINCE #313 THIS IS ALSO THE ONLY TEST OF THE MEMO. Nothing below
+    /// `SidebarList` reads `ctx.chat` any more, so a memo that returned the
+    /// wrong field, or read the other plane's signal, or was never wired to
+    /// the call at all, shows up here and nowhere else in the module.
+    ///
+    /// Two sessions rather than one for the same reason: with a single row, a
+    /// mark on the RIGHT row and a mark on EVERY row are the same markup.
     #[test]
     fn the_marked_row_carries_the_class_the_sheet_paints() {
         let html = crate::testkit::render_seeded(
             |ctx| {
                 let mut sessions = ctx.sessions;
-                sessions.set(vec![session(
-                    "s1",
-                    "The open one",
-                    Some("2026-08-31T09:00:00Z"),
-                )]);
+                sessions.set(vec![
+                    session("s1", "The other one", Some("2026-08-31T09:00:00Z")),
+                    session("s2", "The open one", Some("2026-08-30T09:00:00Z")),
+                ]);
                 let mut chat = ctx.chat;
-                chat.write().session_id = Some("s1".to_owned());
+                chat.write().session_id = Some("s2".to_owned());
             },
             || rsx! { SidebarList { plane: Plane::Chat } },
         );
-        assert!(
-            html.contains(r#"class="nav-row on""#),
-            "the open row does not carry `nav-row on`, so assets/desktop/ \
-             has nothing to paint the selection with: {}",
+        // Each row, from its wrapping div to the next one, keeping the ones
+        // the modifier is on. Split rather than `contains`, because the row's
+        // own children are `nav-row-open`, `nav-row-text` and
+        // `nav-row-actions` — a substring test for the base class would match
+        // all three, and one for `nav-row on` could not say which row it
+        // landed on.
+        let marked: Vec<&str> = html
+            .split(r#"<div class="nav-row"#)
+            .filter(|row| row.starts_with(" on\""))
+            .collect();
+        assert_eq!(
+            marked.len(),
+            1,
+            "{} rows carry `nav-row on` — either assets/desktop/ has nothing \
+             to paint the selection with, or it paints all of it: {}",
+            marked.len(),
             &html[..html.len().min(500)]
         );
         assert!(
-            html.contains(r#"aria-current="true""#),
+            marked[0].contains(r#"title="The open one""#),
+            "the mark is on the row the pane does NOT have open"
+        );
+        assert!(
+            marked[0].contains(r#"aria-current="true""#),
             "the selection is colour only — a reader who cannot see the fill \
              is told nothing about which row is open"
         );
