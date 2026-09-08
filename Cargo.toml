@@ -176,3 +176,76 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
+
+# The profile for RUNNING the app, as opposed to shipping it. `dx serve
+# --desktop --profile fast`, which is what `scripts/serve-real.sh` now does.
+#
+# Every documented way to run this app was `dx serve`, i.e. `dev`, i.e.
+# `opt-level = 0` for every dependency it compiles — 462 units on this target,
+# out of the 602 entries in `Cargo.lock`; dioxus's diff, dioxus-signals,
+# ciborium, pulldown-cmark, the lot. Measured on a 600-item /
+# 400 KB markdown re-parse (`markdown::to_html` over the repo's own prose;
+# four binaries run round-robin so one machine state prices all of them, best
+# of 7 within a round, best of 5 rounds, M3 Max):
+#
+#     dev                                13.67 ms   1.0x
+#     dev + package."*" opt-level = 2     7.01 ms   1.9x
+#     this profile (opt-level = 2)        2.08 ms   6.6x
+#     the same at opt-level = 3           1.93 ms   7.1x
+#
+# 6.6x, and the same multiplier is sitting on every millisecond figure in
+# #307's other children. The round-robin is not ceremony. An unrelated build
+# starting on this machine moved the `dev` figure from 12.6 ms to 18.6 ms
+# between two runs, so a before and an after taken an hour apart would have
+# been a number about the machine; inside one interleaved run the two drift
+# TOGETHER and the ratio held at 5.7-6.5x across six rounds.
+#
+# THE THREE THINGS THAT MAKE THIS THE RIGHT SHAPE, each of which was the reason
+# some more obvious version is not here:
+#
+# 1. NOT `--release`. `dev_seed!` (`src/state.rs`) is `#[cfg(debug_assertions)]
+#    option_env!` with an empty else-arm, deliberately, so a development
+#    endpoint cannot ride along into a shipped binary. A release build
+#    therefore blanks all six `GOOSE_DEV_*` seeds — and `secret_key` and
+#    `code_password` are `#[serde(skip_serializing)]`, so no saved file refills
+#    them either. `--release` turns the launcher into "retype two secrets per
+#    launch", which is the exact outcome `Settings`' own doc comment says the
+#    arrangement exists to avoid. `inherits = "dev"` keeps
+#    `debug-assertions = true`, which is the whole reason this works and so was
+#    checked twice rather than assumed: `dx build --desktop --profile fast`
+#    leaves its own rustc arguments in `target/dx/.captured-args/` and they read
+#    `-C opt-level=2 -C debug-assertions=on`, and a `--profile fast` binary
+#    built with a `GOOSE_DEV_SECRET_KEY` set has that string in it.
+#
+# 2. NOT `[profile.dev]` itself, even though the numbers are the same. CI runs
+#    `clippy --all-targets`, `test --workspace`, `llvm-cov --workspace` and the
+#    iOS `cargo check` in `dev` (`.github/workflows/ci.yml`), and coverage
+#    instrumentation at `opt-level = 2` can move the line counts the 95% gate
+#    reads. A separate profile leaves every gate on the build it was measured
+#    against and costs the run a flag.
+#
+# 3. NOT `[profile.dev.package."*"] opt-level = 2`, the usual one-liner, which
+#    recovered 1.9x of the 6.6x above — it sets the opt-level of code compiled
+#    in the DEPENDENCY's codegen unit, and `html::push_html` is generic over its
+#    event iterator, so it monomorphises into `goose-mobile`'s unit and stays at
+#    0, as does the `filter_map` in `markdown::to_html`. Any hot loop whose real
+#    work is a generic instantiated locally behaves the same way, and `rsx!` and
+#    dioxus's diff are exactly that shape.
+#
+# The price is the COLD build and only the cold build. A profile is its own
+# target directory, so the first `--profile fast` recompiles the whole graph:
+# 2m31s against 49s for a cold `dev`, both `cargo build -p goose-mobile` into an
+# empty target dir. After that it is a wash, which is the result that decided
+# this — `inherits = "dev"` also inherits `incremental = true`, so a save
+# re-optimises one codegen unit and nothing else: three edits to
+# `src/views/chat.rs` rebuilt in 2.02/2.07/2.72s under `fast` against
+# 2.35/2.38/2.57s under `dev`. Nothing in CI builds this profile.
+#
+# `opt-level = 2` and not `3`: 3 measured inside 2's run-to-run spread on this
+# workload (1.93 ms against 2.08 ms at the best, and SLOWER than 2 in two of the
+# five interleaved rounds), so there is nothing to buy. `lto` is off because it
+# is a link-time cost paid on every incremental rebuild, and the wash in the
+# paragraph above is the property this profile cannot afford to lose.
+[profile.fast]
+inherits = "dev"
+opt-level = 2
