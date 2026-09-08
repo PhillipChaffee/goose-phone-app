@@ -12,13 +12,22 @@ REVISED 2026-09-08 (#314). The client half described the world before #220, and
 #220 made all four storage keys reach the disk — so "the client persists exactly
 one file" and "the Code transcript cache doesn't work" were both false, and every
 `src/state.rs` line number in it had drifted through the desktop campaign. The
-client half was re-measured and re-read for this pass. -->
+client half was re-measured and re-read for this pass.
+
+The same pass found the gateway had never been pinned to a commit the way goose
+and OpenCode were, and has since moved far enough that none of §2's line numbers
+resolve and §4.13's finding has been fixed there. That is now recorded in the
+header, at the top of §2, on §4.13 itself and as the last item of §6, rather than
+re-audited — re-deriving §2 against a pinned gateway is its own piece of work. -->
+
 
 # Where chats and sessions actually live
 
 Two backends, two different answers. This is the model, with citations, and with the places where the obvious reading of the code turns out to be wrong.
 
-Read against: this repo at `7ca4dd0`; goose at `/Users/phillipchaffee/git/goose` (commit `3810898a7`, version 1.46.0 per `crates/goose/Cargo.toml:11`); the gateway at `/Users/phillipchaffee/git/personal-ai-setup/scripts/vps/code-agent-manager.py`; OpenCode at `/Users/phillipchaffee/git/opencode` (commit `5e2a6257b2`, 1.18.5). Everything below is either read from source or measured on this machine; measured claims say so, and the last section lists what could not be checked here.
+Read against: this repo at `7ca4dd0`; goose at `/Users/phillipchaffee/git/goose` (commit `3810898a7`, version 1.46.0 per `crates/goose/Cargo.toml:11`); the gateway at `/Users/phillipchaffee/git/personal-ai-setup/scripts/vps/code-agent-manager.py` (**unpinned when §2 was written**, `e1046a8c8` today); OpenCode at `/Users/phillipchaffee/git/opencode` (commit `5e2a6257b2`, 1.18.5). Everything below is either read from source or measured on this machine; measured claims say so, and the last section lists what could not be checked here.
+
+**Three of those four pins are honest and the gateway's is not, which is the one thing to know before reading §2.** goose and OpenCode were still at the commits above when this was revised — checked by reading their `.git/HEAD` — so their citations resolve as written. The gateway was never pinned, and it has moved a long way since: `code-agent-manager.py` is 2,489 lines today, and **not one** of the bare `:NNNN` citations into it still lands on what it names. Resolve those by NAME, not by number. At least one finding built on them has been fixed upstream in the meantime (§4.13), so treat the whole gateway half as dated rather than current; the last item in §6 says exactly how far that goes and what was and was not re-checked.
 
 ---
 
@@ -94,6 +103,8 @@ The app opens on Settings, disconnected (`src/state.rs:790-796`) — but not on 
 
 ## 2. The code plane
 
+> **Dated.** Every `:NNNN` in this section points into `code-agent-manager.py` at a snapshot that was never pinned, and the file has since grown to 2,489 lines; none of those numbers resolve. The names — `Chat`, `Index`, `run_container`, `wake_chat`, `next_port`, `wait_for_chat`, `render_chat_config`, `seed_auth`, `oneshot`, `reaper_loop`, `route_delete_chat` — all still exist and are how to find them. The model this section describes was not re-checked against today's gateway; §6's last item says what that costs.
+
 ### Layer one: the index row
 
 `Chat` is a ten-field dataclass — `id, repo, title, port, branch, base, model, probe, created, last_active` (`code-agent-manager.py:163-202`) — held in an `Index` that is a plain dict serialized to `/data/code-agents/index.json` (`:85-88`, `:205-231`). `save()` writes a temp file and `os.replace`s it, so a crash mid-write can't corrupt it.
@@ -133,7 +144,7 @@ Waking (`wake_chat`, `:1050-1108`) is `podman start` if the container is merely 
 
 ### Manager restart
 
-`ExecStopPost` is `podman stop --filter label=code-agent=1 --time 30` (`scripts/vps/systemd/code-agent-manager.service:31`) and every container carries that label (`:805-806`). A deploy SIGTERMs **every** chat container, waits 30s, then kills. The cost is the spin-down list applied to all chats at once and **without the busy guard**: every in-flight turn dies mid-stream and every parked ask is destroyed. There is no journal, no retry, and no client-side record: every call to the journal's own API — `note`, `resolve`, `forget_open`, `lose_open`, `acknowledge`, `reconcile_at_startup` — is in `src/state.rs`, on a goose-plane path (`:786`, `:1024`, `:1043`, `:1082`, `:1084`, `:1143`, `:2014`, `:2064`). `src/code.rs` names `crate::ask_journal` in exactly two places and both are `::Backing`, the storage alias every persisted key now shares (`src/code.rs:2604`, `:2610`), which is the module's other half and has nothing to do with recording an ask. A code-plane ask that dies in a deploy dies silently.
+`ExecStopPost` is `podman stop --filter label=code-agent=1 --time 30` (`scripts/vps/systemd/code-agent-manager.service:31`) and every container carries that label (`:805-806`). A deploy SIGTERMs **every** chat container, waits 30s, then kills. The cost is the spin-down list applied to all chats at once and **without the busy guard**: every in-flight turn dies mid-stream and every parked ask is destroyed. There is no journal, no retry, and no client-side record: every call to the journal's own API — `note`, `resolve`, `forget_open`, `lose_open`, `acknowledge`, `reconcile_at_startup` — is in `src/state.rs`, on a goose-plane path (`:786`, `:1024`, `:1043`, `:1082`, `:1084`, `:1143`, `:2014`, `:2064`). `src/code.rs` names `crate::ask_journal` in exactly two places and both are `::Backing`, the storage alias every persisted key now shares (`src/code.rs:2604`, `:2610`), which is the module's other half and has nothing to do with recording an ask. A code-plane ask that dies in a deploy dies silently *on this side* — the gateway has since grown a notification pipeline this section predates, so whether it dies silently end to end is one of the things §6's last item says to re-derive.
 
 The manager itself loses nothing, because it holds nothing: every route does `Index.load()` fresh from disk (`:1314`, `:1356`, `:1410`, `:1467`). The only in-RAM state is a rate-limiter dict (`:1197`).
 
@@ -187,7 +198,9 @@ These are the places where the code's shape suggests the wrong answer. Several w
 
 **12. goose writes a hidden `<turn-context>` user message into every turn**, carrying your wall clock and working directory, marked `userVisible:false` — so it never replays and never counts toward `message_count`, but it is in the database and in the model's context. The row count per turn is always at least two.
 
-**13. An unanswered code-plane ask pins one of two concurrency slots open indefinitely.** `chat_busy` is true while a turn is blocked, so the reaper does `touch(cid); continue` (`:1157-1159`) forever. `MAX_ACTIVE` is 2 (`:92`), and a wake beyond that is a hard 409 — the app's toast reads "Chat unreachable: wake failed: 2 chats already active — stop one or wait for idle spin-down." Combined with the ask dying silently in a deploy, the recovery is: the slot frees, and the reason it was stuck is unrecoverable.
+**13. An unanswered code-plane ask pins one of two concurrency slots open indefinitely. FIXED UPSTREAM — this is what it said, and then what happened.** As written: `chat_busy` is true while a turn is blocked, so the reaper does `touch(cid); continue` (`:1157-1159`) forever. `MAX_ACTIVE` is 2 (`:92`), and a wake beyond that is a hard 409 — the app's toast reads "Chat unreachable: wake failed: 2 chats already active — stop one or wait for idle spin-down." Combined with the ask dying silently in a deploy, the recovery is: the slot frees, and the reason it was stuck is unrecoverable.
+
+Source read of today's gateway (`e1046a8c8`), and the only part of §2/§4's gateway half that was re-checked for this revision: the *holding open* is unchanged — `spin_down_idle` (`code-agent-manager.py:1438-1449`) touches any sampled chat that is not reporting `idle`, so a parked ask still keeps its container alive forever. The *slot* half is gone. `admission_count` (`:942-970`) counts running chats **minus** the blocked ones, and its docstring is a direct answer to this finding: *"A chat parked on a permission ask is exempt, and that exemption is a bug fix rather than a tuning knob … With MAX_ACTIVE = 2 that means two asks nobody answered take the WHOLE code plane offline: create returns 409, wake returns 409, and the 409's own advice — 'wait for idle spin-down' — is advice to wait for the one thing that provably cannot happen."* `chat_busy` no longer exists; `MAX_ACTIVE` is at `:107` and still 2; the 409's wording (`:1268`) is unchanged. The price the fix names is that running containers can now exceed `MAX_ACTIVE` by the number of unanswered asks, which `/api/health` reports as `blocked` (`:2138`).
 
 **14. `wait_for_chat` accepts any process listening on the chat's port.** `next_port` (`:874-880`) only avoids ports claimed by other chats in `index.json` — it never checks the host — and `wait_for_chat` (`:848-863`) returns true on HTTP 200 *or* 401. Hit by accident during checking: a stale manager squatting a port made a wake report success into an unrelated service, which the proxy would then have fed that chat's prompts. Related: `podman start` reuses the port and env baked in at `podman run`, so changing a chat's port in `index.json` produces a 502 while the container is up and healthy on the old port, and a rotated `GITHUB_CODE_AGENT_PAT` or `OPENCODE_SERVER_PASSWORD` doesn't reach existing containers until `podman rm`.
 
@@ -233,6 +246,7 @@ The app's entire deliberate on-disk footprint is those four files. `~/Library/We
 - **That the per-repo `setup` command's installs are discarded.** Sound from source (`oneshot`, `:830-845`, runs `--rm`), but the local test harness cannot prove it and actively suggests the opposite: `stub-engine.sh:52-58` handles `--rm` by running the script on the host, so a probe marker written outside the volume survived. Needs a real podman.
 - **PermissionV2 drift.** The image is `ghcr.io/anomalyco/opencode:latest` (`Containerfile:15`) and the checkout read is 1.18.5. If `:latest` ever moves the `bash` tool onto V2, asks stop appearing in the app with no other symptom, because the client only parses `permission.updated` / `permission.asked` / `permission.replied` (`crates/opencode-client/src/lib.rs:1111-1120`). A version-drift risk, not a present bug.
 - **The real code plane.** Everything code-plane here was checked against a locally-run manager with a mock OpenCode behind it, plus the real OpenCode database on this machine for the event-log shape. The mock is honest about transcript persistence and in-memory pending state; do not trust it on grant persistence, which is stubbed.
+- **The gateway as it is today.** This is the largest unchecked area in the document and it was created by an omission rather than by a limit: goose and OpenCode were pinned to a commit in the header and the gateway was not, so §2 and §4's gateway half describe a snapshot nobody can name. That snapshot has moved. `code-agent-manager.py` is 2,489 lines at `e1046a8c8` against roughly 1,500 when it was read, no `:NNNN` citation into it resolves, and the drift is behavioural and not only positional — §4.13's headline is false there now, `chat_busy` has been replaced by a sampled `session_state` shared across one reaper pass, and a whole notification pipeline (`notify_new_asks`, `notify_agent`) exists that did not when "a code-plane ask that dies in a deploy dies silently" was written. **Only §4.13 was re-checked** for the 2026-09-08 revision, because that is where the drift was found; everything else in §2 is repeated as it stood and should be re-derived, not cited, until someone re-runs the code-plane half against a pinned gateway. Pin it in the header when they do.
 
 ---
 
