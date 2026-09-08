@@ -1486,16 +1486,59 @@ of the per-frame cost the rule is about is paid, and a `peek` guard means the
 signal is written on the transition rather than on the frame. Nothing about the
 column count travels that way, and nothing may start to.
 
-**The window's own bar says what the window has open.** `.shell-chrome` is
-the band the traffic lights are painted in, and it carries three things: the
-nav toggle, the name of whatever the detail column is showing, and the
-connection. `assets/desktop/` then takes that same heading back out of the
-pane below it (`.shell:has(.chrome-title) .pane-main .topbar > .title`, in
-`80-measure.css`), so there is **one title per window** where there used to be
-one per column. That selector read `[data-detail="open"] .pane-detail .topbar >
-.title` in this document until #143's sweep, and both halves of it had moved:
-the attribute is gone with the list column, and the pane it names is
-`.pane-main`.
+**The pane says what the window has open, and the band says it only where the
+pane cannot.** `.shell-chrome` is the band the traffic lights are painted in,
+and it carries the nav toggle, the plane badge, a name, the half's counts and
+the connection. There is **one title per window**, and #286 changed which of
+the two bars shows it.
+
+It used to be the band's, unconditionally: `crumb_parts` is total, so
+`.chrome-title` was always present, so `.shell:has(.chrome-title) .pane-main
+.topbar > .title` in `80-measure.css` hid the pane's own heading on every
+screen. What that left was a 4rem pane header holding a back chevron, a `+`, a
+`…` and **514px of nothing** between them (measured on `desktop-code-chat` at
+1440x860 with the sidebar open: the chevron ends at x=566 and `.topbar-actions`
+begins at x=1080), while the name of the thing you had open sat 500pt away and
+one strip up at 12.5px, sharing its line with a badge, a pill and two toggles.
+
+The rule is now the same question turned round, in `55-panes.css`:
+`.shell:has(.pane-main .topbar > .title, .pane-main .topbar > .titlegroup)`
+hides the band's three name spans. The `:has()` argument is character for
+character what the old rule's subject was, so "is the pane showing a heading"
+and "then hide the band's" are one string and cannot drift — which is the
+property `[data-detail="open"] .pane-detail .topbar > .title` never had, and
+that attribute is gone with the list column.
+
+**Four states are why the band still computes a name.** `desktop-chats` and
+`desktop-code-list` are the plane homes and `home::Home` renders no `.topbar`
+at all; `desktop-code-new`'s header is a chevron and nothing else. On those the
+band's crumb is the only name the window has. `crumb_parts` therefore stays
+TOTAL and the sheet decides which copy is on screen.
+
+**Not the whole cell — the three name spans.** `.chrome-title` is the mockups'
+`.band-mid` rather than "the crumb": it also holds `.chrome-sub`, which since
+#215 carries the half's counts when the sidebar that otherwise shows them is
+shut. That arrangement is a detail screen by definition, so hiding the cell
+whole would take the counts off screen in the one state they exist for.
+
+**What names the window itself** is `document::Title`, from the same crumb
+(`window_title` in `src/shell/desktop/mod.rs`). With the band's copy gone from
+seventeen of twenty-one screens, the Window menu, ⌘-tab and a Mission Control
+thumbnail would otherwise all have read the constant `"Goose"` that
+`src/main.rs` sets at launch. The order is the crumb's inverted — leaf first,
+then the more specific of its qualifier and its parent — because a window title
+is a document name in a list of dozens and macOS truncates from the end.
+
+**And the pane header's flex line had to be taught to distribute**, which is
+the latent defect this uncovered. On a phone the heading is `position:
+absolute`, so the bar's flex line is two control groups; `70-overrides.css`
+puts it back in flow for this shell and `80-measure.css` then hid it, so that
+in-flow arrangement had never once been laid out. With it visible,
+`.titlegroup` inherited `flex: 0 1 auto` and took its intrinsic width while
+`.topbar-actions` — also `0 1 auto`, with `min-width: 0` — was squeezed around
+its own buttons: 370 SPILL and 148 OVERFLOW-X, an overflow button painting at
+x=632 in a 628px window. `55-panes.css` gives the name `flex: 1 1 0` and the
+controls `flex: 0 0 auto`, which is TITLE-OUTBID's discipline said as CSS.
 
 Only the detail's, and only when there is one. A LIST keeps its heading on the
 canvas at every width, in every state, so the list column never moves — which
@@ -2011,7 +2054,7 @@ re-calibrated below, on the shipping three-cell grid.
 | put back | before the repair | after |
 |---|---|---|
 | the fullscreen block's selector broken, so a fullscreen window keeps the 76pt reservation and the 0pt band padding | **Clean** | 784 FULLSCREEN (392 for either half alone) |
-| the detail pane's heading wrapped one element deeper, with `.topbar > .title` broadened to match and the wrapper given `display: contents` — a refactor that moves not one pixel | **Clean**, with the name painted twice | 588 TITLE-DOUBLED |
+| the detail pane's heading wrapped one element deeper, with `.topbar > .title` broadened to match and the wrapper given `display: contents` — a refactor that moves not one pixel | **Clean**, with the name painted twice | 588 TITLE-DOUBLED (on the grid of the day, and against `.pane-detail`; see #286 below, which found that selector had been dead since #40) |
 | `.pane .topbar > .conn-badge` broadened to a bare `.conn-badge`, which takes the shell's copy with it | **Clean**, with no connection indicator anywhere | 1176 CONN-GONE |
 | `flex: 1 0 300px` on `.window-drag` inside the `max-width: 571px` block — a crush confined to the tier where the badge is only a dot | **Clean** | 162 TITLE-OUTBID (138 the drag strip, 24 the title narrower than the 32pt button beside it) |
 
@@ -2038,6 +2081,29 @@ each against the floor the sheet gives it — `.window-drag` its documented 96,
 `.nav-toggle`, `.chrome-sub` and `.conn-badge` zero — with `.traffic-slot`
 deliberately excluded, because that room is not the app's to spend and
 `FULLSCREEN` owns the one case where it should be given back.
+
+**And #286 moved it with the title.** The band holds the name on four of the
+twenty-one desktop states now; on the other seventeen `.chrome-heading` is
+`display: none`, reports no client rects, and this check never enters its own
+body — which is not a regression it could report but an empty question it would
+pass. The contest is stated once and asked of both bars: the band's arm is
+unchanged item for item, and the pane header's rivals are `.icon-btn` and
+`.topbar-actions`, both at a zero floor for `.nav-toggle`'s reason ("the name
+of the open thing is in less room than the button beside it"). The heading
+asked about there is the `h1` and never `.titlegroup`, which is the same
+heading-not-group lesson: the group is `flex: 1 1 0`, so it is never cut while
+the title inside it can be cut to nothing. `flex-basis: 400px` on
+`.pane-main .topbar > .topbar-actions` — a plausible way to make room for a
+fourth control — reports **3046 TITLE-OUTBID**; without the pane arm the same
+sabotage reports none of them.
+
+The same pass repaired a check that had been dead since #40 rather than merely
+blind. `TITLE-DOUBLED` still read `.pane-detail`, a class the three-column
+restructure deleted, so for the whole life of the current shell it matched
+nothing and could not fail — the wrapper disease above, arrived by a rename.
+Pointed at `.pane-main`, neutering the band's suppression reports **4368**, and
+the number is exactly the sixteen states that have a pane heading and no
+others.
 
 #### The blind spots, named
 

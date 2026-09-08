@@ -318,8 +318,8 @@ const coverage = (states) => {
         + ' this grid has never rendered it in a window');
     }
   }
-  // AND EVERY STATE MUST CARRY A TITLE, which is the opposite of what this
-  // asked for until the band became total.
+  // AND EVERY STATE MUST CARRY A NAME THE BAND COULD SHOW, which is the
+  // opposite of what this asked for until the band became total.
   //
   // It used to demand BOTH answers to "is anything open", because the band was
   // two arrangements: a title when a detail column had something in it, and
@@ -327,20 +327,27 @@ const coverage = (states) => {
   // states were the second kind — an empty middle in the one strip that is on
   // screen at every width.
   //
-  // `crumb_parts` (src/shell/desktop/mod.rs) is total now: an open detail, a
-  // home screen and a destination's own root all produce a crumb, so the band
-  // names something on every screen and `assets/desktop/`'s
-  // `:has(.chrome-title)` suppression of the pane's own heading is
-  // unconditional. The old check cannot pass any longer — it asks for a state
-  // the shell no longer has — and the useful question inverts with it: a state
-  // WITHOUT a title is now the defect, because it means a screen the window
-  // cannot name.
+  // `crumb_parts` (src/shell/desktop/mod.rs) is total: an open detail, a home
+  // screen and a destination's own root all produce a crumb, so the band has a
+  // name for every screen. The old check cannot pass any longer — it asks for
+  // a state the shell no longer has — and the useful question inverts with it.
+  //
+  // #286 CHANGED WHO PAINTS IT AND NOT WHETHER IT EXISTS, so this question
+  // survives the reversal unchanged while its reason moves. The pane header
+  // carries the name now and `assets/desktop/55-panes.css` hides the band's
+  // copy wherever it does — but four of the twenty-one desktop states have no
+  // pane heading at all (`desktop-chats` and `desktop-code-list`, whose
+  // `home::Home` renders no `.topbar`, and `desktop-code-new`, whose header is
+  // a chevron and nothing else), and on those the band's crumb is the only
+  // name the window has. A state with no `.chrome-title` in its markup is
+  // therefore still a screen this shell might be unable to name, and it is
+  // also the state in which TITLE-DOUBLED below has nothing to compare.
   const untitled = desktop.filter((state) => !state.body.includes('chrome-title'));
   if (untitled.length) {
     gaps.push(`${untitled.length} desktop state(s) render no .chrome-title `
-      + `(${untitled.map((s) => s.label).join(', ')}) — the band is total now, so a`
-      + " state with no title is a screen the window cannot name AND one whose pane"
-      + ' heading is hidden by `:has(.chrome-title)` without anything replacing it');
+      + `(${untitled.map((s) => s.label).join(', ')}) — the band computes a name for`
+      + ' every screen, so a state without one is a screen the window falls back to'
+      + ' nothing on when its pane header has no heading of its own');
   }
   // AND EVERY DESKTOP STATE MUST CARRY THE COLUMN THE SHELL AXIS COLLAPSES.
   //
@@ -1050,7 +1057,9 @@ const DESKTOP_SHELL = [
 // `data-detail` is deliberately NOT here. It was a fourth until the sidebar
 // took the list column (`src/shell/desktop/mod.rs:1106-1111`): it existed only
 // to tell the sheet which of two columns held content, there is one column now,
-// and `:has(.chrome-title)` asks the markup directly instead. Naming it here
+// and a `:has()` asks the markup directly instead — since #286 it is the pane
+// header's own heading that is asked about, and the band's copy that goes when
+// there is one, but the shape of the answer is the same. Naming it here
 // would fail every desktop cell on an attribute the app is right not to write.
 const SHELL_ATTRS = ['data-nav', 'data-fullscreen', 'data-insp'];
 
@@ -2026,13 +2035,23 @@ const GEOMETRY = ({ mark, ledger }) => {
   if (chrome) {
     const shown = (sel) => [...document.querySelectorAll(sel)]
       .filter((el) => el.getClientRects().length);
-    const band = shown('.shell-chrome > .chrome-title');
+    // THE HEADING, NOT THE GROUP THAT HOLDS IT — #286.
+    //
+    // This read `.shell-chrome > .chrome-title`, the band's whole middle cell,
+    // and that stopped being the question the day the sheet started hiding the
+    // NAME inside that cell rather than the cell itself. `.chrome-title` also
+    // carries `.chrome-sub`, the half's counts, which are deliberately still
+    // painted on the screens where the pane names itself — so against the group
+    // this check would report every detail state as a doubled title and be
+    // wrong about all of them. `.chrome-heading` is the band's copy of the name
+    // and is the only thing that must not be on screen beside the pane's.
+    const band = shown('.shell-chrome .chrome-heading');
     // A DESCENDANT COMBINATOR, DELIBERATELY UNLIKE THE RULE IT GUARDS.
     //
-    // `assets/desktop/` hides the pane's copy with `.pane-detail .topbar >
-    // .title`, and this check used to be written with the same `>`. That is
+    // `assets/desktop/` asks about the pane's heading with `.pane-main .topbar
+    // > .title`, and this check used to be written with the same `>`. That is
     // the one shape a guard must never take: a heading nested one element
-    // deeper is un-hidden by the sheet and unseen by the check in the same
+    // deeper is missed by the sheet and unseen by the check in the same
     // stroke, so the failure and the blindness arrive together. It is not a
     // hypothetical shape either — `views::chrome::TopBar` growing a wrapper
     // around its heading is an ordinary refactor, and `.titlegroup` is already
@@ -2047,19 +2066,37 @@ const GEOMETRY = ({ mark, ledger }) => {
     // With the descendant selector: **588 TITLE-DOUBLED** (7 states x 2 for
     // the long-text pass x 2 themes x 7 window sizes x 3 shell states).
     //
+    // `.pane-main` AND NOT `.pane-detail`, WHICH IS WHY THAT NUMBER IS OLD.
+    // The three-column restructure (#40) replaced `.pane-list`/`.pane-detail`
+    // with the single `.pane-main` and this selector was not moved with it, so
+    // from that commit until #286 this check matched nothing at all and could
+    // not fail — the exact disease the paragraph above is about, arrived by a
+    // rename instead of by a wrapper. Re-measured on the tree #286 ships in:
+    // neuter `assets/desktop/55-panes.css`'s suppression of the band's three
+    // name spans and the run reports **4368 TITLE-DOUBLED**. The number is
+    // exactly the states that HAVE a pane heading and no others, which is the
+    // check being specific rather than loud: 16 of the 21 desktop states carry
+    // one (`desktop-chats`, `desktop-chats-confirm`, `desktop-code-list` and
+    // `desktop-code-list-picker` render no `.topbar` in the pane at all, and
+    // `desktop-code-new` renders one with no title in it), so 16 x 2 for the
+    // long-text pass x 2 themes x 13 window sizes x 4 shell states is 3328,
+    // plus 1040 for the 10 disc-holding states walked a second time in
+    // `body.away-from-bottom`.
+    //
     // The cost of the wider net is that a `.titlegroup` and the `.title`
     // inside it are both matched, so a doubled two-line heading names two
     // elements in one finding. That is the finding being more specific, not
-    // less: on a correct build both are hidden and neither has a box.
-    const pane = shown('.pane-detail .topbar .title, .pane-detail .topbar .titlegroup');
-    // Guarded on the band actually carrying one. With nothing open the band
-    // paints no title at all — `src/shell/desktop/mod.rs` renders it only for
-    // a `Some(crumb)`, so an empty flex item never takes its gap — and then the
-    // detail pane keeping its own heading is not a duplicate, it is the only
-    // one there is.
+    // less.
+    const pane = shown('.pane-main .topbar .title, .pane-main .topbar .titlegroup');
+    // Guarded on BOTH being on screen, and since #286 the guard is doing work
+    // in both directions rather than one. The pane names what it has open and
+    // the band's copy goes; on the four states whose pane has no heading at all
+    // — the two plane homes, whose `home::Home` renders no `.topbar`, and the
+    // code composer, whose header is a chevron — the band's copy is the only
+    // name the window has and is not a duplicate.
     if (band.length && pane.length) {
       out.push(`TITLE-DOUBLED the band carries ${name(band[0])}`
-        + ` "${(band[0].textContent || '').trim().slice(0, 32)}" and the detail pane still paints`
+        + ` "${(band[0].textContent || '').trim().slice(0, 32)}" and the pane still paints`
         + ` ${pane.map((el) => `${name(el)} "${(el.textContent || '').trim().slice(0, 32)}"`).join(' + ')}`);
     }
     // The connection is the window's, full stop — there is one socket, so a
@@ -2186,20 +2223,75 @@ const GEOMETRY = ({ mark, ledger }) => {
     // string will land on constantly. The real squeeze it is written for is
     // not close to the boundary — the subtitle on the same states wants 284px
     // and is given 198.
-    const bandTitle = band[0] && band[0].querySelector('.chrome-heading');
-    if (bandTitle && bandTitle.getClientRects().length
-      && bandTitle.scrollWidth > bandTitle.clientWidth + 1) {
-      const t = bandTitle.getBoundingClientRect().width;
-      for (const rival of chrome.querySelectorAll(
-        ':scope > *:not(.chrome-title):not(.traffic-slot),'
-        + ' :scope > .chrome-title > *:not(.chrome-heading)',
-      )) {
+    // AND IT MOVED WITH THE TITLE — #286, AND THIS IS THE HALF THAT WOULD
+    // OTHERWISE HAVE GONE QUIET.
+    //
+    // Every sentence above is about `.chrome-heading` competing with the band's
+    // other flex items, and it was written when the band held the name of
+    // whatever the window had open on all twenty-one desktop states. It now
+    // holds it on FOUR — the two plane homes and the code composer, the only
+    // screens whose pane header has no heading of its own — because
+    // `assets/desktop/55-panes.css` gives the name back to the pane everywhere
+    // else. A `display: none` heading reports no client rects, so on the other
+    // seventeen this check would simply never enter its own body: not a
+    // regression it could report, an empty question it would pass.
+    //
+    // So the contest is stated once and asked of BOTH bars. The band's arm is
+    // unchanged, item for item and floor for floor. The pane's arm is the same
+    // shape one column down, and its two rivals are the pane header's
+    // equivalents of the band's:
+    //
+    //   .icon-btn        zero, for `.nav-toggle`'s reason verbatim — a 32px
+    //                    control, so the finding reads "the name of the open
+    //                    thing is in less room than the button beside it".
+    //   .topbar-actions  zero. A group of 32px controls, same argument. Its own
+    //                    content IS its floor, and a group that has grown past
+    //                    the name it sits beside is the finding rather than an
+    //                    exemption.
+    //
+    // The heading asked about is the `h1` and never `.titlegroup`, which is
+    // "THE HEADING, NOT THE GROUP" above restated where it bites hardest: the
+    // group is `flex: 1 1 0` in this shell, so it is never cut and the `.title`
+    // inside it can be cut to nothing while the group reports itself fitting
+    // exactly. Measured on the long-text pass at 480x560, `desktop-code-chat`:
+    // group 314x38 uncut, `.title` inside it 314px holding 470px of text.
+    //
+    // Reproduced on the tree this ships in: give `.pane-main .topbar >
+    // .topbar-actions` a `flex-basis: 400px` — a plausible way to make room for
+    // a fourth control — and the run reports **3046 TITLE-OUTBID**, naming
+    // `div.topbar-actions` holding 400px and `button.icon-btn.back` holding its
+    // 32 against pane titles cut to between 0px and 380px. With the pane arm
+    // taken out and nothing else changed, the same sabotage reports **zero** of
+    // them: 484 SPILL and 264 OVERFLOW-X, both of which are the actions box
+    // being too wide for its own line rather than the name being crushed, and
+    // neither of which appears at all once the group is merely wide enough to
+    // fit. That last part is the whole reason this arm exists — a control group
+    // can take the name's room without ever overflowing anything.
+    const contests = [[
+      chrome.querySelector('.chrome-title > .chrome-heading'),
+      chrome,
+      ':scope > *:not(.chrome-title):not(.traffic-slot),'
+      + ' :scope > .chrome-title > *:not(.chrome-heading)',
+    ]];
+    const paneBar = document.querySelector('.pane-main .topbar');
+    if (paneBar) {
+      contests.push([
+        paneBar.querySelector(':scope > .title, :scope > .titlegroup > .title'),
+        paneBar,
+        ':scope > .icon-btn, :scope > .topbar-actions',
+      ]);
+    }
+    for (const [heading, bar, rivals] of contests) {
+      if (!heading || !heading.getClientRects().length) continue;
+      if (heading.scrollWidth <= heading.clientWidth + 1) continue;
+      const t = heading.getBoundingClientRect().width;
+      for (const rival of bar.querySelectorAll(rivals)) {
         const floor = rival.classList.contains('window-drag') ? 96 : 0;
         const held = rival.getBoundingClientRect().width - floor;
         if (held > t + 0.5) {
           out.push(`TITLE-OUTBID ${name(rival)} holds ${held.toFixed(0)}px it could give back`
             + `${floor ? ` (${(held + floor).toFixed(0)}px, ${floor}px of it its own floor)` : ''}`
-            + ` while the band's title is cut to ${t.toFixed(0)}px`);
+            + ` while ${name(bar)}'s title is cut to ${t.toFixed(0)}px`);
         }
       }
     }

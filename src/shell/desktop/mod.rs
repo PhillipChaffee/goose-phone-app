@@ -498,21 +498,32 @@ pub(crate) fn PlaneConn(plane: Plane) -> Element {
     }
 }
 
-/// What the window's bar says it has open: a parent, a leaf, and a qualifier.
+/// What the window has open: a parent, a leaf, and a qualifier.
 ///
 /// The mockups' crumb is `goose server / **All conversations**` followed by a
 /// line of counts. The band rendered only the middle of that, and only when
 /// something was open — six of thirteen captured states had a plane badge, a
 /// comment node, and a drag strip.
+///
+/// TWO CONSUMERS NOW, and only one of them is on screen at a time (#286). The
+/// band paints this where the pane below it has no heading of its own, and
+/// [`window_title`] hands it to macOS in every state — so a screen whose name
+/// the band gives back to the pane still names the window in the Window menu
+/// and under its own thumbnail in Mission Control.
 pub(crate) struct CrumbParts {
     /// `None` on a destination's own root, where the parent and the leaf would
     /// be the same word.
     pub parent: Option<&'static str>,
     pub leaf: String,
-    /// Beside the leaf: the crumb's own subtitle where there is one, the
-    /// half's counts on its home screen and behind a shut sidebar, nothing
-    /// otherwise.
-    pub after: Option<String>,
+    /// What the open thing calls itself beyond its name — where it lives, what
+    /// state it is in.
+    ///
+    /// NOT IN THE BAND ANY MORE, and that is #286 rather than an omission: it
+    /// is the same string the pane header's own `.subtitle` carries, from the
+    /// same expression (`nav::Crumb`), and the pane header is on screen. What
+    /// reads it here is [`window_title`], where it is the only qualifier there
+    /// is.
+    pub qualifier: Option<String>,
 }
 
 /// What the plane's home screen is called — the mockups' own leaf words, in
@@ -561,22 +572,32 @@ const fn home_parent(plane: Plane) -> &'static str {
 /// `sidebar::chat_rows`' reason: `AppShell` calls `dioxus::desktop::window()`
 /// and cannot be mounted in a test.
 ///
-/// TOTAL, and that is a change rather than a tidy-up. The band used to render
-/// a title only when something was OPEN, so six of thirteen captured states
-/// put a plane badge, a comment node and a drag strip in the window's bar and
-/// nothing else. Every screen has a name; the band says it now.
+/// STILL TOTAL, and it has to be for a reason that has inverted. The band used
+/// to render a title only when something was OPEN, so six of thirteen captured
+/// states put a plane badge, a comment node and a drag strip in the window's
+/// bar and nothing else. Every screen has a name; this is where it is computed.
 ///
-/// The consequence is that `.chrome-title` is always present, so
-/// `assets/desktop/`'s `:has(.chrome-title)` suppression of the pane's own
-/// heading became unconditional — which is what the mockups draw, where no
-/// screen has a pane header at all.
+/// WHAT CHANGED IN #286 IS WHO PAINTS IT. The pane's own header carries the
+/// name again — it is `.topbar > .title` between the back chevron and the
+/// screen's controls, which is the ~514px of empty header the reader was
+/// looking at — and `assets/desktop/55-panes.css` hides the BAND's copy when
+/// the pane is showing one. That inverts `80-measure.css`'s old
+/// `:has(.chrome-title)` and keeps its property: neither side is a
+/// hand-maintained attribute, so the two cannot drift.
+///
+/// Totality is what makes the inversion safe. Four of the twenty-one captured
+/// desktop states render no pane heading at all — `desktop-chats` and
+/// `desktop-code-list` (the two plane homes; `home::Home` has no `.topbar`)
+/// and `desktop-code-new` (a `.topbar` with a chevron, no title and no
+/// actions) — so a band that named only what a pane could not would still have
+/// to name those, and a band that named nothing would leave them unnamed. The
+/// band goes on computing a name for every screen and the sheet decides which
+/// of the two shows it.
 pub(crate) fn crumb_parts(
     dest: &'static Destination,
     plane: Plane,
     on_home: bool,
-    nav_open: bool,
     crumb: Option<crate::nav::Crumb>,
-    after: Option<String>,
 ) -> CrumbParts {
     if let Some(crumb) = crumb {
         return CrumbParts {
@@ -587,44 +608,32 @@ pub(crate) fn crumb_parts(
             // avoids by answering `None`.
             parent: (crumb.title != dest.label).then_some(dest.label),
             leaf: crumb.title,
-            // AND THE COUNTS TAKE THE SLOT WHEN THE OPEN THING HAS NOTHING TO
-            // SAY AND THE SIDEBAR IS SHUT.
+            // THE OPEN THING'S OWN QUALIFIER, AND IT NO LONGER SHARES A SLOT
+            // WITH THE HALF'S COUNTS.
             //
-            // The half's counts otherwise live in two places, and shutting the
-            // sidebar takes both away: `.plane-seg-count` is inside the column
-            // that just closed, and the band only ever passed `after` on the
-            // home screen. So with a chat open and the sidebar collapsed —
-            // which is the arrangement the mockups' 30-collapse-left and
-            // 32-collapse-both are drawn for, and the arrangement `docs/audit.js`
-            // walks in two of its four shell cells — nothing on screen said how
-            // many conversations the half had or that any were waiting on you.
-            // The string was already computed by `band_after`; only the slot was
-            // contested.
-            //
-            // ONLY WHEN THE CRUMB HAS NO SUBTITLE OF ITS OWN, and that is a
-            // priority rather than a hedge. `.chrome-sub` says what qualifies
-            // the thing that is open; where the open thing qualifies itself —
-            // "paused", "Global", "developer" — that is the more specific
-            // answer and it keeps the slot. Where it says nothing, the half's
-            // standing counts are the next most useful qualifier and they are
-            // otherwise nowhere.
-            //
-            // WHAT THIS IS NOT: the mockups put a second element in the
-            // collapsed band — `.backb`, a glyph, a chevron, the word
-            // "Sessions" and a bold count — beside the crumb rather than in it.
-            // That is new markup and a new class, which
-            // `every_class_the_desktop_shell_renders_is_in_the_captured_store`
-            // refuses until `docs/gallery-states.json` is retaken by an
-            // operator. This is the same fact in the slot that already exists;
-            // the second element is what to build when the store is retaken.
-            after: crumb.subtitle.or(if nav_open { None } else { after }),
+            // It used to: `after` was `crumb.subtitle.or(counts when the
+            // sidebar is shut)`, one band slot arbitrated by a priority, and
+            // the priority was right for as long as both strings wanted the
+            // same 287px of band. They no longer do. The subtitle is on screen
+            // in the pane header's own `.titlegroup > .subtitle`, from this
+            // very expression, so a second copy in the band is the duplication
+            // #286 exists to remove — and it leaves `.chrome-sub` to the counts
+            // alone ([`band_counts`]), which is what makes it safe for
+            // `55-panes.css` to hide the three NAME spans and not the cell
+            // they share.
+            qualifier: crumb.subtitle,
         };
     }
     if on_home {
         return CrumbParts {
             parent: Some(home_parent(plane)),
             leaf: home_leaf(plane).to_owned(),
-            after,
+            // The half's counts are not a qualifier of its home screen's name,
+            // they are a fact about the half — so they are `band_counts`', and
+            // the window's title does not carry them. "All conversations — 12
+            // conversations · nothing waiting on you" in the Window menu is a
+            // number in a place nothing can act on it.
+            qualifier: None,
         };
     }
     // A destination's own root — the Recipes grid, the Skills grid. Naming it
@@ -632,8 +641,83 @@ pub(crate) fn crumb_parts(
     CrumbParts {
         parent: None,
         leaf: dest.label.to_owned(),
-        after: None,
+        qualifier: None,
     }
+}
+
+/// What macOS is told this window is, since the band is no longer always
+/// saying it.
+///
+/// THIS IS THE ANSWER TO "WHAT NAMES THE WINDOW". Moving the name into the
+/// pane header answers the reader in front of the screen and nothing else: the
+/// Window menu, ⌘-tab's list, Mission Control's thumbnail caption and a
+/// screenshot of the whole desktop all read the window's own title, and
+/// `src/main.rs` set that to the constant `"Goose"` at launch and never touched
+/// it again. So the crumb keeps its whole route — `nav::Crumb` travels as data
+/// on `nav::Destination` because Dioxus has no portal — and lands here instead
+/// of in `.shell-chrome`.
+///
+/// `document::Title` and not a `use_effect` calling `window().set_title()`.
+/// Dioxus's own component does exactly that call on the desktop renderer
+/// (`dioxus-document-0.7.10/src/elements/title.rs` sets it on first render and
+/// again on every change of the string), it renders no DOM node — so it adds
+/// no class, nothing for `src/domdump.rs` to photograph and nothing for the
+/// capture gate to hold — and `src/app.rs` already builds this app's three
+/// stylesheets out of the same family (`document::Style`).
+///
+/// LEAF FIRST, which inverts the crumb's own order deliberately. A crumb is a
+/// path and reads `goose server / All conversations`; a window title is a
+/// document name and macOS lists it beside dozens of others, so the word that
+/// distinguishes this window has to be the first one. The tail is the MORE
+/// SPECIFIC of the two things that place it, which is `crumb_parts`' own
+/// priority restated: where the open thing qualifies itself — "goose-phone-app
+/// · agent/…", "paused", "Global" — that is a better placement than the table
+/// row it was reached through.
+///
+/// NO APP NAME. macOS puts it in the menu bar and beside every window in every
+/// list that shows one, and a third segment is what pushes the first one out of
+/// a truncated menu item.
+///
+/// Data in, string out, so the rule is one a test can hold — `home_leaf` and
+/// `home_parent` above are tables for the same reason.
+pub(crate) fn window_title(crumb: &CrumbParts) -> String {
+    match crumb.qualifier.as_deref().or(crumb.parent) {
+        Some(tail) => format!("{} \u{2014} {tail}", crumb.leaf),
+        None => crumb.leaf.clone(),
+    }
+}
+
+/// The half's standing counts, where the sidebar is not already saying them.
+///
+/// A FUNCTION OF ITS OWN SINCE #286, and that is the point rather than a
+/// tidy-up. This was a term inside [`crumb_parts`], sharing `.chrome-sub` with
+/// the open thing's subtitle and losing to it — which was fine while the band
+/// always painted a name to qualify. It does not: `assets/desktop/55-panes.css`
+/// takes the name back out wherever the pane header has one. Separating the two
+/// is what lets that rule hide the three NAME spans and leave this string
+/// standing, so the arrangement the counts were added for (#215 — a chat open
+/// behind a collapsed sidebar, which is a detail screen and therefore exactly
+/// where the name yields) still shows them.
+///
+/// THE SET IS EXACTLY THE ONE THE OLD ARRANGEMENT PRODUCED, restated as a
+/// single condition. `.plane-seg-count` in the sidebar says the same thing
+/// whenever the sidebar is open, and the band used to pass `after` on the home
+/// screen unconditionally and elsewhere only with the column shut. So: the
+/// home screen, or a shut sidebar. Everywhere else the fact is already three
+/// inches to the left.
+///
+/// The `is_connected` gate is [`band_after`]'s and stays there — a count over a
+/// socket nobody opened is the one thing worse than no count.
+pub(crate) fn band_counts(
+    ctx: &AppCtx,
+    plane: Plane,
+    on_home: bool,
+    nav_open: bool,
+) -> Option<String> {
+    if nav_open && !on_home {
+        return None;
+    }
+    band_after(ctx, plane)
 }
 
 /// The half's standing counts, or `None` when the half is not connected.
@@ -865,11 +949,11 @@ pub(crate) fn AppShell() -> Element {
     // unconditional: it takes the content area whole and the shell draws two
     // columns rather than three.
     //
-    // It arrives with its own name (`nav::Detail`), which is the whole of what
-    // the window's bar needs: Dioxus has no portal, so no header rendered
-    // inside a pane can be MOVED into `.shell-chrome` — but a `String` travels
-    // anywhere. So the title is carried as data and painted in the bar below,
-    // and `assets/desktop/` takes the pane's own copy of it back out.
+    // It arrives with its own name (`nav::Detail`): Dioxus has no portal, so
+    // no header rendered inside a pane can be MOVED anywhere — but a `String`
+    // travels. Since #286 that name is the WINDOW's (`window_title`, handed to
+    // macOS by `document::Title`) and the band's only where the pane below has
+    // no heading of its own; the pane's own copy is what the reader sees.
     let detail = (dest.detail)(&ctx);
     let crumb = detail.as_ref().map(|detail| detail.crumb.clone());
 
@@ -937,10 +1021,15 @@ pub(crate) fn AppShell() -> Element {
         //
         // THERE WERE FOUR. `data-detail` said which of two columns held
         // content, and it went out with the list column — one column does not
-        // need telling, and `:has(.chrome-title)` asks the markup directly
+        // need telling, and a `:has()` asks the markup directly
         // (`the_pane_gives_up_what_the_window_bar_took` is the check that
         // replaced the assertion on it). This comment described that attribute
         // until #143's sweep, above a `div` that had stopped writing it.
+        //
+        // #286 turned that `:has()` around and did not bring the attribute
+        // back: the pane keeps its own heading and the BAND hides its copy
+        // where the pane has one, which is still a question asked of the
+        // markup rather than of a fact Rust would have to remember to write.
         div {
             class: "shell",
             // The whole of the collapse, as far as Rust is concerned. Width
@@ -1069,23 +1158,45 @@ pub(crate) fn AppShell() -> Element {
                 }
 
                 {
-                    let crumb = crumb_parts(
-                        dest,
-                        plane,
-                        on_home,
-                        nav_open(),
-                        crumb,
-                        band_after(&ctx, plane),
-                    );
+                    let crumb = crumb_parts(dest, plane, on_home, crumb);
+                    let title = window_title(&crumb);
                     rsx! {
+                    // THE WINDOW'S OWN NAME, which is what the crumb was for
+                    // and is now the only thing that always has it. See
+                    // `window_title`: this renders no node at all, it sets the
+                    // tao window's title, and it is on screen in the Window
+                    // menu and under the Mission Control thumbnail in every
+                    // state — including the ones where the sheet gives the
+                    // band's copy of the name back to the pane below.
+                    document::Title { "{title}" }
+
+                    // AND THE BAND'S MIDDLE CELL, whose three NAME spans
+                    // `assets/desktop/55-panes.css` hides wherever the pane
+                    // header is carrying a heading. Rendered unconditionally
+                    // and decided by the sheet, which is this shell's standing
+                    // rule and is load-bearing twice here: `docs/audit.js`
+                    // renders captured markup, so a name whose presence Rust
+                    // decided would be photographed in one arm of its four
+                    // shell cells and unmeasurable in the other three; and the
+                    // question "is the pane showing a heading" is one only
+                    // `:has()` can ask, because that heading belongs to the
+                    // view and this file never sees it.
+                    //
+                    // `.chrome-sub` is NOT one of the three, and that is the
+                    // one place this is not a mirror of the rule it replaces.
+                    // It is the half's counts (`band_counts`), and the
+                    // arrangement they exist for is a chat open behind a shut
+                    // sidebar — a screen whose pane names itself — so hiding
+                    // the cell whole would take them off screen in exactly the
+                    // state they were added in.
                     div { class: "chrome-title",
                         if let Some(parent) = crumb.parent {
                             span { class: "chrome-parent", "{parent}" }
                             span { class: "chrome-sep", "/" }
                         }
                         h1 { class: "chrome-heading", "{crumb.leaf}" }
-                        if let Some(after) = crumb.after {
-                            span { class: "chrome-sub", "{after}" }
+                        if let Some(counts) = band_counts(&ctx, plane, on_home, nav_open()) {
+                            span { class: "chrome-sub", "{counts}" }
                         }
                     }
                     }
@@ -1475,7 +1586,8 @@ mod tests {
     use dioxus::prelude::*;
 
     use super::MIN_INNER;
-    use super::{band_after, conn_of, crumb_parts, seg_count, standing_line};
+    use super::{band_after, band_counts, conn_of, crumb_parts, seg_count, standing_line};
+    use super::{window_title, CrumbParts};
     use crate::nav::Plane;
     use crate::nav::{Destination, DESTINATIONS};
     use crate::state::{AppCtx, ConnState};
@@ -2483,22 +2595,27 @@ mod tests {
         );
     }
 
-    /// The window's bar takes the detail's title and its connection badge, and
-    /// `assets/desktop/` is what stops the pane below painting either of
-    /// them again. That half is invisible to the compiler in BOTH directions:
-    /// the sheet names classes Rust never writes (`.conn-badge` comes from
-    /// `views::ConnBadge`, `.title` and `.titlegroup` from six hand-rolled
-    /// headers and from `views::chrome::TopBar`), and the shell names an
-    /// attribute the sheet has to agree about. Lose either and the window
+    /// The window is named once, and `assets/desktop/` is what decides which of
+    /// the two bars says it. That half is invisible to the compiler in BOTH
+    /// directions: the sheet names classes Rust never writes (`.conn-badge`
+    /// comes from `views::ConnBadge`, `.title` and `.titlegroup` from six
+    /// hand-rolled headers and from `views::chrome::TopBar`), and the shell
+    /// renders a crumb the sheet has to agree about. Lose either and the window
     /// shows a chat's name twice, 500pt apart and at two different sizes, with
     /// nothing failing anywhere.
+    ///
+    /// #286 TURNED THE `:has()` ROUND and this test with it. The pane keeps its
+    /// own heading — it is the ~514px of empty header the reader was looking at
+    /// — and the BAND's copy is what goes when the pane has one. The band goes
+    /// on computing a name for every screen, because four of the twenty-one
+    /// captured desktop states have no pane heading to yield to.
     ///
     /// A rule this cannot check and a reader should not assume: that the rule
     /// MATCHES. `.pane .topbar > .conn-badge` is a child combinator, so a
     /// header that wrapped its badge one element deeper would keep painting
     /// it and this would still pass. `docs/audit.js` on a captured desktop
-    /// state is what sees that, and its `.shell-chrome` arm is what sees the
-    /// band.
+    /// state is what sees that — its TITLE-DOUBLED arm asks the rendered
+    /// layout the same question this asks the source.
     ///
     /// REPRODUCED, because as shipped it could not fail. Both shell-side
     /// assertions read `include_str!` of this very file, which includes this
@@ -2511,7 +2628,13 @@ mod tests {
     /// data-detail" — and putting them back is green again.
     #[test]
     fn the_pane_gives_up_what_the_window_bar_took() {
-        let sheet = crate::css::SHELL;
+        // COMMENTS OUT FIRST, and here it is the difference between a check and
+        // its own opposite. `80-measure.css` writes down at length what it used
+        // to hide and why the direction reversed, so the raw sheet contains the
+        // old selector as prose — and the assertion that the old rule is GONE
+        // was answered by the paragraph saying it went. Measured: this test
+        // failed on a correct tree until this line went in.
+        let sheet = crate::css::without_comments(crate::css::SHELL);
 
         assert!(
             chrome_band().contains("PlaneConn { plane }"),
@@ -2519,48 +2642,71 @@ mod tests {
              `.pane .topbar > .conn-badge` below now hides the only one there is"
         );
         for rule in [
-            ":has(.chrome-title) .pane-main .topbar > .title",
-            ":has(.chrome-title) .pane-main .topbar > .titlegroup",
+            ":has(.pane-main .topbar > .title, .pane-main .topbar > .titlegroup)",
+            "> :is(.chrome-parent, .chrome-sep, .chrome-heading)",
             ".pane .topbar > .conn-badge",
         ] {
             assert!(
                 sheet.contains(rule),
-                "assets/desktop/ never mentions `{rule}`, so the pane paints \
-                 a second copy of what `.shell-chrome` is already showing"
+                "assets/desktop/ never mentions `{rule}`, so the window paints \
+                 two copies of the name of whatever it has open"
             );
         }
+        // AND `.chrome-sub` IS NOT IN THAT LIST OF THREE, which is the one
+        // asymmetry in the reversal and is easy to lose to a tidy-up. The band
+        // cell holds the half's counts as well as the name, and the counts are
+        // for a chat open behind a shut sidebar — a screen whose pane names
+        // itself, so a rule that hid the cell whole would take them off screen
+        // in precisely the arrangement they were added for.
+        assert!(
+            !sheet.contains(".chrome-sep, .chrome-heading, .chrome-sub"),
+            "the band's counts were folded into the spans the pane's heading \
+             displaces, so a shut sidebar over an open chat says nothing about \
+             the half again — which is the whole of #215 undone"
+        );
+        // AND THE OLD DIRECTION IS GONE RATHER THAN LEFT BESIDE THE NEW ONE.
+        // Both rules matching at once is every pane header hidden AND every
+        // band crumb hidden — a window with no name anywhere, which no other
+        // check in this repo can see: nothing overflows, nothing collides, and
+        // `docs/audit.js`'s TITLE-DOUBLED asks about two titles rather than
+        // none.
+        assert!(
+            !sheet.contains(":has(.chrome-title) .pane-main"),
+            "`assets/desktop/` still hides the pane's heading when the band \
+             carries one, and it now also hides the band's when the pane does \
+             — so the two rules cancel and the window is nameless"
+        );
 
         // The other half of the same decision, and the reason this can be
-        // asked of the markup at all now. The sheet suppresses the pane's
-        // heading when `.chrome-title` is present, so the band has to be the
-        // thing that renders `.chrome-title` — and it has to render it exactly
-        // when there is a crumb to put in it. An `if let` that stopped being
-        // conditional would hide every pane heading behind an empty bar.
+        // asked of the markup at all. The sheet suppresses the BAND's crumb
+        // when the pane header has a heading, so the band has to render
+        // `.chrome-title` unconditionally — a crumb that came and went in Rust
+        // would be photographed in one arm of `docs/audit.js`'s four shell
+        // cells and unmeasurable in the other three.
         //
         // This replaces an assertion on `data-detail`. The attribute is gone:
         // it existed to tell the sheet which of two columns held content, and
         // there is one column now. `:has()` asks the markup directly, so the
-        // bar's title and the pane's suppression can no longer drift apart —
-        // which is the failure the attribute made possible and this test was
-        // written for.
+        // bar's title and the pane's cannot drift apart — which is the failure
+        // the attribute made possible and this test was written for.
         let band = chrome_band();
         assert!(
-            band.contains("crumb_parts(") && band.contains("band_after(&ctx, plane)"),
-            "the window's bar no longer renders `.chrome-title` conditionally, \
-             so `:has(.chrome-title)` either never matches — and every screen \
-             paints two titles — or always does, and the screens the bar does \
-             not name paint none"
+            band.contains("crumb_parts(") && band.contains("window_title(&crumb)"),
+            "the window's bar no longer computes a crumb, so the four screens \
+             whose pane header has no heading — the two plane homes and the \
+             code composer — are named nowhere, and neither is the window \
+             itself in the Window menu"
         );
-        // AND IT IS TOLD WHETHER THE SIDEBAR IS SHUT, which is the whole of
-        // the half's counts reaching a collapsed window: `crumb_parts` gives
-        // the sub slot to `band_after` only when the column that otherwise
-        // carries the count is closed. Passing a constant here would be a
-        // silent no-op — the string would still be computed, the slot would
-        // still be filled on the home screen, and the one arrangement this
-        // exists for would go on saying nothing.
+        // AND THE COUNTS ARE TOLD WHETHER THE SIDEBAR IS SHUT, which is the
+        // whole of the half's counts reaching a collapsed window: `band_counts`
+        // answers `Some` off the home screen only when the column that
+        // otherwise carries the count is closed. Passing a constant here would
+        // be a silent no-op — the string would still be computed, the slot
+        // would still be filled on the home screen, and the one arrangement
+        // this exists for would go on saying nothing.
         assert!(
-            band.contains("nav_open(),"),
-            "the band no longer passes the sidebar's state to `crumb_parts`, \
+            band.contains("band_counts(&ctx, plane, on_home, nav_open())"),
+            "the band no longer passes the sidebar's state to `band_counts`, \
              so a shut sidebar takes the half's counts off screen with it and \
              nothing puts them back"
         );
@@ -2892,28 +3038,23 @@ mod tests {
             chats,
             Plane::Chat,
             false,
-            true,
             Some(crate::nav::Crumb {
                 title: "A conversation".to_owned(),
                 subtitle: None,
             }),
-            None,
         );
         assert_eq!(open.parent, Some("Chats"));
         assert_eq!(open.leaf, "A conversation");
 
-        let home = crumb_parts(
-            chats,
-            Plane::Chat,
-            true,
-            true,
-            None,
-            Some("2 threads".to_owned()),
-        );
+        let home = crumb_parts(chats, Plane::Chat, true, None);
         assert_eq!(home.leaf, "All conversations");
-        assert_eq!(home.after.as_deref(), Some("2 threads"));
+        assert_eq!(
+            home.qualifier, None,
+            "a home screen's name qualifies itself with nothing — the half's \
+             counts are `band_counts`', beside the crumb rather than in it"
+        );
 
-        let root = crumb_parts(chats, Plane::Chat, false, true, None, None);
+        let root = crumb_parts(chats, Plane::Chat, false, None);
         assert_eq!(
             root.parent, None,
             "a destination's own root named itself either side of a slash"
@@ -2924,12 +3065,10 @@ mod tests {
             chats,
             Plane::Chat,
             false,
-            true,
             Some(crate::nav::Crumb {
                 title: "Chats".to_owned(),
                 subtitle: None,
             }),
-            None,
         );
         assert_eq!(
             itself.parent, None,
@@ -2955,7 +3094,7 @@ mod tests {
     fn a_home_crumb_does_not_repeat_the_plane_badge_beside_it() {
         for plane in Plane::ALL {
             let dest = crate::nav::primary(plane);
-            let home = crumb_parts(dest, plane, true, true, None, None);
+            let home = crumb_parts(dest, plane, true, None);
             let parent = home.parent.unwrap_or_default();
             assert!(
                 !parent.is_empty(),
@@ -2979,66 +3118,136 @@ mod tests {
     /// WITH THE SIDEBAR SHUT, THE HALF'S COUNTS COME BACK INTO THE BAND.
     ///
     /// They otherwise live in two places and shutting the column takes both:
-    /// `.plane-seg-count` is inside the sidebar, and the band passed `after`
-    /// on the home screen only. So a chat open behind a collapsed sidebar —
-    /// the arrangement mockups 30 and 32 are drawn for, and two of the four
-    /// shell cells `docs/audit.js` walks — said nothing at all about how much
-    /// the half held or whether any of it was waiting on you.
+    /// `.plane-seg-count` is inside the sidebar, and the band said them on the
+    /// home screen only. So a chat open behind a collapsed sidebar — the
+    /// arrangement mockups 30 and 32 are drawn for, and two of the four shell
+    /// cells `docs/audit.js` walks — said nothing at all about how much the
+    /// half held or whether any of it was waiting on you.
     ///
-    /// AND THE OPEN THING'S OWN SUBTITLE STILL WINS, which is the half of this
-    /// that is a priority rather than a feature: "paused" qualifies the
-    /// schedule you opened, and the half's counts do not.
+    /// AND #286 IS WHY THIS IS A FUNCTION OF ITS OWN. The counts used to share
+    /// `.chrome-sub` with the open thing's subtitle, arbitrated by a priority;
+    /// `assets/desktop/55-panes.css` now hides `.chrome-title` on every screen
+    /// whose pane header names itself, so a count inside that group would have
+    /// gone off screen in exactly the arrangement above. The subtitle stays
+    /// behind — it is the pane header's own `.subtitle`, from the same
+    /// expression — and the counts have `.chrome-sub` to themselves.
     ///
-    /// REPRODUCED, both ways: drop the `nav_open` term and the first assertion
-    /// fails (the counts never arrive); take `crumb.subtitle.or(...)` to
-    /// `Some(counts)` unconditionally and the third fails, because the
-    /// schedule's own "paused" has been replaced by a count.
+    /// REPRODUCED, both ways: drop the `nav_open` term and the second assertion
+    /// passes but the fourth fails (the counts never leave the home screen);
+    /// drop the `on_home` term and the first fails, because the home screen is
+    /// the one place the sidebar being open does not settle the question.
     #[test]
     fn a_shut_sidebar_puts_the_halfs_counts_back_in_the_band() {
-        let chats = crate::nav::primary(Plane::Chat);
-        let counts = || Some("12 conversations \u{b7} nothing waiting on you".to_owned());
-        let bare = || {
-            Some(crate::nav::Crumb {
-                title: "A conversation".to_owned(),
-                subtitle: None,
+        fn up(ctx: &AppCtx) {
+            let mut conn = ctx.conn;
+            conn.set(ConnState::Connected {
+                agent: "goose".to_owned(),
+            });
+            let mut sessions = ctx.sessions;
+            sessions.set(vec![session("s1"), session("s2")]);
+        }
+        let at = |on_home: bool, nav_open: bool| {
+            crate::testkit::with_ctx(up, move |ctx| {
+                band_counts(ctx, Plane::Chat, on_home, nav_open)
             })
         };
 
-        let shut = crumb_parts(chats, Plane::Chat, false, false, bare(), counts());
-        assert_eq!(
-            shut.after,
-            counts(),
-            "with the sidebar shut and a chat open, the band says nothing about \
-             the half — and `.plane-seg-count`, the only other place that says \
-             it, is inside the column that just closed"
+        assert!(
+            at(true, true).is_some(),
+            "the home screen is the band's own subject and its counts are the \
+             qualifier of the name beside them"
         );
-
-        let open = crumb_parts(chats, Plane::Chat, false, true, bare(), counts());
-        assert_eq!(
-            open.after, None,
+        assert!(
+            at(false, true).is_none(),
             "with the sidebar OPEN the counts are already on screen in the \
              plane switch, so the band saying them again is one fact in two \
              places three inches apart"
         );
+        assert!(
+            at(true, false).is_some(),
+            "shutting the sidebar took the counts off the home screen, which is \
+             the screen they belong to"
+        );
+        let shut = at(false, false).unwrap_or_default();
+        assert!(
+            shut.starts_with("2 conversations"),
+            "with the sidebar shut and a chat open, the band says nothing about \
+             the half — and `.plane-seg-count`, the only other place that says \
+             it, is inside the column that just closed: {shut}"
+        );
 
+        // AND THE OPEN THING'S OWN SUBTITLE IS NOT IN THE BAND AT ALL, which is
+        // the half of #286 that is a deletion rather than a move. It is the
+        // string the pane header's `.titlegroup > .subtitle` renders, from this
+        // very `nav::Crumb`, so a copy in the band is the duplication the whole
+        // change is about. What still reads it is `window_title`.
         let titled = crumb_parts(
-            chats,
+            crate::nav::primary(Plane::Chat),
             Plane::Chat,
-            false,
             false,
             Some(crate::nav::Crumb {
                 title: "Nightly digest".to_owned(),
                 subtitle: Some("paused".to_owned()),
             }),
-            counts(),
         );
+        assert_eq!(titled.qualifier.as_deref(), Some("paused"));
         assert_eq!(
-            titled.after.as_deref(),
-            Some("paused"),
-            "the open thing's own subtitle was replaced by the half's counts. \
-             `.chrome-sub` says what qualifies what is open; where the open \
-             thing qualifies itself that is the more specific answer and it \
-             keeps the slot"
+            window_title(&titled),
+            "Nightly digest \u{2014} paused",
+            "the open thing's own qualifier reaches nothing at all: it is out \
+             of the band by design and the window's title is the only place \
+             left that can carry it"
+        );
+    }
+
+    /// THE WINDOW HAS A NAME EVEN WHERE THE BAND NO LONGER SHOWS ONE.
+    ///
+    /// This is #286's third question answered — with the crumb given back to
+    /// the pane, a second window, a Mission Control thumbnail and a screenshot
+    /// of the whole desktop would all have said "Goose" and nothing else,
+    /// because `src/main.rs` sets that constant at launch and never touches it
+    /// again. `document::Title` in the band hands this string to the tao
+    /// window on every render that changes it.
+    ///
+    /// THE ORDER IS THE CRUMB'S INVERTED, deliberately: a crumb is a path and
+    /// leads with where you are, a window title is a document name and leads
+    /// with what it is, because macOS lists it beside every other window on the
+    /// machine and truncates from the end.
+    ///
+    /// REPRODUCED: make the tail `crumb.parent.or(qualifier)` instead and the
+    /// second assertion fails — an open chat would be placed by the nav row it
+    /// was reached through rather than by the repository and branch it is a
+    /// tree of.
+    #[test]
+    fn the_window_is_named_by_the_crumb_the_band_gave_up() {
+        let plain = CrumbParts {
+            parent: None,
+            leaf: "Settings".to_owned(),
+            qualifier: None,
+        };
+        assert_eq!(
+            window_title(&plain),
+            "Settings",
+            "a name with nothing to place it took a separator and an empty tail"
+        );
+
+        let both = CrumbParts {
+            parent: Some("Chats"),
+            leaf: "Give the sidebar a search box".to_owned(),
+            qualifier: Some("goose-phone-app \u{b7} agent/goose-phone-app-7b13".to_owned()),
+        };
+        assert_eq!(
+            window_title(&both),
+            "Give the sidebar a search box \u{2014} goose-phone-app \u{b7} agent/goose-phone-app-7b13",
+            "the window took the nav row's word over the tree the chat is in, \
+             which is the less specific of the two placements"
+        );
+
+        let home = crumb_parts(crate::nav::primary(Plane::Code), Plane::Code, true, None);
+        assert_eq!(
+            window_title(&home),
+            "Working trees \u{2014} code plane",
+            "a home screen's window title lost the half it belongs to"
         );
     }
 

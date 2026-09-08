@@ -717,24 +717,21 @@
   --chip-line: var(--border-secondary);
 }
 
-/* WHAT THE WINDOW HAS OPEN, said once, in the window's own bar.
+/* WHAT THE WINDOW HAS OPEN — ON THE SCREENS WHOSE PANE CANNOT SAY IT.
  *
- * `src/shell/desktop/mod.rs` renders this from `nav::Detail`'s crumb whenever
- * the detail column has something in it, and the rule further down takes the
- * pane's own copy of the same heading back out. So there is one title per
- * WINDOW where there used to be one per COLUMN — at three columns that is 64px
- * of pane header given back at the top of every window, and a heading that no
- * longer slides sideways when the nav collapses (measured: the detail title's
- * x was 486 with the nav open and 380 with it shut, because it is padded by a
- * gutter computed from the pane's own width).
+ * `src/shell/desktop/mod.rs` renders this from `nav::Detail`'s crumb on every
+ * screen, and `assets/desktop/55-panes.css` hides it wherever the pane header
+ * below is carrying a heading of its own. #286 turned that decision round: the
+ * name is the pane's again, because a 4rem header holding a chevron, a `+` and
+ * 514px of nothing was the reader's whole complaint, and the band keeps a copy
+ * only for the two plane homes and `desktop-code-new`, whose panes have no
+ * heading to give.
  *
  * ONE LINE, and that is a constraint rather than a taste. `--chrome-h` is 34px
  * — the height of this row plus the band's hairline, `assets/platform/macos.css`
  * has the derivation — and the toggle beside this is a 32px control centred on
  * the traffic lights at y 16; a two-line group centred on that same 16 starts
- * above the top of the window. So the subtitle sits BESIDE the title
- * — the same string the pane's `.subtitle` carries, from the same expression —
- * on a baseline with it.
+ * above the top of the window.
  *
  * 32px tall, matching the toggle, so the two are centred on the same line
  * rather than each on its own idea of the bar's middle. */
@@ -783,31 +780,34 @@
   white-space: nowrap;
 }
 
-/* THE QUALIFIER TAKES WHAT IS LEFT AFTER THE NAME, never the other way round.
+/* THE BAND'S MIDDLE CELL IS THE HALF'S COUNTS AND NOTHING ELSE NOW — #286.
  *
- * `flex: 1 1 0` and not the `0 1 auto` this shipped with, and it is a priority
- * rather than a size. Both items had a shrink factor of 1 against an `auto`
- * basis, which means a narrow band takes the deficit off them in proportion to
- * how much each wanted — so the LONGER the subtitle, the more of the title it
- * cost. Measured on the captured `desktop-scheduler-detail` at a 572pt window:
- * the group had 211px, the subtitle spent 95 of it on "Runs every day at
- * 2:30 AM" and the heading was cut to 108, narrower than the 135px the
- * connection badge was spending on an agent version beside it. That is
- * `docs/audit.js`'s TITLE-OUTBID, and it was invisible for as long as that
- * check compared the badge against the whole group instead of the heading.
+ * This slot used to carry two strings by turns, arbitrated by a priority: the
+ * open thing's own subtitle where it had one, the half's standing counts
+ * otherwise. The subtitle half is gone. It is the same expression the pane
+ * header's `.titlegroup > .subtitle` renders — `nav::Crumb` builds both — and
+ * the pane header is on screen again, so the band's copy was the duplication
+ * #286 exists to remove. What still reads `nav::Crumb`'s subtitle is
+ * `window_title` in `src/shell/desktop/mod.rs`, where it places the window in
+ * the Window menu.
  *
- * A zero basis is what makes it exact. The subtitle no longer bids in the
- * shrink phase at all — it asks for nothing and GROWS into whatever the
- * heading did not want, so the heading keeps its intrinsic width until there
- * is genuinely none left, and only then ellipsises. Same result at 572:
- * heading 173px, uncut, subtitle 30px. Nothing changes where there is room —
- * the group is `flex: 0 1 auto`, so at 1180pt it is still exactly heading plus
- * gap plus the subtitle's own width (measured: 333px, unchanged).
+ * THE COUNTS DO NOT GO WITH IT, and that is why `55-panes.css` hides the three
+ * name spans rather than this cell whole. They are a fact about the HALF, like
+ * the plane badge and the connection pill either side of them, and the
+ * arrangement they were added for (#215) is precisely a chat open behind a
+ * shut sidebar — a detail screen, which is exactly where the name now yields
+ * to the pane.
  *
- * A large `flex-shrink` on the subtitle was tried first and rejected: it is
- * asymptotic rather than exact. At a factor of 100 the heading still gives up
- * 1.2px of a 65px deficit, which is a cut title by any measurement and a check
- * that has to be given a tolerance to hide it. */
+ * THE PRIORITY THAT ARBITRATED THE SLOT IS GONE WITH THE SHARING, and the
+ * flex terms below are not: they are about this box against `.chrome-heading`,
+ * which is still beside it on the screens where the band names the screen.
+ * `flex: 0 1 auto` on both items made a narrow band take the deficit in
+ * proportion to what each WANTED, so the longer the qualifier the more of the
+ * title it cost — measured on the captured `desktop-scheduler-detail` at
+ * 572pt, the group had 211px, the qualifier spent 95 of it and the heading was
+ * cut to 108, narrower than the connection badge beside it. A large
+ * `flex-shrink` alone was tried and rejected as asymptotic: at a factor of 100
+ * the heading still gives up 1.2px of a 65px deficit. */
 /* THE COUNTS YIELD TO THE NAME, and `flex: 1 1 0` is what stopped them.
  *
  * That basis makes this GROW into the free space, so on the chat home the
@@ -840,9 +840,8 @@
  * The third symptom is why the leading is not a free choice. `.chrome-title`
  * is `align-items: baseline`, so the tallest line box in the group sets where
  * the shared baseline falls: an 18.85px sub beside an 18px heading dragged the
- * whole crumb 1px down, on the two home screens and the three detail screens
- * that carry a subtitle and nowhere else. The band's alignment changed with
- * which screen was open.
+ * whole crumb 1px down, on the screens that carry one and nowhere else. The
+ * band's alignment changed with which screen was open.
  *
  * `--lh-xs` (16px) AND NOT `--lh-sm` (18px). The issue prescribes both, in two
  * findings, and they cannot both ship — one property, one selector.
@@ -859,6 +858,15 @@
  *   declarations below are the ones that were meant to be here and never
  *   landed, not a new opinion. 16 is under 18, the sub stops being the tallest
  *   box, and the group's baseline returns to the badge's and the pill's.
+ *
+ * AND IT IS ALSO WHAT PLACES THIS BOX WHEN IT IS THE CELL'S ONLY VISIBLE
+ * CHILD, which is the arrangement #286 made ordinary. With the three name
+ * spans `display: none` there is no 18px heading to be baseline-aligned
+ * against, so the line falls where `.chrome-title`'s own
+ * `padding-top: max(0px, (32px - var(--lh-sm)) / 2)` puts it: measured on
+ * `desktop-chat` at 1440x860 with `--chrome-pad: 1px`, y=8 rather than the y=9
+ * it takes beside a heading. One pixel, in the one state where nothing is
+ * beside it to be a pixel out from.
  *
  * `--text-secondary` and not `--ink-faint`: this is a string a reader reads,
  * and the faint rung is spent on marks and counters. It measures 8.78:1 on the
