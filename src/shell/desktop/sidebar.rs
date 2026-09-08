@@ -1088,6 +1088,43 @@ mod tests {
         }
     }
 
+    /// Newest first on the code half too, and the tree nobody has run after
+    /// all of them.
+    ///
+    /// The chat plane has asserted its own order since the sidebar landed and
+    /// this half asserted nothing about its, so `code_rows` could have been
+    /// re-sorted — or lost its sort outright — with the whole module still
+    /// green. The list arrives scrambled here for that reason: a version that
+    /// merely kept the manager's order would pass a fixture handed over in the
+    /// order it expects.
+    ///
+    /// THE DORMANT TREE IS THE ROW THE SORT IS ACTUALLY ABOUT. `last_active`
+    /// is a plain `f64` and the manager sends `0.0` for a tree it has never
+    /// run, so there is no `Option` to make the fallback obvious; a fallback
+    /// that read as "unknown, therefore first" would push every live tree
+    /// below one nobody has touched.
+    #[test]
+    fn the_newest_tree_is_the_first_one() {
+        let rows = crate::testkit::with_ctx(
+            |ctx| {
+                let mut chats = ctx.code_chats;
+                chats.set(vec![
+                    active("old", NOW - 6 * DAY),
+                    active("never", 0),
+                    active("new", NOW),
+                    active("mid", NOW - DAY),
+                ]);
+            },
+            |ctx| code_rows(ctx, NOW),
+        );
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["new", "mid", "old", "never"]);
+        assert_eq!(rows[0].band, Band::Today);
+        assert_eq!(rows[1].band, Band::Yesterday);
+        assert_eq!(rows[2].band, Band::Earlier);
+        assert_eq!(rows[3].band, Band::Undated);
+    }
+
     /// The code plane's rows carry the repo AND the branch, because neither
     /// alone says which tree it is: three repos can hold the same branch name,
     /// and one repo holds a tree per branch. Both are identifiers, so the row
@@ -1414,6 +1451,24 @@ mod tests {
             additions: size.map(|(plus, _)| plus),
             deletions: size.map(|(_, minus)| minus),
             ..opencode_client::PullRequest::default()
+        }
+    }
+
+    /// A tree the manager last ran at `at`, in the code plane's own units:
+    /// `ChatMeta::last_active` is seconds in an `f64` where the chat plane's
+    /// `updated_at` is an RFC 3339 string, so a test about ordering has to say
+    /// which wire it is on.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the mirror of the two casts `code_rows` already carries and \
+                  for the same reason: an epoch in seconds is far inside the \
+                  range f64 represents integers exactly (2^53), so every stamp \
+                  this suite uses survives the trip"
+    )]
+    fn active(id: &str, at: i64) -> opencode_client::ChatMeta {
+        opencode_client::ChatMeta {
+            last_active: at as f64,
+            ..tree(id, "goose-phone-app", &format!("agent/{id}"))
         }
     }
 
