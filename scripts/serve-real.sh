@@ -34,7 +34,7 @@
 # Two consequences of the seeds being environment variables, stated because
 # they are easy not to think about and this is a real credential rather than a
 # mock's: the values are visible in `ps -E` output for the `dx serve` process
-# while it runs, and `option_env!` bakes them into the debug binary under
+# while it runs, and `option_env!` bakes them into the unstripped binary under
 # `target/`. Neither can ride into a release build — `dev_seed!` expands to an
 # empty string there — but both are on this disk until you rebuild. If that is
 # not a trade you want, leave the seeds off and type the fields into Settings
@@ -238,10 +238,15 @@ else
 fi
 
 # ---- 4. clear the field ----------------------------------------------------
-# Every running `dx serve` writes the same target directory and relaunches the
-# same app, so a stale one silently replaces the build this script is about to
-# make. Killing them is the difference between configuring the window you are
-# looking at and configuring a different one.
+# Every running `dx serve` relaunches the same app, so a stale one silently
+# replaces the build this script is about to make. Killing them is the
+# difference between configuring the window you are looking at and configuring
+# a different one. Two on the SAME profile also write the same target
+# directory, so the last writer wins there as well; since this script serves
+# `--profile fast` (section 5) and a bare `dx serve --desktop` is `dev`, that
+# second collision is now only between two runs of this script — the window
+# problem is the one that always applies, which is why the kill is
+# unconditional.
 if pgrep -f "dx serve" >/dev/null 2>&1; then
   note "stopping $(pgrep -f 'dx serve' | wc -l | tr -d ' ') running dx serve process(es)"
   pkill -f "dx serve" 2>/dev/null
@@ -255,6 +260,22 @@ printf '  The app starts DISCONNECTED by design — press Save & Connect once.\n
 
 cd "$(dirname "$0")/.." || die "cannot reach the repo root"
 
+# `--profile fast` is `Cargo.toml`'s own profile: `inherits = "dev"` plus
+# `opt-level = 2`. It is here and not `--release` because the six lines above
+# would all become empty strings in a release build — `dev_seed!` is
+# `#[cfg(debug_assertions)]` on purpose — and the two secrets are
+# `#[serde(skip_serializing)]`, so nothing would refill them. Inheriting `dev`
+# keeps `debug-assertions = true`, so they still arrive; verified by reading
+# `-C debug-assertions=on` and `-C opt-level=2` back out of the rustc arguments
+# dx captured for this build.
+#
+# The first run after this landed pays a cold build of the whole graph at
+# `opt-level = 2` (2m31s here against 49s for `dev`, `cargo build -p
+# goose-mobile`); after that a save costs what it did, because `inherits =
+# "dev"` keeps `incremental = true` and only the changed unit is re-optimised
+# (2.0-2.7s either way). What it buys is 6.6x — a 600-item markdown re-parse
+# goes 13.67 ms to 2.08 ms. The profile's own comment in `Cargo.toml` has the
+# table and the two cheaper options it beat.
 exec env \
   GOOSE_DEV_SERVER_URL="$GOOSE_URL" \
   GOOSE_DEV_SECRET_KEY="$GOOSE_SECRET" \
@@ -262,4 +283,4 @@ exec env \
   GOOSE_DEV_WORKING_DIR="$REMOTE_WORKDIR" \
   GOOSE_DEV_CODE_URL="$CODE_URL" \
   GOOSE_DEV_CODE_PASSWORD="$CODE_SECRET" \
-  dx serve --desktop
+  dx serve --desktop --profile fast

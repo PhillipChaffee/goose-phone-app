@@ -24,6 +24,7 @@ cargo fmt --all -- --check           # formatting gate
 cargo run -p mock-goose-server       # fake goose on :3285 (secret "mock-secret")
 cargo run -p mock-opencode-server    # fake code agents on :4399 ("mock-code-secret")
 dx serve --desktop                   # the desktop shell (the phone's is iOS/Android only)
+dx serve --desktop --profile fast    # ...at opt-level 2 — 6.6x at run time, see below
 ```
 
 **Testing the whole app locally.** Start both fakes, then serve with the
@@ -37,8 +38,22 @@ GOOSE_DEV_SECRET_KEY=mock-secret \
 GOOSE_DEV_WORKING_DIR=$PWD \
 GOOSE_DEV_CODE_URL=http://127.0.0.1:4399 \
 GOOSE_DEV_CODE_PASSWORD=mock-code-secret \
-  dx serve --desktop
+  dx serve --desktop --profile fast
 ```
+
+**`--profile fast` is the run profile, and `--release` is not available.**
+`[profile.fast]` in the root `Cargo.toml` is `inherits = "dev"` plus
+`opt-level = 2`, because the default `dev` compiles every dependency at
+`opt-level = 0` and that is a 6.6x tax on everything the app does (measured: a
+600-item markdown re-parse, 13.67 ms against 2.08 ms).
+`--release` is not the fix and never can be — it turns `debug_assertions` off,
+which is what `dev_seed!` is gated on, so all six seeds above become `""` and
+the two secrets have nothing to refill them from. `inherits = "dev"` is what
+keeps the seeds working. The price is one cold build of the new profile's own
+target directory, 2m31s against 49s; a save after that costs what it did,
+because `dev`'s `incremental = true` is inherited too.
+`scripts/serve-real.sh` passes the flag already. The profile's own comment in
+`Cargo.toml` carries the full table and the two options it beat.
 
 The fields arrive filled; press **Save & Connect** once per launch, because the
 app deliberately starts disconnected. `MOCK_FIXTURES=empty` on either fake
