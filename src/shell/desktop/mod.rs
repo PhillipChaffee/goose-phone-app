@@ -869,6 +869,15 @@ fn use_refresh_key() {
 /// ask twice on arrival. A duplicate GET over Tailscale is cheaper than a
 /// hand-kept list of exceptions that goes stale the first time a feature adds
 /// a destination.
+///
+/// WHAT #317 CHANGED IS WHAT "ONCE" IS SCOPED TO, and none of the above.
+/// `ensure_loaded` is still a cache and still does not re-fetch; what it now
+/// caches is a CONNECTION rather than a process, because
+/// `state::forget_server_lists` empties all four `Remote`s in `establish`.
+/// This hook is still the only re-fetch Skills and Scheduler get *within* a
+/// connection, and it is still the reason there is no list of exceptions here.
+/// The asymmetry this paragraph accepts was never the bug; a skills list that
+/// outlived the goose it came from was.
 fn use_arrival_refresh(dest: &'static Destination) {
     let ctx = crate::state::use_app_ctx();
     use_arrival(dest.id, move |id| {

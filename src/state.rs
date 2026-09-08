@@ -928,6 +928,10 @@ pub(crate) async fn establish(ctx: &AppCtx) -> bool {
             crate::timing::done("establish", t);
             client_slot.set(Some(client));
             want.set(true);
+            // Before the state says Connected, because every one of the four
+            // mount effects that refills these is keyed on exactly that
+            // signal: they must see the emptied list, not the last server's.
+            forget_server_lists(ctx);
             let agent = if info.agent_version.is_empty() {
                 info.agent_name
             } else {
@@ -950,6 +954,47 @@ pub(crate) async fn establish(ctx: &AppCtx) -> bool {
             false
         }
     }
+}
+
+/// Forget what the last connection said, so "fetched once" means once per
+/// CONNECTION rather than once per process.
+///
+/// Recipes, Skills, Scheduler and Extensions are one screen on the desktop
+/// before they are four in the Library: the Chat home's "Ways to start" grid is
+/// recipes and skills appended under one heading (`starters_for`), and the
+/// dashed row under it is the scheduler. Two of the four fetch through
+/// `refresh` and revalidate on every arrival; the other two fetch through
+/// `ensure_loaded`, whose guard is `items.is_empty() && !loading`. Nothing
+/// emptied those items, so half of one grid was as old as the process (#317).
+///
+/// CONNECT TO ONE GOOSE, OPEN THE CHAT HOME, CHANGE `server_url` IN SETTINGS,
+/// CONNECT TO ANOTHER: the recipes half of the grid re-fetched and the skills
+/// half kept the first server's skills for the rest of the process. Emptying
+/// the four here is the whole fix, and it fixes the phone's Skills and
+/// Scheduler screens with it — on the desktop those two escape through
+/// `refresh_named` on arrival, and on the phone the only escape was a pull.
+///
+/// A RECONNECT TO THE SAME SERVER PAYS FOR THIS, one GET per list per screen
+/// that is up. That is the price `use_arrival_refresh` already names for the
+/// same trade — "a duplicate GET over Tailscale is cheaper than a hand-kept
+/// list of exceptions" — and the alternative is a policy that cannot tell a
+/// reconnect from a different server, because at this point nothing can: an
+/// `AcpClient` is built fresh here every time and carries no identity from the
+/// last one.
+///
+/// THE WHOLE `Remote` GOES, not just `items`. `unsupported` and `sticky` are
+/// statements about a server too, and `Remote::settle` already says so in as
+/// many words — *"a phone that reconnected to a different one must be able to
+/// say so"*. Leaving `unsupported` behind would hide a feature the new server
+/// has; leaving `sticky` behind would keep the last server's failure on screen
+/// under the new one's list.
+fn forget_server_lists(ctx: &AppCtx) {
+    let (mut recipes, mut skills) = (ctx.recipes.list, ctx.skills.list);
+    let (mut scheduler, mut extensions) = (ctx.scheduler.list, ctx.extensions.list);
+    *recipes.write() = Remote::new();
+    *skills.write() = Remote::new();
+    *scheduler.write() = Remote::new();
+    *extensions.write() = Remote::new();
 }
 
 /// Ask the server what a conversation started right now would run on, so the
@@ -5129,6 +5174,122 @@ mod tests {
             server.methods(),
             ["_goose/unstable/config/read"],
             "connecting asked the server for something else"
+        );
+    }
+
+    /// A connection that comes up forgets what the last one was told (#317).
+    ///
+    /// All four are checked because all four are the fix: two of them
+    /// (`recipes`, `extensions`) re-fetch on every arrival anyway and would
+    /// have hidden this, and the two that do not (`skills`, `scheduler`) are
+    /// exactly the ones whose `ensure_loaded` guard is `items.is_empty()`. The
+    /// whole `Remote` is checked and not just `items`, because `unsupported`
+    /// and `sticky` are statements about a server too — a goose that lacks the
+    /// scheduler must not make the next one look as though it lacks it as well.
+    #[test]
+    fn a_new_connection_forgets_the_last_servers_lists() {
+        let app = App::mount();
+        let server = serve(happy);
+        // The shapes the mock server sends, parsed rather than constructed so
+        // a test cannot seed a row no goose could answer with.
+        let skill: goose_acp_client::SourceEntry = serde_json::from_value(json!({
+            "type": "skill", "name": "deploy", "description": "", "content": "",
+            "path": "/skills/deploy", "global": true,
+        }))
+        .unwrap();
+        let extension: goose_acp_client::GooseExtensionEntry = serde_json::from_value(json!({
+            "extension": {"type": "builtin", "name": "developer"}, "enabled": true,
+        }))
+        .unwrap();
+        app.run(|ctx| {
+            let mut skills = ctx.skills.list;
+            skills.write().settle(vec![skill.clone()]);
+            let mut scheduler = ctx.scheduler.list;
+            scheduler.write().unsupported = true;
+            let mut recipes = ctx.recipes.list;
+            recipes.write().sticky = Some("the last goose fell over".to_owned());
+            let mut extensions = ctx.extensions.list;
+            extensions.write().settle(vec![extension.clone()]);
+        });
+
+        assert!(app.dial(&server), "the mock server refused the handshake");
+
+        app.run(|ctx| {
+            assert!(
+                ctx.skills.list.peek().items.is_empty(),
+                "the new goose's Skills screen is showing the old goose's skills"
+            );
+            assert!(
+                !ctx.scheduler.list.peek().unsupported,
+                "a goose without the scheduler taught the app to stop offering \
+                 it against every goose after it"
+            );
+            assert!(
+                ctx.recipes.list.peek().sticky.is_none(),
+                "the last server's failure is on screen under this one's list"
+            );
+            assert!(
+                ctx.extensions.list.peek().items.is_empty(),
+                "the new goose's Extensions screen is showing the old goose's"
+            );
+        });
+    }
+
+    /// …AND THAT IS WHAT MAKES `ensure_loaded` ASK AGAIN, which is the whole
+    /// point of emptying them: the guard it reads is `items.is_empty()`.
+    ///
+    /// Two servers rather than one, because the bug this closes is not "a list
+    /// went stale" — a list is allowed to be as old as its connection — it is
+    /// that a list outlived the goose it came from. Skills is the one checked
+    /// because it is the half of the Chat home's one grid that was never
+    /// refreshed by anything.
+    ///
+    /// THE SERVER HAS TO ANSWER WITH A SKILL, and this test was vacuous until
+    /// it did. `happy` replies `{}` to `sources/list`, which does not parse as
+    /// a `ListSourcesResponse` — so `Remote::fail` leaves `items` EMPTY, and
+    /// `ensure_loaded`'s guard would have re-fetched against the second server
+    /// whether or not anything had been forgotten. A test that passes without
+    /// the change it is for is worse than no test.
+    #[test]
+    fn and_so_the_once_per_connection_lists_are_fetched_from_the_new_server() {
+        fn with_a_skill(method: &str, params: &Value) -> Reply {
+            if method == "_goose/unstable/sources/list" {
+                return ok(json!({"sources": [{
+                    "type": "skill", "name": "deploy", "description": "",
+                    "content": "", "path": "/skills/deploy", "global": true,
+                }]}));
+            }
+            happy(method, params)
+        }
+        let mut app = App::mount();
+        let first = serve(with_a_skill);
+        let second = serve(with_a_skill);
+
+        assert!(app.dial(&first), "the first goose refused the handshake");
+        app.run(crate::skills::ensure_loaded);
+        app.settle();
+        assert_eq!(
+            first.count("_goose/unstable/sources/list"),
+            2,
+            "the first fetch is two calls — filesystem skills and built-ins"
+        );
+        app.run(|ctx| {
+            assert!(
+                !ctx.skills.list.peek().items.is_empty(),
+                "the setup did not land a skill, so the guard under test is \
+                 satisfied for the wrong reason"
+            );
+        });
+
+        assert!(app.dial(&second), "the second goose refused the handshake");
+        app.run(crate::skills::ensure_loaded);
+        app.settle();
+        assert_eq!(
+            second.count("_goose/unstable/sources/list"),
+            2,
+            "connecting to another goose left `ensure_loaded` believing it had \
+             already loaded, so this server was never asked: {:?}",
+            second.methods()
         );
     }
 
