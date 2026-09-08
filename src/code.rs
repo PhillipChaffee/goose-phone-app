@@ -2457,6 +2457,261 @@ pub(crate) fn delete_code_chat(ctx: &AppCtx, chat_id: String) {
 
 // ----------------------------------------------------------------- cache
 
+/// The store the `code_cache` signal is written through: the same files
+/// [`crate::ask_journal::Backing`] writes, on a thread that is not the one
+/// drawing the screen.
+///
+/// # What was on the render thread, and how it got there
+///
+/// [`write_cache`] only mutates the signal, and the expensive half happens one
+/// turn later somewhere else. `dioxus-sdk-storage` hangs a reactive task off
+/// every stored signal (`dioxus-sdk-storage-0.7.0/src/lib.rs:276-299`) which
+/// deep-compares the old value against the new, deep-clones it and calls
+/// `save()`; `save()` reaches `serde_to_string` (`lib.rs:551-571`), which runs
+/// ciborium over the WHOLE `CodeCache`, compresses it with zlib at
+/// `CompressionLevel::BestSize` — level 9, the maximum-effort setting — and
+/// then hex-encodes the result two characters per byte, doubling it back out.
+/// `create_dir_all` + `File::create` + `write_all` finish the job
+/// (`client_storage/fs.rs:32-41`).
+///
+/// So the work is not inside the click handler, but it is on the thread the
+/// click handler blocks. That task is polled by `poll_vdom`
+/// (`dioxus-desktop-0.7.10/src/webview.rs:537-590`), on the tao event loop, in
+/// the same pass as `dom.render_immediate` — and every listened-to DOM event
+/// gets there through `handleVirtualdomEventSync`
+/// (`dioxus-interpreter-js-0.7.10/src/ts/native.ts:407`), whose body is
+/// `xhr.open("POST", endpoint, false)`: a synchronous XHR that holds the
+/// webview until the poll returns. Two of the six callers of [`write_cache`]
+/// are the reader's own hand — [`toggle_diff_seen`] and [`mark_all_diff_seen`],
+/// which is one click per file in a review.
+///
+/// # Why move it when it costs nothing today
+///
+/// Because [`CACHE_MAX_CHATS`] and [`CACHE_MAX_ITEMS`] say how much it is
+/// allowed to cost tomorrow, and nothing else does. MEASURED here, this repo's
+/// own prose as the corpus, the whole path from `into_writer` to `write_all`,
+/// as the time the CALLING thread does not get back — before this backing, and
+/// after it:
+///
+/// | cache | file on disk | dev | release |
+/// |---|---|---|---|
+/// | 1 chat, 4 short items — about the size a real one is | 878 B | 0.20 -> 0.003 ms | 0.08 -> 0.002 ms |
+/// | 5 chats x 100 items | 270 KB | 85.8 -> 0.045 ms | 17.9 -> 0.031 ms |
+/// | 15 x 300, 760-char items — exactly what the two constants permit | 2.4 MB | 779 -> 0.34 ms | 163 -> 0.21 ms |
+///
+/// `dev` is the profile every documented way of running this app produces:
+/// `dx serve --desktop` builds it and there is no `[profile.dev]` override in
+/// the root manifest. So the row that matters is a mark-as-reviewed click
+/// costing most of a second of the render thread on a cache the app is
+/// explicitly allowed to grow, and 0.20 ms on the one it has. This is headroom
+/// being taken away before it is spent, not a defect anybody has felt.
+///
+/// What is left on the calling thread is the clone and a `HashMap::insert`
+/// under a mutex, and it does not grow the way the write does: the whole work
+/// still takes 779 ms, it is just no longer taken out of the frame. Making it
+/// SMALLER is a different change and a deliberately separate one — the zlib
+/// level is hardcoded in the dependency (`lib.rs:557`) and a key per chat is a
+/// change to what is cached rather than to where it is written.
+///
+/// # Last write wins, and nothing stronger is needed
+///
+/// Nothing in the app reads this file back inside a session. [`open_code_chat`]
+/// takes the cached transcript off the signal (`src/code.rs:1029`), not out of
+/// the store; the only read is the one `use_storage` does at mount. So the sole
+/// thing a deferred write can get wrong is WHICH value is on disk when the
+/// process ends, and one thread with one pending slot per key answers that
+/// exactly: a write still queued when the next one arrives is replaced rather
+/// than performed, and writes that do run, run in order.
+///
+/// The coalescing is not a bonus, it is the thing that makes deferral safe at
+/// the sizes above. A plain queue would have fifteen clicks in a review put
+/// fifteen full serialisations behind each other — off the render thread, but
+/// nearly twelve seconds of them in a `dev` build, with the file lagging the
+/// screen the whole way. Superseding gives the same last value for one write.
+///
+/// What it costs is a crash window: the app dying between a click and the
+/// writer finishing loses the last cache write, where before it could only lose
+/// a click the vdom had not been polled for yet. That window is one thread
+/// wakeup plus the 0.20 ms the write takes, this is a cache the server is
+/// authoritative for, and the `diff_seen` marks are the only thing in it a
+/// reader would notice missing.
+///
+/// # Why this key and not the other three
+///
+/// `settings` is six small fields and `inspector_open` is a bool. `lost_asks`
+/// is the one that must NOT move: `crate::ask_journal`'s whole argument is that
+/// the note is written at the moment the ask ARRIVES, because the case it
+/// exists for is a process that never runs Rust again — and a journal entry
+/// handed to a background thread is an entry that iOS jetsam can eat. The code
+/// cache is the opposite kind of data and the only one whose size is
+/// unbounded-by-design.
+///
+/// The store underneath is unchanged: this delegates to
+/// [`crate::ask_journal::Backing`], so all four persisted keys are still
+/// `LocalStorage` and still land in one directory. It is also not the wrapper
+/// backing that `crate::state::use_app_ctx_provider` argues against — that one
+/// would have had to read the test namespace at WRITE time, and this is handed
+/// a key that already carries it.
+#[derive(Clone, Debug)]
+pub(crate) struct CacheBacking;
+
+impl dioxus_sdk_storage::StorageBacking for CacheBacking {
+    type Key = String;
+
+    /// Straight through. The read happens once, at mount, on a screen nobody
+    /// is looking at yet; deferring it would mean the first paint could not
+    /// see the cache, which is the whole feature.
+    fn get<T: serde::de::DeserializeOwned + Clone + 'static>(key: &String) -> Option<T> {
+        <crate::ask_journal::Backing as dioxus_sdk_storage::StorageBacking>::get(key)
+    }
+
+    fn set<T: Serialize + Send + Sync + Clone + 'static>(key: String, value: &T) {
+        // The clone is the only cost left on this thread, and it is one the
+        // caller was already paying twice over: `save_to_storage_on_change`
+        // clones the value to keep as `old` (`lib.rs:291`) and `LocalStorage`
+        // clones it again before writing (`client_storage/fs.rs:61`).
+        let value = value.clone();
+        let target = key.clone();
+        queue_cache_write(
+            key,
+            Box::new(move || {
+                <crate::ask_journal::Backing as dioxus_sdk_storage::StorageBacking>::set(
+                    target, &value,
+                );
+            }),
+        );
+    }
+}
+
+/// One deferred write, with the value it is going to write already inside it.
+type PendingWrite = Box<dyn FnOnce() + Send + 'static>;
+
+/// The writer thread's mailbox: at most one outstanding write per key, and
+/// whether one is being performed right now.
+///
+/// `in_flight` is not bookkeeping for its own sake — it is the difference
+/// between "the queue is empty" and "the disk is up to date", and
+/// [`drain_cache_writes`] needs the second one.
+#[derive(Default)]
+struct WriteQueue {
+    pending: HashMap<String, PendingWrite>,
+    in_flight: bool,
+}
+
+/// The mailbox, and the condition variable that wakes whoever is waiting on
+/// it — the writer for work, a drainer for quiet.
+fn write_queue() -> &'static (std::sync::Mutex<WriteQueue>, std::sync::Condvar) {
+    static QUEUE: std::sync::OnceLock<(std::sync::Mutex<WriteQueue>, std::sync::Condvar)> =
+        std::sync::OnceLock::new();
+    QUEUE.get_or_init(|| {
+        (
+            std::sync::Mutex::new(WriteQueue::default()),
+            std::sync::Condvar::new(),
+        )
+    })
+}
+
+/// Hand a write to the writer thread, starting it if this is the first.
+///
+/// The fallback is deliberate rather than defensive: if the thread cannot be
+/// spawned at all then the choice is between the old cost and no cache, and the
+/// old cost was measured at 0.20 ms on a real one.
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "the guard is the condition variable's: `notify_all` has to be called while \
+              it is still held, or a writer between its predicate and its `wait` misses \
+              the wakeup and sleeps on a queue that is not empty"
+)]
+fn queue_cache_write(key: String, write: PendingWrite) {
+    static WRITER: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let running = *WRITER.get_or_init(|| {
+        std::thread::Builder::new()
+            .name("code-cache-writer".to_owned())
+            .spawn(writer_loop)
+            .is_ok()
+    });
+    if !running {
+        write();
+        return;
+    }
+    let (mailbox, wake) = write_queue();
+    let mut queue = mailbox
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    queue.pending.insert(key, write);
+    wake.notify_all();
+}
+
+/// Take writes one at a time, newest-per-key, forever.
+///
+/// The `catch_unwind` is the one place this changes what a failure does. Every
+/// filesystem call on the way down unwraps (`client_storage/fs.rs:37-40`), so a
+/// full disk used to take the whole app with it; here it would instead kill the
+/// writer and leave the queue filling silently, which is worse. Swallowing it
+/// costs the cache and nothing else — which for a cache the server is
+/// authoritative for is the trade to make.
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "the guard is what `Condvar::wait` consumes and hands back, so the loop \
+              cannot drop it early; the one place it IS dropped early is the block \
+              around the take, which is what keeps the write itself off the lock"
+)]
+fn writer_loop() {
+    let (mailbox, wake) = write_queue();
+    loop {
+        let write = {
+            let mut queue = mailbox
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            loop {
+                if let Some(key) = queue.pending.keys().next().cloned() {
+                    if let Some(write) = queue.pending.remove(&key) {
+                        queue.in_flight = true;
+                        break write;
+                    }
+                }
+                queue.in_flight = false;
+                wake.notify_all();
+                queue = wake
+                    .wait(queue)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+        };
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(write));
+        let mut queue = mailbox
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        queue.in_flight = false;
+        wake.notify_all();
+    }
+}
+
+/// Block until every queued write has been performed.
+///
+/// Tests only, and that is not a hedge: the app never needs it, because nothing
+/// in a session reads the file. A test that asserts on the FILE does need it,
+/// and the two that do — `the_transcript_cache_reaches_the_disk` and
+/// `the_cached_transcript_survives_the_backing_it_is_stored_through` — are the
+/// pair that catches a backing which has stopped persisting at all.
+#[cfg(test)]
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "same as the writer's: the guard is `Condvar::wait`'s argument and its \
+              return, and holding it across the predicate is what makes the answer \
+              true when it is read"
+)]
+pub(crate) fn drain_cache_writes() {
+    let (mailbox, wake) = write_queue();
+    let mut queue = mailbox
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    while !queue.pending.is_empty() || queue.in_flight {
+        queue = wake
+            .wait(queue)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
+}
+
 /// Write-through of the open chat's transcript into the persisted cache,
 /// truncated and LRU-capped.
 pub(crate) fn write_cache(ctx: &AppCtx) {
@@ -2549,6 +2804,14 @@ mod tests {
     /// on the file because the value's half is a different question and
     /// [`the_cached_transcript_survives_the_backing_it_is_stored_through`] asks
     /// it under a key of its own.
+    ///
+    /// THE DRAIN IS NOT A SLEEP. Since #310 the write happens on
+    /// [`super::CacheBacking`]'s own thread, so "the mount has settled" and
+    /// "the file is there" are two events rather than one;
+    /// [`super::drain_cache_writes`] waits for the second by waiting on the
+    /// writer's own condition variable, and would return immediately if the
+    /// mount had queued nothing. Which is to say: it makes this test wait for
+    /// the write, and it cannot make a missing write look like one that landed.
     #[test]
     fn the_transcript_cache_reaches_the_disk() {
         use dioxus::prelude::*;
@@ -2559,6 +2822,7 @@ mod tests {
         crate::testkit::in_storage_scope("cachedisk-", || {
             let _ = crate::testkit::render_settled(|_| {}, nothing);
         });
+        super::drain_cache_writes();
         assert!(
             dir.join("cachedisk-code_cache").is_file(),
             "mounting the app wrote no code_cache file, so every launch opens \
@@ -2572,6 +2836,14 @@ mod tests {
     /// thing the screen reads first: the items. `ChatItem` grew a field in
     /// #241 and `CachedChat` is what carries it across a restart, so a diff
     /// that survives the wire and the fold has one more boundary to cross.
+    ///
+    /// Through [`super::CacheBacking`] rather than through
+    /// `crate::ask_journal::Backing`, since #310, because the test's name says
+    /// "the backing it is stored through" and that is now the one the signal is
+    /// declared with. The bytes and the file are the same either way — the
+    /// deferred backing delegates — so what the switch adds is the boundary
+    /// itself: a `set` that queued the value and dropped it, or a `get` that
+    /// stopped delegating, fails here rather than nowhere.
     #[test]
     fn the_cached_transcript_survives_the_backing_it_is_stored_through() {
         use dioxus_sdk_storage::StorageBacking as _;
@@ -2601,16 +2873,150 @@ mod tests {
                 updated: 1_700_000_000,
             },
         );
-        crate::ask_journal::Backing::set("code_cache_probe".to_owned(), &cache);
+        super::CacheBacking::set("code_cache_probe".to_owned(), &cache);
+        super::drain_cache_writes();
         assert!(
             dir.join("code_cache_probe").is_file(),
             "the cache's backing wrote no file"
         );
         let read: Option<super::CodeCache> =
-            crate::ask_journal::Backing::get(&"code_cache_probe".to_owned());
+            super::CacheBacking::get(&"code_cache_probe".to_owned());
         assert!(
             read == Some(cache),
             "a cached chat lost something on the way through the store"
+        );
+    }
+
+    /// THE WRITE LEAVES THE THREAD THAT ASKED FOR IT, AND THE LAST ONE WINS.
+    ///
+    /// The two halves of #310's fix, asserted without a clock in either. It is
+    /// the writer thread that is stopped rather than time that is waited on:
+    /// the first job parked below does not return until this test says so, and
+    /// while it is parked the queue cannot advance, so every claim underneath
+    /// is a fact about ordering rather than a race that usually goes our way.
+    ///
+    /// 1. Three `set`s land on one key while the writer is held. The file does
+    ///    not exist. Before #310 the first of them would have written it before
+    ///    `set` returned, which is precisely the cost this took off the render
+    ///    thread.
+    /// 2. Three writes queued behind a held writer collapse to one. The counted
+    ///    jobs go in through `queue_cache_write` directly because the count is
+    ///    the assertion — from the file alone, three writes and one write leave
+    ///    the same bytes, and it is the two discarded serialisations of a
+    ///    2.4 MB cache that the coalescing is for.
+    /// 3. When the writer is let go the value on disk is the LAST one, which is
+    ///    the whole ordering contract: nothing reads this file inside a session,
+    ///    so which write wins is the only question a deferred write raises.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the gate's whole job is to hold its lock across a wait and a notify; \
+                  dropping it early is what the writer thread would race on"
+    )]
+    #[test]
+    fn a_cache_write_leaves_the_caller_and_only_the_last_one_lands() {
+        use dioxus_sdk_storage::StorageBacking as _;
+        use std::sync::{Arc, Condvar, Mutex};
+
+        /// A job the writer thread enters and cannot leave until released.
+        #[derive(Default)]
+        struct Gate {
+            /// `(the writer is inside, it may leave)`.
+            state: Mutex<(bool, bool)>,
+            change: Condvar,
+        }
+        impl Gate {
+            /// Wait for `want` to become true of the state, and give up rather
+            /// than hang: a deadlock here must be a red test, not a red CI job
+            /// with no output.
+            fn await_flag(&self, want: fn(&(bool, bool)) -> bool, what: &str) {
+                let mut state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let deadline = std::time::Duration::from_secs(20);
+                while !want(&state) {
+                    let (next, timed_out) = self
+                        .change
+                        .wait_timeout(state, deadline)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    state = next;
+                    assert!(!timed_out.timed_out(), "the cache writer never {what}");
+                }
+            }
+        }
+
+        let dir = crate::testkit::storage_dir();
+        let key = "code_cache_ordering".to_owned();
+        let _ = std::fs::remove_file(dir.join(&key));
+
+        let gate = Arc::new(Gate::default());
+        let held = Arc::clone(&gate);
+        super::queue_cache_write(
+            "code_cache_ordering_gate".to_owned(),
+            Box::new(move || {
+                let mut state = held
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.0 = true;
+                held.change.notify_all();
+                while !state.1 {
+                    state = held
+                        .change
+                        .wait(state)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                }
+            }),
+        );
+        gate.await_flag(|it| it.0, "picked the parked job up");
+
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        for n in 1..=3u64 {
+            let mut cache = super::CodeCache::default();
+            cache.chats.insert(
+                "burst".to_owned(),
+                super::CachedChat {
+                    updated: n,
+                    ..super::CachedChat::default()
+                },
+            );
+            super::CacheBacking::set(key.clone(), &cache);
+
+            let ran = Arc::clone(&ran);
+            super::queue_cache_write(
+                "code_cache_ordering_count".to_owned(),
+                Box::new(move || {
+                    ran.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(n);
+                }),
+            );
+        }
+
+        assert!(
+            !dir.join(&key).is_file(),
+            "the caller's thread wrote the cache file itself, so the \
+             serialise-compress-and-write is still on the thread that renders"
+        );
+
+        gate.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .1 = true;
+        gate.change.notify_all();
+        super::drain_cache_writes();
+
+        assert_eq!(
+            *ran.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            vec![3],
+            "a write superseded while it was still queued was performed anyway"
+        );
+        let read: Option<super::CodeCache> = super::CacheBacking::get(&key);
+        assert_eq!(
+            read.and_then(|it| it.chats.get("burst").map(|entry| entry.updated)),
+            Some(3),
+            "the value on disk is not the last one written"
         );
     }
 

@@ -762,8 +762,16 @@ pub(crate) fn use_app_ctx_provider() -> AppCtx {
         key("settings"),
         Settings::default,
     );
+    // The odd one out, and only in WHICH THREAD: `crate::code::CacheBacking`
+    // writes the same `LocalStorage` files through the same functions, from a
+    // thread of its own. It earns that on two counts no other key here has.
+    // Its size is unbounded by design — `CACHE_MAX_CHATS` x `CACHE_MAX_ITEMS`
+    // — and two of the six things that write it are a click in the diff
+    // review, so the cost landed on the reader's hand rather than on an event
+    // (#310). Its own doc carries the measurement, and the argument for why
+    // `lost_asks` must not follow it.
     let code_cache = dioxus_sdk_storage::use_storage::<
-        crate::ask_journal::Backing,
+        crate::code::CacheBacking,
         crate::code::CodeCache,
     >(key("code_cache"), crate::code::CodeCache::default);
     // The same fs-backed store, subscribed rather than plain, because the

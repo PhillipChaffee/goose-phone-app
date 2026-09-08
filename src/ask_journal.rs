@@ -44,7 +44,15 @@ use serde::{Deserialize, Serialize};
 ///
 /// It is named here rather than inlined at the call sites because FOUR keys
 /// now share it: this journal, `inspector_open`, `code_cache` (#220's first
-/// half) and `settings` (#220's second).
+/// half) and `settings` (#220's second). Three of them name it directly;
+/// `code_cache` reaches it through `crate::code::CacheBacking`, which is this
+/// store called from a thread of its own rather than a store of its own (#310).
+///
+/// AND THIS JOURNAL MUST NOT FOLLOW IT THERE. The module comment above is the
+/// whole reason: the note is written at the moment the ask ARRIVES, because
+/// the case it exists for is a process that never runs Rust again. A journal
+/// entry handed to a background thread is an entry the next jetsam can eat, so
+/// `lost_asks` pays the write on the spot and is small enough to.
 ///
 /// STILL A BARE ALIAS after #220, and that is a decision rather than an
 /// oversight. The obvious way to isolate one test binary's nine hundred mounts
