@@ -1458,7 +1458,6 @@ const fn action_chips(diff: Option<bool>, pulls: Option<bool>) -> (bool, bool) {
 pub fn CodeChatView() -> Element {
     let ctx = use_app_ctx();
     let chat = (ctx.code_chat)();
-    let mut draft = ctx.code_draft;
 
     use_effect(move || {
         let _ = ctx.code_chat.read().items.len();
@@ -1510,24 +1509,6 @@ pub fn CodeChatView() -> Element {
         (count.map(|n| n > 0), count)
     };
     let (show_diff, show_pulls) = action_chips(diff_answer, pulls_answer);
-
-    let mut submit = move || {
-        let text = draft.peek().trim().to_string();
-        let files = ctx.code_attachments.peek().clone();
-        if text.is_empty() && files.is_empty() {
-            return;
-        }
-        // Emptied once the message is on its way; a request that then fails
-        // is `send_code_prompt`'s to put right, since it is answered long
-        // after this returns (see the goose composer for the same shape).
-        if send_code_prompt(&ctx, text, &files) {
-            draft.set(String::new());
-            // Your own message always takes you back to the bottom, whatever
-            // you had scrolled up to read.
-            crate::viewport::scroll_to_bottom(SCROLL_ID);
-            ctx.code_attachments.clone().set(Vec::new());
-        }
-    };
 
     let heading = chat_crumb(&ctx).title;
 
@@ -1643,80 +1624,23 @@ pub fn CodeChatView() -> Element {
             }
         }
 
-        footer { class: "composer",
-            AttachTray { target: AttachTarget::Code, conversation: conversation.clone() }
-            textarea {
-                class: "input",
-                placeholder: if chat.waking { "Waking…" } else { "Message the code agent…" },
-                value: "{draft}",
-                rows: 1,
-                disabled: chat.waking,
-                oninput: move |e| draft.set(e.value()),
-                onkeydown: move |e| {
-                    if e.key() == Key::Enter && !e.modifiers().contains(Modifiers::SHIFT) {
-                        e.prevent_default();
-                        if can_send {
-                            submit();
-                        }
-                    }
-                },
-            }
-            div { class: "composer-row",
-                // This box is one line and never more. The send button is
-                // outside it, which is what keeps it pinned to the trailing
-                // edge whatever the chips inside do.
-                div { class: "chip-row",
-                    AttachButton { target: AttachTarget::Code, conversation }
-                    button {
-                        class: "composer-chip action model",
-                        title: "Session settings",
-                        onclick: move |_| {
-                            ensure_code_models(&ctx);
-                            sheet.set(true);
-                        },
-                        span { class: "chip-label",
-                            span { class: "chip-model", "{chip_label}" }
-                            if let Some(effort) = effort {
-                                span { class: "chip-effort", "{effort}" }
-                            }
-                        }
-                        Icon { name: "chevron-down" }
-                    }
-                    // Always offered, unlike goose's: whether this server has
-                    // any agents is not known until the list is asked for, and
-                    // an empty answer is reported inside the picker rather
-                    // than by the chip going missing. The tap is a loud retry
-                    // — `refresh_code_agents` has already asked quietly on
-                    // open, because the chip's own label is resolved out of
-                    // that list.
-                    button {
-                        class: "composer-chip action mode",
-                        title: "Mode",
-                        onclick: move |_| {
-                            ensure_code_agents(&ctx);
-                            mode_sheet.set(true);
-                        },
-                        Icon { name: mode_icon(agent.as_deref().unwrap_or(DEFAULT_AGENT)) }
-                        span { class: "chip-label", "{mode_label}" }
-                    }
-                }
-                if running {
-                    button {
-                        class: "send stop",
-                        title: "Stop",
-                        onclick: move |_| stop_code_turn(&ctx),
-                        Icon { name: "stop" }
-                    }
-                } else {
-                    button {
-                        class: "send",
-                        title: "Send",
-                        disabled: !can_send,
-                        onclick: move |_| submit(),
-                        Icon { name: "arrow-up" }
-                    }
-                }
-            }
+        CodeCompose {
+            conversation,
+            waking: chat.waking,
+            running,
+            can_send,
+            chip_label,
+            effort,
+            agent: agent.clone(),
+            mode_label,
+            onsettings: move |()| {
+                ensure_code_models(&ctx);
+                sheet.set(true);
+            },
+            onmode: move |()| {
+                ensure_code_agents(&ctx);
+                mode_sheet.set(true);
+            },
         }
 
         if sheet() {
@@ -1785,6 +1709,131 @@ pub fn CodeChatView() -> Element {
                     ctx.code_screen.clone().set(CodeScreen::List);
                     delete_code_chat(&ctx, id);
                 },
+            }
+        }
+    }
+}
+
+/// THE THING YOU TYPE INTO on the code half, its own component for the reason
+/// the goose composer (`ChatCompose`, `src/views/chat.rs`) is: `value:
+/// "{draft}"` is a read of
+/// `AppCtx::code_draft`, and whichever scope performs it is the scope one
+/// character marks dirty. In [`CodeChatView`] that was the scope that also
+/// calls [`render_transcript`] — the same shared renderer, so the same
+/// per-keystroke re-parse of every Assistant and Thought item in the session.
+///
+/// The draft stays on `AppCtx` here too, and `AppCtx::code_draft` names a
+/// second reason of its own: the review screen is a screen, so opening it
+/// unmounts this component, and the workflow the review screen exists for is
+/// "type a correction, go check what the agent changed, come back and send".
+///
+/// `waking` is a prop rather than a read of `ctx.code_chat`, like everything
+/// else here, because the point is to keep a signal that changes on every
+/// streamed part out of this scope entirely.
+#[component]
+fn CodeCompose(
+    conversation: String,
+    waking: bool,
+    running: bool,
+    can_send: bool,
+    chip_label: String,
+    effort: Option<String>,
+    agent: Option<String>,
+    mode_label: String,
+    onsettings: EventHandler<()>,
+    onmode: EventHandler<()>,
+) -> Element {
+    let ctx = use_app_ctx();
+    // Not a `use_signal`: the draft outlives this screen (see
+    // `AppCtx::code_draft`).
+    let mut draft = ctx.code_draft;
+
+    let mut submit = move || {
+        let text = draft.peek().trim().to_string();
+        let files = ctx.code_attachments.peek().clone();
+        if text.is_empty() && files.is_empty() {
+            return;
+        }
+        // Emptied once the message is on its way; a request that then fails
+        // is `send_code_prompt`'s to put right, since it is answered long
+        // after this returns (see the goose composer for the same shape).
+        if send_code_prompt(&ctx, text, &files) {
+            draft.set(String::new());
+            // Your own message always takes you back to the bottom, whatever
+            // you had scrolled up to read.
+            crate::viewport::scroll_to_bottom(SCROLL_ID);
+            ctx.code_attachments.clone().set(Vec::new());
+        }
+    };
+
+    rsx! {
+        footer { class: "composer",
+            AttachTray { target: AttachTarget::Code, conversation: conversation.clone() }
+            textarea {
+                class: "input",
+                placeholder: if waking { "Waking…" } else { "Message the code agent…" },
+                value: "{draft}",
+                rows: 1,
+                disabled: waking,
+                oninput: move |e| draft.set(e.value()),
+                onkeydown: move |e| {
+                    if e.key() == Key::Enter && !e.modifiers().contains(Modifiers::SHIFT) {
+                        e.prevent_default();
+                        if can_send {
+                            submit();
+                        }
+                    }
+                },
+            }
+            div { class: "composer-row",
+                // This box is one line and never more. The send button is
+                // outside it, which is what keeps it pinned to the trailing
+                // edge whatever the chips inside do.
+                div { class: "chip-row",
+                    AttachButton { target: AttachTarget::Code, conversation }
+                    button {
+                        class: "composer-chip action model",
+                        title: "Session settings",
+                        onclick: move |_| onsettings.call(()),
+                        span { class: "chip-label",
+                            span { class: "chip-model", "{chip_label}" }
+                            if let Some(effort) = effort {
+                                span { class: "chip-effort", "{effort}" }
+                            }
+                        }
+                        Icon { name: "chevron-down" }
+                    }
+                    // Always offered, unlike goose's: whether this server has
+                    // any agents is not known until the list is asked for, and
+                    // an empty answer is reported inside the picker rather
+                    // than by the chip going missing. The tap is a loud retry
+                    // — `refresh_code_agents` has already asked quietly on
+                    // open, because the chip's own label is resolved out of
+                    // that list.
+                    button {
+                        class: "composer-chip action mode",
+                        title: "Mode",
+                        onclick: move |_| onmode.call(()),
+                        Icon { name: mode_icon(agent.as_deref().unwrap_or(DEFAULT_AGENT)) }
+                        span { class: "chip-label", "{mode_label}" }
+                    }
+                }
+                if running {
+                    button {
+                        class: "send stop",
+                        title: "Stop",
+                        onclick: move |_| stop_code_turn(&ctx),
+                        Icon { name: "stop" }
+                    }
+                } else {
+                    button {
+                        class: "send",
+                        title: "Send",
+                        disabled: !can_send,
+                        onclick: move |_| submit(),
+                        Icon { name: "arrow-up" }
+                    }
+                }
             }
         }
     }

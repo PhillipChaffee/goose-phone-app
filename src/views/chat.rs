@@ -39,9 +39,6 @@ pub fn ChatView() -> Element {
     let ctx = use_app_ctx();
     let chat = (ctx.chat)();
     let usage = (ctx.usage)();
-    // Not a `use_signal`: the draft outlives this screen (see
-    // `AppCtx::chat_draft`).
-    let mut draft = ctx.chat_draft;
 
     // Keep the transcript pinned to the bottom as content streams in. The
     // chat signal is read INSIDE the effect so it re-runs on every change.
@@ -53,8 +50,8 @@ pub fn ChatView() -> Element {
     let running = chat.running;
     let can_send = !running && !chat.loading;
     // Which conversation the composer's picks belong to. Passed down rather
-    // than read off the context inside the two components, so neither of them
-    // subscribes to a signal that changes on every streamed token.
+    // than read off the context inside the three components below it, so none
+    // of them subscribes to a signal that changes on every streamed token.
     let conversation = chat.session_id.clone().unwrap_or_default();
 
     // Whatever the agent says it has, in the order it says it: provider,
@@ -91,29 +88,6 @@ pub fn ChatView() -> Element {
     let mut confirm_delete = use_signal(|| false);
     let mut rename = use_signal(|| false);
     let mut menu = use_signal(|| false);
-
-    let mut submit = move || {
-        let text = draft.peek().trim().to_string();
-        // A message can be attachments alone — a photo with nothing to say
-        // about it is still a message.
-        let files = ctx.attachments.peek().clone();
-        if text.is_empty() && files.is_empty() {
-            return;
-        }
-        // Cleared only once the message is on its way, so a send that never
-        // starts — disconnected, no session — leaves the typed text and the
-        // picked files where they were. A send that starts and then fails on
-        // the wire is `send_prompt`'s to put right: it answers long after
-        // this returns, and it hands the files back to the tray itself.
-        if send_prompt(&ctx, text, &files) {
-            draft.set(String::new());
-            // Your own message always takes you back to the bottom, whatever
-            // you had scrolled up to read. Without this the transcript stays
-            // where it was and the message you just sent is off screen.
-            crate::viewport::scroll_to_bottom(SCROLL_ID);
-            ctx.attachments.clone().set(Vec::new());
-        }
-    };
 
     let heading = crumb(&ctx).title;
 
@@ -161,81 +135,17 @@ pub fn ChatView() -> Element {
 
         ScrollToBottom { scroller: SCROLL_ID }
 
-        footer { class: "composer",
-            AttachTray { target: AttachTarget::Goose, conversation: conversation.clone() }
-            textarea {
-                class: "input",
-                placeholder: "Message goose…",
-                value: "{draft}",
-                rows: 1,
-                oninput: move |e| draft.set(e.value()),
-                onkeydown: move |e| {
-                    if e.key() == Key::Enter && !e.modifiers().contains(Modifiers::SHIFT) {
-                        e.prevent_default();
-                        if can_send {
-                            submit();
-                        }
-                    }
-                },
-            }
-            div { class: "composer-row",
-                // This box is one line and never more (`.chip-row` in
-                // shared.css). The send button is outside it, which is what
-                // keeps it pinned to the trailing edge whatever the chips
-                // inside do — and what it used to be outside a *wrapping* box
-                // for. The wrap is gone: a composer that grows a row under
-                // your thumb is worse than a model name you can tap to read in
-                // full.
-                div { class: "chip-row",
-                    AttachButton { target: AttachTarget::Goose, conversation }
-                    if !rows.is_empty() {
-                        button {
-                            class: "composer-chip action model",
-                            title: "Session settings",
-                            onclick: move |_| sheet.set(true),
-                            span { class: "chip-label",
-                                span { class: "chip-model", "{chip_label}" }
-                                if let Some(effort) = effort {
-                                    span { class: "chip-effort", "{effort}" }
-                                }
-                            }
-                            Icon { name: "chevron-down" }
-                        }
-                    }
-                    if let Some(mode) = mode.as_ref() {
-                        button {
-                            class: "composer-chip action mode",
-                            title: "Mode",
-                            onclick: move |_| mode_sheet.set(true),
-                            Icon {
-                                name: mode_icon(mode.current_value.as_deref().unwrap_or_default()),
-                            }
-                            span { class: "chip-label", {mode_chip_label(mode)} }
-                        }
-                    }
-                    if let Some(percent) = crowding(usage) {
-                        span { class: "composer-chip warn", title: "Context used",
-                            "{percent}%"
-                        }
-                    }
-                }
-                if running {
-                    button {
-                        class: "send stop",
-                        title: "Stop",
-                        onclick: move |_| stop_turn(&ctx),
-                        Icon { name: "stop" }
-                    }
-                } else {
-                    button {
-                        class: "send",
-                        title: "Send",
-                        disabled: !can_send,
-                        onclick: move |_| submit(),
-                        Icon { name: "arrow-up" }
-                    }
-                }
-            }
+        ChatCompose {
+            conversation,
+            running,
+            can_send,
+            settings: !rows.is_empty(),
+            chip_label,
+            effort,
+            mode: mode.clone(),
+            crowding: crowding(usage),
+            onsettings: move |()| sheet.set(true),
+            onmode: move |()| mode_sheet.set(true),
         }
 
         if sheet() {
@@ -330,6 +240,171 @@ pub fn ChatView() -> Element {
                         }
                     });
                 },
+            }
+        }
+    }
+}
+
+/// THE THING YOU TYPE INTO, and its own component because of what a keystroke
+/// used to cost.
+///
+/// `value: "{draft}"` is a read of `AppCtx::chat_draft`, so whichever scope
+/// performs that read is the scope one character marks dirty. That used to be
+/// [`ChatView`]'s own body — which also calls [`render_transcript`], which
+/// hands every item to [`render_item`], which calls `markdown::to_html` on
+/// every Assistant and every Thought. So typing re-parsed the whole
+/// conversation to produce ONE DOM edit, the textarea's own value. Measured
+/// here, dev profile, best of 32 renders on a mounted `VirtualDom` over a
+/// transcript of this repo's own markdown split into paragraph-sized items:
+/// 0.98 ms at 50 items, 4.16 ms at 200, 12.79 ms at 600 — and it is felt rather
+/// than merely wasted, because the renderer runs on the thread that must also
+/// answer the next event, and every listened-to event in this renderer is a
+/// SYNCHRONOUS XHR (`src/viewport.rs` records the same hazard for scroll).
+///
+/// Scoping the read to this component takes the transcript out of the dirty
+/// set: a character now re-renders a textarea and three chips, and costs
+/// **0.028-0.029 ms at all three of those sizes** — flat in the length of the
+/// conversation, which is the actual defect.
+///
+/// THE DESKTOP SHELL ALREADY DID THIS. `HomeCompose` in
+/// `src/shell/desktop/home.rs` — *"It owns the draft as well, which `Home`
+/// used to. Nothing outside the composer ever read that signal."* — and this
+/// is the same move with ONE difference kept on purpose: the draft stays on
+/// `AppCtx` rather than becoming a `use_signal` here. `AppCtx::chat_draft`
+/// argues that, and it is not a style preference — navigating away unmounts
+/// this component and a `use_signal` draft would die with it, while a recipe's
+/// prompt and a scheduled run's instructions are both written into that signal
+/// by screens that run BEFORE this one mounts.
+///
+/// EVERYTHING ELSE ARRIVES AS PROPS rather than being read off the context
+/// here, extending the rule `conversation` was already passed down under. A
+/// prop that has not changed is a render dioxus skips, so a streamed token —
+/// which writes `ctx.chat` and re-renders [`ChatView`] — does not re-render
+/// this at all, as long as none of the chips' words changed. `crowding` is
+/// passed already bucketed for the same reason: a usage update that does not
+/// move the percent must not reach this scope.
+///
+/// STILL TWO ROUND TRIPS PER CHARACTER, and that is unfinished rather than
+/// fixed: `oninput` and `onkeydown` are both on this textarea, so one keypress
+/// is two of those synchronous XHRs. Moving Enter-to-send into the JS the
+/// desktop shell already installs would halve it, and is deliberately not part
+/// of this change.
+#[component]
+fn ChatCompose(
+    conversation: String,
+    running: bool,
+    can_send: bool,
+    settings: bool,
+    chip_label: String,
+    effort: Option<String>,
+    mode: Option<ConfigOption>,
+    crowding: Option<u128>,
+    onsettings: EventHandler<()>,
+    onmode: EventHandler<()>,
+) -> Element {
+    let ctx = use_app_ctx();
+    // Not a `use_signal`: the draft outlives this screen (see
+    // `AppCtx::chat_draft`).
+    let mut draft = ctx.chat_draft;
+
+    let mut submit = move || {
+        let text = draft.peek().trim().to_string();
+        // A message can be attachments alone — a photo with nothing to say
+        // about it is still a message.
+        let files = ctx.attachments.peek().clone();
+        if text.is_empty() && files.is_empty() {
+            return;
+        }
+        // Cleared only once the message is on its way, so a send that never
+        // starts — disconnected, no session — leaves the typed text and the
+        // picked files where they were. A send that starts and then fails on
+        // the wire is `send_prompt`'s to put right: it answers long after
+        // this returns, and it hands the files back to the tray itself.
+        if send_prompt(&ctx, text, &files) {
+            draft.set(String::new());
+            // Your own message always takes you back to the bottom, whatever
+            // you had scrolled up to read. Without this the transcript stays
+            // where it was and the message you just sent is off screen.
+            crate::viewport::scroll_to_bottom(SCROLL_ID);
+            ctx.attachments.clone().set(Vec::new());
+        }
+    };
+
+    rsx! {
+        footer { class: "composer",
+            AttachTray { target: AttachTarget::Goose, conversation: conversation.clone() }
+            textarea {
+                class: "input",
+                placeholder: "Message goose…",
+                value: "{draft}",
+                rows: 1,
+                oninput: move |e| draft.set(e.value()),
+                onkeydown: move |e| {
+                    if e.key() == Key::Enter && !e.modifiers().contains(Modifiers::SHIFT) {
+                        e.prevent_default();
+                        if can_send {
+                            submit();
+                        }
+                    }
+                },
+            }
+            div { class: "composer-row",
+                // This box is one line and never more (`.chip-row` in
+                // shared.css). The send button is outside it, which is what
+                // keeps it pinned to the trailing edge whatever the chips
+                // inside do — and what it used to be outside a *wrapping* box
+                // for. The wrap is gone: a composer that grows a row under
+                // your thumb is worse than a model name you can tap to read in
+                // full.
+                div { class: "chip-row",
+                    AttachButton { target: AttachTarget::Goose, conversation }
+                    if settings {
+                        button {
+                            class: "composer-chip action model",
+                            title: "Session settings",
+                            onclick: move |_| onsettings.call(()),
+                            span { class: "chip-label",
+                                span { class: "chip-model", "{chip_label}" }
+                                if let Some(effort) = effort {
+                                    span { class: "chip-effort", "{effort}" }
+                                }
+                            }
+                            Icon { name: "chevron-down" }
+                        }
+                    }
+                    if let Some(mode) = mode.as_ref() {
+                        button {
+                            class: "composer-chip action mode",
+                            title: "Mode",
+                            onclick: move |_| onmode.call(()),
+                            Icon {
+                                name: mode_icon(mode.current_value.as_deref().unwrap_or_default()),
+                            }
+                            span { class: "chip-label", {mode_chip_label(mode)} }
+                        }
+                    }
+                    if let Some(percent) = crowding {
+                        span { class: "composer-chip warn", title: "Context used",
+                            "{percent}%"
+                        }
+                    }
+                }
+                if running {
+                    button {
+                        class: "send stop",
+                        title: "Stop",
+                        onclick: move |_| stop_turn(&ctx),
+                        Icon { name: "stop" }
+                    }
+                } else {
+                    button {
+                        class: "send",
+                        title: "Send",
+                        disabled: !can_send,
+                        onclick: move |_| submit(),
+                        Icon { name: "arrow-up" }
+                    }
+                }
             }
         }
     }
