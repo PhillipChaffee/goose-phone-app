@@ -349,16 +349,45 @@ pub(crate) struct Tree {
     /// its own field because [`RepoGroup::base`] is a claim about the raw ref
     /// and would be wrong built from a line that might say `#121 open`.
     pub base: Option<String>,
-    /// The line under the branch name: the pull request and its commit count
-    /// where the branch has one, `from <base>` where it does not — #82.
+    /// The line under the branch name: how far the tree has moved, the pull
+    /// request off it, `from <base>` where it has neither — #82.
     pub branch_sub: Option<String>,
-    /// `(additions, deletions)`, and only where a server sent both — #81. A
-    /// tree with no pull request has no numbers AT ALL, not zeroes, and the
-    /// three limits on that are written on `code::PullsState::plane_pull`.
+    /// `(additions, deletions)` off THIS TREE'S OWN compare, and only where a
+    /// server sent both — #81.
+    ///
+    /// It used to come off the tree's pull request, which meant a branch
+    /// nobody had opened one for had no numbers at all;
+    /// `opencode_client::ChatStat` is one container-free compare per tree and
+    /// arrives whether or not anyone did. What has NOT changed is that absent
+    /// is absent: a tree the manager could not measure draws nothing here, not
+    /// zeroes.
+    ///
+    /// A LOWER BOUND WHEN [`Tree::capped`], which is why the two fields are
+    /// read together — see there.
     pub num: Option<(u32, u32)>,
-    /// `changed_files` off the same pull request, on its own `Option` because
-    /// the manager can send it without the pair or the pair without it.
+    /// How many files that pair was summed over. Its own `Option` because a
+    /// manager can send it without the pair or the pair without it.
     pub files: Option<u32>,
+    /// The compare stopped at GitHub's 300-file cap, so [`Tree::num`] and
+    /// [`Tree::files`] are floors rather than totals.
+    ///
+    /// The row says so with a `+` on the file count and nowhere else, because
+    /// the cap is a cap on the FILE LIST — one glyph on the number it was
+    /// applied to, rather than four across a pair that would then read as two
+    /// separate claims. That is also the whole reason `tree_of` refuses the
+    /// pair when a capped stat carried no file count: with nothing to hang the
+    /// `+` on, `+77 −33` would be a total, and it would be wrong.
+    pub capped: bool,
+    /// What this tree may contribute to the heading's total, which is NOT
+    /// [`Tree::num`] and must not be confused with it.
+    ///
+    /// `ChatStat::total_diffstat` is what fills it, and the difference is the
+    /// cap: a row may draw a floor because the reader can see whose it is and
+    /// the row marks it, and a sum may not, because a total over four trees of
+    /// which one is a floor is a number with no name. So a capped tree has
+    /// numbers of its own and nothing to add, and [`group_total`] refuses the
+    /// whole heading over it.
+    pub total: Option<(u32, u32)>,
     /// The ask that is parked in it, or nothing. The mockup's own content here
     /// is the live shell command, which no index on this wire carries.
     pub say: Option<String>,
@@ -381,21 +410,51 @@ pub(crate) struct RepoGroup {
     pub base: Option<String>,
     pub awake: usize,
     pub waiting: usize,
-    /// The mockup's `.rhead .rt` total, `+108 −30`, or `None` — which is most
-    /// of the time and by construction.
+    /// The mockup's `.rhead .rt` total, `+108 −30`, or `None`.
     ///
-    /// `code::PullsState::group_diffstat` is what answers it, and the refusal
-    /// is in ITS return type rather than in a comment here: one tree in the
-    /// group that no server measured and there is no total. Summing only the
-    /// trees that happen to carry a pull request would put a plausible figure
-    /// on a heading, and plausible is worse than absent — the reader cannot
-    /// tell a total of four trees from a total of two.
+    /// [`group_total`] is what answers it, and the refusal is in ITS return
+    /// type rather than in a comment here: one tree in the group that no
+    /// server measured and there is no total. Summing only the trees that
+    /// happen to be measured would put a plausible figure on a heading, and
+    /// plausible is worse than absent — the reader cannot tell a total of four
+    /// trees from a total of two.
+    ///
+    /// It used to be `None` for almost every heading, because it was summed
+    /// over pull requests and most trees have none. Now it is answerable for
+    /// any group whose every tree the manager compared, which is most of them.
     pub num: Option<(u32, u32)>,
     pub trees: Vec<Tree>,
 }
 
-/// One tree's commit count, in words. `None` where no pull request carries
-/// one — a branch with no pull request has no commits anybody counted, and
+/// The heading's `+N −M`, or nothing at all.
+///
+/// A function rather than a note, because the note is the thing that gets
+/// ignored: the caller passes what each tree may CONTRIBUTE
+/// ([`Tree::total`]) and gets one answer, so there is no argument to make at
+/// the call site and no way to sum "the ones that have numbers".
+///
+/// It moved here from `code::PullsState`, where it read the group's pull
+/// requests. That is no longer where a tree's size comes from — `ChatStat` is
+/// on the tree itself — and the move takes an `expect(dead_code)` with it:
+/// the function is the desktop board's alone and this file is not compiled
+/// into a phone.
+///
+/// A group of one measured tree is a real total and answers, because that sum
+/// is a number the server did send. An EMPTY group answers nothing, and that
+/// case is unreachable from [`code_board`] — a group is made by its first
+/// tree — which is exactly why it is decided here rather than left to
+/// `Iterator::sum`'s `0`.
+fn group_total(trees: &[Tree]) -> Option<(u32, u32)> {
+    let mut total = (0_u32, 0_u32);
+    for tree in trees {
+        let (plus, minus) = tree.total?;
+        total = (total.0.checked_add(plus)?, total.1.checked_add(minus)?);
+    }
+    (!trees.is_empty()).then_some(total)
+}
+
+/// One tree's commit count, in words. `None` where nothing measured the
+/// branch — a tree nobody compared has no commits anybody counted, and
 /// `0 commits` would be a claim (#82).
 fn commits_word(n: u32) -> String {
     if n == 1 {
@@ -405,12 +464,54 @@ fn commits_word(n: u32) -> String {
     }
 }
 
+/// HOW FAR THE TREE HAS MOVED, as one clause — #82.
+///
+/// `3 commits` is the ahead count and it is a WORD, because that is the
+/// mockup's own line and what this row already said. `\u{2193}7` is the base
+/// moving on underneath, and it is a GLYPH, because `3 commits · \u{2193}7
+/// behind · #118 open` measures 208.6px in a 167.1px cell and ellipsises away
+/// the pull request — measured against the sheet list `docs/audit.js` builds,
+/// in the 1440x860 window `src/main.rs` opens, on the captured
+/// `desktop-code-list`. This form is 151.7px and clears it by 15.4. (Both
+/// figures are the cell's own scale: a clone measured in `document.body`
+/// leaves `.app > .shell`, where `00-tokens.css` restates the type ladder, and
+/// reports the phone's rung — 202.3px for the string the real cell lays out in
+/// 132.8.)
+///
+/// `\u{2191}` is not on the row and would be redundant: the ahead count IS the
+/// commit count, which is why the mockup's `3 commits \u{b7} \u{2191}3 ahead`
+/// is one number said twice. Both arrows are in `docs/audit.js`'s pinned mono
+/// face — measured with `CSS.getPlatformFontsForNode`, `isCustomFont: true` —
+/// so neither can fall through to the host and fail the run's family guard.
+///
+/// **`None` at zero, which is the one number on this row that is louder
+/// absent.** `behind: 0` IS a measurement (`ChatStat` says so where it decodes
+/// it) and this still declines to print it, which looks like the rule the rest
+/// of this file follows turned upside down. It is not the same rule. Elsewhere
+/// an absence means "nobody measured"; here the clause is a WARNING — your
+/// branch has fallen behind — and a warning that fires at zero is `\u{2193}0`
+/// on every tree that is up to date. The measured zero is not lost: it is the
+/// reason there is nothing here to read.
+fn moved_word(ahead: Option<u32>, behind: Option<u32>) -> Option<String> {
+    let behind = behind.filter(|n| *n > 0).map(|n| format!("\u{2193}{n}"));
+    match (ahead.map(commits_word), behind) {
+        (Some(ahead), Some(behind)) => Some(format!("{ahead} {behind}")),
+        (Some(one), None) | (None, Some(one)) => Some(one),
+        (None, None) => None,
+    }
+}
+
 /// The file count, in words, for the row's number column.
-fn files_word(n: u32) -> String {
-    if n == 1 {
-        "1 file".to_owned()
-    } else {
-        format!("{n} files")
+///
+/// `capped` is GitHub's 300-file limit on the compare, and the `+` is the
+/// whole of how this cell says the pair above it is a floor — see
+/// [`Tree::capped`]. It is not pluralised away: `300+ files` is the only
+/// shape a capped count can take, because the cap is 300.
+fn files_word(n: u32, capped: bool) -> String {
+    match (n, capped) {
+        (n, true) => format!("{n}+ files"),
+        (1, false) => "1 file".to_owned(),
+        (n, false) => format!("{n} files"),
     }
 }
 
@@ -449,9 +550,18 @@ fn spark(add: u32, del: u32) -> Vec<bool> {
 /// request off its branch.
 ///
 /// Its own function because [`code_board`] is a grouping loop and this is a
-/// dozen field decisions, three of which (`branch_sub`, `num`, `files`) are
-/// the whole of #81 and #82 and want to be read together rather than found
-/// among the bucketing.
+/// dozen field decisions, four of which (`branch_sub`, `num`, `files`,
+/// `total`) are the whole of #81 and #82 and want to be read together rather
+/// than found among the bucketing.
+///
+/// THE SIZE COMES OFF THE TREE AND THE PULL REQUEST IS NO LONGER ASKED FOR
+/// ONE. `ChatMeta::stat` is one container-free compare per tree, so the four
+/// rows in five that never opened a pull request are measured too — and the
+/// pull request keeps the two facts only it has: which number it is and what
+/// state it is in. It also keeps `commits` as a FALLBACK, for a manager old
+/// enough to send a pull's counts and no stat at all; that arrives as a count
+/// with no diffstat beside it, which is honest — they are two measurements and
+/// only one of them landed.
 fn tree_of(
     meta: &opencode_client::ChatMeta,
     ask: Option<&(String, opencode_client::CodePermission)>,
@@ -460,6 +570,30 @@ fn tree_of(
     now: i64,
 ) -> Tree {
     let base = (!meta.base.trim().is_empty()).then(|| format!("from {}", meta.base));
+    let stat = meta.stat;
+    let capped = stat.is_some_and(|s| s.truncated);
+    let files = stat.and_then(|s| s.files);
+    // `ahead` FIRST AND `commits` SECOND, and the order is the point rather
+    // than a preference. Today they are one number — the manager sends
+    // GitHub's `ahead_by` under both names — but `ChatStat` decodes them
+    // separately precisely so that a manager which stopped doing that could be
+    // seen, and the sentence this row writes is "commits this branch has that
+    // its base does not". That is `ahead_by`. `total_commits` in the same slot
+    // would put a count on the row that its own `\u{2193}N behind` contradicts.
+    let ahead = stat
+        .and_then(|s| s.ahead.or(s.commits))
+        .or_else(|| pull.and_then(|p| p.commits));
+    // TWO clauses and not three, joined by the middot the mockup uses, and the
+    // width is why — `moved_word` carries the measurement. Built as a list
+    // because either may be missing and both combinations ship against the
+    // code fake's own fixtures.
+    let sub: Vec<String> = [
+        moved_word(ahead, stat.and_then(|s| s.behind)),
+        pull.map(crate::code::row_pull_word),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     Tree {
         id: meta.id.clone(),
         title: if meta.title.trim().is_empty() {
@@ -469,24 +603,28 @@ fn tree_of(
         },
         branch: (!meta.branch.trim().is_empty()).then(|| meta.branch.clone()),
         base: base.clone(),
-        // THE MOCKUP'S FINISHED ROW, `4 commits · merged #124`, and each half
-        // arrives on its own. `commits` on a pull request IS the count ahead
-        // of its base, so the mockup's other second line, `3 commits · ↑3
-        // ahead`, is the same number said twice wherever a pull request
-        // exists — and where one does not, neither half has a source and the
-        // line falls back to the base ref.
-        branch_sub: pull
-            .map(|p| match p.commits {
-                Some(n) => format!(
-                    "{} \u{b7} {}",
-                    commits_word(n),
-                    crate::code::row_pull_word(p)
-                ),
-                None => crate::code::row_pull_word(p),
-            })
-            .or(base),
-        num: pull.and_then(opencode_client::PullRequest::diffstat),
-        files: pull.and_then(|p| p.changed_files),
+        // THE MOCKUP'S FINISHED ROW, `4 commits · merged #124`, plus the one
+        // fact neither it nor any earlier route had: how far the base has
+        // moved on underneath. The mockup's other second line, `3 commits ·
+        // ↑3 ahead`, is one number said twice and is said once here — which is
+        // why the arrow that survives is the DOWN one.
+        //
+        // `from <base>` is what is left when a tree has none of the three, and
+        // it is now the early-life case alone: a branch that was never pushed
+        // has no compare and no pull request, and the heading directly above
+        // the row already says the same words.
+        branch_sub: (!sub.is_empty()).then(|| sub.join(" \u{b7} ")).or(base),
+        // A CAPPED STAT WITH NO FILE COUNT DRAWS NO PAIR. Everything else
+        // about the cap is a `+` on the file count (see `Tree::capped`), and
+        // with no count on the row there is nowhere to put it — so the pair
+        // would read as a total, and `+77 −33` where the truth is "at least
+        // that" is the one shape this column exists to refuse.
+        num: stat
+            .filter(|s| !s.truncated || files.is_some())
+            .and_then(|s| s.diffstat()),
+        files,
+        capped,
+        total: stat.and_then(|s| s.total_diffstat()),
         say: ask
             .map(|(_, p)| p.title.trim().to_owned())
             .filter(|t| !t.is_empty()),
@@ -574,10 +712,11 @@ pub(crate) fn code_board(ctx: &AppCtx, now: i64, filter: BoardFilter) -> Vec<Rep
     }
     for group in &mut groups {
         // THE GROUP TOTAL IS NOT SUMMED HERE, and that is the point. It is
-        // asked of `group_diffstat`, which refuses a group holding a tree no
-        // server measured — the refusal is a return type rather than a note,
-        // so this call site has no argument to make.
-        group.num = pulls.group_diffstat(group.trees.iter().map(|t| t.id.as_str()));
+        // asked of `group_total`, which refuses a group holding a tree no
+        // server measured or one whose compare hit the cap — the refusal is a
+        // return type rather than a note, so this call site has no argument to
+        // make.
+        group.num = group_total(&group.trees);
         group.awake = group
             .trees
             .iter()
@@ -618,8 +757,12 @@ pub(crate) fn code_board(ctx: &AppCtx, now: i64, filter: BoardFilter) -> Vec<Rep
 // says what that means. And 68px of the column — a 608x44 box plus its 24px
 // bottom margin, measured on the captured `desktop-chats` at 1440x860.
 //
-// `host_of` survives because `compose_chips` still reads it: the host is a chip
-// under the composer, which is the one place on this screen it is still named.
+// `host_of` survives, and no longer for the reason written here. It said "the
+// host is a chip under the composer, which is the one place on this screen it
+// is still named" — #287 took that chip off both halves, so nothing on this
+// screen names the host at all now and the band above it is the only place
+// (`mod.rs`'s `plane_host`, which is one of the two callers this function has
+// left; the other is the inspector's).
 
 /// The scheduled recipe worth naming, and how many others there are.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -908,9 +1051,19 @@ fn one_line(text: &str) -> Option<String> {
 /// either becomes a picker, the bordered form has to come back."* This is that
 /// moment (#79, #194), and the form comes back with it.
 ///
-/// Three, and no fourth. The mode belongs to a turn rather than to a session
-/// about to exist, the host and the extension count are genuinely read-only,
-/// and a context window is a fact about a model rather than a choice.
+/// FIVE, AND IT WAS THREE. *"Three, and no fourth. The mode belongs to a turn
+/// rather than to a session about to exist"* — that was true of a composer
+/// that handed the session over to another screen to be created, and #281 is
+/// that hand-off going away. A turn is exactly what the arrow now starts, so
+/// the mode is a parameter of the thing this row makes; the extension count
+/// stays read-only, and the context window stays a fact about a model rather
+/// than a choice — #287, and `views::code`'s note on the one route that
+/// rewrites it for the mechanism.
+///
+/// The two model entries are not one entry used twice. They read different
+/// catalogues off different servers — goose's `config_options` against the
+/// manager's `ModelInfo` list — and the sheets they open share nothing but
+/// [`ChoicePickerSheet`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Pick {
     /// The chat half's model, chosen before the session exists. #194.
@@ -919,16 +1072,26 @@ pub(crate) enum Pick {
     Repo,
     /// The ref the working tree's own branch is cut from. #79.
     Base,
+    /// The code half's model. #281 — and the one `can_start` refuses without.
+    CodeModel,
+    /// What the first turn runs as. #281.
+    Mode,
 }
 
 impl Pick {
     /// The control's accessible name — what `views::press` locates it by, and
     /// the only name it has once the face is a value and a chevron.
+    ///
+    /// [`Self::Model`] and [`Self::CodeModel`] answer the same word, and that
+    /// is not a collision: they are one word to the reader, on two screens
+    /// that are never on at once, and a "Code model" nobody asked for would be
+    /// the app explaining its own plumbing.
     pub(crate) const fn title(self) -> &'static str {
         match self {
-            Self::Model => "Model",
+            Self::Model | Self::CodeModel => "Model",
             Self::Repo => "Repository",
             Self::Base => "Base branch",
+            Self::Mode => "Mode",
         }
     }
 }
@@ -949,6 +1112,16 @@ pub(crate) struct Chip {
     /// mockups' `.picker` puts in front of the value, and what tells two
     /// bordered boxes apart at a glance before either is read.
     pub icon: Option<&'static str>,
+    /// The send button is waiting on this one — design rule 8, state is a dot,
+    /// and the same amber dot the list puts on a chat that is waiting on you.
+    ///
+    /// It exists because a disabled arrow says nothing about WHICH of the
+    /// controls beside it is why, which is the objection #79 declined the
+    /// one-step send over. Only ever true of [`Pick::CodeModel`] today; it is a
+    /// field rather than a `matches!` at the render because the question is
+    /// "is this value still missing", and the day a second parameter becomes
+    /// required the answer belongs where the chip is built.
+    pub needed: bool,
 }
 
 impl Chip {
@@ -959,6 +1132,7 @@ impl Chip {
             mono,
             pick: None,
             icon: None,
+            needed: false,
         }
     }
 
@@ -969,6 +1143,19 @@ impl Chip {
             mono: false,
             pick: Some(pick),
             icon,
+            needed: false,
+        }
+    }
+
+    /// A thing you can change and the arrow is waiting for.
+    ///
+    /// Not `const`, unlike the two above it: a struct update expression drops
+    /// the fields it did not move out of the base, and dropping a `String` is
+    /// a destructor, which a const function may not run.
+    fn wanted(text: String, pick: Pick, icon: Option<&'static str>) -> Self {
+        Self {
+            needed: true,
+            ..Self::control(text, pick, icon)
         }
     }
 }
@@ -979,6 +1166,37 @@ impl Chip {
 /// · 1M context · $0.41 today`. Five of those six have a source here; the
 /// spend does not, and no cost figure exists on either wire, so it is absent
 /// rather than zeroed.
+///
+/// **THE HOST IS NOT ON THE ROW ANY MORE, AND THAT IS #287.** It was the
+/// widest chip on it and the one fact that never changes between sessions.
+/// The owner's words: *"the url doesn't need to be here."*
+///
+/// MEASURED, on the owner's own four chips — `Claude Opus 4.5`,
+/// `ai-brain.tail5ac550.ts.net:3284`, `19 extensions`, `1.0M context` —
+/// rendered against the sheet list `docs/audit.js` builds. The host is
+/// **214.6px of a 534.1px row**. At 1440x860 that row fits either way and
+/// nothing was being lost; where it was being lost is the three sizes at which
+/// both side columns are up and `.home-chips` is 266px, and there the scroller
+/// held 290px out of sight before and holds 60px after.
+///
+/// WHAT IT WAS DOING THERE IS REAL AND IS NOW THE BAND'S ALONE. This is a
+/// two-server app and the normal state today is a brain on one half and a
+/// local fake on the other, so "which server does the next message go to" is a
+/// question the composer was answering. It is answered one line up:
+/// `mod.rs`'s `PlaneConn` picks its host BY PLANE (`plane_host`), so the band
+/// above this screen already reads `goose 1.46.0 ai-brain.tail5ac550.ts…` on
+/// the Chat half and `127.0.0.1:4399` on the Code half. Said twice, 60px
+/// apart, the second one was costing the controls their width.
+///
+/// It goes from BOTH halves, because it was the same chip on both —
+/// `97-home-code.css` gives `.home-dock` no chip row of its own — and a rule
+/// that removed it from one would be the two composers drifting.
+///
+/// The separator cannot be left stranded by the removal, which #230 is the
+/// reason to check rather than assume: `.home-chip:not(.picker) +
+/// .home-chip:not(.picker)::before` hangs the middot off the SECOND of a pair,
+/// so a chip that goes takes its own leading separator with it and can never
+/// leave a trailing one.
 ///
 /// The context size took two tries. It was called sourceless on the strength
 /// of a comment saying `Usage` is tokens in and out; it is
@@ -1021,9 +1239,6 @@ pub(crate) fn compose_chips(ctx: &AppCtx, plane: Plane, picked: Option<&str>) ->
                     Chip::fact(label, false)
                 });
             }
-            if let Some(host) = host_of(&ctx.settings.peek().server_url) {
-                out.push(Chip::fact(host, true));
-            }
             let loaded = (ctx.extensions.list)().items.len();
             if loaded > 0 {
                 out.push(Chip::fact(format!("{loaded} extensions"), false));
@@ -1064,12 +1279,84 @@ pub(crate) fn compose_chips(ctx: &AppCtx, plane: Plane, picked: Option<&str>) ->
                     Some("git-branch"),
                 ));
             }
-            if let Some(host) = host_of(&ctx.settings.peek().code_server_url) {
-                out.push(Chip::fact(host, true));
-            }
         }
     }
     out
+}
+
+/// Whether the composer is showing the controls that make its sentence
+/// startable — #281.
+///
+/// A function so the rule is one line with a name rather than a condition
+/// spelled out at the render, and so both of its halves can be checked: the
+/// argument for each is on `HomeCompose`'s `open` signal, and the half that
+/// cannot be got wrong quietly is `!draft.trim().is_empty()`. A composer
+/// holding a sentence is a session about to be created, `can_start` refuses
+/// without a model, and a disabled arrow over a row with no model picker on it
+/// is a refusal with no reason on screen.
+fn composer_open(plane: Plane, focused: bool, draft: &str) -> bool {
+    plane == Plane::Code && (focused || !draft.trim().is_empty())
+}
+
+/// THE TWO CONTROLS THE ARROW IS WAITING FOR, and only while the composer is
+/// expanded — #281.
+///
+/// Separate from [`compose_chips`] because it answers a different question.
+/// That one is *what will this session be*, and every entry has a value
+/// already; this one is *what has still to be decided before it can exist*,
+/// and the model's whole point is that it may not have one. Concatenated in
+/// this order at the render, which is the mockup's: what the tree is cut from,
+/// then what runs on it.
+///
+/// EMPTY WHEN COLLAPSED, rather than hidden by a rule. A picker that exists in
+/// the DOM behind `display: none` is still in the tab order of some engines and
+/// still in `docs/audit.js`'s walk, and the composer's collapsed state is a
+/// claim about what is on screen.
+///
+/// The mode is not gated on the agent list having arrived, and the model is not
+/// gated on the catalogue: both are fetched by the press that opens their
+/// sheet, so a chip that waited for its list would be a control that appears
+/// only after you have used it.
+fn start_chips(
+    ctx: &AppCtx,
+    expanded: bool,
+    model: Option<&str>,
+    agent: Option<&str>,
+) -> Vec<Chip> {
+    if !expanded {
+        return Vec::new();
+    }
+    let agents = (ctx.code_agents)();
+    // Resolved once and used for both the face and the glyph, which is
+    // `CodeNewView`'s own rule: reading the signal raw in one place and
+    // `resolve_agent` in the other is how a chip came to say `Build` on a
+    // server whose list has no `build`.
+    let resolved = opencode_client::resolve_agent(agent, &agents);
+    vec![
+        // `Model` before a choice, which is the one place a chip in this app
+        // may name its own control rather than a value — there is nothing true
+        // to say yet and the control IS the thing being asked for.
+        if model.is_none() {
+            Chip::wanted(
+                crate::views::code::new_model_label(None, &[]),
+                Pick::CodeModel,
+                None,
+            )
+        } else {
+            Chip::control(
+                crate::views::code::new_model_label(model, &(ctx.code_models)()),
+                Pick::CodeModel,
+                None,
+            )
+        },
+        Chip::control(
+            crate::views::code::code_mode_label(resolved),
+            Pick::Mode,
+            Some(crate::views::session_settings::mode_icon(
+                resolved.unwrap_or(opencode_client::DEFAULT_AGENT),
+            )),
+        ),
+    ]
 }
 
 /// A model reference as the catalogue names it, or the reference itself.
@@ -1395,12 +1682,15 @@ pub(crate) fn Home(plane: Plane) -> Element {
                                             span { class: "live", "{group.awake} awake" }
                                         }
                                         // THE MOCKUP'S `+108 −30`, and it is
-                                        // absent on most headings by design.
-                                        // See `RepoGroup::num`: one tree in
-                                        // the group that no server measured
-                                        // and `group_diffstat` answers
-                                        // nothing, so this slot cannot carry
-                                        // a figure nobody sent.
+                                        // answerable for most headings now
+                                        // that every tree is compared rather
+                                        // than only the ones with a pull
+                                        // request. See `RepoGroup::num`: one
+                                        // tree in the group that no server
+                                        // measured, or one whose compare hit
+                                        // the cap, and `group_total` answers
+                                        // nothing — this slot cannot carry a
+                                        // figure nobody sent.
                                         if let Some((add, del)) = group.num {
                                             span { class: "repo-head-num",
                                                 span { class: "tree-add", "+{add}" }
@@ -1472,13 +1762,15 @@ pub(crate) fn Home(plane: Plane) -> Element {
                                             if let Some(branch) = tree.branch.clone() {
                                                 span { class: "tree-branch-name", "{branch}" }
                                             }
-                                            // `4 commits · #121 open` where
-                                            // the branch has a pull request,
-                                            // `from main` where it does not —
-                                            // #82. Same class, same geometry;
-                                            // what changed is that the line
-                                            // stopped repeating the heading
-                                            // directly above it on every row.
+                                            // `4 commits · ↓7 behind · #121
+                                            // open`, in whatever subset of
+                                            // the three a server measured,
+                                            // and `from main` for the tree
+                                            // that was never pushed — #82.
+                                            // Same class, same geometry; what
+                                            // changed is that the count no
+                                            // longer waits for somebody to
+                                            // open a pull request first.
                                             if let Some(sub) = tree.branch_sub.clone() {
                                                 span { class: "tree-branch-base", "{sub}" }
                                             }
@@ -1511,7 +1803,9 @@ pub(crate) fn Home(plane: Plane) -> Element {
                                             if tree.num.is_some() || tree.files.is_some() {
                                                 span { class: "tree-sub",
                                                     if let Some(files) = tree.files {
-                                                        span { class: "tree-files", {files_word(files)} }
+                                                        span { class: "tree-files",
+                                                            {files_word(files, tree.capped)}
+                                                        }
                                                     }
                                                     if let Some((add, del)) = tree.num {
                                                         span { class: "tree-bars",
@@ -1751,6 +2045,52 @@ fn HomeCompose(plane: Plane) -> Element {
     // it to the session it creates before the first word goes out.
     let model = use_signal(|| None::<String>);
     let mut sheet = use_signal(|| None::<Pick>);
+    // THE CODE HALF'S OWN TWO, and they are not the chat half's wearing a
+    // second value — a different catalogue, a different picker, a different
+    // wire. `code_model` is `provider/model` from the manager's list;
+    // `agent` is what the composer calls the mode, `None` until the reader
+    // picks or the server's list resolves one (`views::code::initial_mode`
+    // says why `None` is the honest start and not `Some("build")`).
+    let code_model = use_signal(|| None::<String>);
+    let agent = use_signal(|| None::<String>);
+    // EXPANDED, AND IT IS DERIVED RATHER THAN TOGGLED — #281.
+    //
+    // The owner: *"I would prefer that this thing just expands to look like
+    // this as soon as you click on it."* What it expands into is the three
+    // controls a code session cannot be created without, so the state has one
+    // hard requirement: THE ARROW AND ITS REASONS MUST BE ON SCREEN TOGETHER.
+    // `can_start` refuses without a model, and a disabled arrow over a
+    // collapsed row would be #79's second objection arriving anyway — "a send
+    // that refuses with three pills' worth of reasons and no room to say
+    // which".
+    //
+    // So it is `open || the field has text`, and neither half is redundant:
+    //
+    // - FOCUS, NOT CLICK, is what sets `open`. They differ for the keyboard —
+    //   tabbing into the field would expand on focus and not on click — and a
+    //   composer whose model picker only exists after a mouse press is a
+    //   composer a keyboard cannot start a session from. `onfocusin` bubbles,
+    //   so pressing a chip inside the composer keeps it open rather than
+    //   racing a blur; there is deliberately no `onfocusout`, because focus
+    //   moving to a chip fires one before the chip's own focus arrives.
+    // - ESCAPE clears it, and Escape alone. A click-away would need a listener
+    //   on the document, which this shell does not have and will not add —
+    //   `src/viewport.rs` records why: the native renderer sends every
+    //   listened-to event through a synchronous XHR. A blur-collapse is the
+    //   other candidate and would shut the composer the instant the reader
+    //   reached for `Model`.
+    // - TEXT HOLDS IT OPEN even after Escape, which is the derived half. A
+    //   sentence sitting in the field is a session about to be started, and
+    //   its parameters are what the reader is being asked for. Escape is not a
+    //   no-op there — it clears `open`, so clearing the field then collapses —
+    //   it just cannot take the controls away from a draft that needs them.
+    //
+    // THE CHAT HALF DOES NOT EXPAND, and that is a difference between the two
+    // rather than a gap in one. It has one parameter, the model, and that chip
+    // is on its row unconditionally; there is nothing for a second state to
+    // reveal. The Code half has four, and three of them had to be reached
+    // through a screen of their own.
+    let mut open = use_signal(|| false);
 
     // WHERE THE TREE GETS CUT, seeded the way `CodeNewView` seeds its own
     // pills, and for its reason rather than by copying it: the chip has to be
@@ -1799,7 +2139,7 @@ fn HomeCompose(plane: Plane) -> Element {
     // signal nothing on screen renders, and wiped by the next `open_session`.
     // The lift-and-give-back now belongs to the one function that knows which
     // of those happened.
-    let mut start = move || {
+    let start = move || {
         match plane {
             Plane::Chat => {
                 // The composer itself, handed over: it is emptied at once so a
@@ -1811,63 +2151,113 @@ fn HomeCompose(plane: Plane) -> Element {
                 crate::state::new_session_sending(&ctx, draft, model.peek().clone());
             }
             Plane::Code => {
-                // `new_task`, AND IT USED TO BE `code_draft`, WHICH DESTROYED
-                // THE SENTENCE. `code_draft` is the code CHAT's composer:
-                // `CodeNewView` never reads it — it seeded a fresh
-                // `use_signal(String::new)` from nothing — and `open_code_chat`
-                // then blanked it, because its guard is true for every newly
-                // created chat. So the text was written to a signal with no
-                // reader and wiped, and the composer on this screen was a box
-                // whose only function was to enable a button.
+                // AND THIS ARM CREATES THE SESSION NOW — #281, which reverses
+                // #79's decline.
                 //
-                // Not fixed by making `CodeNewView` read `code_draft` either:
-                // that would carry a half-typed correction out of one
-                // conversation and into a new session pointed at a different
-                // repo, which is the line `open_code_chat` and
-                // `new_attachments` both already draw. `new_task` is the tray's
-                // own shape for the tray's own reason — see the field.
-                let mut new_task = ctx.new_task;
-                new_task.set(draft.peek().trim().to_owned());
-                // AND IT STILL OPENS THE NEW-SESSION SCREEN, which is #79's one
-                // open decision taken and written down rather than left.
+                // The owner: *"after you select the options and type your text
+                // and click enter or the arrow, it actually starts the code
+                // session, and doesn't take you to a weird intermediate
+                // screen."* What stood here was `new_task.set(…)` and
+                // `screen.set(CodeScreen::New)`, and the two objections it
+                // recorded were real. Both are ANSWERED rather than overruled,
+                // and the answer is the row below rather than an argument:
                 //
-                // The chips above now say WHERE — repo and base travel on
-                // `ctx.new_where` and `CodeNewView` seeds from them, so the
-                // thing this issue actually reported ("the destination the
-                // session will land in is not visible while you type", and a
-                // second screen asking again for what you already chose) is
-                // gone. What the arrow does NOT do is create the tree outright,
-                // and that was measured before it was decided:
+                //   - `can_start` wants a MODEL, "the one parameter that
+                //     decides what the work costs, how good it is, and, through
+                //     privacy hard rule 1, who gets to see the code". The
+                //     expanded composer IS the fourth picker, with the same
+                //     amber "still needed" mark the new-session screen puts on
+                //     it, so the arrow refuses with its reason beside it
+                //     instead of refusing silently.
+                //   - `CodeNewView` "owns the only attach tray a new code
+                //     session has and the only mode picker, so creating from
+                //     here would take both off the desktop". They move rather
+                //     than disappear: the tray is above this row and the mode
+                //     is the chip next to the model.
                 //
-                //   - `views::code::can_start` wants a MODEL, and its own note
-                //     says why it may not be defaulted into — "the one parameter
-                //     that decides what the work costs, how good it is, and,
-                //     through privacy hard rule 1, who gets to see the code". A
-                //     one-step send would need a fourth picker here or a send
-                //     that refuses with three pills' worth of reasons and no
-                //     room to say which.
-                //   - `CodeNewView` is reachable from NOWHERE else on this
-                //     shell. `grep -rn 'CodeScreen::New' src` finds three
-                //     writers: the sessions list's FAB and the code chat's
-                //     topbar, neither of which the desktop mounts, and this
-                //     line. It owns the only attach tray a new code session has
-                //     and the only mode picker, so creating from here would take
-                //     both off the desktop with nothing to replace them.
+                // THE VIEW IS NOT DELETED. `grep -rn 'CodeScreen::New' src`
+                // finds two other writers, both in `views/code.rs` and both
+                // the PHONE's: `CodeSessionsView`'s new-session FAB and
+                // `CodeChatView`'s topbar. This shell renders `Home` where
+                // that root would be and reaches neither, so what changes here
+                // is one shell's routing; the phone keeps the screen and both
+                // ways in. (Named rather than cited by line: #82's own body
+                // records what happened to the line numbers that used to be
+                // here.)
                 //
-                // So this half is two steps on purpose, and the second one now
-                // opens on the answers the first gave.
-                let mut screen = ctx.code_screen;
-                screen.set(crate::code::CodeScreen::New);
-                // Blanked here and not by a give-back, because this arm cannot
-                // fail: setting a screen is not a round trip, and the sentence
-                // is already on `new_task` where the next screen will take it.
-                draft.set(String::new());
+                // THE DRAFT IS NOT BLANKED, which is a change of rule and not
+                // an omission. The old arm could not fail — setting a screen is
+                // not a round trip — and this one can: no client, or a create
+                // the manager refuses. `new_code_chat` navigates on success, so
+                // this component is gone and the signal with it; on failure
+                // nothing was cleared and the reader still has the sentence
+                // they wrote, which is exactly what `state::give_back` exists
+                // to arrange on the other half.
+                let files = ctx.new_attachments.peek().clone();
+                crate::code::new_code_chat(
+                    &ctx,
+                    crate::code::NewSessionSpec {
+                        repo: ctx.new_where.peek().repo.clone(),
+                        task: draft.peek().trim().to_owned(),
+                        // Empty is the manager's own default and is a choice
+                        // the picker offers; `None` here would mean the same
+                        // thing to `create_chat` and something different to a
+                        // reader of this call.
+                        model: code_model.peek().clone().filter(|m| !m.is_empty()),
+                        // Resolved against the server's list rather than the
+                        // raw signal, which is `CodeNewView`'s own rule and its
+                        // reason: what the chip claims is what the session is
+                        // created with.
+                        agent: opencode_client::resolve_agent(
+                            agent.peek().as_deref(),
+                            &(ctx.code_agents)(),
+                        )
+                        .map(str::to_owned),
+                        base_branch: ctx.new_where.peek().base.clone(),
+                    },
+                    files,
+                );
             }
         }
     };
 
+    // Read once and used by four things below, so the row, the field, the
+    // arrow and the wrapper cannot disagree about which state they are in.
+    let expanded = composer_open(plane, open(), &draft());
+    // What the arrow will actually do, asked of the same function
+    // `CodeNewView` asks — one rule for "can this session exist", not two.
+    let ready = match plane {
+        Plane::Chat => !draft().trim().is_empty(),
+        Plane::Code => crate::views::code::can_start(
+            &ctx.new_where.peek().repo,
+            code_model().as_deref(),
+            &draft(),
+        ),
+    };
+
     rsx! {
-        div { class: "home-compose",
+        div {
+            // A `data-` ATTRIBUTE AND NOT A CLASS, which is this shell's own
+            // idiom for a state the sheet reads — `.shell` carries `data-nav`,
+            // `data-insp`, `data-fullscreen` and `data-detail` for exactly the
+            // same job. It also keeps two ledgers honest. `open` is on
+            // `src/inherit.rs`'s `UNDECIDED` list (the sidebar's Library
+            // disclosure renders it and `assets/shared.css` styles it), so a
+            // rule whose subject was `.home-compose.open` would take the name
+            // off that list and quietly leave the disclosure's `.open`
+            // undecided with nothing recording it.
+            class: "home-compose",
+            "data-open": if expanded { "true" } else { "false" },
+            // FOCUS IS WHAT OPENS IT, and this listener is on the WRAPPER
+            // rather than on the field: `focusin` bubbles, so the chips inside
+            // hold the composer open by being pressed. See the signal above for
+            // why there is no `focusout` beside it.
+            onfocusin: move |_| open.set(true),
+            onkeydown: move |e: Event<KeyboardData>| {
+                if e.key() == Key::Escape {
+                    open.set(false);
+                }
+            },
             textarea {
                 class: "input",
                 placeholder: compose_placeholder(plane),
@@ -1889,16 +2279,46 @@ fn HomeCompose(plane: Plane) -> Element {
                 // would scroll inside a box the height of a single line, which
                 // is worse than the slab. Two is the smallest count that still
                 // shows the reader the line they just wrapped.
-                rows: 2,
+                //
+                // FOUR WHILE IT IS EXPANDED, and that is the "expands" in the
+                // owner's sentence: the resting composer keeps the 100px the
+                // paragraph above measured it to, and the one you are actually
+                // writing a task into gets the room to see it. An attribute
+                // rather than a rule, because it is the same knob — nothing in
+                // this app grows a textarea and `shared.css`'s `max-height`
+                // only caps what this attribute asks for.
+                rows: if expanded { 4 } else { 2 },
                 oninput: move |e| draft.set(e.value()),
                 onkeydown: move |e: Event<KeyboardData>| {
                     if e.key() == Key::Enter && !e.modifiers().contains(Modifiers::SHIFT) {
                         e.prevent_default();
-                        if !draft.peek().trim().is_empty() {
+                        // `ready`, not "has text", and on the Code half those
+                        // differ: Enter on a sentence with no model chosen
+                        // would create nothing and say nothing. The chip says
+                        // which one is missing; this declines to act rather
+                        // than act half-way.
+                        if ready {
                             start();
                         }
                     }
                 },
+            }
+            // WHAT IS ATTACHED, above the control row and inside the composer
+            // — `views::code::CodeNewView`'s own placement, and its reason
+            // verbatim: a file name is server-length text and the control row
+            // has a width budget the send button has to survive.
+            //
+            // `NEW_CONVERSATION`, which is the tray for a session that does
+            // not exist yet (`crate::code::NEW_CONVERSATION`), so a photo
+            // picked here cannot land in whichever chat was last open. That
+            // required widening `attach::conversation_key`, which had keyed the
+            // new-session tray to `CodeScreen::New` — a screen this shell no
+            // longer routes to.
+            if expanded {
+                crate::views::attach::AttachTray {
+                    target: crate::attach::AttachTarget::Code,
+                    conversation: crate::code::NEW_CONVERSATION.to_owned(),
+                }
             }
             div { class: "home-compose-row",
                 // WHAT THE SESSION WILL BE, before it exists — and two of these
@@ -1912,7 +2332,19 @@ fn HomeCompose(plane: Plane) -> Element {
                 // a chevron, because a chip that is pressable and drawn like the
                 // read-only chips beside it is worse than either.
                 div { class: "home-chips",
-                    for chip in compose_chips(&ctx, plane, model().as_deref()) {
+                    // ONE ROW AND NOT TWO, which is the one place this differs
+                    // from `CodeNewView`'s shape. That screen has a page to
+                    // spend and splits "what the session runs ON" from "what
+                    // its first turn runs AS"; this is a dock at the bottom of
+                    // a board, and a second row would take another 47px off it
+                    // every time the reader touched the field. `.home-chips` is
+                    // `.chip-row`'s scroller, so five controls in a 266px
+                    // column are reachable rather than clipped — which is the
+                    // valve that row was given for exactly this.
+                    for chip in compose_chips(&ctx, plane, model().as_deref())
+                        .into_iter()
+                        .chain(start_chips(&ctx, expanded, code_model().as_deref(), agent().as_deref()))
+                    {
                         if let Some(pick) = chip.pick {
                             button {
                                 key: "{chip.text}",
@@ -1922,18 +2354,44 @@ fn HomeCompose(plane: Plane) -> Element {
                                 // screen reader reads it.
                                 title: pick.title(),
                                 "aria-label": pick.title(),
+                                // THE AMBER DOT, and it is the vocabulary the
+                                // new-session screen already uses for this —
+                                // `composer-chip action model needed`. An
+                                // attribute rather than that class for the
+                                // reason the wrapper's `data-open` is one: a
+                                // `.needed` rule here would take `needed` off
+                                // `UNDECIDED` and leave `views::code`'s own
+                                // undecided with nothing saying so.
+                                //
+                                // PRESENT OR ABSENT, not `true`/`false`, which
+                                // is the one place this diverges from `.shell`'s
+                                // `data-nav`: that attribute names which of two
+                                // states a thing is IN, and this one marks the
+                                // exception. Four of the five chips would
+                                // otherwise carry `data-needed="false"` to say
+                                // nothing at all.
+                                "data-needed": chip.needed.then_some("true"),
                                 onclick: move |_| {
                                     // Asked on the press rather than on the
-                                    // render, exactly as `CodeNewView`'s branch
-                                    // pill asks: the manager answers this from
-                                    // GitHub with its own credential, so it
-                                    // wakes no container, but it is still a
+                                    // render, exactly as `CodeNewView`'s pills
+                                    // ask. The branches come from GitHub on the
+                                    // manager's own credential and wake no
+                                    // container; the catalogue and the agent
+                                    // list are a session's, so they are a real
                                     // round trip nobody has asked for until the
-                                    // sheet is opened. `ensure_code_branches`
-                                    // returns at once when the list is in hand.
-                                    if pick == Pick::Base {
-                                        let repo = ctx.new_where.peek().repo.clone();
-                                        crate::code::ensure_code_branches(&ctx, &repo);
+                                    // sheet is opened. All three return at once
+                                    // when the answer is already in hand.
+                                    match pick {
+                                        Pick::Base => {
+                                            let repo = ctx.new_where.peek().repo.clone();
+                                            crate::code::ensure_code_branches(&ctx, &repo);
+                                        }
+                                        Pick::CodeModel => crate::code::ensure_code_catalogue(&ctx),
+                                        Pick::Mode => {
+                                            let repo = ctx.new_where.peek().repo.clone();
+                                            crate::code::ensure_code_agent_list(&ctx, &repo);
+                                        }
+                                        Pick::Model | Pick::Repo => {}
                                     }
                                     sheet.set(Some(pick));
                                 },
@@ -1949,6 +2407,42 @@ fn HomeCompose(plane: Plane) -> Element {
                                 class: if chip.mono { "home-chip mono" } else { "home-chip" },
                                 "{chip.text}"
                             }
+                        }
+                    }
+                    // THE `+`, AND IT IS THIS ROW'S OWN RATHER THAN
+                    // `views::attach::AttachButton`.
+                    //
+                    // NO `onclick`, which is the half that is not a choice:
+                    // `attach::PICK_FILES` catches the press in the CAPTURE
+                    // phase and finds the element with `closest('.attach')`,
+                    // because iOS opens its photo sheet only from inside the
+                    // real touch event and a Rust handler runs a round trip too
+                    // late. `data-attach` and `data-conversation` are the rest
+                    // of that address, and both are written from the same
+                    // constants the component uses.
+                    // `the_home_composers_attach_button_is_the_one_the_picker_
+                    // js_looks_for` holds the two in step.
+                    //
+                    // The half that IS a choice is the face. That component
+                    // wears `composer-chip action attach` — the phone's 36px
+                    // filled pill at a full radius — and this row is 32px
+                    // transparent boxes at `--radius-md` inside a control zone
+                    // measured as 7 + 32 + 8. Measured with the component in
+                    // place: the row went 32px to 36 and the pill was the only
+                    // filled object among four outlines. Wearing `.home-chip
+                    // .picker` it is the row's own shape and needs no rule to
+                    // make it one — which also leaves `attach` on
+                    // `src/inherit.rs`'s `UNDECIDED`, where it still describes
+                    // the code chat's composer, instead of being struck off by
+                    // a rule about this one.
+                    if expanded {
+                        button {
+                            class: "home-chip picker attach",
+                            "data-attach": crate::attach::AttachTarget::Code.as_str(),
+                            "data-conversation": crate::code::NEW_CONVERSATION,
+                            title: "Attach an image or a file",
+                            "aria-label": "Attach an image or a file",
+                            Icon { name: "plus" }
                         }
                     }
                 }
@@ -1980,30 +2474,57 @@ fn HomeCompose(plane: Plane) -> Element {
                     // press makes a session on the server — a real object with a
                     // real id that nobody asked for and someone now has to
                     // delete.
-                    disabled: draft().trim().is_empty(),
+                    //
+                    // On the Code half it is `can_start`, which wants a repo
+                    // and a model as well, and that is the whole of why the
+                    // composer expands: a disabled arrow is only honest while
+                    // the controls it is waiting on are on screen.
+                    disabled: !ready,
                     onclick: move |_| start(),
                     Icon { name: "arrow-up" }
                 }
             }
         }
-        {home_sheet(&ctx, sheet, model)}
+        {home_sheet(&ctx, Picks { sheet, model, code_model, agent })}
     }
+}
+
+/// What the composer has settled and has nowhere to write yet.
+///
+/// One struct rather than four arguments, which is the shape `views::code`'s
+/// own `NewSheet` takes for the same job: every one of these is a choice made
+/// on a screen whose whole premise is that the session does not exist, so none
+/// of them can be written through a `set_config_option` that needs a session
+/// id. They wait here until the create carries them.
+#[derive(Clone, Copy)]
+pub(crate) struct Picks {
+    pub sheet: Signal<Option<Pick>>,
+    /// The chat half's model — goose's `config_options`.
+    pub model: Signal<Option<String>>,
+    /// The code half's, which is a different catalogue on a different server.
+    pub code_model: Signal<Option<String>>,
+    /// What the code half's first turn runs as.
+    pub agent: Signal<Option<String>>,
 }
 
 /// Whichever chip's sheet is open.
 ///
 /// [`ChoicePickerSheet`] and nothing of this screen's own, which is #194's
 /// instruction in its own words: *"reuse it rather than inventing a second one,
-/// so the two screens cannot drift."* The repo and branch rows are
-/// `views::code`'s too — the same `repo_choices` and `branch_choices` the
-/// new-session screen builds, so a repo is described the same way in both
-/// places and the filter that arrived for one arrives for both.
-fn home_sheet(
-    ctx: &AppCtx,
-    mut sheet: Signal<Option<Pick>>,
-    mut model: Signal<Option<String>>,
-) -> Element {
+/// so the two screens cannot drift."* The repo, branch, model and mode rows are
+/// `views::code`'s too — the same `repo_choices`, `branch_choices`,
+/// `model_sheet_choices` and `agent_choices` the new-session screen builds, so
+/// a repo is described the same way in both places and the privacy rule that
+/// withholds a free model from a private repo is applied by one function
+/// rather than by two that could drift apart.
+fn home_sheet(ctx: &AppCtx, picks: Picks) -> Element {
     let ctx = *ctx;
+    let Picks {
+        mut sheet,
+        mut model,
+        code_model,
+        agent,
+    } = picks;
     match sheet() {
         None => rsx! {},
         Some(Pick::Model) => {
@@ -2092,6 +2613,101 @@ fn home_sheet(
                 }
             }
         }
+        Some(Pick::CodeModel) => code_model_sheet(&ctx, sheet, code_model),
+        Some(Pick::Mode) => code_mode_sheet(&ctx, sheet, agent),
+    }
+}
+
+/// THE MODEL THE TREE WILL RUN ON — #281.
+///
+/// The new-session screen's sheet down to the note, and `model_sheet_choices`
+/// is why that matters rather than being tidy: it is what applies privacy hard
+/// rule 1 — a model that trains on its input is withheld unless the repo is a
+/// public throwaway — and `withheld_note` is what says so out loud. The props
+/// are rebuilt here because a sheet is four of them; the RULE is not, and it
+/// could not be without two places to change it.
+///
+/// `loading` is the difference between "there is no catalogue" and "the
+/// catalogue has not arrived", and it has to be asked because the fetch starts
+/// on the same press that opens this — so on a first open the list is empty and
+/// in flight at once.
+fn code_model_sheet(
+    ctx: &AppCtx,
+    mut sheet: Signal<Option<Pick>>,
+    mut model: Signal<Option<String>>,
+) -> Element {
+    let ctx = *ctx;
+    let models = (ctx.code_models)();
+    let loading = (ctx.code_models_loading)();
+    let allow_free = crate::code::repo_allows_free_models(&ctx, &ctx.new_where.peek().repo);
+    let (choices, withheld) = crate::views::code::model_sheet_choices(&models, allow_free, loading);
+    rsx! {
+        ChoicePickerSheet {
+            title: "Select model",
+            backend: "code agent",
+            subtitle: "the session runs on this from its first message",
+            note: crate::views::code::withheld_note(withheld),
+            choices,
+            current: model(),
+            empty: if loading {
+                "Asking a session's container for its model catalogue…"
+            } else {
+                "Every model this server offers trains on its input, and this \
+                 repo is not a public throwaway — start this session on a repo \
+                 flagged public_throwaway, or give the server a model that does \
+                 not train."
+            },
+            onchoose: move |value: String| {
+                model.set(Some(value));
+                sheet.set(None);
+            },
+            onclose: move |()| sheet.set(None),
+        }
+    }
+}
+
+/// HOW THE FIRST TURN RUNS — #281.
+///
+/// `borrowed_agents_from` is the one thing this sheet says that the model's
+/// does not: `GET /agent` is a route on a chat's own server, the session this
+/// composer is about to make has none, so the list may have come off another
+/// repo's container — and a repository can define agents of its own, which
+/// makes a borrowed list a good guess rather than an answer.
+fn code_mode_sheet(
+    ctx: &AppCtx,
+    mut sheet: Signal<Option<Pick>>,
+    mut agent: Signal<Option<String>>,
+) -> Element {
+    let ctx = *ctx;
+    let agents = (ctx.code_agents)();
+    let repo = ctx.new_where.peek().repo.clone();
+    rsx! {
+        ChoicePickerSheet {
+            title: "Select mode",
+            backend: "code agent",
+            subtitle: "how the first turn runs",
+            note: crate::code::borrowed_agents_from(&ctx, &repo).map(|donor| {
+                format!(
+                    "Borrowed from {donor} — nothing on this repo to ask, and a \
+                     repository can define agents of its own."
+                )
+            }),
+            choices: crate::views::code::agent_choices(&agents),
+            // Resolved, not raw — the same expression the chip's face is built
+            // from, so the tick and the pill cannot disagree about which agent
+            // the first turn runs as.
+            current: opencode_client::resolve_agent(agent().as_deref(), &agents).map(str::to_owned),
+            empty: if (ctx.code_agents_loading)() {
+                "Asking a session's container which agents it has…"
+            } else {
+                "No agent list yet — the session starts on the server's default."
+            },
+            onchoose: move |value: String| {
+                agent.set(Some(value));
+                sheet.set(None);
+            },
+            onclose: move |()| sheet.set(None),
+        }
     }
 }
 
@@ -2103,9 +2719,9 @@ fn home_sheet(
 )]
 mod tests {
     use super::{
-        code_board, code_tiles, compose_chips, compose_placeholder, part_of_day, recent_for,
-        sched_line, spark, standing, starter_kinds, BoardFilter, Home, RecentState, Starter, Tile,
-        TreeState,
+        code_board, code_tiles, compose_chips, compose_placeholder, composer_open, files_word,
+        part_of_day, recent_for, sched_line, spark, standing, starter_kinds, BoardFilter, Home,
+        RecentState, Starter, Tile, TreeState,
     };
     use crate::nav::Plane;
     use crate::views::press::Pressable;
@@ -2683,49 +3299,194 @@ mod tests {
 
     /// A ROW DRAWS THE NUMBERS IT WAS SENT AND NOT ONE MORE — #81, #82.
     ///
-    /// Three trees in one repo, and the middle one is the whole point: it has
-    /// a pull request whose detail form the manager could not read, which is
-    /// the shape `mock-opencode-server`'s `#126` ships and the shape a real
-    /// manager produces on any minute GitHub is slow. `Option<u32>` on the
-    /// wire only helps if the renderer keeps the distinction, and a
-    /// `unwrap_or(0)` anywhere on this path would put `+0 −0` on that row —
-    /// a claim that the branch changed nothing.
+    /// Five trees, and every one of them is a shape the code fake serves or a
+    /// real manager can produce on a bad minute. The middle three are the
+    /// point: a size arrives on the TREE now (`ChatMeta::stat`, one
+    /// container-free compare), so a branch nobody opened a pull request for
+    /// is measured, and a pull request whose detail form the manager could not
+    /// read no longer costs the row its numbers — the two measurements are
+    /// orthogonal and come off different GitHub calls.
     ///
-    /// REPRODUCED: replace `pull.and_then(PullRequest::diffstat)` with a sum
-    /// defaulted to zero and the second row's assertion fails.
+    /// `Option<u32>` on the wire only helps if the renderer keeps the
+    /// distinction, and an `unwrap_or(0)` anywhere on this path would put
+    /// `+0 \u{2212}0` on the unmeasured row — a claim that the branch changed
+    /// nothing.
+    ///
+    /// REPRODUCED: read `num` off the pull request again and both the
+    /// stat-only rows lose their numbers; drop the `behind_word` guard and the
+    /// level tree reads `\u{2193}0 behind`.
+    /// The five shapes, seeded once. Its own function so the assertions below
+    /// read as a table rather than as a page of `ChatMeta` literals — the same
+    /// reason `seed_board` is one.
+    fn seed_five_shapes(ctx: &crate::state::AppCtx) {
+        let mut chats = ctx.code_chats;
+        chats.set(vec![
+            // Measured, with a pull request, and behind its base.
+            statted("both", stat(3, 7, 2, 23, 2)),
+            // Measured, no pull request — the case that had no numbers at all
+            // until the compare landed.
+            opencode_client::ChatMeta {
+                last_active: 2.0,
+                ..statted("stat-only", stat(2, 5, 1, 18, 4))
+            },
+            // A pull request the manager could not read a detail form for, on
+            // a tree the sweep DID compare. The fake's #126.
+            opencode_client::ChatMeta {
+                last_active: 3.0,
+                ..statted("pull-unmeasured", stat(4, 0, 3, 77, 33))
+            },
+            // No compare, and a pull request carrying its own commit count —
+            // an older manager, and the one path on which the pull request is
+            // still the source of a number.
+            opencode_client::ChatMeta {
+                last_active: 4.0,
+                ..based("old-manager", "repo", "main")
+            },
+            // Never pushed: no compare, no pull request, nothing.
+            opencode_client::ChatMeta {
+                last_active: 5.0,
+                ..based("bare", "repo", "main")
+            },
+        ]);
+        let mut pulls = ctx.code_pulls;
+        let mut w = pulls.write();
+        w.by_chat.insert(
+            "both".to_owned(),
+            vec![pull(118, opencode_client::PullState::Open)],
+        );
+        w.by_chat.insert(
+            "pull-unmeasured".to_owned(),
+            vec![pull(126, opencode_client::PullState::Open)],
+        );
+        w.by_chat.insert(
+            "old-manager".to_owned(),
+            vec![opencode_client::PullRequest {
+                commits: Some(4),
+                additions: Some(77),
+                deletions: Some(33),
+                changed_files: Some(3),
+                ..pull(121, opencode_client::PullState::Open)
+            }],
+        );
+        w.by_chat.insert("bare".to_owned(), Vec::new());
+    }
+
     #[test]
     fn a_row_carries_only_the_numbers_a_server_sent() {
+        let groups = crate::testkit::with_ctx(seed_five_shapes, |ctx| {
+            code_board(ctx, 2_000_000_000, BoardFilter::All)
+        });
+        let tree = |id: &str| {
+            groups[0]
+                .trees
+                .iter()
+                .find(|t| t.id == id)
+                .expect("every seeded tree is on the board")
+                .clone()
+        };
+
+        let both = tree("both");
+        assert_eq!(both.num, Some((23, 2)));
+        assert_eq!(both.files, Some(2));
+        assert_eq!(
+            both.branch_sub.as_deref(),
+            Some("3 commits \u{2193}7 \u{b7} #118 open"),
+            "the three facts of a branch that is ahead, behind and reviewed, \
+             and `\u{2191}3 ahead` is not a fourth \u{2014} it is `3 commits` \
+             said twice. The behind count is a glyph and shares the commits \
+             clause because the worded form ellipsised the pull request away; \
+             `moved_word` carries the two measurements"
+        );
+
+        let stat_only = tree("stat-only");
+        assert_eq!(
+            stat_only.num,
+            Some((18, 4)),
+            "a tree with no pull request is measured now, and this is the case \
+             the whole compare exists for"
+        );
+        assert_eq!(stat_only.files, Some(1));
+        assert_eq!(
+            stat_only.branch_sub.as_deref(),
+            Some("2 commits \u{2193}5"),
+            "no pull request is not no news"
+        );
+
+        let orphan = tree("pull-unmeasured");
+        assert_eq!(
+            orphan.num,
+            Some((77, 33)),
+            "the compare answered for this tree even though the pull \
+             request's detail form did not, and the row reads the compare"
+        );
+        assert_eq!(
+            orphan.branch_sub.as_deref(),
+            Some("4 commits \u{b7} #126 open"),
+            "`behind: 0` is a measured level branch and says nothing, and the \
+             pull request is still real without its own counts"
+        );
+
+        let old = tree("old-manager");
+        assert_eq!(
+            old.num, None,
+            "a manager that sends no compare sends no size, and the pull \
+             request's own counts are not a substitute \u{2014} the group \
+             total would then be summing two different measurements"
+        );
+        assert_eq!(old.files, None);
+        assert_eq!(
+            old.branch_sub.as_deref(),
+            Some("4 commits \u{b7} #121 open"),
+            "the pull request's commit count is still a count, and it is what \
+             this row said before the compare existed"
+        );
+
+        let bare = tree("bare");
+        assert_eq!(bare.num, None);
+        assert_eq!(
+            bare.branch_sub.as_deref(),
+            Some("from main"),
+            "a branch nobody has pushed has no compare and no pull request, \
+             and the base ref is the only thing anybody knows about it"
+        );
+    }
+
+    /// A CAPPED COMPARE IS A FLOOR, AND THE ROW SAYS SO WITH ONE GLYPH.
+    ///
+    /// GitHub stops listing files at 300, so past the cap `files`, `additions`
+    /// and `deletions` are lower bounds while `ahead` and `behind` stay exact.
+    /// The row may still draw the pair — the reader can see whose tree it is —
+    /// on the condition that it marks it, and the mark is the `+` on the file
+    /// count. With no file count there is nothing to mark, so there is no pair
+    /// either.
+    ///
+    /// REPRODUCED: drop the `filter` on the stat in `tree_of` and the second
+    /// tree draws `+900 \u{2212}40` as a total.
+    #[test]
+    fn a_capped_compare_marks_its_floor_or_draws_no_pair_at_all() {
         let groups = crate::testkit::with_ctx(
             |ctx| {
                 let mut chats = ctx.code_chats;
                 chats.set(vec![
-                    based("measured", "repo", "main"),
+                    statted(
+                        "capped",
+                        opencode_client::ChatStat {
+                            truncated: true,
+                            ..stat(9, 0, 300, 900, 40)
+                        },
+                    ),
                     opencode_client::ChatMeta {
                         last_active: 2.0,
-                        ..based("unmeasured", "repo", "main")
-                    },
-                    opencode_client::ChatMeta {
-                        last_active: 3.0,
-                        ..based("no-pull", "repo", "main")
+                        ..statted(
+                            "capped-countless",
+                            opencode_client::ChatStat {
+                                files: None,
+                                truncated: true,
+                                ..stat(9, 0, 300, 900, 40)
+                            },
+                        )
                     },
                 ]);
-                let mut pulls = ctx.code_pulls;
-                let mut w = pulls.write();
-                w.by_chat.insert(
-                    "measured".to_owned(),
-                    vec![opencode_client::PullRequest {
-                        commits: Some(4),
-                        additions: Some(77),
-                        deletions: Some(33),
-                        changed_files: Some(3),
-                        ..pull(121, opencode_client::PullState::Open)
-                    }],
-                );
-                w.by_chat.insert(
-                    "unmeasured".to_owned(),
-                    vec![pull(126, opencode_client::PullState::Open)],
-                );
-                w.by_chat.insert("no-pull".to_owned(), Vec::new());
             },
             |ctx| code_board(ctx, 2_000_000_000, BoardFilter::All),
         );
@@ -2738,75 +3499,84 @@ mod tests {
                 .clone()
         };
 
-        let measured = tree("measured");
-        assert_eq!(measured.num, Some((77, 33)));
-        assert_eq!(measured.files, Some(3));
+        let capped = tree("capped");
+        assert_eq!(capped.num, Some((900, 40)));
+        assert!(capped.capped);
         assert_eq!(
-            measured.branch_sub.as_deref(),
-            Some("4 commits \u{b7} #121 open"),
-            "the mockup's finished row is `4 commits \u{b7} merged #124` and \
-             both halves are off one read of `plane_pull`"
+            files_word(
+                capped.files.expect("a capped stat carries its cap"),
+                capped.capped
+            ),
+            "300+ files",
+            "the cap is a cap on the file list, so the `+` goes on the number \
+             it was applied to"
+        );
+        assert_eq!(
+            capped.total, None,
+            "a floor may be a row's own number and may never be part of a sum"
         );
 
-        let unmeasured = tree("unmeasured");
+        let countless = tree("capped-countless");
         assert_eq!(
-            unmeasured.num, None,
-            "a pull request the manager could not read a detail form for was \
-             drawn as a branch that changed nothing"
+            countless.num, None,
+            "a capped compare with no file count has nowhere to put the `+`, \
+             so `+900 \u{2212}40` would read as a total"
         );
-        assert_eq!(unmeasured.files, None);
-        assert_eq!(
-            unmeasured.branch_sub.as_deref(),
-            Some("#126 open"),
-            "the pull request is still real without its size, so the row says \
-             what it knows and drops only the count"
-        );
-
-        let none = tree("no-pull");
-        assert_eq!(none.num, None);
-        assert_eq!(
-            none.branch_sub.as_deref(),
-            Some("from main"),
-            "a branch with no pull request keeps the base ref, which is the \
-             only thing anybody has measured about it"
-        );
+        assert_eq!(countless.total, None);
     }
 
-    /// THE GROUP TOTAL REFUSES A GROUP HOLDING AN UNMEASURED TREE, and it is
-    /// `group_diffstat` that refuses rather than this file.
+    /// THE GROUP TOTAL REFUSES A GROUP HOLDING A TREE IT CANNOT ADD, and it is
+    /// `group_total` that refuses rather than this file.
     ///
-    /// The mockup's `.rhead .rt` reads `+108 −30` — a sum over every tree in
-    /// the repo. Summing only the ones that happen to carry a pull request
+    /// The mockup's `.rhead .rt` reads `+108 \u{2212}30` — a sum over every
+    /// tree in the repo. Summing only the ones that happen to be measured
     /// would put a plausible figure on a heading, and the reader has no way to
     /// tell a total of three trees from a total of one. So the heading says
-    /// nothing until every tree under it has been measured, which today means
-    /// a group with no pull-request-less tree in it.
+    /// nothing until every tree under it can be added, and the compare landing
+    /// is what turned that from almost never into almost always.
+    ///
+    /// Two reasons a tree cannot be added, and only one of them is an absence:
+    /// nobody compared it, or the compare hit the cap and its numbers are
+    /// floors.
     #[test]
     fn a_repo_heading_totals_only_a_group_it_can_measure_whole() {
         let groups = crate::testkit::with_ctx(
             |ctx| {
                 let mut chats = ctx.code_chats;
                 chats.set(vec![
-                    based("solo", "measured-repo", "main"),
+                    statted_in("solo", "measured-repo", stat(1, 0, 5, 84, 0)),
                     opencode_client::ChatMeta {
                         last_active: 2.0,
-                        ..based("with-pull", "mixed-repo", "main")
+                        ..statted_in("first", "whole-repo", stat(3, 0, 2, 23, 2))
                     },
                     opencode_client::ChatMeta {
                         last_active: 3.0,
-                        ..based("without", "mixed-repo", "main")
+                        ..statted_in("second", "whole-repo", stat(4, 0, 3, 77, 33))
+                    },
+                    opencode_client::ChatMeta {
+                        last_active: 4.0,
+                        ..statted_in("measured", "mixed-repo", stat(1, 0, 5, 84, 0))
+                    },
+                    opencode_client::ChatMeta {
+                        last_active: 5.0,
+                        ..based("never-pushed", "mixed-repo", "main")
+                    },
+                    opencode_client::ChatMeta {
+                        last_active: 6.0,
+                        ..statted_in("small", "capped-repo", stat(1, 0, 5, 84, 0))
+                    },
+                    opencode_client::ChatMeta {
+                        last_active: 7.0,
+                        ..statted_in(
+                            "enormous",
+                            "capped-repo",
+                            opencode_client::ChatStat {
+                                truncated: true,
+                                ..stat(9, 0, 300, 900, 40)
+                            },
+                        )
                     },
                 ]);
-                let sized = opencode_client::PullRequest {
-                    additions: Some(84),
-                    deletions: Some(0),
-                    ..pull(109, opencode_client::PullState::Merged)
-                };
-                let mut pulls = ctx.code_pulls;
-                let mut w = pulls.write();
-                w.by_chat.insert("solo".to_owned(), vec![sized.clone()]);
-                w.by_chat.insert("with-pull".to_owned(), vec![sized]);
-                w.by_chat.insert("without".to_owned(), Vec::new());
             },
             |ctx| code_board(ctx, 2_000_000_000, BoardFilter::All),
         );
@@ -2814,20 +3584,31 @@ mod tests {
             groups
                 .iter()
                 .find(|g| g.repo == repo)
-                .expect("both repos are on the board")
+                .expect("every seeded repo is on the board")
                 .num
         };
         assert_eq!(
             group("measured-repo"),
             Some((84, 0)),
-            "a group whose every tree was measured is a real total, and `0` \
+            "a group of one measured tree is that tree's own numbers, and `0` \
              deletions is a measurement rather than an absence"
+        );
+        assert_eq!(
+            group("whole-repo"),
+            Some((100, 35)),
+            "every tree compared is a real total, which is the case that was \
+             unreachable while the size came off a pull request"
         );
         assert_eq!(
             group("mixed-repo"),
             None,
-            "the heading totalled the one tree that had a pull request and \
+            "the heading totalled the one tree that had been measured and \
              presented it as the repo's"
+        );
+        assert_eq!(
+            group("capped-repo"),
+            None,
+            "one floor in the group and the sum is a number with no name"
         );
     }
 
@@ -3061,6 +3842,47 @@ mod tests {
         }
     }
 
+    /// One compare's answer, whole — which is how `compare_to_stat` builds it
+    /// and therefore the only shape a real manager sends. A test that wants a
+    /// half-answer says so by naming the field, and there is exactly one of
+    /// those (`files: None` under a cap).
+    ///
+    /// `commits` is filled from `ahead` because the manager sends `ahead_by`
+    /// under both names; a fixture that could make them disagree would be
+    /// teaching a shape no wire produces.
+    const fn stat(
+        ahead: u32,
+        behind: u32,
+        files: u32,
+        additions: u32,
+        deletions: u32,
+    ) -> opencode_client::ChatStat {
+        opencode_client::ChatStat {
+            ahead: Some(ahead),
+            behind: Some(behind),
+            commits: Some(ahead),
+            files: Some(files),
+            additions: Some(additions),
+            deletions: Some(deletions),
+            truncated: false,
+        }
+    }
+
+    fn statted(id: &str, stat: opencode_client::ChatStat) -> opencode_client::ChatMeta {
+        statted_in(id, "repo", stat)
+    }
+
+    fn statted_in(
+        id: &str,
+        repo: &str,
+        stat: opencode_client::ChatStat,
+    ) -> opencode_client::ChatMeta {
+        opencode_client::ChatMeta {
+            stat: Some(stat),
+            ..based(id, repo, "main")
+        }
+    }
+
     fn based(id: &str, repo: &str, base: &str) -> opencode_client::ChatMeta {
         opencode_client::ChatMeta {
             base: base.to_owned(),
@@ -3172,6 +3994,13 @@ mod tests {
     /// than no test, because it makes the next reader believe the source is
     /// gone. What survives is the half that was right: money, which neither
     /// wire reports and which must never appear.
+    ///
+    /// AND THE HOST IS FORBIDDEN NOW, which is the reverse of what this
+    /// asserted before #287. It required the chip and required it to carry
+    /// neither scheme nor path; the configured URL is set here still, with the
+    /// scheme and the path on it, so the assertion is that no part of it
+    /// reaches the row — a chip that dropped only the scheme would pass a
+    /// weaker test and fail this one.
     #[test]
     fn the_composer_chips_come_from_real_sources_only() {
         let chips = crate::testkit::with_ctx(
@@ -3185,8 +4014,10 @@ mod tests {
         );
         let text: Vec<&str> = chips.iter().map(|c| c.text.as_str()).collect();
         assert!(
-            text.contains(&"tail-mini.ts.net:3285"),
-            "the host chip is missing or still carries its scheme and path: {text:?}"
+            !text.iter().any(|t| t.contains("tail-mini")),
+            "the composer is naming the server again — the band above it says \
+             which host this half is on, per plane, and this row is the one \
+             that is short of width: {text:?}"
         );
         assert!(
             text.contains(&"2 extensions"),
@@ -3392,50 +4223,192 @@ mod tests {
         );
     }
 
-    /// …AND SO DOES THE CODE HALF'S, which is the arm nothing covered.
+    /// …AND THE CODE HALF'S ARROW CREATES THE SESSION — #281, which reverses
+    /// #79 and takes the intermediate screen out.
     ///
-    /// The test above mounts `ChatHome` and there was no counterpart, which is
-    /// how a signal write with no reader survived: `start()`'s `Plane::Code`
-    /// arm wrote `ctx.code_draft`, the code CHAT's composer, which
-    /// `CodeNewView` does not read and `open_code_chat` then blanks. The
-    /// sentence was destroyed between two screens with nothing on either
-    /// saying so.
+    /// The owner: *"after you select the options and type your text and click
+    /// enter or the arrow, it actually starts the code session, and doesn't
+    /// take you to a weird intermediate screen."*
     ///
-    /// The second assertion is the half that would not have been enough on its
-    /// own. `code_draft` staying empty is the cross-conversation line
-    /// `open_code_chat` and `new_attachments` already draw: a correction typed
-    /// in one chat has no business in a new session pointed at another repo,
-    /// and pointing the home composer at that signal would have carried it
-    /// there.
+    /// What this asserts in order is the whole of the change: a sentence
+    /// expands the composer, the expanded row carries the model picker with
+    /// the amber mark on it, the arrow refuses until that picker has an answer,
+    /// and the press then reaches `new_code_chat` rather than
+    /// `CodeScreen::New`. The last one is checked by what the create does with
+    /// no client — it toasts and leaves the sentence where it is — because a
+    /// test cannot make a working tree.
     ///
-    /// REPRODUCED: point the Code arm back at `ctx.code_draft` and both
-    /// assertions fail.
+    /// REPRODUCED: put `screen.set(CodeScreen::New)` back in the Code arm and
+    /// the last two assertions fail together.
     #[test]
-    fn what_you_type_on_the_code_home_screen_reaches_the_new_session() {
+    fn the_code_home_creates_the_session_instead_of_opening_a_screen() {
         let _guard = crate::views::press::alone();
-        let mut screen = Pressable::mount(|_| {}, CodeHome);
+        let mut screen = Pressable::mount(
+            |ctx| {
+                let mut repos = ctx.code_repos;
+                repos.set(vec![allowed("acme/infra")]);
+                let mut models = ctx.code_models;
+                models.set(vec![model_info("opencode", "claude-sonnet-4-5")]);
+            },
+            CodeHome,
+        );
+        screen.settle();
+        assert!(
+            screen.markup().contains(r#"data-open="false""#)
+                && !screen.markup().contains(r#"aria-label="Mode""#),
+            "the resting composer is already carrying the controls it is \
+             supposed to expand into: {}",
+            screen.markup()
+        );
 
         screen.type_into("Describe a change", "add a retry to the poll");
         screen.settle();
-        screen.press("Start a session");
-        screen.settle();
-
-        assert_eq!(
-            screen.with(|ctx| (ctx.new_task)()),
-            "add a retry to the poll",
-            "the text typed on the code home did not reach the carrier the \
-             new-session screen seeds its field from, so it is lost the moment \
-             that screen opens"
-        );
-        assert_eq!(
-            screen.with(|ctx| (ctx.code_draft)()),
-            "",
-            "the code home wrote into the code CHAT's draft, which is a \
-             conversation's and not a session-about-to-exist's"
+        let open = screen.markup();
+        assert!(
+            open.contains(r#"data-open="true""#),
+            "a sentence in the field did not hold the composer open, so the \
+             pickers the arrow is waiting on are off screen: {open}"
         );
         assert!(
-            screen.with(|ctx| (ctx.code_screen)() == crate::code::CodeScreen::New),
-            "the press did not open the screen that can act on the sentence"
+            open.contains(r#"aria-label="Model" data-needed="true""#),
+            "no amber mark on the one control `can_start` refuses without, so \
+             a disabled arrow says nothing about which chip is why: {open}"
+        );
+        assert!(
+            open.contains(r#"aria-label="Mode""#)
+                && open.contains(r#"class="home-chip picker attach""#),
+            "the mode picker and the attach button did not move onto the \
+             composer, so this shell lost both when it stopped routing to \
+             `CodeNewView`: {open}"
+        );
+        assert!(
+            open.contains(r#"aria-label="Start a session" disabled=true"#),
+            "the arrow offered to start a session with no model chosen: {open}"
+        );
+
+        screen.press("Model");
+        screen.settle();
+        screen.press(r#"class="choice""#);
+        screen.settle();
+        let picked = screen.markup();
+        assert!(
+            !picked.contains("data-needed"),
+            "the model was chosen and the chip is still asking for it: {picked}"
+        );
+        assert!(
+            !picked.contains(r#"aria-label="Start a session" disabled=true"#),
+            "the arrow is still refusing with every parameter answered: {picked}"
+        );
+
+        screen.press("Start a session");
+        screen.settle();
+        assert!(
+            screen.with(|ctx| (ctx.code_screen)() == crate::code::CodeScreen::List),
+            "the press pushed the screen this issue exists to remove"
+        );
+        assert!(
+            screen.markup().contains("add a retry to the poll"),
+            "the create was refused — there is no client in a test — and the \
+             composer was blanked anyway, so the sentence is gone with nothing \
+             to paste and no undo: {}",
+            screen.markup()
+        );
+        assert!(
+            screen.with(|ctx| (ctx.toast)()).is_some(),
+            "the create went nowhere and said nothing"
+        );
+    }
+
+    /// THE `+` ON THIS ROW IS THE ONE THE PICKER'S JAVASCRIPT LOOKS FOR.
+    ///
+    /// `home.rs` writes its own attach button rather than mounting
+    /// `views::attach::AttachButton`, because that component wears the phone's
+    /// 36px filled pill and this row is 32px outlines — the argument is at the
+    /// markup. What it may not do is drift from the CONTRACT: `PICK_FILES`
+    /// installs one capture-phase listener on the document and finds the
+    /// button with `closest('.attach')`, then reads `data-attach` and
+    /// `data-conversation` off it. Nothing in Rust connects the two, and a
+    /// rename on either side would leave a `+` that opens nothing at all —
+    /// silently, because the button carries no `onclick` to fail.
+    ///
+    /// So the component is rendered here and its own attributes are the
+    /// needles: rename one there and this fails, rather than passing against a
+    /// literal copied out of it.
+    ///
+    /// REPRODUCED: change either `data-` name in `views/attach.rs` and this
+    /// fails naming it.
+    #[test]
+    fn the_home_composers_attach_button_is_the_one_the_picker_js_looks_for() {
+        let component = crate::testkit::render(|| {
+            rsx! {
+                crate::views::attach::AttachButton {
+                    target: crate::attach::AttachTarget::Code,
+                    conversation: crate::code::NEW_CONVERSATION.to_owned(),
+                }
+            }
+        });
+        let _guard = crate::views::press::alone();
+        let mut screen = Pressable::mount(
+            |ctx| {
+                let mut repos = ctx.code_repos;
+                repos.set(vec![allowed("acme/infra")]);
+            },
+            CodeHome,
+        );
+        screen.type_into("Describe a change", "add a retry to the poll");
+        screen.settle();
+        let home = screen.markup();
+
+        // Every `data-` attribute the component carries, as `name="value"`,
+        // taken from its markup rather than written down again here.
+        let wanted: Vec<String> = component
+            .split(' ')
+            .filter(|part| part.starts_with("data-"))
+            .map(|part| part.trim_end_matches('>').to_owned())
+            .collect();
+        assert_eq!(
+            wanted.len(),
+            2,
+            "`AttachButton` no longer carries exactly the two data attributes \
+             `PICK_FILES` reads, so this test has stopped checking what it \
+             says it checks: {component}"
+        );
+        for want in &wanted {
+            assert!(
+                home.contains(want.as_str()),
+                "the home composer's attach button is missing {want}, which \
+                 `attach::PICK_FILES` reads off whatever it finds with \
+                 `closest('.attach')`: {home}"
+            );
+        }
+        assert!(
+            component.contains("attach") && home.contains("home-chip picker attach"),
+            "the class the picker's `closest('.attach')` selects on is not on \
+             both buttons: {home}"
+        );
+    }
+
+    /// THE RULE FOR WHEN IT IS EXPANDED, in all six states it has.
+    ///
+    /// Escape clears the focus half and cannot clear the other, which is the
+    /// decision worth checking rather than describing: a sentence sitting in
+    /// the field keeps its pickers, because the arrow refuses without them and
+    /// the reader would have nothing on screen saying so. Emptying the field
+    /// after Escape is what collapses it.
+    #[test]
+    fn a_sentence_holds_the_code_composer_open_and_escape_alone_does_not() {
+        assert!(!composer_open(Plane::Code, false, ""));
+        assert!(!composer_open(Plane::Code, false, "   \n "));
+        assert!(composer_open(Plane::Code, true, ""));
+        assert!(
+            composer_open(Plane::Code, false, "add a retry"),
+            "Escape collapsed a composer holding an unsent sentence, taking \
+             the model picker away from an arrow that refuses without it"
+        );
+        assert!(
+            !composer_open(Plane::Chat, true, "rotate the cert"),
+            "the chat composer expanded, and it has nothing to expand into — \
+             one parameter, and its chip is on the row unconditionally"
         );
     }
 
@@ -3741,6 +4714,18 @@ mod tests {
         );
     }
 
+    /// One model in the manager's catalogue. Deliberately not a free one:
+    /// `allowed` above flags no repo a public throwaway, and a free model
+    /// would be withheld by the same privacy rule the sheet applies.
+    fn model_info(provider: &str, id: &str) -> opencode_client::ModelInfo {
+        opencode_client::ModelInfo {
+            id: id.to_owned(),
+            provider_id: provider.to_owned(),
+            name: id.to_owned(),
+            ..opencode_client::ModelInfo::default()
+        }
+    }
+
     /// One allowlisted repo, as the manager sends it.
     fn allowed(name: &str) -> opencode_client::RepoEntry {
         opencode_client::RepoEntry {
@@ -3821,9 +4806,10 @@ mod tests {
         );
     }
 
-    /// A board with a measured tree, an unmeasured one and one with no pull
-    /// request at all — which is the fixture set `mock-opencode-server` ships
-    /// and the state the operator captures.
+    /// A board with a measured tree and an unmeasured one — the fixture set
+    /// `mock-opencode-server` ships, in the two shapes it keeps furthest
+    /// apart. The blocked tree is the one nobody has pushed, so nothing
+    /// compared it and nothing opened a pull request on it.
     fn seed_board(ctx: &crate::state::AppCtx) {
         let mut chats = ctx.code_chats;
         chats.set(vec![
@@ -3834,7 +4820,7 @@ mod tests {
             opencode_client::ChatMeta {
                 last_active: 2.0,
                 branch: "agent/quiet".to_owned(),
-                ..based("quiet-tree", "repo", "main")
+                ..statted("quiet-tree", stat(4, 0, 3, 77, 33))
             },
         ]);
         let mut perms = ctx.code_permissions;
@@ -3849,13 +4835,7 @@ mod tests {
         let mut w = pulls.write();
         w.by_chat.insert(
             "quiet-tree".to_owned(),
-            vec![opencode_client::PullRequest {
-                commits: Some(4),
-                additions: Some(77),
-                deletions: Some(33),
-                changed_files: Some(3),
-                ..pull(121, opencode_client::PullState::Open)
-            }],
+            vec![pull(121, opencode_client::PullState::Open)],
         );
         w.by_chat.insert("blocked-tree".to_owned(), Vec::new());
     }
@@ -3881,12 +4861,12 @@ mod tests {
         );
         assert!(
             html.contains("class=\"tree-files\">3 files<"),
-            "no file count on a pull request that carries `changed_files`"
+            "no file count on a tree whose compare listed three"
         );
         assert!(
             html.contains("4 commits \u{b7} #121 open"),
-            "the second branch line still reads `from main` on a tree with a \
-             pull request, which is the fact the heading above it repeats"
+            "the second branch line still reads `from main` on a tree that has \
+             been compared, which is the fact the heading above it repeats"
         );
         assert!(
             html.contains("from main"),
@@ -4228,9 +5208,10 @@ mod tests {
     /// own control rather than a value. `views::code`'s model pill draws the
     /// same distinction in the same words.
     ///
-    /// The host is on this row too, and it is the one fact the code half keeps:
-    /// which gateway the tree will be built on is not something this screen can
-    /// change, and it is the only thing left saying which brain is answering.
+    /// The host was on this row too and is gone from it (#287), which is why
+    /// the assertion is the WHOLE list rather than a `contains`: the code
+    /// half's row is two controls and nothing else now, and the gateway is
+    /// named by the band above, per plane.
     #[test]
     fn the_code_controls_name_themselves_until_they_have_a_value() {
         let chips = crate::testkit::with_ctx(
@@ -4243,11 +5224,12 @@ mod tests {
             |ctx| compose_chips(ctx, Plane::Code, None),
         );
         let text: Vec<&str> = chips.iter().map(|c| c.text.as_str()).collect();
-        assert_eq!(text, ["Repository", "Default", "brain.ts.net:4399"]);
+        assert_eq!(text, ["Repository", "Default"]);
         assert!(
-            chips[2].mono && chips[2].pick.is_none(),
-            "the gateway is not something this screen can change, and an \
-             address is compared character by character"
+            chips.iter().all(|c| c.pick.is_some()),
+            "every chip left on the code row is a control, so the read-only \
+             form has no user on this half and `Chip::fact`'s `mono` is the \
+             chat half's alone"
         );
     }
 

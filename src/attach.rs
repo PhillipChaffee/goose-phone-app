@@ -507,17 +507,63 @@ pub(crate) fn reading_for(picks: &[Pick], target: AttachTarget, conversation: &s
 pub(crate) fn conversation_key(ctx: &AppCtx, target: AttachTarget) -> String {
     match target {
         AttachTarget::Goose => ctx.chat.peek().session_id.clone().unwrap_or_default(),
-        // The new-session composer has no chat of its own yet, and `code_chat`
-        // still holds whichever one you last visited — so without this a photo
-        // picked for a session that does not exist is either dropped as
-        // belonging to another conversation, or worse, accepted into it. It is
-        // its own conversation until it becomes one, which is also why
-        // `tray_of` gives it a tray of its own: this decides which picks are
-        // accepted, and that decides where the accepted ones sit.
-        AttachTarget::Code if *ctx.code_screen.peek() == crate::code::CodeScreen::New => {
+        AttachTarget::Code
+            if new_code_composer(
+                crate::shell::Shell::CURRENT,
+                *ctx.code_screen.peek(),
+                *ctx.tab.peek(),
+            ) =>
+        {
             crate::code::NEW_CONVERSATION.to_owned()
         }
         AttachTarget::Code => ctx.code_chat.peek().chat_id.clone().unwrap_or_default(),
+    }
+}
+
+/// Whether the code composer on screen is the one for a session that does not
+/// exist yet.
+///
+/// The new-session composer has no chat of its own, and `code_chat` still
+/// holds whichever one you last visited — so without this a photo picked for a
+/// session that does not exist is either dropped as belonging to another
+/// conversation, or worse, accepted into it. It is its own conversation until
+/// it becomes one, which is also why [`tray_of`] gives it a tray of its own:
+/// this decides which picks are *accepted*, and that decides where the
+/// accepted ones sit.
+///
+/// TWO COMPOSERS ANSWER TO IT NOW, one per shell, and that is #281.
+/// `CodeScreen::New` is the phone's screen and was the only one; the desktop's
+/// Code home has a composer that creates the session in place and no longer
+/// routes to that screen at all. `shell::desktop::mod`'s `on_home` is
+/// `detail.is_none() && dest.id == primary(plane).id`, and for the Code plane
+/// `nav.rs` produces a detail for every `CodeScreen` except `List` — so the
+/// desktop home is up exactly when the tab is Code and the screen is `List`,
+/// which is what the second arm asks.
+///
+/// A TOTAL FUNCTION OF THE SHELL rather than a reader of
+/// [`crate::shell::Shell::CURRENT`], which is `src/shell/mod.rs`'s own rule
+/// and its reason: `cargo test` builds for the host, which is a desktop
+/// target, so a function that asked `CURRENT` itself would leave the phone's
+/// arm verified by nothing at all — a `cargo check --target aarch64-apple-ios`
+/// proves only that it parses. The caller passes `CURRENT`; the test below
+/// passes both.
+///
+/// The difference is load-bearing rather than tidy. The phone's Code LIST has
+/// no composer on it, so answering `NEW_CONVERSATION` there would be this
+/// function describing a screen that is not there — and the two arms would
+/// then differ only in a comment.
+const fn new_code_composer(
+    shell: crate::shell::Shell,
+    screen: crate::code::CodeScreen,
+    tab: crate::state::Tab,
+) -> bool {
+    match shell {
+        crate::shell::Shell::Mobile => matches!(screen, crate::code::CodeScreen::New),
+        crate::shell::Shell::Desktop => matches!(
+            (screen, tab),
+            (crate::code::CodeScreen::New, _)
+                | (crate::code::CodeScreen::List, crate::state::Tab::Code)
+        ),
     }
 }
 
@@ -1001,10 +1047,10 @@ fn restored_note(restored: usize, wanted: usize) -> String {
 mod tests {
     use super::{
         accept, adopt_sent, base64_len_to_bytes, code_parts, display_name, format_bytes,
-        from_content_block, from_part, goose_blocks, picker_js, reading_for, refusal,
-        refusal_summary, restore_thumbnails, restored_note, sent_attachments, thumbnail_index,
-        track, AttachTarget, Attachment, ChatItem, PendingAttachment, Picked, PickedRejection,
-        MAX_ATTACHMENTS, MAX_FILE_BYTES, MAX_TOTAL_BYTES, THUMB_MAX_CHARS,
+        from_content_block, from_part, goose_blocks, new_code_composer, picker_js, reading_for,
+        refusal, refusal_summary, restore_thumbnails, restored_note, sent_attachments,
+        thumbnail_index, track, AttachTarget, Attachment, ChatItem, PendingAttachment, Picked,
+        PickedRejection, MAX_ATTACHMENTS, MAX_FILE_BYTES, MAX_TOTAL_BYTES, THUMB_MAX_CHARS,
     };
     use goose_acp_client::ContentBlock;
     use opencode_client::Part;
@@ -1020,6 +1066,57 @@ mod tests {
             data: "QUJD".to_owned(),
             text: Some("hello".to_owned()),
         }
+    }
+
+    /// WHICH COMPOSER A PICK BELONGS TO IS NOW A QUESTION ABOUT THE SHELL —
+    /// #281.
+    ///
+    /// The desktop's Code home creates the session in place, so
+    /// `CodeScreen::New` is a phone screen there and the composer for a
+    /// session that does not exist yet is on the plane's ROOT. Both arms run
+    /// here, which is the whole reason [`new_code_composer`] takes the shell
+    /// rather than reading it: `cargo test` builds for a desktop target, so
+    /// the phone's arm has no other check anywhere.
+    ///
+    /// The row that matters most is the last one. Answering `true` for the
+    /// phone's Code list would send a pick made in the code CHAT into a tray
+    /// belonging to nothing — that list has no composer on it at all.
+    ///
+    /// REPRODUCED: drop the `Shell` match and both shells take the desktop's
+    /// answer; the last assertion fails.
+    #[test]
+    fn the_new_session_tray_belongs_to_whichever_composer_this_shell_puts_it_on() {
+        use crate::code::CodeScreen;
+        use crate::shell::Shell;
+        use crate::state::Tab;
+
+        for shell in [Shell::Mobile, Shell::Desktop] {
+            assert!(
+                new_code_composer(shell, CodeScreen::New, Tab::Code),
+                "{shell:?}: the new-session screen is the new-session composer \
+                 on both shells — the phone reaches it from two places"
+            );
+            assert!(
+                !new_code_composer(shell, CodeScreen::Chat, Tab::Code),
+                "{shell:?}: a pick made in an open code chat belongs to that \
+                 chat, not to a session about to exist"
+            );
+            assert!(
+                !new_code_composer(shell, CodeScreen::List, Tab::Home),
+                "{shell:?}: the Code plane is not even on screen"
+            );
+        }
+        assert!(
+            new_code_composer(Shell::Desktop, CodeScreen::List, Tab::Code),
+            "the desktop's Code home is where its new-session composer lives \
+             now, and a photo picked there would otherwise land in whichever \
+             chat was last open"
+        );
+        assert!(
+            !new_code_composer(Shell::Mobile, CodeScreen::List, Tab::Code),
+            "the phone's Code list has no composer on it, so this would be \
+             naming a tray for a screen that cannot fill one"
+        );
     }
 
     /// The limits the browser enforces are the limits the messages quote, and
