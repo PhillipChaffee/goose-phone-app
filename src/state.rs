@@ -1658,13 +1658,69 @@ pub(crate) async fn rename_session(ctx: &AppCtx, session_id: &str, title: &str) 
     }
 }
 
-/// Open an existing session: switch to the chat screen and replay history.
+/// Open an existing session: switch to the chat screen, and replay history
+/// unless it is already on screen.
+///
+/// THE CONVERSATION YOU ARE ALREADY READING IS NOT RE-FETCHED (#309). Every
+/// caller reaches this unguarded — the desktop sidebar row that *knows* it is
+/// the selected one, the chat home's list, the phone's list, a scheduled run —
+/// and the three-column shell invites the gesture, because the list sits
+/// permanently beside the conversation it lists. Without the guard below, a
+/// re-click threw away `items`, raised the spinner, and asked goose to replay
+/// a transcript already on screen: one round trip, a transcript that flickers
+/// out and streams back, a composer disabled for the duration
+/// (`can_send = !running && !chat.loading`, `src/views/chat.rs`) and a lost
+/// scroll position, all for no new information.
+///
+/// WHAT THE GUARD ASKS IS NOT "THE SAME ID". It is "the same id, with a
+/// transcript in it, and nothing in flight", and the two extra clauses are
+/// each a button that would otherwise stop working:
+///
+/// * `items` empty means the last attempt brought nothing back — a load that
+///   failed, or one that never went out because there was no connection. The
+///   row is the only retry those two have, so a bare id check would answer a
+///   toast that says "reconnect in Settings" with a screen that then refuses
+///   to. It costs a re-click on a genuinely empty conversation one request,
+///   which flickers nothing because there is nothing on screen to flicker.
+/// * `loading` means a replay is in flight; re-clicking is the reader's way
+///   of restarting one that is taking too long, and there is no transcript to
+///   protect yet either.
+///
+/// WHAT IS DELIBERATELY NOT REFRESHED ON THE SKIPPED PATH is the title, and it
+/// is not an oversight: both channels that can change it already write the open
+/// chat directly — goose's own `session_info` update ([`apply_update`]) and
+/// [`rename_session`] — so `info` has nothing to tell a conversation that is
+/// already up.
+///
+/// WHY NOT KEEP `items` AND STILL RELOAD, which is the other shape #309
+/// offers: goose replays history as live-shaped notifications that
+/// [`apply_update`] APPENDS, so a transcript left in place would be added to
+/// rather than replaced — every message twice. That needs a
+/// clear-on-first-replayed-item rule and an answer for a replay that arrives
+/// empty, which is the transcript cache's design problem (#312), not this
+/// one's. And note that [`reload_chat`] still clears and reloads on every
+/// auto-reconnect, on purpose: the argument for that is in place at its call
+/// site and this guard does not reach it.
 pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
     let mut screen = ctx.screen;
     let mut chat = ctx.chat;
     let mut usage = ctx.usage;
     let cwd = info.cwd.clone().unwrap_or_else(|| "/".to_string());
     let running = ctx.running_sessions.peek().contains(&info.session_id);
+
+    let (same_session, worth_keeping) = {
+        let current = ctx.chat.peek();
+        let same = current.session_id.as_deref() == Some(info.session_id.as_str());
+        (same, same && !current.loading && !current.items.is_empty())
+    };
+    if worth_keeping {
+        // Everything below this line is a write, and the reader asked for
+        // none of them. The one thing a re-click still means is "show me the
+        // chat", which matters on the phone, where the row that was clicked
+        // is on the list screen.
+        screen.set(Screen::Chat);
+        return;
+    }
 
     // An attachment belongs to the message it was picked for, and the tray
     // lives on the context (the picker has to be able to reach it from the app
@@ -1674,14 +1730,14 @@ pub(crate) fn open_session(ctx: &AppCtx, info: SessionInfo) {
     // Walking out of a chat and back into it replays it from scratch, and the
     // replay cannot say what a photo was called or what it looked like. Only
     // from the same session: two conversations' attachments have nothing to
-    // say about each other.
-    let (same_session, carry) = {
-        let current = ctx.chat.peek();
-        if current.session_id.as_deref() == Some(info.session_id.as_str()) {
-            (true, crate::attach::sent_attachments(&current.items))
-        } else {
-            (false, Vec::new())
-        }
+    // say about each other. Since the guard above, the same-session case that
+    // reaches this is the narrow one — a replay that failed, never started, or
+    // is still running — but each of those still ends in a replay that has to
+    // hand the photos back their names.
+    let carry = if same_session {
+        crate::attach::sent_attachments(&ctx.chat.peek().items)
+    } else {
+        Vec::new()
     };
     // The draft belongs to the conversation for the same reason. It used to be
     // a `use_signal` that died with the screen; hoisting it onto the context
@@ -4150,16 +4206,151 @@ mod tests {
         });
     }
 
-    /// Backing out of a chat and going straight back in replays it from
-    /// scratch, and the replay cannot say what a photo was called or what it
-    /// looked like. So what the transcript knew is carried across — and so is
-    /// what was being typed, because the conversation did not change.
+    /// Backing out of a chat and going straight back in used to replay it from
+    /// scratch; since #309 it does not replay at all. So the transcript keeps
+    /// itself rather than being wiped and rebuilt — photos, scroll position and
+    /// all — and so does what was being typed, because the conversation never
+    /// changed.
     #[test]
     fn reopening_the_same_chat_keeps_what_was_typed_and_what_was_sent() {
         let app = App::mount();
         app.run(|ctx| {
             ctx.chat.clone().set(ChatState {
                 session_id: Some("s3".to_owned()),
+                title: "Roof".to_owned(),
+                cwd: "/srv/app".to_owned(),
+                items: vec![ChatItem::User {
+                    text: "look".to_owned(),
+                    attachments: vec![crate::attach::Attachment {
+                        name: "roof.jpg".to_owned(),
+                        mime: "image/jpeg".to_owned(),
+                        size: 3,
+                        thumb: "THUMB".to_owned(),
+                    }],
+                }],
+                ..ChatState::default()
+            });
+            ctx.chat_draft.clone().set("keep me".to_owned());
+            // The gesture this is about is performed from a list, and on the
+            // phone that list is a screen of its own.
+            ctx.screen.clone().set(Screen::Sessions);
+
+            let info: SessionInfo = serde_json::from_value(
+                json!({"sessionId": "s3", "title": "Roof", "cwd": "/srv/app"}),
+            )
+            .unwrap();
+            open_session(ctx, info);
+
+            let chat = ctx.chat.peek();
+            assert!(
+                matches!(*ctx.screen.peek(), Screen::Chat),
+                "the row that was clicked did not open the chat it names"
+            );
+            assert_eq!(
+                transcript(&chat.items),
+                ["user:look:[roof.jpg]"],
+                "the conversation on screen was thrown away and asked for again"
+            );
+            assert!(
+                !chat.loading,
+                "the spinner went up over a transcript that never left, and the \
+                 composer is disabled while it is"
+            );
+            assert_eq!(chat.title, "Roof");
+            assert_eq!(chat.cwd, "/srv/app");
+            assert_eq!(
+                *ctx.chat_draft.peek(),
+                "keep me",
+                "leaving a chat and coming back ate what was being written"
+            );
+        });
+    }
+
+    /// …AND THE SKIP REACHES THE SOCKET, which is the whole point of it: the
+    /// saving is a round trip, not a signal write.
+    ///
+    /// The replay is folded in by hand between the two opens because the mock
+    /// server answers `session/load` without pushing any history — and goose
+    /// replays as live-shaped `session/update` notifications, so a hand-folded
+    /// chunk is the same thing arriving the same way.
+    #[test]
+    fn reopening_the_open_chat_asks_the_server_for_nothing() {
+        let mut app = App::mount();
+        let server = serve(happy);
+        let _events = app.attach(&server);
+        let info = session("chat_7", Some("Roof"));
+
+        app.run(|ctx| open_session(ctx, info.clone()));
+        app.settle_until(Duration::from_secs(5), |ctx| !ctx.chat.peek().loading);
+        pump_events(
+            &app,
+            vec![notify(
+                "chat_7",
+                json!({"sessionUpdate": "agent_message_chunk",
+                       "content": {"type": "text", "text": "the roof is fine"}}),
+            )],
+        );
+        assert_eq!(
+            server.methods(),
+            ["session/load"],
+            "the first open is the one that has to pay"
+        );
+
+        app.run(|ctx| open_session(ctx, info.clone()));
+        app.settle();
+        assert_eq!(
+            server.methods(),
+            ["session/load"],
+            "a re-click went back over the tailnet for a transcript that was \
+             already on screen: {:?}",
+            server.methods()
+        );
+        assert_eq!(
+            app.items(),
+            ["assistant:-:the roof is fine"],
+            "the transcript was cleared even though nothing was fetched to \
+             replace it"
+        );
+    }
+
+    /// A chat with nothing in it yet is asked for again, and that clause of the
+    /// guard is the difference between a retry and a dead row.
+    ///
+    /// Opening a chat while disconnected leaves the id in place, the items
+    /// empty and a toast telling the reader to go and connect. If the guard
+    /// were "the same id" they would come back, click the same row, and watch
+    /// it do nothing for ever.
+    #[test]
+    fn a_chat_whose_replay_never_landed_is_asked_for_again() {
+        let mut app = App::mount();
+        app.run(|ctx| open_session(ctx, session("s2", Some("Nightly standup"))));
+        app.drain();
+        assert_eq!(
+            app.toast().as_deref(),
+            Some("Not connected — reconnect in Settings"),
+            "the offline open is the setup for this test and it did not happen"
+        );
+        app.run(|ctx| {
+            assert!(!ctx.chat.peek().loading, "the spinner is still up");
+            open_session(ctx, session("s2", Some("Nightly standup")));
+            assert!(
+                ctx.chat.peek().loading,
+                "the second try was refused, so the only way back into an empty \
+                 chat is to open a different one first"
+            );
+        });
+    }
+
+    /// And a replay that is still running restarts rather than being skipped —
+    /// with the photos' names carried across the wipe it does, because that
+    /// path still ends in a replay that cannot name them.
+    #[test]
+    fn reopening_a_chat_mid_replay_restarts_it_and_keeps_the_photos() {
+        let app = App::mount();
+        app.run(|ctx| {
+            ctx.chat.clone().set(ChatState {
+                session_id: Some("s3".to_owned()),
+                loading: true,
                 items: vec![ChatItem::User {
                     text: "look".to_owned(),
                     attachments: vec![crate::attach::Attachment {
@@ -4173,15 +4364,11 @@ mod tests {
             });
             ctx.chat_draft.clone().set("keep me".to_owned());
 
-            let info: SessionInfo = serde_json::from_value(
-                json!({"sessionId": "s3", "title": "Roof", "cwd": "/srv/app"}),
-            )
-            .unwrap();
-            open_session(ctx, info);
+            open_session(ctx, session("s3", Some("Roof")));
 
             let chat = ctx.chat.peek();
-            assert_eq!(chat.title, "Roof");
-            assert_eq!(chat.cwd, "/srv/app");
+            assert!(chat.items.is_empty(), "the restarted replay will double up");
+            assert!(chat.loading);
             let carried: Vec<&str> = chat.attach_replay.iter().map(|a| a.name.as_str()).collect();
             assert_eq!(
                 carried,
@@ -4191,7 +4378,7 @@ mod tests {
             assert_eq!(
                 *ctx.chat_draft.peek(),
                 "keep me",
-                "leaving a chat and coming back ate what was being written"
+                "the conversation did not change, so the draft should not have"
             );
         });
     }
