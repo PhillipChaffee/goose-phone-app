@@ -50,7 +50,32 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
+  # The doc-quality lints are rustdoc's, not clippy's: none of them can fire
+  # under `cargo clippy`, so they get their own gate or they are never read.
+  # System deps are installed because a `--no-deps` run does not skip
+  # DEPENDENCY build scripts — `webkit2gtk-sys` still runs pkg-config, the
+  # boundary the coverage job documented when it widened to `--workspace`.
+  doc-comments:
+    name: Doc comments (Linux)
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the doc comments
+        run: cargo doc --workspace --no-deps
+
   # The audit reads docs/gallery-states.json — markup the app really produced,
+
   # captured by scripts/capture-gallery.py — and measures what is easier to
   # measure than to see: overflow, clipped text, square corners, sub-32px
   # buttons, and every piece of text and every icon against its contrast bar.

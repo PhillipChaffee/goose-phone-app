@@ -102,7 +102,7 @@ pub(crate) struct NewWhere {
 
 /// Point the home composer's next session at `repo`.
 ///
-/// [`crate::views::code::choose_repo`]'s two jobs, minus the one this screen
+/// `crate::views::code::choose_repo`'s two jobs, minus the one this screen
 /// cannot have: the base moves with the repo, because a branch of the old one
 /// does not exist on the new, and the branches are fetched so the chip can say
 /// `main` before it is opened. There is no model to clear — the home composer
@@ -2591,7 +2591,7 @@ type PendingWrite = Box<dyn FnOnce() + Send + 'static>;
 ///
 /// `in_flight` is not bookkeeping for its own sake — it is the difference
 /// between "the queue is empty" and "the disk is up to date", and
-/// [`drain_cache_writes`] needs the second one.
+/// `drain_cache_writes` needs the second one.
 #[derive(Default)]
 struct WriteQueue {
     pending: HashMap<String, PendingWrite>,

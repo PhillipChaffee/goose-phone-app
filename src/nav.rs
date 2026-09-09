@@ -82,7 +82,7 @@ impl Crumb {
 pub(crate) struct Detail {
     /// Dead on a phone, deliberately. One screen is on a phone at a time and
     /// it names itself in its own header; there is no window bar to hand a
-    /// name to, so [`Destination::screen`] drops this on the floor. The
+    /// name to, so `Destination::screen` drops this on the floor. The
     /// `expect` is scoped to those two targets rather than blanket-allowed, so
     /// the day the phone does read it the exception fails the build instead of
     /// rotting.
@@ -425,7 +425,7 @@ pub(crate) struct Destination {
     /// whoever edited the row last. Swapping a list component would then move
     /// the phone and leave the desktop's middle column rendering the old one,
     /// and no phone gate could see it. Here the root is written once and
-    /// [`Destination::screen`] composes the two, so they cannot disagree.
+    /// `Destination::screen` composes the two, so they cannot disagree.
     ///
     /// A phone reads it only through `screen`, which is a destination's whole
     /// stack collapsed to the one screen a phone shows — and drops the

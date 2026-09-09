@@ -1,3 +1,10 @@
+//! The app's binary crate. Every module declared below is private, so the
+//! documented API lives in the two libraries this one talks to
+//! (`goose-acp-client`, `opencode-client`); what is here is shell wiring —
+//! the module list, the window setup for the desktop build, and `launch`,
+//! which exists in one `#[cfg]` arm per shell because the renderer is picked
+//! by target triple (`Cargo.toml`'s target-conditional dependencies), not by
+//! a feature flag anyone has to remember to pass.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 // Dioxus's rsx!/#[component] macros expand to fully-qualified paths, so
 // unused_qualifications fires ~50 times on code no one here can edit. Scoped

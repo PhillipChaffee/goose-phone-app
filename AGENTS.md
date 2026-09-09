@@ -20,6 +20,7 @@ Common commands:
 ```bash
 cargo clippy --workspace --all-targets -- -D warnings   # the CI lint gate
 cargo test --workspace               # all tests
+RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
 cargo fmt --all -- --check           # formatting gate
 cargo run -p mock-goose-server       # fake goose on :3285 (secret "mock-secret")
 cargo run -p mock-opencode-server    # fake code agents on :4399 ("mock-code-secret")

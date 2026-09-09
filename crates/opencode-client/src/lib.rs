@@ -1475,7 +1475,7 @@ impl CodeClient {
     /// route. A GitHub outage is **not** an error here: this serves a cache and
     /// the failure is per chat, already on the wire, and already handled by the
     /// paragraph above. A 2xx body that is not the contracted shape yields an
-    /// empty map rather than an error, for [`parse_pulls_by_chat`]'s reason.
+    /// empty map rather than an error, for `parse_pulls_by_chat`'s reason.
     pub async fn all_pulls(
         &self,
     ) -> Result<std::collections::HashMap<String, Vec<PullRequest>>, CodeError> {

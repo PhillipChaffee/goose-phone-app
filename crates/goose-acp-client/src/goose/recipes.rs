@@ -90,7 +90,7 @@ pub struct Recipe {
     /// invented on its behalf.
     ///
     /// The one `skip_serializing_if` in this module, against the rule in
-    /// [`super`], because this is the one field whose goose-side type is not an
+    /// `super`, because this is the one field whose goose-side type is not an
     /// `Option`: `RecipeDto::version` is a `String` with `#[serde(default)]`,
     /// and a serde `default` fires on a *missing* key and never on an explicit
     /// `null`. `scan` and `encode` send this body back, so serializing `None`

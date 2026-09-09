@@ -232,7 +232,7 @@ impl AcpClient {
     /// skills": a wrong statement rather than a missing one.
     ///
     /// The unsupported case stays clean despite the doubling: both calls use
-    /// the same method, so [`AcpClient::goose_request`] caches the first
+    /// the same method, so `AcpClient::goose_request` caches the first
     /// `-32601` and the second returns [`AcpError::Unsupported`] without
     /// touching the socket. A server without the feature costs one round
     /// trip, not two, and both halves fail — so this returns `Err`, which is

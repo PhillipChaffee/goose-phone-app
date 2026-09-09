@@ -31,6 +31,17 @@ trivial_casts = "warn"
 trivial_numeric_casts = "warn"
 unused_qualifications = "warn"
 
+[workspace.lints.rustdoc]
+# The whole stable group in one entry: no hand-enumeration of ten names to
+# mistype, and lints rustdoc gains stay owned by the group by default. The
+# nightly-only `missing_doc_code_examples` is deliberately outside the group —
+# it churns with the toolchain channel (unstable) and demands a runnable
+# example on every documented item, which violates the same rule the old
+# `missing_docs` opt-out did. `missing_crate_level_docs` overlaps rustc's
+# `missing_docs` on the crate-line omission; a second gate on the same
+# omission costs nothing.
+all = "deny"
+
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }

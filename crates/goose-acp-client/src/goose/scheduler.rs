@@ -367,7 +367,7 @@ impl AcpClient {
     }
 
     /// Stop the run in flight. `schedule_id` is the schedule's own id — see
-    /// [`kill_params`] for why the wire key says `jobId`.
+    /// `kill_params` for why the wire key says `jobId`.
     ///
     /// goose's success message is parsed and discarded: the shape is worth
     /// checking, the sentence is not worth showing.
