@@ -73,7 +73,11 @@ pedantic, nursery and cargo groups plus restriction picks (`unwrap_used`,
 `expect_used`, `panic`, `print_stdout`, ...). Every blanket exception is
 justified in that table; one-off exceptions go in the code as
 `#[expect(lint, reason = "...")]` — `expect`, not `allow`, so an exception
-that stops being needed fails the build instead of rotting.
+that stops being needed fails the build instead of rotting. The doc lints do
+not take that courtesy: `missing_docs` is deny and `[workspace.lints.rustdoc]`
+denies the whole stable rustdoc group, in local builds as well as CI —
+`cargo check` fails until the doc exists, and `RUSTDOCFLAGS='-D warnings'
+cargo doc` fails on every broken link it carries.
 
 Comment and doc-comment rules. The coding agent's global rules own the
 style basics — "Present state only" (a comment never narrates what the code
