@@ -26,6 +26,8 @@ pub struct ConfigOption {
     /// simply break in the other direction on the next person's older server.
     #[serde(alias = "id")]
     pub config_id: String,
+    /// The option's label in goose's own words; absent on the wire becomes
+    /// an empty string.
     #[serde(default)]
     pub name: String,
     /// The agent's own words about what this option does. goose sends one
@@ -33,12 +35,22 @@ pub struct ConfigOption {
     /// likely to find stuck on a single value.
     #[serde(default)]
     pub description: Option<String>,
+    /// The bucket goose files the option under — `mode`, `model`,
+    /// `thought_level` on its own settings sheet — or none when the server
+    /// sends no category.
     #[serde(default)]
     pub category: Option<String>,
+    /// The wire's `type` tag naming the payload shape; `select` is the only
+    /// one goose sends today, and a server that omits it leaves this
+    /// `None`.
     #[serde(default, rename = "type")]
     pub kind: Option<String>,
+    /// The value currently in effect, as the raw id matching one entry of
+    /// [`ConfigOption::options`].
     #[serde(default)]
     pub current_value: Option<String>,
+    /// The selectable values for a `select`; nothing comes back for any
+    /// other kind, and the sheet then has to render a fact, not a control.
     #[serde(default)]
     pub options: Vec<ConfigChoice>,
 }
@@ -73,7 +85,11 @@ impl ConfigOption {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigChoice {
+    /// The id this choice goes by on the wire — the string sent back as
+    /// `value` to `session/set_config_option` to switch the session onto it.
     pub value: String,
+    /// The choice's display label, defaulting to an empty string when the
+    /// server omits it.
     #[serde(default)]
     pub name: String,
     /// What choosing this one does, per `SessionConfigSelectOption`. goose

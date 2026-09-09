@@ -77,11 +77,22 @@ pub struct ScheduledJob {
     pub id: String,
     /// Absolute path of the recipe YAML on the server.
     pub source: String,
+    /// The cadence the scheduler holds: usually the six-field form goose
+    /// expands out of the five-field one
+    /// [`AcpClient::recipes_schedule`] takes, seconds first. Any other
+    /// shape arrives as written — nothing here parses it.
     pub cron: String,
+    /// When the job last fired, RFC 3339 — `None` before it ever has,
+    /// sent as an absent key or an explicit `null`.
     #[serde(rename = "lastRun")]
     pub last_run: Option<String>,
+    /// A run is writing into a session at listing time — `currentlyRunning`
+    /// on the wire, and required there, so an absent key fails the parse
+    /// rather than reading as an idle job.
     #[serde(rename = "currentlyRunning")]
     pub currently_running: bool,
+    /// The schedule is on hold — a statement about the next fire only,
+    /// not the run in flight: goose pauses the schedule, not the process.
     pub paused: bool,
     /// The session the run in flight is writing into — what "Watch it run"
     /// opens.
@@ -91,6 +102,8 @@ pub struct ScheduledJob {
     /// "running 4m", which is why `running-job/inspect` is not worth a call.
     #[serde(rename = "jobStartTime")]
     pub job_start_time: Option<String>,
+    /// Serde catch-all: keys goose sent with the job that this struct
+    /// does not model land here instead of being dropped.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -98,8 +111,13 @@ pub struct ScheduledJob {
 /// What a job is doing, in the order a reader needs to know it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScheduleState {
+    /// A run is going: [`ScheduledJob::currently_running`] said so, and it
+    /// outranks a pause.
     Running,
+    /// The next fire is held: [`ScheduledJob::paused`] said so, and a run
+    /// already in flight is untouched.
     Paused,
+    /// Neither flag is set: the cadence is live and will fire.
     Scheduled,
 }
 
@@ -160,8 +178,14 @@ impl ScheduleState {
 /// wire string here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RunStatus {
+    /// The run ran itself out — spelled `completed` on the wire, and
+    /// carrying the session it wrote into in
+    /// [`RunNowResponse::session_id`].
     #[serde(rename = "completed")]
     Completed,
+    /// The run was stopped before it ever got a session, spelled
+    /// `cancelled` on the wire — [`RunNowResponse::session_id`] stays
+    /// `None`.
     #[serde(rename = "cancelled")]
     Cancelled,
 }
@@ -169,38 +193,53 @@ pub enum RunStatus {
 /// The `schedules/run-now` result, once the run has finished.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunNowResponse {
+    /// Which of the two endings happened. The reply arrives only once the
+    /// run is over — `session_id` below is its second statement.
     pub status: RunStatus,
     /// The session the run wrote into. Absent on a cancellation, which never
     /// got one.
     #[serde(rename = "sessionId")]
     pub session_id: Option<String>,
+    /// Serde catch-all: keys goose sent with the reply that this struct
+    /// does not model land here instead of being dropped.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
+/// The `schedules/list` reply.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListSchedulesResponse {
+    /// Every job the scheduler holds — running, paused and idle alike;
+    /// nothing here filters.
     pub jobs: Vec<ScheduledJob>,
+    /// Serde catch-all: keys goose sent with the reply that this struct
+    /// does not model land here instead of being dropped.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
+/// The `schedules/update` reply.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateScheduleResponse {
     /// The job as goose re-read it after the write. goose builds this by
     /// re-listing internally, so it is the stored value and not an echo of
     /// the request.
     pub job: ScheduledJob,
+    /// Serde catch-all: keys goose sent with the reply that this struct
+    /// does not model land here instead of being dropped.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
+/// The `schedules/running-job/kill` reply: a sentence and nothing else.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KillRunningJobResponse {
     /// goose's own sentence — "Successfully killed running job 'x'". Parsed
     /// to prove the shape and then dropped: design rule 8 keeps a backend
     /// string off the screen, and the caller has better words.
     pub message: String,
+    /// Serde catch-all: keys goose sent with the reply that this struct
+    /// does not model land here instead of being dropped.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -220,7 +259,12 @@ pub struct KillRunningJobResponse {
 /// there.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ListScheduleSessionsResponse {
+    /// The job's past runs, newest first, in the same [`SessionInfo`]
+    /// shape `session/list` answers with — one record type, whichever
+    /// list it arrived on.
     pub sessions: Vec<SessionInfo>,
+    /// Serde catch-all: keys goose sent with the reply that this struct
+    /// does not model land here instead of being dropped.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

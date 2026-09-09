@@ -43,16 +43,26 @@ const SOURCES_LIST: &str = "_goose/unstable/sources/list";
 /// goose adds cannot appear in a response to a request made here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SourceType {
+    /// A skill a user keeps on disk: a directory holding a `SKILL.md`, in
+    /// the user's global or a project's sources directory.
     #[serde(rename = "skill")]
     Skill,
+    /// A skill goose ships as data rather than reads from disk, served at
+    /// a synthetic `builtin://skills/<name>` path.
     #[serde(rename = "builtinSkill")]
     BuiltinSkill,
+    /// A recipe — the saved, parameterised YAML prompt goose keeps in its
+    /// recipe directories.
     #[serde(rename = "recipe")]
     Recipe,
+    /// A sub-recipe, the nested kind a recipe body lists under
+    /// `sub_recipes`.
     #[serde(rename = "subrecipe")]
     Subrecipe,
+    /// An agent the server keeps as a source.
     #[serde(rename = "agent")]
     Agent,
+    /// A project the server keeps as a source.
     #[serde(rename = "project")]
     Project,
 }
@@ -84,9 +94,15 @@ impl SourceType {
 /// `type` is renamed only because it is a Rust keyword.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceEntry {
+    /// The kind of source this is. The wire key is `type`, a Rust keyword.
     #[serde(rename = "type")]
     pub source_type: SourceType,
+    /// The source's name. Not unique across scopes: a project skill and a
+    /// global one are different entries, and the sort breaks the tie on
+    /// [`SourceEntry::path`].
     pub name: String,
+    /// What the source says it does, in its author's prose; free text on
+    /// the wire.
     pub description: String,
     /// The body of `SKILL.md`, frontmatter included.
     pub content: String,
@@ -106,6 +122,8 @@ pub struct SourceEntry {
     /// schema is an open object with no named members — so modelling it would
     /// be inventing a shape goose does not promise.
     pub properties: Option<Value>,
+    /// Serde catch-all: keys the server sent on the entry that this struct
+    /// does not model land here and survive a round trip.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -154,7 +172,13 @@ impl SourceEntry {
 /// The `sources/list` result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListSourcesResponse {
+    /// The entries the server returned for the requested kind, in the
+    /// order it sent them. [`AcpClient::skills_list`] does the merging and
+    /// sorting; this reply is one raw request's answer.
     pub sources: Vec<SourceEntry>,
+    /// Serde catch-all: reply keys this struct does not model land here and
+    /// survive a round trip; a round-trip test plants a `nextCursor` among
+    /// them to prove it.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use crate::client::normalize_base_url;
 
+/// What a pre-flight check concluded about a server: whether a WebSocket
+/// connection to it would succeed, and if it would not, why not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeOutcome {
     /// Server reachable and (if a secret was given) the secret was accepted.
