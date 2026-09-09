@@ -1568,16 +1568,6 @@ pub(crate) fn AppShell() -> Element {
     }
 }
 
-// `empty_detail` WAS HERE, and #249 deleted it. It rendered `.pane-empty`,
-// `.pane-empty-line` and `.pane-empty-hint` — a glyph, "Nothing open" and
-// "Pick something from {label} to see it here." — for a destination with no
-// root and no detail, and it was written when the content area was a list
-// column beside a detail column and launching landed on an empty one. The
-// three-column restructure (#40) took the list into the sidebar and gave the
-// pane a home arm; from that commit on there was no state left that reached
-// it. Its argument, its rules in `assets/desktop/` and its tests went with it;
-// the reasoning is at the pane's own arms above.
-
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

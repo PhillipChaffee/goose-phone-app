@@ -757,12 +757,11 @@ pub(crate) fn code_board(ctx: &AppCtx, now: i64, filter: BoardFilter) -> Vec<Rep
 // says what that means. And 68px of the column — a 608x44 box plus its 24px
 // bottom margin, measured on the captured `desktop-chats` at 1440x860.
 //
-// `host_of` survives, and no longer for the reason written here. It said "the
-// host is a chip under the composer, which is the one place on this screen it
-// is still named" — #287 took that chip off both halves, so nothing on this
-// screen names the host at all now and the band above it is the only place
-// (`mod.rs`'s `plane_host`, which is one of the two callers this function has
-// left; the other is the inspector's).
+// The host this half is on comes from the configured URL, which `host_of`
+// reduces to a `host:port` pair or `None`. Two things render that value: the
+// top band's connection, fed by `mod.rs`'s `plane_host`, and the inspector's
+// host row — so nothing on this home itself names the host, and the band
+// above it is the one place on screen where it appears.
 
 /// The scheduled recipe worth naming, and how many others there are.
 #[derive(Debug, Clone, PartialEq, Eq)]

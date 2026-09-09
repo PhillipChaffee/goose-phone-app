@@ -246,14 +246,15 @@ pub fn ChatView() -> Element {
 }
 
 /// THE THING YOU TYPE INTO, and its own component because of what a keystroke
-/// used to cost.
+/// costs when the draft read shares a scope with the transcript.
 ///
 /// `value: "{draft}"` is a read of `AppCtx::chat_draft`, so whichever scope
-/// performs that read is the scope one character marks dirty. That used to be
-/// [`ChatView`]'s own body — which also calls [`render_transcript`], which
-/// hands every item to [`TranscriptItem`], which calls `markdown::to_html` on
-/// every Assistant and every Thought. So typing re-parsed the whole
-/// conversation to produce ONE DOM edit, the textarea's own value. Measured
+/// performs that read is the scope one character marks dirty. [`ChatView`]'s
+/// own body must not perform it: that body calls [`render_transcript`],
+/// which hands every item to [`TranscriptItem`], which calls
+/// `markdown::to_html` on every Assistant and every Thought, so a keystroke
+/// read there re-parses the whole conversation to produce ONE DOM edit, the
+/// textarea's own value. Measured
 /// here, dev profile, best of 32 renders on a mounted `VirtualDom` over a
 /// transcript of this repo's own markdown split into paragraph-sized items:
 /// 0.98 ms at 50 items, 4.16 ms at 200, 12.79 ms at 600 — and it is felt rather
@@ -352,10 +353,9 @@ fn ChatCompose(
                 // This box is one line and never more (`.chip-row` in
                 // shared.css). The send button is outside it, which is what
                 // keeps it pinned to the trailing edge whatever the chips
-                // inside do — and what it used to be outside a *wrapping* box
-                // for. The wrap is gone: a composer that grows a row under
-                // your thumb is worse than a model name you can tap to read in
-                // full.
+                // inside do. One line is the trade-off: a composer that
+                // grows a row under your thumb is worse than a model name
+                // you can tap to read in full.
                 div { class: "chip-row",
                     AttachButton { target: AttachTarget::Goose, conversation }
                     if settings {
@@ -443,26 +443,25 @@ fn is_mode_chip(option: &ConfigOption) -> bool {
 
 /// What the mode chip says, in the same words the picker under it uses.
 ///
-/// ONE RENDERING OF ONE VALUE, and there were two. The chip used to read
-/// [`ConfigOption::current_label`], which finds `current_value` in `options`
-/// and hands back the raw wire string when it is not there — a real state,
-/// because goose reports a mode set from its own config or by another client
-/// whether or not the option list it sends enumerates it. Against the real
-/// server that fallback put `smart_approve` on screen, and a wire enum on a
-/// chip reads as the app leaking rather than as the agent speaking (#210 made
-/// the same argument for `tool_kind_phrase`). The sheet's own answer to the
-/// identical situation is already better and already tested:
-/// `a_current_value_outside_the_choices_still_shows` renders `retired_model` as
-/// "Retired model".
-///
-/// So this asks [`choice_label`] both times, which is what the picker's rows
-/// ask (`mode_choices` → `option_choices`), and the chip cannot disagree with
-/// the row it is about to open. THE SECOND HALF MATTERS AS MUCH AS THE FIRST:
-/// goose 1.46.0 sends its mode options with `name` EQUAL to `value` — measured,
-/// and written down at `crates/goose-acp-client/src/types/config.rs:158` — so
-/// the found branch was rendering a lowercase `auto` beside a picker row
-/// reading "Auto". Only the fake's modes carry names of their own, which is
-/// why nothing here could see it.
+/// ONE RENDERING OF ONE VALUE: this asks [`choice_label`] both times, which
+/// is what the picker's rows ask (`mode_choices` → `option_choices`), so the
+/// chip cannot disagree with the row it is about to open. Two states reach
+/// that label, and both pass through [`choice_label`]. Where the current
+/// value is in the options, the label must not be read raw: goose 1.46.0
+/// sends its mode options with `name` EQUAL to `value` — measured, and
+/// written down at `crates/goose-acp-client/src/types/config.rs:158` — so a
+/// chip carrying the found choice's `name` as-is reads `auto` beside a
+/// picker row reading "Auto"; only the fake's modes carry names of their
+/// own, which is why nothing here could see it. Where the current value is
+/// outside the options — a real state, because goose reports a mode set
+/// from its own config or by another client whether or not the option list
+/// it sends enumerates it — [`ConfigOption::current_label`] hands back the
+/// raw wire string, and on a chip that reads as the app leaking rather than
+/// as the agent speaking (#210 made the same argument for
+/// `tool_kind_phrase`); [`choice_label`] supplies the sheet's answer to the
+/// identical situation, already better and already tested:
+/// `a_current_value_outside_the_choices_still_shows` renders `retired_model`
+/// as "Retired model".
 ///
 /// `None` is the empty label rather than the raw value: the chip can end up
 /// naming its own control, and that is a fallback rather than a state the app
@@ -1255,8 +1254,10 @@ pub(crate) fn tool_status_label(status: &str) -> String {
 /// for anything keyed off it: "the host runs the desktop arm, so every rule
 /// keyed off the shell has to take it as a PARAMETER rather than read
 /// `Shell::CURRENT` — otherwise the mobile assertions silently assert about
-/// desktop and pass". [`attributed`] above predates that rule and is a `const`
-/// the compiler folds; this is the newer shape, and it is the only way the
+/// desktop and pass". [`attributed`] above is a `const fn` over
+/// `Shell::CURRENT`, which the compiler folds per binary, so the rule has no
+/// runtime branch there for a parameter to carry; this function's branch
+/// runs at runtime, so it takes the shell as a PARAMETER — the only way the
 /// phone's arm of this decision is checkable at all from a `cargo test` that
 /// builds the desktop one.
 fn tool_kind_word(shell: crate::shell::Shell, kind: &str) -> Option<&'static str> {
@@ -1294,12 +1295,14 @@ fn tool_icon(kind: &str) -> &'static str {
 
 /// How full the context window is, as the chip states it.
 ///
-/// It used to read `128.0k/200.0k`, which is 106px of a 306px composer row —
-/// and with a mode chip in that row as well, a phone at 360pt had 48px left
-/// for two chip labels, so even `GPT-5.2` and `Auto` came out ellipsised.
-/// The two numbers were never the question anyway: "how much room is left" is,
-/// and one percentage answers it in a third of the width. The window itself is
-/// still stated in full, as the Context length row of the settings sheet.
+/// The chip states a percentage and not the fraction the window is at, and
+/// the row's geometry is why: a fraction like `128.0k/200.0k` is 106px of a
+/// 306px composer row — and with a mode chip in that row as well, a phone at
+/// 360pt is down to 48px for two chip labels, where even `GPT-5.2` and
+/// `Auto` ellipsize. The two numbers are not the question anyway: "how much
+/// room is left" is, and one percentage answers it in a third of the width.
+/// The window itself is stated in full, as the Context length row of the
+/// settings sheet.
 ///
 /// A limit of zero is a server that has not said, and there is no fraction of
 /// nothing; a count above it is clamped, because a turn that overran its own
@@ -1308,11 +1311,12 @@ fn tool_icon(kind: &str) -> &'static str {
 /// a nearly-full window into "1%", which is the opposite of the truth.
 /// The context readout, but only once it is worth the room it costs.
 ///
-/// It used to be there always. Four chips do not fit a 360pt composer — a
-/// model name, its effort tier, a mode and this came to 306px of a 306px row,
-/// and the model name was rendered in under six of them. Something had to
-/// leave, and this is the one whose absence costs least: the window is stated
-/// in full in the settings sheet, and "12% used" is not a fact anyone acts on.
+/// It is not there always, and the row's arithmetic is why: four chips do
+/// not fit a 360pt composer — a model name, its effort tier, a mode and
+/// this readout come to 306px of a 306px row, which leaves the model name
+/// under six of them. Something has to leave, and this is the one whose
+/// absence costs least: the window is stated in full in the settings sheet,
+/// and "12% used" is not a fact anyone acts on.
 /// Near the end of the window it becomes the most useful thing in the row, so
 /// that is when it appears — which is also what the reference app does, as a
 /// notice rather than a permanent readout.

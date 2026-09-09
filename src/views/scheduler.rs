@@ -434,10 +434,10 @@ fn cadence_row(ctx: &AppCtx, job: &ScheduledJob) -> Element {
             "cadence",
             "Cadence",
             cron,
-            // The recipe's Schedule row says this too, and both copies said
-            // "this phone" (#161). One sentence now, and it names the client
-            // rather than the hardware: what cannot express the cron is this
-            // app's five-row form, on either shell.
+            // The recipe's Schedule row in `views/recipes.rs` renders the
+            // same shared constant, and the sentence names the client rather
+            // than the hardware: what cannot express the cron is this app's
+            // five-row form, on either shell.
             crate::recipes::CRON_SET_ELSEWHERE,
         )),
         Cadence::Editable(schedule) => rsx! {

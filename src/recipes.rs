@@ -362,27 +362,28 @@ pub(crate) const SCHEDULE_OFF: &str = "off";
 
 /// What a cron this app has no form for says about itself.
 ///
-/// ONE COPY, and that is the fix rather than a tidy-up. It shipped twice —
-/// `views/recipes.rs` on a recipe's Schedule row and `views/scheduler.rs` on a
-/// job's Cadence row — and both copies said "this phone", which is #161. Two
-/// copies of a sentence are two sentences to correct, and the second one is
-/// always the one that is missed.
+/// The sentence lives as ONE shared constant, rendered by the recipe's
+/// Schedule row in `views/recipes.rs` and the job's Cadence row in
+/// `views/scheduler.rs`. One sentence, because two copies of a sentence are
+/// two sentences to correct, and the second one is the one that is missed.
 ///
 /// "this app" and not a shell branch, because the sentence is not about
 /// hardware. What cannot express a `0 3 */2 * *` is this client's five-row
 /// form (`crate::cron`), which is the same five rows in a 1440pt window as on a
-/// phone. Renaming the device would have made the desktop's copy true by
-/// accident and left it saying the wrong thing about why.
+/// phone.
 pub(crate) const CRON_SET_ELSEWHERE: &str =
     "Set on another client, in a form this app cannot edit — change it there.";
 
 /// What a schedule promises about the machine you set it from.
 ///
-/// The other sentence that shipped twice — `views/recipes.rs`'s schedule sheet
-/// and `scheduler.rs`'s facts card — and this one IS about hardware, so it
-/// takes the shell rather than dropping the noun. The whole point of a
-/// server-side timer is that your own machine does not have to be awake for it,
-/// and "the phone" said that to a reader sitting at a Mac.
+/// The sentence is worded once, here, and rendered in two places — the
+/// schedule sheet in `views/recipes.rs` and the facts card in `scheduler.rs`
+/// — because two copies of a sentence are two sentences to correct, and the
+/// second one is the one that is missed.
+///
+/// It takes the shell rather than dropping the noun, because the sentence IS
+/// about hardware: the whole point of a server-side timer is that your own
+/// machine does not have to be awake for it.
 ///
 /// Takes the shell rather than reading `Shell::CURRENT`, for
 /// [`crate::shell::this_device`]'s reason: `cargo test` runs on a host, where
@@ -569,10 +570,9 @@ pub(crate) fn facts(entry: &RecipeListEntry) -> Vec<SettingRow> {
 /// and a missing button with no explanation is design rule 11 failed rather
 /// than followed.
 ///
-/// The sentence says "this app" and names goose Desktop, and both halves are
-/// #161. What has no parameter form is this client — the same client in a
-/// 1440pt window — so "the phone" was the wrong noun on one shell and the wrong
-/// subject on both. "your desktop" was worse than wrong: it means the goose
+/// The sentence says "this app" and names goose Desktop. What has no
+/// parameter form is this client — the same client in a 1440pt window.
+/// "your desktop" was worse than wrong: it means the goose
 /// Desktop APPLICATION, and a reader in a macOS window is at a desktop already
 /// and has just been told to go to it. Naming the product is right on both
 /// shells and needs no branch.
