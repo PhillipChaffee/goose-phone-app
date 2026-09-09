@@ -22,38 +22,72 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
+    /// Prose or streamed message text, tagged `text` on the wire.
     Text {
+        /// The chunk's message text. A long message arrives as streamed chunks,
+        /// and each one is its own `Text` here.
         text: String,
+        /// MCP's annotations (audience, priority), omitted from the wire when
+        /// absent and never consumed by this client.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         annotations: Option<Value>,
+        /// ACP's `_meta` extension slot, kept as raw JSON; `None` when the
+        /// server sent none.
         #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
         meta: Option<Value>,
     },
+    /// A base64-encoded image, tagged `image` on the wire.
     Image {
+        /// The image bytes, base64, sent under `data`.
         data: String,
+        /// The image's media type, spelled `mimeType` on the wire.
         #[serde(rename = "mimeType")]
         mime_type: String,
+        /// A URI naming the image, omitted when `None` — this client's own
+        /// blocks never carry one, because the agent cannot resolve a path
+        /// on the phone.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         uri: Option<String>,
+        /// ACP's `_meta` extension slot, kept as raw JSON; `None` when the
+        /// server sent none.
         #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
         meta: Option<Value>,
     },
+    /// A base64-encoded audio clip, tagged `audio` on the wire.
     Audio {
+        /// The audio bytes, base64, sent under `data`.
         data: String,
+        /// The audio's media type, spelled `mimeType` on the wire.
         #[serde(rename = "mimeType")]
         mime_type: String,
+        /// Everything else the block carries, kept by `#[serde(flatten)]` so
+        /// an unmodelled field parses instead of failing the whole block.
         #[serde(flatten)]
         extra: serde_json::Map<String, Value>,
     },
+    /// A link to a resource that stays where it is, tagged `resource_link`
+    /// on the wire.
     ResourceLink {
+        /// The address the link opens.
         uri: String,
+        /// A display name for the `uri`, omitted when `None` — the
+        /// transcript falls back to the URI itself.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
+        /// Everything else the block carries, kept by `#[serde(flatten)]` so
+        /// an unmodelled field parses instead of failing the whole block.
         #[serde(flatten)]
         extra: serde_json::Map<String, Value>,
     },
+    /// An embedded resource — MCP's `ResourceContents` carried verbatim,
+    /// tagged `resource` on the wire.
     Resource {
+        /// The resource object itself, left raw because MCP types it as
+        /// either `TextResourceContents` (carrying `text`) or
+        /// `BlobResourceContents` (carrying a base64 `blob`).
         resource: Value,
+        /// Everything else the block carries, kept by `#[serde(flatten)]` so
+        /// an unmodelled field parses instead of failing the whole block.
         #[serde(flatten)]
         extra: serde_json::Map<String, Value>,
     },
@@ -86,6 +120,7 @@ impl ContentBlock {
         }
     }
 
+    /// Wraps plain text as a `Text` block with no annotations and no `_meta`.
     pub fn text(text: impl Into<String>) -> Self {
         Self::Text {
             text: text.into(),
@@ -155,9 +190,17 @@ impl ContentBlock {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageChunk {
+    /// The chunk's body — prose blocks in practice, but any `ContentBlock`,
+    /// so a replayed user chunk can be an attachment block.
     pub content: ContentBlock,
+    /// `messageId` on the wire, `None` when the server sent none: goose tags
+    /// each streamed message with one, and the transcript folds chunks of
+    /// the same message into one bubble by it.
     #[serde(default)]
     pub message_id: Option<String>,
+    /// The chunk's `_meta`, kept as raw JSON and `None` when absent; goose
+    /// addresses its `goose` namespace there — a `created` timestamp beside
+    /// the message id — and nothing here reads it.
     #[serde(rename = "_meta", default)]
     pub meta: Option<Value>,
 }
@@ -167,14 +210,36 @@ pub struct MessageChunk {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ToolCallUpdate {
+    /// The server's id for the call (`toolCallId`), the key later
+    /// `tool_call_update` notifications match against.
     pub tool_call_id: String,
+    /// A human-readable summary of the call — `shell: ls`, a file path —
+    /// `None` when the server sent none.
     pub title: Option<String>,
+    /// The call's class per ACP's tool vocabulary — `execute`, `read`,
+    /// `edit`, `delete`, `move`, `search`, `fetch`, `think`, `other` — or
+    /// `None` when goose sent no `kind` at all.
     pub kind: Option<String>,
+    /// Where the call stands — goose sends `pending`, `in_progress`,
+    /// `completed` or `failed` — `None` while an update omits the field.
     pub status: Option<String>,
+    /// The `content` entries, carried as raw JSON (ACP `ToolCallContent`
+    /// objects) and decoded by hand in `contents()`, which keeps only the
+    /// entry shapes this client knows; `None` when there were none.
     pub content: Option<Vec<Value>>,
+    /// Locations on disk the call is said to touch — files and line
+    /// ranges, still raw JSON; nothing in this client consumes them.
     pub locations: Option<Vec<Value>>,
+    /// The arguments the tool was invoked with, under the wire key
+    /// `rawInput` and left untyped so any tool's schema can be rendered
+    /// from them.
     pub raw_input: Option<Value>,
+    /// The call's undecorated result, under the wire key `rawOutput` —
+    /// goose puts things like a `stdout` object there — read when
+    /// `content` arrived empty.
     pub raw_output: Option<Value>,
+    /// The call's `_meta`, kept as raw JSON: goose's `toolCall` entry
+    /// there names the underlying tool, which `tool_name()` digs out.
     #[serde(rename = "_meta")]
     pub meta: Option<Value>,
 }
@@ -206,8 +271,16 @@ pub struct ToolCallUpdate {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct FileDiff {
+    /// The file that was edited, or `None` when the server sent no
+    /// readable path — a pathless diff still displays, under the name
+    /// `file`.
     pub path: Option<String>,
+    /// What the file contained before the edit (`oldText` on the wire),
+    /// the half a diff card colors as deletions; `None` is a file that
+    /// did not exist before, which is unlike `Some("")`, an empty file.
     pub old_text: Option<String>,
+    /// What replaced it (`newText` on the wire), absent when the server
+    /// described the edit without its result.
     pub new_text: Option<String>,
 }
 
@@ -345,18 +418,49 @@ impl ToolCallUpdate {
 /// `sessionUpdate` tag. Unknown variants are preserved rather than dropped.
 #[derive(Debug, Clone)]
 pub enum SessionUpdate {
+    /// Tag `user_message_chunk`: one piece of the user's own turn,
+    /// replayed back while a session loads.
     UserMessageChunk(MessageChunk),
+    /// Tag `agent_message_chunk`: streamed prose of the reply as it
+    /// builds.
     AgentMessageChunk(MessageChunk),
+    /// Tag `agent_thought_chunk`: streamed reasoning, kept apart from
+    /// what the agent said out loud.
     AgentThoughtChunk(MessageChunk),
+    /// Tag `tool_call`: the announcement of a call, with the id later
+    /// revisions revise it by.
     ToolCall(ToolCallUpdate),
+    /// Tag `tool_call_update`: a revision of a call already announced.
     ToolCallUpdate(ToolCallUpdate),
+    /// Tag `plan`: the agent's task list, kept raw.
     Plan(Value),
+    /// Tag `session_info_update`: session metadata on the move, chiefly
+    /// an auto-generated title.
     SessionInfoUpdate(SessionInfoUpdate),
+    /// Tag `usage_update`: the working turn's token spend and context
+    /// window fill, kept raw.
     UsageUpdate(Value),
+    /// Tag `current_mode_update`: which agent mode is in force now,
+    /// kept raw.
     CurrentModeUpdate(Value),
+    /// Tag `config_option_update`: the session's configuration options
+    /// re-sent in full after any change — where a picker refresh comes
+    /// from.
     ConfigOptionUpdate(Value),
+    /// Tag `available_commands_update`: the slash commands the agent
+    /// accepts, kept raw.
     AvailableCommandsUpdate(Value),
-    Unknown { tag: String, raw: Value },
+    /// Any payload this crate could not type — a tag it does not know,
+    /// or a known tag whose body failed to parse — kept whole rather
+    /// than dropped.
+    Unknown {
+        /// The `sessionUpdate` string that routed here, or the empty
+        /// string when the notification carried no such field.
+        tag: String,
+        /// The payload exactly as it arrived, whatever the tag turned
+        /// out to be.
+        raw: Value,
+    },
 }
 
 /// Deserialize a whole `session/update` payload into one of the typed
@@ -366,6 +470,10 @@ fn parse<T: serde::de::DeserializeOwned>(raw: &Value) -> Option<T> {
 }
 
 impl SessionUpdate {
+    /// Dispatches one `session/update` notification on its `sessionUpdate`
+    /// tag. A missing or unrecognised tag, and a known tag whose body does
+    /// not fit the shape it implies, all fall to [`SessionUpdate::Unknown`] —
+    /// every input becomes an event, and nothing is dropped.
     pub fn from_value(raw: Value) -> Self {
         let tag = raw
             .get("sessionUpdate")
@@ -412,9 +520,18 @@ impl SessionUpdate {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionOption {
+    /// The choice's id, spelled `optionId` on the wire and echoed back to
+    /// the agent when the user picks this one.
     pub option_id: String,
+    /// The label the agent wrote for the button, `None` when it offered
+    /// the choice with no words and the display then falls back to
+    /// `kind` or the raw id.
     #[serde(default)]
     pub name: Option<String>,
+    /// Which grant the choice represents — one of ACP's `allow_once`,
+    /// `allow_always`, `reject_once` or `reject_always` — read for the
+    /// button's styling and as a name fallback; `None` when the server
+    /// sent nothing.
     #[serde(default)]
     pub kind: Option<String>,
 }
@@ -425,16 +542,29 @@ pub struct PermissionRequest {
     /// JSON-RPC id of the incoming request; pass back to
     /// [`crate::AcpClient::respond_permission`].
     pub request_id: Value,
+    /// The `sessionId` the request came in under, or the empty string
+    /// when the params carried none.
     pub session_id: String,
+    /// The call being asked about, in the same shape as a `tool_call`
+    /// update — where the prompt's title and input preview come from;
+    /// `Default` when the params carried no `toolCall`.
     pub tool_call: ToolCallUpdate,
+    /// The choices offered, in the order the agent sent them; an empty
+    /// vector when the params carried no `options`.
     pub options: Vec<PermissionOption>,
 }
 
 /// Result of `initialize`.
 #[derive(Debug, Clone)]
 pub struct InitializeInfo {
+    /// The agent's own name from `agentInfo/name` in the response,
+    /// defaulting to `"goose"` when the server did not send one.
     pub agent_name: String,
+    /// The agent's version, likewise from `agentInfo` in the response,
+    /// an empty string when the server sent no version.
     pub agent_version: String,
+    /// The whole `initialize` response, kept for anything beyond these two
+    /// parsed fields.
     pub raw: Value,
 }
 
@@ -462,21 +592,42 @@ pub enum DisconnectCause {
 pub enum AcpEvent {
     /// `session/update` notification.
     Update {
+        /// The session the change belongs to, from the notification
+        /// params' `sessionId`.
         session_id: String,
+        /// The decoded payload, `sessionUpdate`-dispatched; anything this
+        /// crate cannot type stays readable as [`SessionUpdate::Unknown`].
         update: SessionUpdate,
     },
     /// `_goose/unstable/session/update` notification (token usage, status
     /// messages). Payload is the raw `update` object tagged by `sessionUpdate`.
-    GooseUpdate { session_id: String, update: Value },
+    GooseUpdate {
+        /// The session the payload belongs to, from the params'
+        /// `sessionId`.
+        session_id: String,
+        /// The raw `update` object, left untyped because the
+        /// goose-unstable vocabulary changes faster than this crate can
+        /// type it.
+        update: Value,
+    },
     /// The agent asks permission to run a tool; answer with
     /// [`crate::AcpClient::respond_permission`].
     Permission(PermissionRequest),
     /// The agent cancelled one of its own outstanding requests
     /// (`$/cancel_request`), e.g. a permission prompt that timed out.
-    RequestCancelled { request_id: Value },
+    RequestCancelled {
+        /// The JSON-RPC id of the cancelled request, carried as
+        /// `requestId` in the notification; for a cancelled prompt it
+        /// matches the id in [`AcpEvent::Permission`].
+        request_id: Value,
+    },
     /// The connection is gone. No further events will arrive.
     Disconnected {
+        /// A human-readable line about how the socket ended.
         reason: String,
+        /// Which side ended it, the question [`DisconnectCause`] exists
+        /// to answer; a lost turn must not be reported for one the user
+        /// deliberately closed.
         cause: DisconnectCause,
     },
 }

@@ -2,7 +2,7 @@
 //! behind it, for exercising the app's whole Code plane without a container
 //! engine or a paid API key.
 //!
-//!   cargo run -p mock-opencode-server -- [port]      (default 4399, 0 = any)
+//!   cargo run -p mock-opencode-server -- `port`      (default 4399, 0 = any)
 //!   `MOCK_CODE_PASSWORD`=...                    (default mock-code-secret)
 //!   `MOCK_FIXTURES`=full|empty                             (default full)
 //!   `MOCK_SILENT`=1                          (accept, then never answer)

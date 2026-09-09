@@ -42,6 +42,9 @@ pub fn parse_fingerprint(input: &str) -> Result<Option<[u8; 32]>, String> {
     Ok(Some(out))
 }
 
+/// Renders a digest as uppercase colon-separated hex pairs (`AA:BB:…`), the
+/// form goose prints for `GOOSED_CERT_FINGERPRINT`; [`parse_fingerprint`]
+/// round-trips this output.
 #[must_use]
 pub fn format_fingerprint(fp: &[u8; 32]) -> String {
     fp.iter()

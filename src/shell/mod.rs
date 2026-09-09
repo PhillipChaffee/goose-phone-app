@@ -290,8 +290,8 @@ pub(crate) fn render_group(ctx: &AppCtx, group: Group) -> Element {
 
 /// ONE destination, as a row you can press.
 ///
-/// Extracted from [`render_group`] when the desktop stopped arranging its nav
-/// by [`Group`] and started arranging it by [`crate::nav::Plane`]. The two
+/// Extracted from `render_group` when the desktop stopped arranging its nav
+/// by [`crate::nav::Group`] and started arranging it by [`crate::nav::Plane`]. The two
 /// shells now choose DIFFERENT rows in a different order, and this is the part
 /// that has to stay identical: a second copy of this markup is how one shell
 /// grows a hover state, an `aria-current` or a keyboard affordance the other

@@ -18,18 +18,39 @@ members = [
 #
 # CI runs `cargo clippy --workspace --all-targets -- -D warnings`, so these
 # warn levels are errors there while staying non-blocking in a local build.
+# The doc lints do not get that courtesy: `missing_docs` and the stable
+# rustdoc group are deny outright, because an undocumented public item is an
+# error to fix, not a style taste to weigh — a compile without docs is
+# "non-blocking" all the way to a shipped API nobody can read. These are
+# deny in local builds too; `cargo check` fails until the doc exists, which
+# is the point.
 #
-# Deliberately NOT enabled: `missing_docs`. It fires 332 times across the two
-# client crates, and the docs it asks for are restatements of the item name.
-# The half that carries information — `missing_errors_doc`,
-# `missing_panics_doc` (both pedantic) — is on and enforced.
+# `missing_docs` was once deliberately off: the 332-or-so docs it then asked
+# for were measured to be restatements of the item name (#327). The docs it
+# asks for now are held to the bar that answers that objection — each one
+# says what the signature cannot (the wire key when it differs, who sends
+# what, defaults, absence) — and the house rules in AGENTS.md keep that bar.
+# The half that carries information with no extra work — `missing_errors_doc`
+# and `missing_panics_doc` (both pedantic) — was on and enforced all along.
 [workspace.lints.rust]
 unsafe_code = "forbid"
+missing_docs = "deny"
 missing_debug_implementations = "warn"
 unreachable_pub = "warn"
 trivial_casts = "warn"
 trivial_numeric_casts = "warn"
 unused_qualifications = "warn"
+
+[workspace.lints.rustdoc]
+# The whole stable group in one entry: no hand-enumeration of ten names to
+# mistype, and lints rustdoc gains stay owned by the group by default. The
+# nightly-only `missing_doc_code_examples` is deliberately outside the group —
+# it churns with the toolchain channel (unstable) and demands a runnable
+# example on every documented item, which violates the same rule the old
+# `missing_docs` opt-out did. `missing_crate_level_docs` overlaps rustc's
+# `missing_docs` on the crate-line omission; a second gate on the same
+# omission costs nothing.
+all = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

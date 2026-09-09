@@ -73,13 +73,19 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(120);
 /// env key, which fails closed at startup.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HttpHeader {
+    /// Header name, forwarded to the remote server as spelled here, casing included.
     pub name: String,
+    /// Header value. A `${VAR}` in it is resolved from goose's secret store when the extension
+    /// starts; an unknown variable is left literal rather than making the start fail.
     pub value: String,
+    /// Serde catch-all: fields goose sends that this type does not model land here and
+    /// survive a write-back.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
 impl HttpHeader {
+    /// Builds a header with the given name and value and an empty catch-all.
     #[must_use]
     pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
@@ -97,8 +103,13 @@ impl HttpHeader {
 /// private and empty.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnvVariable {
+    /// Variable name as the spawned MCP child process sees it.
     pub name: String,
+    /// Variable value, carried inline in the ACP frame — the plaintext crossing
+    /// [`StdioMcpServer`] refuses to create, and the reason its `env` stays empty.
     pub value: String,
+    /// Serde catch-all: fields goose sends that this type does not model land here and
+    /// survive a write-back.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -107,6 +118,8 @@ pub struct EnvVariable {
 /// wrong or left off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HttpTransport {
+    /// Serializes as the bare string `http`, standing in as the `type` tag of an
+    /// http-transport server.
     #[serde(rename = "http")]
     Http,
 }
@@ -117,14 +130,24 @@ pub struct HttpMcpServer {
     /// Always `http`. Private so the only way to build one is [`Self::new`].
     #[serde(rename = "type")]
     kind: HttpTransport,
+    /// Name of the server, which is also the name goose reports for the extension that wraps
+    /// it — there is no separate name field on the [`GooseExtension`] side.
     pub name: String,
+    /// Endpoint of the server, spelled `url` on this wire; `uri` is what goose writes into
+    /// its own config file one layer down, never what the ACP frame carries.
     pub url: String,
+    /// Headers goose sends to the server on its startup traffic, as an array of name/value
+    /// objects — not the mapping the connector manifests use.
     pub headers: Vec<HttpHeader>,
+    /// Serde catch-all: fields goose sends that this type does not model land here and
+    /// survive a write-back.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
 impl HttpMcpServer {
+    /// Builds an http server, stamping the discriminator and starting from an empty
+    /// catch-all.
     #[must_use]
     pub fn new(name: impl Into<String>, url: impl Into<String>, headers: Vec<HttpHeader>) -> Self {
         Self {
@@ -140,8 +163,13 @@ impl HttpMcpServer {
 /// A local MCP server the agent host launches as a child process.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StdioMcpServer {
+    /// Name of the server, which is also the name goose reports for the extension that wraps
+    /// it — there is no separate name field on the [`GooseExtension`] side.
     pub name: String,
+    /// Executable goose launches on the agent host to run the server.
     pub command: String,
+    /// Arguments passed to that command, in order — for example a package
+    /// specifier, then `stdio`.
     pub args: Vec<String>,
     /// ACP requires this key on a stdio server, and this client always sends
     /// it empty — which is why it is private with no setter.
@@ -154,11 +182,16 @@ pub struct StdioMcpServer {
     /// secrets"). Credentials travel as `envKeys` — names of secrets already
     /// stored server-side — and nothing else.
     env: Vec<EnvVariable>,
+    /// Serde catch-all: fields goose sends that this type does not model land here and
+    /// survive a write-back — the fixture's `_meta` is the example in practice.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
 impl StdioMcpServer {
+    /// Builds a stdio server with an always-empty `env`: an inline value would put its
+    /// credential on the frame in plaintext, so credentials go through `envKeys` and stored
+    /// secrets instead.
     #[must_use]
     pub fn new(name: impl Into<String>, command: impl Into<String>, args: Vec<String>) -> Self {
         Self {
@@ -195,11 +228,16 @@ impl StdioMcpServer {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum McpServer {
+    /// The streamable-HTTP case: tagged `type: "http"` on the wire, and carrying a URL,
+    /// startup headers and the catch-all.
     Http(HttpMcpServer),
+    /// The stdio case, which goose writes with no `type` tag at all — the untidy shape that
+    /// forces this enum to be `untagged`.
     Stdio(StdioMcpServer),
 }
 
 impl McpServer {
+    /// The wrapped server's name, whichever transport it rides on.
     #[must_use]
     pub fn name(&self) -> &str {
         match self {
@@ -239,53 +277,86 @@ impl McpServer {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GooseExtension {
+    /// A built-in extension goose ships with the agent, one row of its own
+    /// `extensions/available` catalogue.
     Builtin {
+        /// The extension's name as goose spells it; the server folds it into the `configKey`
+        /// that `set-enabled` and `remove` address rows by.
         name: String,
+        /// Optional description goose sends with the catalogue row; absent from the wire
+        /// when the server carries none.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
         /// `snake_case` on the wire. Not a typo — see the note above this type.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         display_name: Option<String>,
+        /// Optional launch budget in seconds, for extensions whose startup goose bounds.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout: Option<u64>,
+        /// Whether goose ships the extension, as opposed to one the user configured.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bundled: Option<bool>,
         /// `snake_case` on the wire, and `None` means EVERY TOOL IS ALLOWED.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         available_tools: Option<Vec<String>>,
+        /// Serde catch-all: fields goose sends that this type does not model land here and
+        /// survive a write-back.
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
+    /// A platform extension the server ships alongside its built-ins, carrying Builtin's
+    /// shape minus `timeout`.
     Platform {
+        /// The extension's name as goose spells it; the server folds it into the `configKey`
+        /// that `set-enabled` and `remove` address rows by.
         name: String,
+        /// Optional description goose sends with the catalogue row; absent from the wire
+        /// when the server carries none.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        /// `snake_case` on the wire, like Builtin's — nothing renames either field.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         display_name: Option<String>,
+        /// Whether goose ships the extension, as opposed to one the user configured.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bundled: Option<bool>,
+        /// `snake_case` on the wire, and `None` means EVERY TOOL IS ALLOWED.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         available_tools: Option<Vec<String>>,
+        /// Serde catch-all: fields goose sends that this type does not model land here and
+        /// survive a write-back.
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
+    /// An MCP server the agent host launches or reaches — the variant every extension this
+    /// crate adds takes.
     Mcp {
+        /// The [`McpServer`] underneath, http or stdio; the extension's own `name` lives at
+        /// that level, not on the variant's fields.
         server: Box<McpServer>,
         /// `camelCase` on the wire — the one field goose renames explicitly.
         /// Names of secrets already in goose's store; never values.
         #[serde(default, rename = "envKeys", skip_serializing_if = "Vec::is_empty")]
         env_keys: Vec<String>,
+        /// Optional description; [`GooseExtension::mcp`] always sends one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        /// Optional launch budget in seconds; [`GooseExtension::mcp`] pins 300, because a
+        /// cold first launch may still be fetching the server package.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout: Option<u64>,
+        /// Optional path to a server listening on a local Unix socket. This crate never sets
+        /// one ([`GooseExtension::mcp`] sends none), so the key stays off the wire.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         socket: Option<String>,
+        /// Whether goose ships it; left unset by [`GooseExtension::mcp`].
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bundled: Option<bool>,
         /// `snake_case` on the wire, and `None` means EVERY TOOL IS ALLOWED.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         available_tools: Option<Vec<String>>,
+        /// Serde catch-all for the 1.47 field set — `clientId`, `clientSecretKey`, `scopes` —
+        /// so a newer server's reply parses and writes back unchanged.
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
@@ -330,6 +401,7 @@ impl GooseExtension {
         }
     }
 
+    /// The variant's description, or `None` on any variant that carries none.
     #[must_use]
     pub fn description(&self) -> Option<&str> {
         match self {
@@ -384,7 +456,11 @@ impl GooseExtension {
 /// is echoed here so the client never has to reimplement that.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GooseExtensionEntry {
+    /// The configured extension; [`AcpClient::add_extension_verified`] matches entries by
+    /// the name inside it when reading the persisted config back.
     pub extension: GooseExtension,
+    /// Whether the extension is switched on. A key missing from the wire deserializes as
+    /// false here, so an unflagged entry is understood as disabled.
     #[serde(default)]
     pub enabled: bool,
     /// `camelCase` on the wire: goose puts `rename_all = "camelCase"` on the
@@ -393,6 +469,8 @@ pub struct GooseExtensionEntry {
     /// the diff instead of one being inferred.
     #[serde(default, rename = "configKey")]
     pub config_key: Option<String>,
+    /// Serde catch-all: fields goose sends around the entry that this type does not model
+    /// land here and survive a write-back.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -404,10 +482,16 @@ pub struct GooseExtensionEntry {
 /// from `extensions` otherwise.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigExtensions {
+    /// One row per extension persisted in the server's goose user config.
     #[serde(default)]
     pub extensions: Vec<GooseExtensionEntry>,
+    /// Human-readable problems goose hit while loading the config — the only trace of an
+    /// extension that failed to parse, since such a row is missing from
+    /// [`ConfigExtensions::extensions`] entirely.
     #[serde(default)]
     pub warnings: Vec<String>,
+    /// Serde catch-all: fields goose sends that this type does not model land here and
+    /// survive a write-back.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

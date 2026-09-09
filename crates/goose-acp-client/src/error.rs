@@ -12,10 +12,18 @@ use serde_json::Value;
 /// not available on this goose server" instead of surfacing `-32601`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Feature {
+    /// Custom workflow recipes under goose's `recipes/` namespace.
     Recipes,
+    /// Skill listings under goose's `sources/` namespace — a skill is a
+    /// "source" on the wire, the directory of markdown files goose loads.
     Skills,
+    /// Scheduled recipe runs under `schedules/` and `recipes/schedule`,
+    /// gated on goose's `--enable-scheduler` flag.
     Scheduler,
+    /// Extension setup, reached on three separate paths: the global config
+    /// list, the per-session list, and the catalogue of installable ones.
     Extensions,
+    /// Per-session housekeeping calls, such as rename and export.
     SessionHistory,
     /// Anything not in goose's custom namespace: base ACP, which every server
     /// must implement.
@@ -77,14 +85,25 @@ impl Feature {
     }
 }
 
+/// Every failure this crate returns: an input the client rejects before it
+/// reaches the wire, a transport death, a call that outlives its deadline, or
+/// an agent-side error carrying a sentence for the user.
 #[derive(Debug, thiserror::Error)]
 pub enum AcpError {
+    /// The server could not be reached at all — the WebSocket handshake
+    /// failed.
     #[error("connection failed: {0}")]
     Connect(String),
+    /// An established connection lost the payload in translation: a request
+    /// would not serialize, or a reply did not fit its expected type.
     #[error("transport error: {0}")]
     Transport(String),
+    /// The connection no longer exists — the socket died or the connection
+    /// task voted to shut down.
     #[error("connection closed")]
     Closed,
+    /// A call was abandoned at its deadline; the server may still be working
+    /// on its answer.
     #[error("timed out")]
     Timeout,
     /// A JSON-RPC error object from the agent.
@@ -96,8 +115,14 @@ pub enum AcpError {
     /// goose's own desktop client reads `data` first for the same reason.
     #[error("{}", rpc_reason(.message, .data.as_ref()))]
     Rpc {
+        /// The JSON-RPC error code, as goose sent it.
         code: i64,
+        /// The canned `message` field; goose leaves it "Internal error" for
+        /// nearly every failure, so it is the fallback rather than the
+        /// sentence worth showing.
         message: String,
+        /// goose's structured payload; nearly every real failure's readable
+        /// sentence lands here as a string, not in `message`.
         data: Option<Value>,
     },
     /// The server does not offer this method.
@@ -111,8 +136,15 @@ pub enum AcpError {
     /// server is older than the feature, and there is nothing to switch on.
     #[error("{}", unsupported_message(*.feature, .reason.as_deref()))]
     Unsupported {
+        /// Which feature area the method belongs to, classified by
+        /// [`Feature::of_method`]; it supplies the subject of the user-facing
+        /// sentence.
         feature: Feature,
+        /// The wire name of the method the server does not offer.
         method: String,
+        /// goose's own "it exists but is switched off" sentence — present
+        /// only when the server said so, and then saying which thing to turn
+        /// on.
         reason: Option<String>,
     },
     /// A write appeared to succeed but reading it back did not match.
@@ -123,6 +155,9 @@ pub enum AcpError {
     /// being written.
     #[error("{0}")]
     Verification(String),
+    /// An input rejected before the agent is asked for anything: a blank or
+    /// malformed server URL, a secret that cannot ride in an HTTP header, an
+    /// empty prompt, or a record missing the key a follow-up call needs.
     #[error("invalid configuration: {0}")]
     Config(String),
 }

@@ -979,17 +979,12 @@ pub fn CodeNewView() -> Element {
     let mut branch = use_signal(|| None::<String>);
     let model = use_signal(|| None::<String>);
     let agent = use_signal(initial_mode);
-    // SEEDED FROM WHATEVER STARTED THIS SCREEN, and it used to be seeded from
-    // nothing. The desktop's Code home had a composer whose arrow could only
-    // bring you here — it wrote the sentence to `ctx.code_draft` and this line
-    // threw it away, so a reader who typed on that screen arrived at an empty
-    // field with nothing to paste and no undo.
-    //
-    // NOTHING FILLS THE CARRIER NOW (#281): that composer gained the model,
-    // the mode and the attach tray and creates the session in place, so it is
-    // no longer two steps and this screen is the phone's alone. The seed is
-    // always empty here, and `crate::state::AppCtx::new_task` says what is
-    // left to do about that and why it was not done there.
+    // SEEDED FROM WHATEVER STARTED THIS SCREEN, and since #281 that is
+    // nothing: the desktop composer gained the model, the mode and the
+    // attach tray and creates the session in place, so this screen is the
+    // phone's alone and the seed is always empty here.
+    // `crate::state::AppCtx::new_task` says what is left to do about that
+    // and why it was not done there.
     //
     // TAKEN RATHER THAN READ, for the reason the dismiss button below clears
     // its tray: leaving the carrier full would resurrect a sentence already
@@ -1480,10 +1475,9 @@ pub fn CodeChatView() -> Element {
     let mut chat_confirm_delete = use_signal(|| false);
     let mut menu = use_signal(|| false);
     let chip_label = code_chip_label(chat.model.as_deref(), &models);
-    // Resolved once and fed to all three places that used to read `chat.agent`
-    // raw — the label, the chip's icon and the picker's tick — so the chip,
-    // its mark and the checked row can never disagree about which agent the
-    // next turn runs as.
+    // Resolves once and feeds the three readers — the label, the chip's icon
+    // and the picker's tick — so the chip, its mark and the checked row can
+    // never disagree about which agent the next turn runs as.
     let agent = resolve_agent(chat.agent.as_deref(), &agents).map(str::to_owned);
     let mode_label = code_mode_label(agent.as_deref());
     // No catalogue lookup: a model switch clears the tier (`set_code_model`)

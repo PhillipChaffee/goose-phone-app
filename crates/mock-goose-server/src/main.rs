@@ -5,7 +5,7 @@
 //! markdown, tool calls and permission round-trips, and replays history on
 //! session/load.
 //!
-//!   cargo run -p mock-goose-server -- [port]          (default 3285, 0 = any)
+//!   cargo run -p mock-goose-server -- `port`          (default 3285, 0 = any)
 //!   `MOCK_SECRET`=...                                    (default mock-secret)
 //!   `MOCK_FIXTURES`=full|empty|broken                        (default full)
 //!   `MOCK_NO_SCHEDULER`=1        (goose started without --enable-scheduler)

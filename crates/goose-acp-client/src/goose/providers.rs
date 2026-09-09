@@ -102,7 +102,11 @@ impl GlobalKey {
 /// one lowercase word and the Rust name IS the wire name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderListResponse {
+    /// One [`ProviderEntry`] per provider the server knows, configured or
+    /// not, in the order it lists them.
     pub entries: Vec<ProviderEntry>,
+    /// Serde catch-all: reply keys this struct does not model land here and
+    /// survive a round trip.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -118,8 +122,12 @@ pub struct ProviderListResponse {
 /// in `extra`, where the round-trip check can still see them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderEntry {
+    /// The provider's id, the value a `GOOSE_PROVIDER` config value names.
+    /// The wire spells it `providerId`.
     #[serde(rename = "providerId")]
     pub provider_id: String,
+    /// The provider's human-readable name, distinct from
+    /// [`ProviderEntry::provider_id`]. The wire spells it `providerName`.
     #[serde(rename = "providerName")]
     pub provider_name: String,
     /// Whether this provider has the credentials it needs. Fourteen of the
@@ -135,7 +143,12 @@ pub struct ProviderEntry {
     /// session was ever going to run on.
     #[serde(rename = "defaultModel")]
     pub default_model: Option<String>,
+    /// The provider's model catalogue, in the order the server lists it —
+    /// what [`AcpClient::default_model_option`] turns into the `model`
+    /// option's choices.
     pub models: Vec<ProviderModel>,
+    /// Serde catch-all: keys the server sent on the provider that this
+    /// struct does not model land here and survive a round trip.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -150,11 +163,15 @@ pub struct ProviderEntry {
 /// screen claims, not a decode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderModel {
+    /// The model's id — the value a `GOOSE_MODEL` config value names, and
+    /// what a choice with no usable `name` shows instead.
     pub id: String,
     /// The catalogue's own label. Often the id verbatim — every one of
     /// `together`'s 168 is — which is why the empty case falls back to the id
     /// rather than to a blank.
     pub name: Option<String>,
+    /// Serde catch-all: catalogue keys the server sent that this struct
+    /// does not model land here and survive a round trip.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

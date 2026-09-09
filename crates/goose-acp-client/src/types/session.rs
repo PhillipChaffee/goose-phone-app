@@ -9,8 +9,15 @@ use super::config::ConfigOption;
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SessionInfoUpdate {
+    /// The session's name as the server now holds it — chiefly the
+    /// auto-generated title it minted after a turn; absent when this update
+    /// carries none.
     pub title: Option<String>,
+    /// When the session was last touched (wire `updatedAt`, an ISO 8601
+    /// string); absent when the update does not stamp one.
     pub updated_at: Option<String>,
+    /// Unmodeled goose keys riding the standard `_meta` object beside the
+    /// typed fields, kept whole; `None` when the update carries none.
     #[serde(rename = "_meta")]
     pub meta: Option<Value>,
 }
@@ -19,13 +26,26 @@ pub struct SessionInfoUpdate {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
+    /// The server's identifier for the session (wire `sessionId`); required
+    /// on every row, and the label [`SessionInfo::display_title`] falls back
+    /// to when there is no title.
     pub session_id: String,
+    /// The server directory the session runs in (wire `cwd`); `None` when
+    /// goose sends none.
     #[serde(default)]
     pub cwd: Option<String>,
+    /// The session's name — auto-titled or set by a person — or `None` for a
+    /// session that has none.
     #[serde(default)]
     pub title: Option<String>,
+    /// When the session was last touched (wire `updatedAt`, an ISO 8601
+    /// string); `None` when goose sends none.
     #[serde(default)]
     pub updated_at: Option<String>,
+    /// Unmodeled goose keys riding the standard `_meta` object — among them
+    /// `messageCount`, `sessionType` and `lastMessageSnippet` — kept whole
+    /// and read out by the typed accessors below; `None` when the row carries
+    /// no object.
     #[serde(rename = "_meta", default)]
     pub meta: Option<Value>,
 }
@@ -35,6 +55,8 @@ impl SessionInfo {
         self.meta.as_ref()?.get(key)
     }
 
+    /// The title this session shows: its own title when one is set and not
+    /// all whitespace, its session id otherwise.
     #[must_use]
     pub fn display_title(&self) -> String {
         self.title
@@ -43,11 +65,16 @@ impl SessionInfo {
             .unwrap_or_else(|| self.session_id.clone())
     }
 
+    /// How many messages the session holds, from `_meta.messageCount`;
+    /// `None` when goose sent no usable count.
     #[must_use]
     pub fn message_count(&self) -> Option<u64> {
         self.meta_field("messageCount")?.as_u64()
     }
 
+    /// The session's last user-visible message, from
+    /// `_meta.lastMessageSnippet`; goose sends it only when the list request
+    /// opted in with `goose.includeLastMessageSnippet`, so `None` otherwise.
     #[must_use]
     pub fn last_message_snippet(&self) -> Option<String> {
         Some(self.meta_field("lastMessageSnippet")?.as_str()?.to_string())
@@ -183,11 +210,15 @@ impl SessionQuery {
         })
     }
 
+    /// The kinds this query restricts `session/list` to; an empty slice
+    /// means every kind.
     #[must_use]
     pub fn kinds(&self) -> &[SessionKind] {
         &self.kinds
     }
 
+    /// The keyword this query searches with, already trimmed and non-empty;
+    /// `None` when it performs no search.
     #[must_use]
     pub fn query(&self) -> Option<&str> {
         self.query.as_deref()
@@ -200,24 +231,36 @@ impl SessionQuery {
     }
 }
 
+/// Reply to `session/list`: one page of sessions plus the cursor to the page
+/// after them.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionListResponse {
+    /// This page's sessions, newest first as goose orders them; a missing
+    /// key deserializes as empty.
     #[serde(default)]
     pub sessions: Vec<SessionInfo>,
+    /// The cursor for the page after this one, minted under the same filters
+    /// the request carried; `None` when this was the last page.
     #[serde(default)]
     pub next_cursor: Option<String>,
 }
 
+/// Reply to `session/new`: the session's identity, the configuration the
+/// agent offers, and the `session/new`-specific `_meta` keys.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewSessionResponse {
+    /// The server's identifier for the new session (wire `sessionId`), which
+    /// every later request about that session needs.
     pub session_id: String,
     /// Session configuration the agent offers — provider, model, mode and
     /// thinking effort. This is where the list of available models arrives:
     /// no separate call is needed, and it was previously parsed away.
     #[serde(default)]
     pub config_options: Vec<ConfigOption>,
+    /// Unmodeled goose keys riding the standard `_meta` object of the reply,
+    /// kept whole; `None` when the server sends no object.
     #[serde(rename = "_meta", default)]
     pub meta: Option<Value>,
 }

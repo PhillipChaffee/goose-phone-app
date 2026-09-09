@@ -66,7 +66,7 @@ pub(crate) enum Tab {
 ///
 /// The second use of `serde(default)` is what makes that survivable in a
 /// development build. A missing field is filled from `Settings::default()`,
-/// which is where [`dev_seed!`] lives — so a build carrying
+/// which is where `dev_seed!` lives — so a build carrying
 /// `GOOSE_DEV_SECRET_KEY` refills it on every launch even though the last save
 /// wrote it nowhere. Without the container attribute the same code would
 /// deserialize the two skipped fields as `String::new()` and the documented

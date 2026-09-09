@@ -22,12 +22,27 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
+/// Why a code-plane call failed: the transport said no, the gateway refused
+/// with a status, or this client refused the answer itself.
 #[derive(Debug, thiserror::Error)]
 pub enum CodeError {
+    /// The transport's own verdict, carried as-is: an unreachable gateway, a
+    /// request that outran the 150s cap, or a stream chunk that never arrived.
     #[error("{0}")]
     Http(#[from] reqwest::Error),
+    /// The gateway answered — with a real status and a refusal.
     #[error("server said {status}: {body}")]
-    Status { status: u16, body: String },
+    Status {
+        /// The HTTP status of the refusal — `401` for a wrong password,
+        /// `502` while the manager restarts.
+        status: u16,
+        /// Up to the first 300 characters of the refused body — the slice
+        /// [`Self::message`] looks for the manager's `{"error": …}` sentence
+        /// in.
+        body: String,
+    },
+    /// A failure this client names itself: an empty configured URL, a body
+    /// that is not the contracted shape, a stream gone silent.
     #[error("{0}")]
     Other(String),
 }
@@ -54,6 +69,8 @@ impl CodeError {
     }
 }
 
+/// Connection settings for the code plane: one gateway base and the Basic-auth
+/// secret every request to it carries.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct CodeConfig {
     /// Gateway base, e.g. `https://brain.tailnet.ts.net:4300`.
@@ -65,13 +82,29 @@ pub struct CodeConfig {
 /// One repo from the manager's allowlist.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct RepoEntry {
+    /// The repo's name in the owner's allowlist — the string that goes back
+    /// into `GET /api/repos/<name>/branches` and the new-chat picker, and the
+    /// one key the wire requires; the rest arrive only when set.
     pub name: String,
+    /// The clone URL the manager's GitHub asks are made against, e.g.
+    /// `git@github.com:me/notes.git`. A repo the manager named with no URL
+    /// reads empty — still listable, but nothing to consult GitHub about.
     #[serde(default)]
     pub url: String,
+    /// An edit-restricted repo: chats may read it, but no push is offered on
+    /// it. Absent decodes `false`, so a flag lost between manager and screen
+    /// widens rather than narrows what the agent is allowed to do.
     #[serde(default)]
     pub edit_only: bool,
+    /// Whether the chat's container may `git push` without being asked. It
+    /// defaults `false` on the manager, so on most repos a push surfaces as a
+    /// permission ask — and "never pushed" is the ordinary state a branch
+    /// stat can be missing for.
     #[serde(default)]
     pub allow_push: bool,
+    /// This repo may be pointed at a free model that trains on its input —
+    /// the one flag under which the model picker offers those models.
+    /// Absent decodes `false`, and nothing else grants it.
     #[serde(default)]
     pub public_throwaway: bool,
 }
@@ -86,6 +119,8 @@ pub struct RepoBranches {
     /// "no default" is a real answer and not a failure.
     #[serde(rename = "default")]
     pub default_branch: String,
+    /// The branch rows in the manager's own order — default first, which
+    /// [`Self::names`] preserves.
     pub branches: Vec<BranchRef>,
     /// The manager stopped paging (500 branches), so a list that is short can
     /// say why rather than look complete. The app carries it onto its own
@@ -111,6 +146,8 @@ impl RepoBranches {
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 #[serde(default)]
 pub struct BranchRef {
+    /// The branch name as git spells it — the same string a base picker rows
+    /// under and a new chat names its `base` by.
     pub name: String,
     /// The wire spells it `default`, which is a Rust keyword.
     ///
@@ -133,11 +170,18 @@ pub struct BranchRef {
 /// `index.json` and evaporate on the next save.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct ChatMeta {
+    /// The chat's id — the token every per-chat path spells, and the suffix
+    /// its own branch carries: `agent/<id>` is how the tree names itself on
+    /// GitHub.
     pub id: String,
+    /// Which allowlisted repo the chat's workspace is a clone of.
     #[serde(default)]
     pub repo: String,
+    /// The chat's display name, as the manager's index holds it.
     #[serde(default)]
     pub title: String,
+    /// The git branch the chat's tree is cut to — `agent/<chat id>` for a
+    /// chat the manager started.
     #[serde(default)]
     pub branch: String,
     /// The ref this chat's branch was cut from. Empty means the clone's
@@ -153,6 +197,8 @@ pub struct ChatMeta {
     /// before the chat's container is awake enough to have a session.
     #[serde(default)]
     pub model: Option<String>,
+    /// When the chat last moved, as Unix SECONDS in an `f64`. `0.0` says the
+    /// chat has never been active — not that it is 1970.
     #[serde(default)]
     pub last_active: f64,
     /// How far this tree has moved from its base, or [`None`] when the manager
@@ -163,6 +209,9 @@ pub struct ChatMeta {
 }
 
 impl ChatMeta {
+    /// Whether the chat's container is up — the wire's `running`, which is a
+    /// container's life, not a turn's: a container with nothing in flight
+    /// still answers true.
     #[must_use]
     pub fn is_running(&self) -> bool {
         self.status == "running"
@@ -267,8 +316,12 @@ impl ChatStat {
 /// What happened to a file in a session's diff.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FileStatus {
+    /// The wire's `added`: the file came into being over the session.
     Added,
+    /// The wire's `deleted`: the file went away whole.
     Deleted,
+    /// The wire's `modified` — and what an absent or unrecognised status
+    /// decodes to rather than failing the file it describes.
     #[default]
     Modified,
 }
@@ -290,8 +343,13 @@ pub struct FileDiff {
     /// to re-hunk it (`src/diff.rs` in the app). Empty for a binary file.
     #[serde(default)]
     pub patch: String,
+    /// Lines the file gained. A real count on a text file; a binary file
+    /// carries neither patch nor counts, so its zeros are the
+    /// `#[serde(default)]` — absence decoded, not a measurement.
     #[serde(default)]
     pub additions: u32,
+    /// Lines the file lost, by the same rule as [`Self::additions`]: text
+    /// carries a real number, binary defaults to `0`.
     #[serde(default)]
     pub deletions: u32,
     /// Absent or unrecognised reads as [`FileStatus::Modified`] rather than
@@ -326,9 +384,15 @@ impl FileDiff {
 /// decides whether the app offers to merge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PullState {
+    /// The wire's `open`; draft-ness rides beside it as
+    /// [`PullRequest::draft`], so one variant covers both.
     Open,
+    /// The wire's `merged`: the pull request landed.
     Merged,
+    /// The wire's `closed`: shut without ever being merged.
     Closed,
+    /// Every state word this client has not met — and what a pull request
+    /// carrying no state decodes to.
     #[default]
     Unknown,
 }
@@ -343,11 +407,19 @@ pub enum PullState {
 /// guessing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Checks {
+    /// The wire's `passing`: the head commit's checks all came back clean.
     Passing,
+    /// The wire's `failing`: at least one check refused — the one answer
+    /// [`PullRequest::is_mergeable`] treats as a no.
     Failing,
+    /// The wire's `pending`: checks exist but have not answered yet. A wait,
+    /// not a refusal.
     Pending,
     /// Nothing runs checks on this repo.
     None,
+    /// Nothing was actually observed: the manager's credential cannot read
+    /// checks on the repo, or the wire used a state word this client has not
+    /// met.
     #[default]
     Unknown,
 }
@@ -382,15 +454,25 @@ pub enum Checks {
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 #[serde(default)]
 pub struct PullRequest {
+    /// GitHub's pull-request number — the integer the merge route spells in
+    /// its path.
     pub number: u64,
+    /// The pull request's title as GitHub carries it.
     pub title: String,
+    /// State from the wire, decoded leniently: a word this client does not
+    /// know reads [`PullState::Unknown`] rather than as open.
     #[serde(deserialize_with = "de_pull_state")]
     pub state: PullState,
+    /// GitHub's draft mark; absent decoding `false` is the same reading as a
+    /// pull request that was never marked one.
     pub draft: bool,
     /// GitHub computes mergeability asynchronously and answers `null` until it
     /// has. That is not the same as "cannot be merged", and the two must not
     /// collapse into one bool: one is a wait, the other is a refusal.
     pub mergeable: Option<bool>,
+    /// The head commit's checks, decoded leniently; an unreadable word lands
+    /// as [`Checks::Unknown`], which is an observation about visibility and
+    /// not a guess at health.
     #[serde(deserialize_with = "de_checks")]
     pub checks: Checks,
     /// The `html_url` — where the system browser is sent.
@@ -399,7 +481,13 @@ pub struct PullRequest {
     pub head: String,
     /// Base branch the merge would land on.
     pub base: String,
+    /// When the pull request was opened, ISO-8601 straight through from
+    /// GitHub.
     pub created_at: String,
+    /// When the pull request was last touched, ISO-8601 straight through
+    /// from GitHub. The manager's list arrives newest-first (the fixture
+    /// pins the order); which field its sort runs off is the manager's own
+    /// business.
     pub updated_at: String,
     /// Commits in the pull request — which is also how far the branch is
     /// **ahead** of its base, since that is what a pull request is a request
@@ -475,6 +563,9 @@ impl PullRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 #[serde(default)]
 pub struct MergeOutcome {
+    /// Whether the merge happened. A body that decodes as nothing still
+    /// builds the struct on its defaults, so `false` on its own is not a
+    /// verdict — [`Self::sha`] carrying a hash is what corroborates it.
     pub merged: bool,
     /// The merge commit GitHub made.
     pub sha: String,
@@ -531,12 +622,20 @@ fn parse_pulls_by_chat(body: &Value) -> std::collections::HashMap<String, Vec<Pu
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CodePermission {
+    /// The ask's id — what an answer is addressed by. It is also the ask's
+    /// existence test: an event payload without one is kept only as
+    /// [`CodeEvent::Unknown`], never surfaced as an ask.
     pub id: String,
+    /// The wire's `sessionID`: the session whose turn is parked on this ask.
     #[serde(rename = "sessionID")]
     pub session_id: String,
+    /// What the tool wants to run, in the server's own words.
     pub title: String,
+    /// The wire's `type`: the tool class the ask is about, e.g. `bash`.
     #[serde(rename = "type")]
     pub kind: String,
+    /// The tool's own detail, raw — the exact command line for a `bash` ask,
+    /// other keys for other kinds.
     pub metadata: Value,
 }
 
@@ -561,8 +660,12 @@ impl Default for CodePermission {
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 #[serde(default)]
 pub struct PendingAsk {
+    /// The wire's `chatId`: the chat the answer has to be routed back into,
+    /// since a permission id means nothing outside its own server.
     #[serde(rename = "chatId")]
     pub chat_id: String,
+    /// The ask itself, flattened — [`CodePermission`]'s keys sit inline beside
+    /// `chatId` rather than nested under one.
     #[serde(flatten)]
     pub permission: CodePermission,
 }
@@ -575,6 +678,9 @@ pub struct PendingAsk {
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deserialize)]
 #[serde(default)]
 pub struct PermissionReport {
+    /// Every ask the running chats that answered in time are holding. For a
+    /// chat in [`Self::unreachable`], the absence of its asks here means
+    /// "unknown", not "nothing pending".
     pub permissions: Vec<PendingAsk>,
     /// Running chats that did not answer in time. The aggregate still
     /// succeeds without them, and a caller must read their absence from
@@ -588,13 +694,19 @@ pub struct PermissionReport {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Part {
+    /// The part's own id — how a `message.part.updated` event addresses which
+    /// stored part it overwrites (or appends a `delta` to).
     pub id: String,
+    /// The wire's `messageID`: the message this part folds under.
     #[serde(rename = "messageID")]
     pub message_id: String,
+    /// The wire's `sessionID`.
     #[serde(rename = "sessionID")]
     pub session_id: String,
+    /// The wire's `type` — `text`, a `file` attachment, or a tool-call kind.
     #[serde(rename = "type")]
     pub kind: String,
+    /// The contents of a `text` part; [`None`] on parts of any other kind.
     pub text: Option<String>,
     /// The server wrote this part on the reader's behalf: the scaffolding it
     /// wraps a `text/plain` attachment in, the note it leaves when it
@@ -602,16 +714,27 @@ pub struct Part {
     /// They are the model's context rather than anything anybody said, and
     /// `OpenCode`'s own UI does not draw them either.
     pub synthetic: bool,
+    /// The tool a tool-call part invoked, by the name the model sent;
+    /// [`None`] on parts that are not tool calls.
     pub tool: Option<String>,
+    /// The wire's `callID`: the id joining this part to its tool call's
+    /// state.
     #[serde(rename = "callID")]
     pub call_id: Option<String>,
+    /// The part's state block, raw — its keys depend on `kind`, and only the
+    /// fold's needs are typed anywhere in this struct.
     pub state: Option<Value>,
     // `FilePart`: what an attachment looks like coming back out of history.
     // `url` is whatever the client sent — for this app, a `data:` URI, which
     // is how a re-opened chat gets its thumbnails back without a second
     // fetch.
+    /// MIME of a `file` part — the label an attachment is decoded under.
     pub mime: Option<String>,
+    /// An attachment's original file name, if the uploading side gave one.
     pub filename: Option<String>,
+    /// Where an attachment's bytes live, as saved. A phone's own upload is a
+    /// `data:` URI, which is what [`Self::data_url_base64`] reads the inline
+    /// payload from.
     pub url: Option<String>,
 }
 
@@ -648,18 +771,31 @@ impl Part {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum PromptPart {
+    /// The wire's `"text"` case: words, no attachment.
     Text {
+        /// The message text, sent verbatim.
         text: String,
     },
+    /// The wire's `"file"` case: an attachment carried by reference. The
+    /// server switches on `url`'s protocol rather than receiving the bytes in
+    /// a field of their own.
     File {
+        /// The declared MIME. Exactly `text/plain` is inlined into the
+        /// conversation by the server; any other label rides through as an
+        /// attachment.
         mime: String,
+        /// Original file name, omitted on the wire when there is none.
         #[serde(skip_serializing_if = "Option::is_none")]
         filename: Option<String>,
+        /// Named `url` on the wire. A `data:` URI is what works from a
+        /// phone — `file:` names paths inside the chat's container, which
+        /// this device cannot read.
         url: String,
     },
 }
 
 impl PromptPart {
+    /// The plain-text case — the part an ordinary message is made of.
     #[must_use]
     pub fn text(text: impl Into<String>) -> Self {
         Self::Text { text: text.into() }
@@ -695,15 +831,24 @@ impl PromptPart {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct MessageWithParts {
+    /// The message record itself.
     pub info: MessageInfo,
+    /// The message's parts, in the order the server stored them.
     pub parts: Vec<Part>,
 }
 
+/// The message record an entry opens with, and the one a `message.updated`
+/// event carries: which message it is, who produced it, and the session it
+/// folds into.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct MessageInfo {
+    /// The message's id, the name its parts carry back via
+    /// [`Part::message_id`].
     pub id: String,
+    /// Who produced the message — the wire's `user` or `assistant`.
     pub role: String,
+    /// The wire's `sessionID`.
     #[serde(rename = "sessionID")]
     pub session_id: String,
 }
@@ -712,8 +857,12 @@ pub struct MessageInfo {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct SessionMeta {
+    /// The session's id — the token every per-session path spells.
     pub id: String,
+    /// The session's display title, as the server records it.
     pub title: String,
+    /// The directory the session runs in; `/chat/workspace` for a session
+    /// this app creates.
     pub directory: String,
     /// What the session is currently set to. `OpenCode` writes this on every
     /// turn whose model or variant differs from the record, so it is the
@@ -746,6 +895,7 @@ impl SessionMeta {
 pub struct SessionModel {
     /// Model id within its provider, e.g. `deepseek-v4-flash`.
     pub id: String,
+    /// The wire's `providerID` — the prefix half of [`Self::reference`].
     #[serde(rename = "providerID")]
     pub provider_id: String,
     /// Thinking-effort tier, `OpenCode`'s "variant". Recorded as the literal
@@ -776,10 +926,18 @@ impl SessionModel {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct ModelInfo {
+    /// The model's id within its provider; the server may leave it blank, in
+    /// which case the catalogue map's key is copied in over it.
     pub id: String,
+    /// The wire's `providerID`, likewise blank when the server omits it — the
+    /// owning provider's id fills the gap.
     #[serde(rename = "providerID")]
     pub provider_id: String,
+    /// The display name, which may also arrive blank and is then the id — a
+    /// picker row must read as something.
     pub name: String,
+    /// Declared limits, read-only catalogue data: the prompt API never
+    /// adjusts them.
     pub limit: ModelLimit,
     /// Thinking-effort tiers this model accepts, keyed by variant name. It is
     /// legitimately empty — `OpenCode` returns no variants at all for the
@@ -861,6 +1019,9 @@ pub struct Agent {
     pub name: String,
     /// The agent's own one-line account of when to use it.
     pub description: Option<String>,
+    /// How the agent may hold a session; a missing or unrecognised wire
+    /// value reads [`AgentMode::All`], so one unfamiliar word cannot empty
+    /// the picker.
     #[serde(deserialize_with = "de_agent_mode")]
     pub mode: AgentMode,
     /// Shipped with `OpenCode` rather than defined by the repo.
@@ -1048,28 +1209,57 @@ impl ProviderCatalog {
 /// Unknown kinds are preserved so new server events degrade gracefully.
 #[derive(Clone, Debug)]
 pub enum CodeEvent {
+    /// The wire's `message.updated`: a message record was written or changed.
+    /// Its parts hang off this record, so this event is what gives them
+    /// somewhere to attach to.
     MessageUpdated {
+        /// The record as the server now holds it. One that cannot be decoded
+        /// stays inside this event as an empty record — the write itself is
+        /// the news, so the event must survive an unreadable body.
         info: MessageInfo,
     },
+    /// The wire's `message.part.updated`: one part now stands as `part` says.
     PartUpdated {
+        /// The part as the server now holds it; one that cannot be decoded
+        /// degrades to an empty part rather than a different kind of event.
         part: Part,
+        /// Just the text appended by this update, when the server names an
+        /// increment at all; absent means `part` is the whole content.
         delta: Option<String>,
     },
+    /// An ask the chat's server has parked — the wire's `permission.asked` or
+    /// `permission.updated`, and only those payloads that name an id.
     PermissionAsked(CodePermission),
+    /// The wire's `permission.replied`: an ask was answered from somewhere
+    /// this device is not, so it must not stay open.
     PermissionReplied {
+        /// The answered ask's id, read from the wire's `permissionID` with
+        /// `id` as the other spelling in the wild; an empty name closes
+        /// nothing.
         id: String,
     },
+    /// The wire's `session.idle`: the session has no turn in flight.
     SessionIdle {
+        /// The wire's `sessionID`.
         session_id: String,
     },
+    /// The wire's `session.status` payload, kept whole — its shape follows
+    /// the status it carries.
     SessionStatus(Value),
+    /// The wire's `server.connected`: the hello a fresh stream opens with.
     Connected,
+    /// Any event this client has no case for, named and kept intact so the
+    /// wire can grow without the fold losing its balance.
     Unknown {
+        /// The wire's `type`, verbatim — an event carrying none reads as "".
         tag: String,
+        /// The payload, kept whole for diagnosis rather than discarded.
         raw: Value,
     },
     /// The stream ended (network drop, chat spin-down, gateway restart).
     Disconnected {
+        /// What ended it — the transport error's message, or a plain phrase
+        /// when the server closed the stream cleanly.
         reason: String,
     },
 }
@@ -1134,6 +1324,13 @@ fn dispatch_event(raw: Value) -> CodeEvent {
     }
 }
 
+/// Every request the code plane makes, over one shared reqwest client and
+/// one Basic-auth gateway: the manager's `/api/...` surface and each chat's
+/// own `/chat/<id>/...` server behind it.
+///
+/// `Clone` shares the pooled connections rather than duplicating a state
+/// machine, so clones are free and stay equivalent. The `Debug` form is
+/// hand-written and never prints the password.
 #[derive(Clone)]
 pub struct CodeClient {
     http: reqwest::Client,
@@ -1475,7 +1672,7 @@ impl CodeClient {
     /// route. A GitHub outage is **not** an error here: this serves a cache and
     /// the failure is per chat, already on the wire, and already handled by the
     /// paragraph above. A 2xx body that is not the contracted shape yields an
-    /// empty map rather than an error, for [`parse_pulls_by_chat`]'s reason.
+    /// empty map rather than an error, for `parse_pulls_by_chat`'s reason.
     pub async fn all_pulls(
         &self,
     ) -> Result<std::collections::HashMap<String, Vec<PullRequest>>, CodeError> {

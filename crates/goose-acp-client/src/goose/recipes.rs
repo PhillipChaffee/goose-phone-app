@@ -42,8 +42,13 @@ const ENCODE: &str = "_goose/unstable/recipes/encode";
 /// it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecipeListResponse {
+    /// The recipes goose found on disk, already sorted newest file first;
+    /// the `default` reads an absent key as an empty list instead of
+    /// failing the parse.
     #[serde(default)]
     pub recipes: Vec<RecipeListEntry>,
+    /// Serde catch-all: keys goose sent with the reply that this struct
+    /// does not model land here instead of being dropped.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -56,18 +61,31 @@ pub struct RecipeListResponse {
 /// is what `delete` and `schedule` take.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecipeListEntry {
+    /// A hash of the file's path — the only identifier a recipe has, and
+    /// the one [`AcpClient::recipes_delete`] and
+    /// [`AcpClient::recipes_schedule`] take.
     pub id: String,
+    /// The recipe itself, not a summary of one: the same body
+    /// [`AcpClient::recipes_scan`] and [`AcpClient::recipes_encode`] take.
     pub recipe: Recipe,
+    /// Where the recipe's YAML lives on the server — the file
+    /// [`AcpClient::recipes_delete`] unlinks.
     pub file_path: String,
     /// RFC 3339, from the file's mtime. goose returns the list already sorted
     /// by this, newest first.
     pub last_modified: String,
+    /// The cron the scheduler runs this file on, when it is on one at all.
+    /// The key may be absent, and goose can send an empty one — a job with
+    /// nothing behind it — both shapes being what
+    /// [`RecipeListEntry::is_scheduled`] sorts out.
     #[serde(default)]
     pub schedule_cron: Option<String>,
     /// The `/name` this recipe answers to in goose's own CLI and desktop
     /// composer. Reported, never set from here: see the module docs.
     #[serde(default)]
     pub slash_command: Option<String>,
+    /// Serde catch-all: keys goose sent with the entry that this struct
+    /// does not model land here instead of being dropped.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -90,7 +108,7 @@ pub struct Recipe {
     /// invented on its behalf.
     ///
     /// The one `skip_serializing_if` in this module, against the rule in
-    /// [`super`], because this is the one field whose goose-side type is not an
+    /// `super`, because this is the one field whose goose-side type is not an
     /// `Option`: `RecipeDto::version` is a `String` with `#[serde(default)]`,
     /// and a serde `default` fires on a *missing* key and never on an explicit
     /// `null`. `scan` and `encode` send this body back, so serializing `None`
@@ -100,10 +118,18 @@ pub struct Recipe {
     /// mis-spelling here still fails a test.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// The recipe's name, required in this type where most of [`Recipe`]
+    /// is optional.
     pub title: String,
+    /// What the recipe says it does, in its author's prose; free text on
+    /// the wire.
     pub description: String,
+    /// What goose folds into the run's system prompt — guidance to the
+    /// agent, not the opening message, which is [`Recipe::prompt`].
     #[serde(default)]
     pub instructions: Option<String>,
+    /// The opening message of a run, with any `{{ placeholder }}` still in
+    /// it: goose does not send it itself, so the client does.
     #[serde(default)]
     pub prompt: Option<String>,
     /// Absent and empty are different states on the wire and stay different
@@ -111,8 +137,12 @@ pub struct Recipe {
     /// writes `[]` for one whose list was emptied.
     #[serde(default)]
     pub parameters: Option<Vec<RecipeParameter>>,
+    /// Provider, model and run limits the recipe pins for its own runs —
+    /// a [`RecipeSettings`], or none at all.
     #[serde(default)]
     pub settings: Option<RecipeSettings>,
+    /// Serde catch-all: keys goose sent on the recipe that this struct
+    /// does not model land here and survive a write-back.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -125,15 +155,33 @@ pub struct Recipe {
 /// type says — goose stores the literal from the YAML and coerces at run time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecipeParameter {
+    /// The name the recipe reaches this value by — the word inside a
+    /// `{{ placeholder }}` in its own prose.
     pub key: String,
+    /// What shape the value is collected as; only
+    /// [`RecipeInputType::Select`] makes [`RecipeParameter::options`]
+    /// mean anything.
     pub input_type: RecipeInputType,
+    /// Whether a run stops to collect a value first — see
+    /// [`RecipeRequirement::blocks_a_run`] for which of the words do
+    /// that and which do not.
     pub requirement: RecipeRequirement,
+    /// The parameter's own prose about what belongs here. The key may be
+    /// absent, and the `default` reads that as an empty text instead of
+    /// failing the parse.
     #[serde(default)]
     pub description: String,
+    /// The value a run starts with when none is offered: always a string
+    /// on the wire, whatever [`RecipeParameter::input_type`] names, or
+    /// absent when the recipe leaves it out.
     #[serde(default)]
     pub default: Option<String>,
+    /// The choices a [`RecipeInputType::Select`] draws from — absent when
+    /// the input is not one and when the recipe names no choices.
     #[serde(default)]
     pub options: Option<Vec<String>>,
+    /// Serde catch-all: keys goose sent on the parameter that this struct
+    /// does not model land here and survive a write-back.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -147,8 +195,12 @@ pub struct RecipeParameter {
 /// [`Recipe`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecipeSettings {
+    /// Which provider the recipe's runs use; `None` leaves goose's own
+    /// choice standing.
     #[serde(default)]
     pub goose_provider: Option<String>,
+    /// Which model the recipe's runs use; `None` leaves goose's own
+    /// choice standing.
     #[serde(default)]
     pub goose_model: Option<String>,
     /// `f64`, though goose types it `f32`. JSON has one number type and the
@@ -157,8 +209,12 @@ pub struct RecipeSettings {
     /// round-trip check would rightly reject.
     #[serde(default)]
     pub temperature: Option<f64>,
+    /// The most agent turns one run may take; `None` leaves goose's own
+    /// ceiling standing.
     #[serde(default)]
     pub max_turns: Option<u32>,
+    /// Serde catch-all: keys goose sent on the settings that this struct
+    /// does not model land here and survive a write-back.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -177,12 +233,20 @@ pub struct RecipeSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum RecipeInputType {
+    /// goose's `"string"`.
     String,
+    /// goose's `"number"`.
     Number,
+    /// goose's `"boolean"`.
     Boolean,
+    /// goose's `"date"`.
     Date,
+    /// goose's `"file"`.
     File,
+    /// goose's `"select"` — the one kind [`RecipeParameter::options`]
+    /// accompanies.
     Select,
+    /// Any input type goose spells that this build has not heard of.
     Other(String),
 }
 
@@ -234,8 +298,14 @@ impl From<RecipeInputType> for String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum RecipeRequirement {
+    /// goose's `"required"`, and a run will not start without it — one of
+    /// the two words [`RecipeRequirement::blocks_a_run`] counts.
     Required,
+    /// goose's `"optional"`: collected when offered, never a reason to
+    /// stop a run.
     Optional,
+    /// goose's `"user_prompt"`, the ask that stops a run even when the
+    /// recipe could technically go without.
     UserPrompt,
     /// See [`RecipeInputType::Other`].
     Other(String),

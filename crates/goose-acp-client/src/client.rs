@@ -30,6 +30,12 @@ use crate::error::AcpError;
 use crate::tls;
 use crate::types::{AcpEvent, DisconnectCause, InitializeInfo, PermissionRequest, SessionUpdate};
 
+/// The name this client presents to the goose server — `clientInfo.name` in
+/// the `initialize` handshake.
+///
+/// It is also the default `client` marker in `session/new` `_meta`, and that
+/// value is what keeps phone-originated sessions distinguishable from goose
+/// Desktop's.
 pub const CLIENT_NAME: &str = "goose-mobile";
 
 /// How to reach the server.
@@ -253,6 +259,9 @@ impl AcpClient {
             .map_err(|_| AcpError::Timeout)?
     }
 
+    /// Sends a JSON-RPC notification: no `id`, so the server sends no response
+    /// and none is awaited. Delivery is best-effort — if the connection has
+    /// already ended, the notification is silently dropped.
     pub fn notify(&self, method: &str, params: Value) {
         let _ = self.tx.send(Cmd::Notify {
             method: method.to_string(),
