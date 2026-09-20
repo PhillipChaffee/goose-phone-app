@@ -212,3 +212,17 @@ The toolchain is pinned in `rust-toolchain.toml` and rustup honours it
 automatically, so a local `cargo clippy` sees exactly the lints CI sees.
 Bumping the channel is a deliberate change: raise it, re-run the gate, and
 fix what the newer lints found in the same commit.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues on PhillipChaffee/goose-phone-app, driven with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles use their default label strings. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root, created lazily. See `docs/agents/domain.md`.
