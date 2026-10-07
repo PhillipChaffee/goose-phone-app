@@ -69,6 +69,13 @@ mod serverkit;
 
 mod shell;
 
+// PROTOTYPE — throwaway walking-skeleton screen (wayfinder ticket 10),
+// rendered only under `GOOSE_SKELETON=1`. `debug_assertions` like `timing`
+// above, for its reason: an instrument is not something a shipped binary
+// carries.
+#[cfg(debug_assertions)]
+mod skeleton;
+
 mod skills;
 
 mod state;

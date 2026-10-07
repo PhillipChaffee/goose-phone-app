@@ -1,0 +1,26 @@
+[package]
+name = "acp-walking-skeleton"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "PROTOTYPE — throwaway five-beat walking skeleton against a real goose serve (wayfinder ticket 10); not part of the app"
+
+[dependencies]
+agent-client-protocol = { git = "https://github.com/agentclientprotocol/rust-sdk", rev = "c97a5203d3392f7f231514d84eea014f9f43e6fb" }
+agent-client-protocol-http = { git = "https://github.com/agentclientprotocol/rust-sdk", rev = "c97a5203d3392f7f231514d84eea014f9f43e6fb", features = ["client"] }
+futures-util = "0.3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+# Direct keyring-core + platform store, NOT the `keyring` crate: its v1 Entry
+# shim refuses iOS/Android by construction (auto-default store returns Err,
+# Entry::new bails before consulting anything the app registered) — measured
+# live on the simulator. The store crate compile_error!s on iOS unless the
+# `protected` feature is on; `keychain` is the macOS-side module.
+apple-native-keyring-store = { version = "1", features = ["keychain", "protected"] }
+keyring-core = "1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-native-keyring-store = "1"
+keyring-core = "1"

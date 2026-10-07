@@ -36,6 +36,21 @@ pub fn App() -> Element {
     ));
 
     let toast = (ctx.toast)();
+
+    // PROTOTYPE — the walking-skeleton screen replaces the shell entirely
+    // when the app is launched with GOOSE_SKELETON=1 (wayfinder ticket 10).
+    // After the hooks, so the component's hook contract stays unconditional.
+    #[cfg(debug_assertions)]
+    if std::env::var("GOOSE_SKELETON").as_deref() == Ok("1") {
+        return rsx! {
+            document::Meta {
+                name: "viewport",
+                content: "width=device-width, initial-scale=1, maximum-scale=1, \
+                          viewport-fit=cover, interactive-widget=resizes-content",
+            }
+            crate::skeleton::SkeletonView {}
+        };
+    }
     // Two independent, backend-tagged queues; the goose modal wins ties.
     //
     // The code queue now holds asks for chats you are not in — the manager's
