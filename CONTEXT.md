@@ -43,3 +43,9 @@ The urgent notification event: a run has stopped and stays stopped until a permi
 
 **Content-free payload**:
 A notification carries only a count and a kind; the truth is fetched from the keeper after the app opens. The lock screen is the exposure bar the payload must clear.
+
+### Feature wants vs. goose primitives
+
+**Canned prompt**:
+The user's term for a reusable prompt snippet created by telling the agent in chat ("make me a reusable prompt that…") and fired into any later session. Goose has no such primitive: `config/prompts` edits only its nine registered system templates and rejects new names; the want is fulfilled by recipes — the agent proposes parameters mid-conversation and saves a reusable workflow.
+_Avoid_: `config/prompts` as a snippet library; "prompts" for the recipes flow
