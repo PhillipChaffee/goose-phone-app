@@ -10,3 +10,7 @@ package-lock.json
 # Scratch space for design mockups and one-off probes: never a build input,
 # and `git add -A` would otherwise commit whatever was last explored there.
 .probe-tmp/
+
+# A cargo-doc render for the lint-probe crates; re-make it with `cargo doc`
+# rather than tracking it.
+/doc
